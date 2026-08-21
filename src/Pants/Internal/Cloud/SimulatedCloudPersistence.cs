@@ -106,7 +106,7 @@ internal sealed class SimulatedCloudPersistence
             }
 
             string localName = $"{segmentId:00000000000000000000}.wal";
-            AtomicWrite(Path.Combine(localWalDirectory, localName), bytes);
+            AtomicStagedFile.Write(Path.Combine(localWalDirectory, localName), bytes);
         }
 
         return catalog.FencingEpoch;
@@ -146,7 +146,7 @@ internal sealed class SimulatedCloudPersistence
             return;
         }
 
-        AtomicWrite(ResolveObjectPath(_cloudRoot, objectKey), segment.Bytes);
+        AtomicStagedFile.Write(ResolveObjectPath(_cloudRoot, objectKey), segment.Bytes);
         _catalog.Segments.Add(segment.SegmentId, publication);
         SaveCatalog();
         MirrorMetadataAndSsts();
@@ -159,7 +159,7 @@ internal sealed class SimulatedCloudPersistence
             string localPath = Path.Combine(_localRoot, fileName);
             if (File.Exists(localPath))
             {
-                AtomicWrite(
+                AtomicStagedFile.Write(
                     Path.Combine(_cloudRoot, "metadata", fileName),
                     File.ReadAllBytes(localPath));
             }
@@ -176,7 +176,7 @@ internal sealed class SimulatedCloudPersistence
                      "*.sst",
                      SearchOption.TopDirectoryOnly))
         {
-            AtomicWrite(
+            AtomicStagedFile.Write(
                 Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
                 File.ReadAllBytes(localSst));
         }
@@ -299,7 +299,7 @@ internal sealed class SimulatedCloudPersistence
         }
     }
 
-    private void SaveCatalog() => AtomicWrite(
+    private void SaveCatalog() => AtomicStagedFile.Write(
         Path.Combine(_cloudRoot, "wal", "publication-catalog.v1.json"),
         JsonSerializer.SerializeToUtf8Bytes(_catalog, JsonOptions));
 
@@ -308,7 +308,7 @@ internal sealed class SimulatedCloudPersistence
         string path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
         if (!File.Exists(path))
         {
-            AtomicWrite(path, "{\n  \"epoch\": 0,\n  \"column_families\": [],\n  \"operations\": []\n}"u8.ToArray());
+            AtomicStagedFile.Write(path, "{\n  \"epoch\": 0,\n  \"column_families\": [],\n  \"operations\": []\n}"u8);
         }
     }
 
@@ -332,7 +332,7 @@ internal sealed class SimulatedCloudPersistence
         }
     }
 
-    private void SaveDdlRegistry(DdlRegistry registry) => AtomicWrite(
+    private void SaveDdlRegistry(DdlRegistry registry) => AtomicStagedFile.Write(
         ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey),
         JsonSerializer.SerializeToUtf8Bytes(registry, JsonOptions));
 
@@ -340,7 +340,7 @@ internal sealed class SimulatedCloudPersistence
     {
         if (File.Exists(source) && !File.Exists(destination))
         {
-            AtomicWrite(destination, File.ReadAllBytes(source));
+            AtomicStagedFile.Write(destination, File.ReadAllBytes(source));
         }
     }
 
@@ -355,28 +355,6 @@ internal sealed class SimulatedCloudPersistence
         }
 
         return Path.Combine(cloudRoot, objectKey.Replace('/', Path.DirectorySeparatorChar));
-    }
-
-    private static void AtomicWrite(string path, byte[] bytes)
-    {
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null)
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        string temporary = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        using (var stream = new FileStream(
-                   temporary,
-                   FileMode.CreateNew,
-                   FileAccess.Write,
-                   FileShare.None))
-        {
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
-        }
-
-        File.Move(temporary, path, overwrite: true);
     }
 
     private sealed class WalPublicationCatalog

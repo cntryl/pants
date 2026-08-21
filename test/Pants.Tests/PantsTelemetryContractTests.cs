@@ -98,6 +98,13 @@ public sealed class PantsTelemetryContractTests
         Assert.Equal(diagnostics.DataBlocksRead, runtime.SstDataBlocksReadTotal);
         Assert.Equal(34, amplification.ReadsTotal);
         Assert.True(amplification.BlocksReadTotal > diagnostics.DataBlocksRead);
+        Assert.Equal(diagnostics.SstReaderCacheHits, amplification.ReaderCacheHitsTotal);
+        Assert.Equal(diagnostics.SstReaderCacheMisses, amplification.ReaderCacheMissesTotal);
+        Assert.Equal(diagnostics.SstBlockCacheHits, amplification.BlockCacheHitsTotal);
+        Assert.Equal(diagnostics.SstBlockCacheMisses, amplification.BlockCacheMissesTotal);
+        Assert.Equal(diagnostics.BloomTruePositives, amplification.BloomTruePositivesTotal);
+        Assert.Equal(diagnostics.BloomFalsePositives, amplification.BloomFalsePositivesTotal);
+        Assert.Equal(diagnostics.BloomTrueNegatives, amplification.BloomTrueNegativesTotal);
     }
 
     [Fact]
@@ -135,5 +142,116 @@ public sealed class PantsTelemetryContractTests
         Assert.True(after.CandidateBlocksChecked > before.CandidateBlocksChecked);
         Assert.True(after.DataBlocksRead > before.DataBlocksRead);
         Assert.True(after.RangeTombstoneScans > before.RangeTombstoneScans);
+    }
+
+    [Fact]
+    public async Task ShouldLeaveHotBlockCacheContentsUnchangedGivenStreamingScan()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            for (var index = 0; index < 128; index++)
+            {
+                writer.Put(TestBytes.FromString($"key-{index:0000}"), new byte[1024]);
+            }
+
+            await writer.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
+        Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
+        PantsReadPathDiagnostics beforeScan = await database.GetReadPathDiagnosticsAsync();
+
+        await using (IPantsScan scan = await reader.ScanAsync(new PantsScanQuery()))
+        {
+            await foreach (PantsEntry _ in scan)
+            {
+            }
+        }
+
+        PantsReadPathDiagnostics afterScan = await database.GetReadPathDiagnosticsAsync();
+        Assert.Equal(beforeScan.SstBlockCacheHits, afterScan.SstBlockCacheHits);
+        Assert.Equal(beforeScan.SstBlockCacheMisses, afterScan.SstBlockCacheMisses);
+
+        Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
+        PantsReadPathDiagnostics afterHotRead = await database.GetReadPathDiagnosticsAsync();
+        Assert.Equal(afterScan.SstBlockCacheHits + 1, afterHotRead.SstBlockCacheHits);
+        Assert.Equal(afterScan.SstBlockCacheMisses, afterHotRead.SstBlockCacheMisses);
+    }
+
+    [Fact]
+    public async Task ShouldGateBloomAndDiskIoWithPersistedKeyRange()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            writer.Put("middle"u8.ToArray(), "value"u8.ToArray());
+            await writer.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Null(await reader.GetAsync("outside"u8.ToArray()));
+
+        PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        Assert.Equal(1, metrics.KeyRangeRejectsTotal);
+        Assert.Equal(0, metrics.ReaderCacheHitsTotal);
+        Assert.Equal(0, metrics.ReaderCacheMissesTotal);
+        Assert.Equal(0, metrics.BloomChecksTotal);
+        Assert.Equal(0, metrics.DataBlocksReadTotal);
+    }
+
+    [Fact]
+    public async Task ShouldClassifyBloomTrueAndFalsePositives()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            for (var index = 0; index < 64; index++)
+            {
+                writer.Put(TestBytes.FromString($"key-{index:0000}"), new byte[128]);
+            }
+
+            await writer.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.NotNull(await reader.GetAsync("key-0032"u8.ToArray()));
+        for (var index = 0; index < 2048; index++)
+        {
+            Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-0032-{index:0000}")));
+        }
+
+        PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        Assert.Equal(1, metrics.BloomTruePositivesTotal);
+        Assert.True(metrics.BloomFalsePositivesTotal > 0);
+        Assert.True(metrics.BloomTrueNegativesTotal > 0);
+        Assert.Equal(
+            metrics.BloomChecksTotal,
+            metrics.BloomTruePositivesTotal +
+            metrics.BloomFalsePositivesTotal +
+            metrics.BloomTrueNegativesTotal);
     }
 }

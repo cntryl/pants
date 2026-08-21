@@ -4971,9 +4971,12 @@
       "source": "tests/hot_sst_tracking.rs",
       "sourceSymbolOrTest": "should_find_keys_given_disjoint_key_ranges_when_flushed",
       "observableBehavior": "find keys given disjoint key ranges when flushed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsHotSstTrackingTests.ShouldFindKeysGivenDisjointKeyRangesWhenFlushed"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hot_sst_tracking.rs:should_preserve_readability_given_mixed_access_pattern_when_keys_repeatedly_accessed",
@@ -4981,9 +4984,12 @@
       "source": "tests/hot_sst_tracking.rs",
       "sourceSymbolOrTest": "should_preserve_readability_given_mixed_access_pattern_when_keys_repeatedly_accessed",
       "observableBehavior": "preserve readability given mixed access pattern when keys repeatedly accessed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsHotSstTrackingTests.ShouldPreserveReadabilityGivenMixedAccessPatternWhenKeysRepeatedlyAccessed"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hot_sst_tracking.rs:should_preserve_reads_given_two_flushed_batches_when_repeatedly_accessed",
@@ -4991,9 +4997,12 @@
       "source": "tests/hot_sst_tracking.rs",
       "sourceSymbolOrTest": "should_preserve_reads_given_two_flushed_batches_when_repeatedly_accessed",
       "observableBehavior": "preserve reads given two flushed batches when repeatedly accessed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsHotSstTrackingTests.ShouldPreserveReadsGivenTwoFlushedBatchesWhenRepeatedlyAccessed"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hot_sst_tracking.rs:should_return_latest_value_given_overlapping_l0_keys_when_multiple_batches_flushed",
@@ -5001,9 +5010,12 @@
       "source": "tests/hot_sst_tracking.rs",
       "sourceSymbolOrTest": "should_return_latest_value_given_overlapping_l0_keys_when_multiple_batches_flushed",
       "observableBehavior": "return latest value given overlapping l0 keys when multiple batches flushed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsHotSstTrackingTests.ShouldReturnLatestValueGivenOverlappingL0KeysWhenMultipleBatchesFlushed"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_apply_simulated_cloud_local_storage_budget_when_opening_simulated_cloud",
@@ -5507,9 +5519,12 @@
       "source": "tests/read_amp_api.rs",
       "sourceSymbolOrTest": "should_accumulate_exact_average_across_multiple_local_sst_reads",
       "observableBehavior": "accumulate exact average across multiple local sst reads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsReadAmplificationContractTests.ShouldAccumulateExactAverageAcrossMultipleLocalSstReads"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_expose_exact_read_amp_metrics_for_local_sst_reads",
@@ -5517,9 +5532,12 @@
       "source": "tests/read_amp_api.rs",
       "sourceSymbolOrTest": "should_expose_exact_read_amp_metrics_for_local_sst_reads",
       "observableBehavior": "expose exact read amp metrics for local sst reads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsReadAmplificationContractTests.ShouldExposeExactMetricsGivenRepeatedLocalSstReads"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_report_budget_violations_for_one_high_amplification_read",
@@ -5527,9 +5545,12 @@
       "source": "tests/read_amp_api.rs",
       "sourceSymbolOrTest": "should_report_budget_violations_for_one_high_amplification_read",
       "observableBehavior": "report budget violations for one high amplification read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsReadAmplificationContractTests.ShouldReportBudgetViolationGivenElevenOverlappingSsts"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_show_zero_read_amp_metrics_for_fresh_engine",
@@ -5537,9 +5558,12 @@
       "source": "tests/read_amp_api.rs",
       "sourceSymbolOrTest": "should_show_zero_read_amp_metrics_for_fresh_engine",
       "observableBehavior": "show zero read amp metrics for fresh engine",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsReadAmplificationContractTests.ShouldShowZeroReadAmplificationMetricsForFreshEngine"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_track_exact_l0_overlap_across_overlapping_ssts",
@@ -5547,9 +5571,12 @@
       "source": "tests/read_amp_api.rs",
       "sourceSymbolOrTest": "should_track_exact_l0_overlap_across_overlapping_ssts",
       "observableBehavior": "track exact l0 overlap across overlapping ssts",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsReadAmplificationContractTests.ShouldTrackExactL0OverlapAcrossOverlappingSsts"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_path_diagnostics.rs:should_count_flushed_range_scan_work_in_its_own_window",
@@ -6775,9 +6802,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_error_given_corrupt_sst_when_transaction_get_reads_flushed_key",
       "observableBehavior": "error given corrupt sst when transaction get reads flushed key",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldErrorGivenCorruptSstWhenTransactionGetReadsFlushedKey"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_error_given_corrupt_sst_when_transaction_scan_reads_flushed_range",
@@ -6785,9 +6815,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_error_given_corrupt_sst_when_transaction_scan_reads_flushed_range",
       "observableBehavior": "error given corrupt sst when transaction scan reads flushed range",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldErrorGivenCorruptSstWhenTransactionScanReadsFlushedRange"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_handle_memtable_and_sst_reads",
@@ -6795,9 +6828,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_handle_memtable_and_sst_reads",
       "observableBehavior": "handle memtable and sst reads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldHandleMemtableAndSstReads"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_read_from_sst_after_flush",
@@ -6805,9 +6841,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_read_from_sst_after_flush",
       "observableBehavior": "read from sst after flush",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldReadFromSstAfterFlush"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_track_l0_sst_reads",
@@ -6815,9 +6854,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_track_l0_sst_reads",
       "observableBehavior": "track l0 sst reads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldTrackL0SstReads"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_use_key_ranges_for_higher_levels",
@@ -6825,9 +6867,12 @@
       "source": "tests/sst_reads_integration.rs",
       "sourceSymbolOrTest": "should_use_key_ranges_for_higher_levels",
       "observableBehavior": "use key ranges for higher levels",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 5
+      "issue": 5,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldUseKeyRangesForHigherLevels"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/storage_verification_hardening.rs:should_not_create_storage_directories_when_offline_verification_runs",

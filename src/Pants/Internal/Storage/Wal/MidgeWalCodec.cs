@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using Microsoft.Win32.SafeHandles;
+
 namespace Pants;
 
 internal static class MidgeWalCodec
@@ -150,7 +152,8 @@ internal static class MidgeWalCodec
     }
 
     public static void AppendFrame(
-        Stream stream,
+        SafeFileHandle handle,
+        long offset,
         byte[] payload,
         Action? afterPartialPayload = null)
     {
@@ -159,18 +162,24 @@ internal static class MidgeWalCodec
             throw new PantsStorageException("WAL record exceeds Midge's 64 MiB frame limit.");
         }
 
-        MidgeDiskFormat.WriteUInt32(stream, (uint)payload.Length);
-        MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+        var header = new byte[2 * sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(header, checked((uint)payload.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            header.AsSpan(sizeof(uint)),
+            MidgeDiskFormat.Crc32C(payload));
         if (afterPartialPayload is null)
         {
-            stream.Write(payload);
+            RandomAccess.Write(handle, [header, payload], offset);
             return;
         }
 
         int partialLength = Math.Max(1, payload.Length / 2);
-        stream.Write(payload.AsSpan(0, partialLength));
+        RandomAccess.Write(handle, [header, payload.AsMemory(0, partialLength)], offset);
         afterPartialPayload();
-        stream.Write(payload.AsSpan(partialLength));
+        RandomAccess.Write(
+            handle,
+            payload.AsSpan(partialLength),
+            checked(offset + header.Length + partialLength));
     }
 
     private static void WriteTlv(Stream stream, byte tag, ReadOnlySpan<byte> value)

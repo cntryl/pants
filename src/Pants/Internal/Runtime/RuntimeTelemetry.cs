@@ -20,11 +20,15 @@ internal sealed class RuntimeTelemetry
     private long _candidateSstFilesChecked;
     private long _candidateBlocksChecked;
     private long _dataBlocksRead;
+    private long _keyRangeRejects;
     private long _bloomChecks;
     private long _bloomRejects;
+    private long _bloomTruePositives;
+    private long _bloomFalsePositives;
     private long _rangeTombstoneScans;
     private long _sstBudgetViolations;
     private long _blockBudgetViolations;
+    private long _readAmplificationCompactionTriggers;
     private long _writeConflictsPoint;
     private long _writeConflictsRange;
     private long _compactionsRun;
@@ -85,6 +89,15 @@ internal sealed class RuntimeTelemetry
 
     public long SstBloomRejects => Volatile.Read(ref _bloomRejects);
 
+    public long SstBloomTruePositives => Volatile.Read(ref _bloomTruePositives);
+
+    public long SstBloomFalsePositives => Volatile.Read(ref _bloomFalsePositives);
+
+    public long SstKeyRangeRejects => Volatile.Read(ref _keyRangeRejects);
+
+    public long ReadAmplificationCompactionTriggers =>
+        Volatile.Read(ref _readAmplificationCompactionTriggers);
+
     public long SstDataBlocksRead => Volatile.Read(ref _dataBlocksRead);
 
     public void RecordTransactionBegin(PantsTransactionMode mode)
@@ -104,44 +117,40 @@ internal sealed class RuntimeTelemetry
 
     public void RecordSnapshotUnregister() => Interlocked.Increment(ref _snapshotsUnregistered);
 
-    public void RecordSstRead(
-        int sstsTouched,
-        int l0SstsTouched,
-        int amplificationBlocksRead,
-        int dataBlocksRead,
-        int readerCacheHits,
-        int readerCacheMisses,
-        int blockCacheHits,
-        int blockCacheMisses,
-        int candidateBlocks,
-        int bloomChecks,
-        int bloomRejects,
-        int rangeTombstoneScans)
+    public bool RecordSstRead(SstReadSample sample)
     {
         Interlocked.Increment(ref _readsTotal);
-        Interlocked.Add(ref _sstsTouchedTotal, sstsTouched);
-        Interlocked.Add(ref _l0SstsTouchedTotal, l0SstsTouched);
-        Interlocked.Add(ref _blocksReadTotal, amplificationBlocksRead);
-        Interlocked.Add(ref _candidateSstFilesChecked, sstsTouched);
-        Interlocked.Add(ref _candidateBlocksChecked, candidateBlocks);
-        Interlocked.Add(ref _dataBlocksRead, dataBlocksRead);
-        Interlocked.Add(ref _bloomChecks, bloomChecks);
-        Interlocked.Add(ref _bloomRejects, bloomRejects);
-        Interlocked.Add(ref _rangeTombstoneScans, rangeTombstoneScans);
-        Interlocked.Add(ref _sstReaderCacheHits, readerCacheHits);
-        Interlocked.Add(ref _sstReaderCacheMisses, readerCacheMisses);
-        Interlocked.Add(ref _sstBlockCacheHits, blockCacheHits);
-        Interlocked.Add(ref _sstBlockCacheMisses, blockCacheMisses);
-        if (sstsTouched > 5)
+        Interlocked.Add(ref _sstsTouchedTotal, sample.SstsTouched);
+        Interlocked.Add(ref _l0SstsTouchedTotal, sample.L0SstsTouched);
+        Interlocked.Add(ref _blocksReadTotal, sample.AmplificationBlocksRead);
+        Interlocked.Add(ref _candidateSstFilesChecked, sample.SstsTouched);
+        Interlocked.Add(ref _candidateBlocksChecked, sample.CandidateBlocks);
+        Interlocked.Add(ref _dataBlocksRead, sample.DataBlocksRead);
+        Interlocked.Add(ref _keyRangeRejects, sample.KeyRangeRejects);
+        Interlocked.Add(ref _bloomChecks, sample.BloomChecks);
+        Interlocked.Add(ref _bloomRejects, sample.BloomTrueNegatives);
+        Interlocked.Add(ref _bloomTruePositives, sample.BloomTruePositives);
+        Interlocked.Add(ref _bloomFalsePositives, sample.BloomFalsePositives);
+        Interlocked.Add(ref _rangeTombstoneScans, sample.RangeTombstoneScans);
+        Interlocked.Add(ref _sstReaderCacheHits, sample.ReaderCacheHits);
+        Interlocked.Add(ref _sstReaderCacheMisses, sample.ReaderCacheMisses);
+        Interlocked.Add(ref _sstBlockCacheHits, sample.BlockCacheHits);
+        Interlocked.Add(ref _sstBlockCacheMisses, sample.BlockCacheMisses);
+        if (sample.SstsTouched > ReadAmplificationBudget.MaximumSstsPerRead)
         {
             Interlocked.Increment(ref _sstBudgetViolations);
         }
 
-        if (amplificationBlocksRead > 20)
+        if (sample.AmplificationBlocksRead > ReadAmplificationBudget.MaximumBlocksPerRead)
         {
             Interlocked.Increment(ref _blockBudgetViolations);
         }
+
+        return sample.ExceedsBudget;
     }
+
+    public void RecordReadAmplificationCompactionTrigger() =>
+        Interlocked.Increment(ref _readAmplificationCompactionTriggers);
 
     public void RecordWriteConflict(bool rangeConflict)
     {
@@ -225,8 +234,12 @@ internal sealed class RuntimeTelemetry
         CandidateSstFilesChecked = Volatile.Read(ref _candidateSstFilesChecked),
         CandidateBlocksChecked = Volatile.Read(ref _candidateBlocksChecked),
         DataBlocksRead = Volatile.Read(ref _dataBlocksRead),
+        KeyRangeRejects = Volatile.Read(ref _keyRangeRejects),
         BloomChecks = Volatile.Read(ref _bloomChecks),
         BloomRejects = Volatile.Read(ref _bloomRejects),
+        BloomTruePositives = Volatile.Read(ref _bloomTruePositives),
+        BloomFalsePositives = Volatile.Read(ref _bloomFalsePositives),
+        BloomTrueNegatives = Volatile.Read(ref _bloomRejects),
         RangeTombstoneScans = Volatile.Read(ref _rangeTombstoneScans)
     };
 
@@ -236,17 +249,34 @@ internal sealed class RuntimeTelemetry
         long ssts = Volatile.Read(ref _sstsTouchedTotal);
         long l0Ssts = Volatile.Read(ref _l0SstsTouchedTotal);
         long blocks = Volatile.Read(ref _blocksReadTotal);
-        return new PantsReadAmplificationMetrics(
-            reads,
-            ssts,
-            l0Ssts,
-            blocks,
-            Divide(ssts, reads),
-            Divide(l0Ssts, reads),
-            Divide(blocks, reads),
-            Divide(l0Ssts, ssts),
-            Divide(Volatile.Read(ref _sstBudgetViolations), reads),
-            Divide(Volatile.Read(ref _blockBudgetViolations), reads));
+        long sstBudgetViolations = Volatile.Read(ref _sstBudgetViolations);
+        long blockBudgetViolations = Volatile.Read(ref _blockBudgetViolations);
+        return new PantsReadAmplificationMetrics
+        {
+            ReadsTotal = reads,
+            SstsTouchedTotal = ssts,
+            L0SstsTouchedTotal = l0Ssts,
+            BlocksReadTotal = blocks,
+            AverageSstsPerRead = Divide(ssts, reads),
+            AverageL0SstsPerRead = Divide(l0Ssts, reads),
+            AverageBlocksPerRead = Divide(blocks, reads),
+            L0OverlapRate = Divide(l0Ssts, ssts),
+            SstBudgetViolationsTotal = sstBudgetViolations,
+            BlockBudgetViolationsTotal = blockBudgetViolations,
+            SstBudgetViolationRate = Divide(sstBudgetViolations, reads),
+            BlockBudgetViolationRate = Divide(blockBudgetViolations, reads),
+            ReaderCacheHitsTotal = Volatile.Read(ref _sstReaderCacheHits),
+            ReaderCacheMissesTotal = Volatile.Read(ref _sstReaderCacheMisses),
+            BlockCacheHitsTotal = Volatile.Read(ref _sstBlockCacheHits),
+            BlockCacheMissesTotal = Volatile.Read(ref _sstBlockCacheMisses),
+            KeyRangeRejectsTotal = Volatile.Read(ref _keyRangeRejects),
+            BloomChecksTotal = Volatile.Read(ref _bloomChecks),
+            BloomTruePositivesTotal = Volatile.Read(ref _bloomTruePositives),
+            BloomFalsePositivesTotal = Volatile.Read(ref _bloomFalsePositives),
+            BloomTrueNegativesTotal = Volatile.Read(ref _bloomRejects),
+            DataBlocksReadTotal = Volatile.Read(ref _dataBlocksRead),
+            CompactionTriggersTotal = Volatile.Read(ref _readAmplificationCompactionTriggers)
+        };
     }
 
     private static double Divide(long numerator, long denominator) =>

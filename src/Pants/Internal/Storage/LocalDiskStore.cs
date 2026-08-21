@@ -31,7 +31,7 @@ internal sealed class LocalDiskStore : IDisposable
     private readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
     private readonly List<MidgeWalMutation> _mutableOperations = [];
     private readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _readerCache = new(StringComparer.Ordinal);
+    private readonly SstReaderCache _readerCache = new();
     private FileStream _walStream;
     private readonly MidgeManifest _manifest;
     private ulong _nextSequence;
@@ -146,42 +146,49 @@ internal sealed class LocalDiskStore : IDisposable
         return metadata.Clone();
     }
 
-    public void RecordPointRead(
+    public bool RecordPointRead(
         RuntimeTelemetry telemetry,
         ColumnFamilyIdentity columnFamily,
         ReadOnlySpan<byte> key)
     {
         byte[] keyCopy = key.ToArray();
-        MidgeFileMeta[] candidates = _manifest.Files
-            .Where(file =>
-                file.ColumnFamilyId == columnFamily.Id &&
-                IsWithinFileRange(file, keyCopy))
+        MidgeFileMeta[] familyFiles = _manifest.Files
+            .Where(file => file.ColumnFamilyId == columnFamily.Id)
+            .ToArray();
+        MidgeFileMeta[] candidates = familyFiles
+            .Where(file => IsWithinFileRange(file, keyCopy))
             .ToArray();
         int bloomChecks = 0;
         int candidateBlocks = 0;
         int amplificationBlocksRead = 0;
         int dataBlocksRead = 0;
-        int bloomRejects = 0;
+        int bloomTruePositives = 0;
+        int bloomFalsePositives = 0;
+        int bloomTrueNegatives = 0;
         int blockCacheHits = 0;
         int blockCacheMisses = 0;
         int readerCacheHits = 0;
         int readerCacheMisses = 0;
         foreach (MidgeFileMeta candidate in candidates)
         {
-            if (_readerCache.Add(candidate.Name))
-            {
-                readerCacheMisses++;
-            }
-            else
+            string path = Path.Combine(_sstDirectory, candidate.Name);
+            MidgeSstReader reader = _readerCache.GetOrAdd(
+                candidate.Name,
+                path,
+                out bool readerCacheHit);
+            if (readerCacheHit)
             {
                 readerCacheHits++;
             }
+            else
+            {
+                readerCacheMisses++;
+            }
 
-            byte[] bytes = File.ReadAllBytes(Path.Combine(_sstDirectory, candidate.Name));
-            SstPointReadDecision decision = MidgeSstCodec.GetPointReadDecision(bytes, keyCopy);
+            SstPointReadDecision decision = reader.GetPointReadDecision(keyCopy);
             bloomChecks = checked(bloomChecks + decision.BloomChecks);
             candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomRejects = checked(bloomRejects + (decision.Rejected ? 1 : 0));
+            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
             amplificationBlocksRead = checked(
                 amplificationBlocksRead + 1 + decision.BlocksRead);
             if (decision.BlocksRead == 0)
@@ -190,31 +197,49 @@ internal sealed class LocalDiskStore : IDisposable
             }
 
             var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-            if (_blockCache.TryGet(cacheKey))
+            bool containsKey;
+            if (_blockCache.TryGet(cacheKey, out SstBlockCacheEntry? cachedBlock) &&
+                cachedBlock is not null)
             {
                 blockCacheHits++;
-                continue;
+                containsKey = cachedBlock.ContainsKey(keyCopy);
+            }
+            else
+            {
+                blockCacheMisses++;
+                byte[] blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
+                dataBlocksRead = checked(dataBlocksRead + 1);
+                containsKey = MidgeSstCodec.DataBlockContainsKey(blockContent, keyCopy);
+                _ = _blockCache.Add(cacheKey, blockContent);
             }
 
-            blockCacheMisses++;
-            MidgeSstCodec.ValidatePointReadDataBlock(bytes, decision.CandidateBlockIndex);
-            dataBlocksRead = checked(dataBlocksRead + 1);
-            _blockCache.Add(cacheKey, decision.CandidateBlockSizeBytes);
+            if (containsKey)
+            {
+                bloomTruePositives++;
+            }
+            else
+            {
+                bloomFalsePositives++;
+            }
         }
 
-        telemetry.RecordSstRead(
-            candidates.Length,
-            candidates.Count(static file => file.Level == 0),
-            amplificationBlocksRead,
-            dataBlocksRead,
-            readerCacheHits,
-            readerCacheMisses,
-            blockCacheHits,
-            blockCacheMisses,
-            candidateBlocks,
-            bloomChecks,
-            bloomRejects,
-            rangeTombstoneScans: 0);
+        return telemetry.RecordSstRead(new SstReadSample
+        {
+            SstsTouched = candidates.Length,
+            L0SstsTouched = candidates.Count(static file => file.Level == 0),
+            AmplificationBlocksRead = amplificationBlocksRead,
+            DataBlocksRead = dataBlocksRead,
+            ReaderCacheHits = readerCacheHits,
+            ReaderCacheMisses = readerCacheMisses,
+            BlockCacheHits = blockCacheHits,
+            BlockCacheMisses = blockCacheMisses,
+            CandidateBlocks = candidateBlocks,
+            KeyRangeRejects = familyFiles.Length - candidates.Length,
+            BloomChecks = bloomChecks,
+            BloomTruePositives = bloomTruePositives,
+            BloomFalsePositives = bloomFalsePositives,
+            BloomTrueNegatives = bloomTrueNegatives
+        });
     }
 
     public void ValidateScanRead(
@@ -228,17 +253,19 @@ internal sealed class LocalDiskStore : IDisposable
         foreach (MidgeFileMeta file in _manifest.Files.Where(
                      file => file.ColumnFamilyId == columnFamily.Id))
         {
-            if (_readerCache.Add(file.Name))
-            {
-                readerCacheMisses++;
-            }
-            else
+            string path = Path.Combine(_sstDirectory, file.Name);
+            _ = _readerCache.GetOrAdd(file.Name, path, out bool readerCacheHit);
+            if (readerCacheHit)
             {
                 readerCacheHits++;
             }
+            else
+            {
+                readerCacheMisses++;
+            }
 
             MidgeSstContents contents = MidgeSstCodec.Decode(
-                File.ReadAllBytes(Path.Combine(_sstDirectory, file.Name)));
+                PositionalFile.ReadAllBytes(path));
             candidateSsts++;
             candidateBlocks = checked(candidateBlocks + contents.DataBlockCount);
         }
@@ -306,12 +333,12 @@ internal sealed class LocalDiskStore : IDisposable
             string intentPath = Path.Combine(root, "intent_log.json");
             if (!File.Exists(intentPath))
             {
-                AtomicWrite(intentPath, "[]"u8.ToArray());
+                AtomicStagedFile.Write(intentPath, "[]"u8);
             }
             string journalPath = Path.Combine(root, "manifest.journal");
             if (!File.Exists(journalPath))
             {
-                AtomicWrite(journalPath, []);
+                AtomicStagedFile.Write(journalPath, []);
             }
             foreach (var temporary in Directory.GetFiles(Path.Combine(root, "sst", ".flush-staging"), "*.tmp"))
             {
@@ -441,7 +468,8 @@ internal sealed class LocalDiskStore : IDisposable
             _failpoints.Hit(PantsFailpoint.BeforeWalAppend);
             var encoded = MidgeWalCodec.EncodeTransactionBatch(checked((ulong)payload.TransactionId), beginSequence, _lease.Epoch, mutations);
             MidgeWalCodec.AppendFrame(
-                _walStream,
+                _walStream.SafeFileHandle,
+                _walStream.Length,
                 encoded,
                 () => _failpoints.Hit(PantsFailpoint.MidWalAppend));
             _failpoints.Hit(PantsFailpoint.AfterWalAppend);
@@ -718,7 +746,7 @@ internal sealed class LocalDiskStore : IDisposable
 
             MidgeSstContents[] contents = plan.Inputs
                 .Select(input => MidgeSstCodec.Decode(
-                    File.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
+                    PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
                 .ToArray();
             MidgeSstEntry[] entries = contents
                 .SelectMany(static content => content.Entries)
@@ -799,7 +827,7 @@ internal sealed class LocalDiskStore : IDisposable
 
     private void RemoveSstFromCaches(string name)
     {
-        _readerCache.Remove(name);
+        _readerCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
     }
 
@@ -817,7 +845,7 @@ internal sealed class LocalDiskStore : IDisposable
                     throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
                 }
 
-                byte[] bytes = File.ReadAllBytes(path);
+                byte[] bytes = PositionalFile.ReadAllBytes(path);
                 if (file.ContentCrc32C.HasValue && MidgeDiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
                 {
                     throw new PantsStorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
@@ -1176,7 +1204,7 @@ internal sealed class LocalDiskStore : IDisposable
 
         if (File.Exists(finalPath))
         {
-            byte[] existing = File.ReadAllBytes(finalPath);
+            byte[] existing = PositionalFile.ReadAllBytes(finalPath);
             if (!existing.AsSpan().SequenceEqual(bytes))
             {
                 throw new PantsCorruptionException(
@@ -1233,12 +1261,14 @@ internal sealed class LocalDiskStore : IDisposable
 
     private void SaveIntentLog(List<JsonElement> intents)
     {
-        _failpoints.Hit(PantsFailpoint.BeforeIntentLogReplace);
-        AtomicWrite(_intentPath, JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions));
+        AtomicStagedFile.Write(
+            _intentPath,
+            JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions),
+            beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeIntentLogReplace));
         _failpoints.Hit(PantsFailpoint.AfterIntentLogReplace);
     }
 
-    private void ClearIntentLog() => AtomicWrite(_intentPath, "[]"u8.ToArray());
+    private void ClearIntentLog() => AtomicStagedFile.Write(_intentPath, "[]"u8);
 
     private static JsonElement CreateManifestEdit(string variant, object value) =>
         JsonSerializer.SerializeToElement(
@@ -1281,21 +1311,13 @@ internal sealed class LocalDiskStore : IDisposable
             },
             JsonOptions);
         byte[] marker = EncodeManifestJournalRecord(9, markerPayload);
-        using (var journal = new FileStream(
-                   _manifestJournalPath,
-                   FileMode.OpenOrCreate,
-                   FileAccess.Write,
-                   FileShare.Read))
-        {
-            journal.Seek(0, SeekOrigin.End);
-            _failpoints.Hit(PantsFailpoint.BeforeManifestJournalAppend);
-            journal.Write(record);
-            journal.Write(marker);
-            _failpoints.Hit(PantsFailpoint.AfterManifestJournalAppend);
-            _failpoints.Hit(PantsFailpoint.BeforeManifestJournalSync);
-            journal.Flush(flushToDisk: true);
-            _failpoints.Hit(PantsFailpoint.AfterManifestJournalSync);
-        }
+        _failpoints.Hit(PantsFailpoint.BeforeManifestJournalAppend);
+        PositionalFile.AppendAndFlush(
+            _manifestJournalPath,
+            [record, marker],
+            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalAppend),
+            () => _failpoints.Hit(PantsFailpoint.BeforeManifestJournalSync),
+            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalSync));
 
         ApplyManifestEdit(_manifest, edit, recordType);
         _manifest.EditCheckpointId = editId;
@@ -1316,11 +1338,12 @@ internal sealed class LocalDiskStore : IDisposable
     private void SaveManifestCheckpoint()
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(_manifest, JsonOptions);
-        _failpoints.Hit(PantsFailpoint.BeforeManifestCheckpointReplace);
-        AtomicWrite(_manifestSnapshotPath, json);
-        using var journal = new FileStream(_manifestJournalPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        journal.Flush(flushToDisk: true);
-        AtomicWrite(_manifestPath, json);
+        AtomicStagedFile.Write(
+            _manifestSnapshotPath,
+            json,
+            beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeManifestCheckpointReplace));
+        AtomicStagedFile.Write(_manifestJournalPath, []);
+        AtomicStagedFile.Write(_manifestPath, json);
         _failpoints.Hit(PantsFailpoint.AfterManifestCheckpointReplace);
     }
 
@@ -1397,7 +1420,7 @@ internal sealed class LocalDiskStore : IDisposable
                 "Persisted state without a Midge FORMAT marker is unsupported.");
         }
 
-        AtomicWrite(path, System.Text.Encoding.UTF8.GetBytes(expected));
+        AtomicStagedFile.Write(path, System.Text.Encoding.UTF8.GetBytes(expected));
     }
 
     private static MidgeManifest LoadManifest(
@@ -1768,7 +1791,7 @@ internal sealed class LocalDiskStore : IDisposable
         string path = Path.Combine(root, "sst", metadata.Name);
         try
         {
-            byte[] bytes = File.ReadAllBytes(path);
+            byte[] bytes = PositionalFile.ReadAllBytes(path);
             if ((metadata.SizeBytes != 0 && metadata.SizeBytes != checked((ulong)bytes.Length)) ||
                 (metadata.ContentCrc32C.HasValue &&
                  metadata.ContentCrc32C.Value != MidgeDiskFormat.Crc32C(bytes)))
@@ -1840,7 +1863,7 @@ internal sealed class LocalDiskStore : IDisposable
 
         state.MarkSalvageMode();
         RetainCorruptFile(path);
-        AtomicWrite(path, replacement);
+        AtomicStagedFile.Write(path, replacement);
     }
 
     internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes)
@@ -2217,18 +2240,6 @@ internal sealed class LocalDiskStore : IDisposable
         File.Move(path, retained);
     }
 
-    private static void AtomicWrite(string path, byte[] bytes)
-    {
-        var temporary = path + ".tmp";
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
-        }
-
-        File.Move(temporary, path, overwrite: true);
-    }
-
     private static string ValidateSstName(string name)
     {
         if (string.IsNullOrEmpty(name) || name != Path.GetFileName(name) || !name.EndsWith(".sst", StringComparison.Ordinal) || name.Contains(':'))
@@ -2252,6 +2263,7 @@ internal sealed class LocalDiskStore : IDisposable
         }
 
         _disposed = true;
+        _readerCache.Dispose();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();

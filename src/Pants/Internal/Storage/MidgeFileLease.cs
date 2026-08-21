@@ -3,7 +3,6 @@ namespace Pants;
 internal sealed class MidgeFileLease : IDisposable
 {
     private static readonly TimeSpan LeaseTakeoverBaseDelay = TimeSpan.FromSeconds(60);
-    private readonly string _root;
     private readonly string _leaderPath;
     private readonly string _lockPath;
     private readonly string _holderId;
@@ -21,7 +20,6 @@ internal sealed class MidgeFileLease : IDisposable
         Action? leaseLossCallback,
         TimeSpan heartbeatInterval)
     {
-        _root = root;
         _leaderPath = Path.Combine(root, ".midge_leader");
         _lockPath = Path.Combine(root, ".midge_leader.lock");
         _holderId = holderId;
@@ -74,7 +72,7 @@ internal sealed class MidgeFileLease : IDisposable
         }
 
         ulong epoch = previousEpoch + 1;
-        WriteRecord(root, leaderPath, new LeaseRecord(epoch, holderId, DateTimeOffset.UtcNow.ToString("O")));
+        WriteRecord(leaderPath, new LeaseRecord(epoch, holderId, DateTimeOffset.UtcNow.ToString("O")));
         var published = ReadRecord(leaderPath);
         if (published?.Epoch != epoch || published.HolderId != holderId)
         {
@@ -114,7 +112,6 @@ internal sealed class MidgeFileLease : IDisposable
                 else
                 {
                     WriteRecord(
-                        _root,
                         _leaderPath,
                         current with { AcquiredAt = DateTimeOffset.UtcNow.ToString("O") });
                 }
@@ -156,7 +153,7 @@ internal sealed class MidgeFileLease : IDisposable
                 var current = ReadRecord(_leaderPath);
                 if (current?.Epoch == Epoch && current.HolderId == _holderId)
                 {
-                    WriteRecord(_root, _leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
+                    WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
                 }
             }
             catch
@@ -205,19 +202,10 @@ internal sealed class MidgeFileLease : IDisposable
                 "Midge leader record is invalid; ownership is ambiguous.");
     }
 
-    private static void WriteRecord(string root, string target, LeaseRecord record)
+    private static void WriteRecord(string target, LeaseRecord record)
     {
-        var temporary = Path.Combine(root, $".midge_leader.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
         var content = $"epoch: {record.Epoch}\nholder_id: {record.HolderId}\nacquired_at: {record.AcquiredAt}\n";
-        using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        using (var writer = new StreamWriter(stream))
-        {
-            writer.Write(content);
-            writer.Flush();
-            stream.Flush(flushToDisk: true);
-        }
-
-        File.Move(temporary, target, overwrite: true);
+        AtomicStagedFile.Write(target, System.Text.Encoding.UTF8.GetBytes(content));
     }
 
     private sealed record LeaseRecord(ulong Epoch, string HolderId, string AcquiredAt);

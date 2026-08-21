@@ -490,7 +490,12 @@ internal sealed class PantsActor : IAsyncDisposable
                 DurabilityWaitersFannedOutTotal = _telemetry.DurabilityWaitersFannedOut,
                 SstBloomRejectsTotal = _telemetry.SstBloomRejects,
                 SstBloomChecksTotal = _telemetry.SstBloomChecks,
+                SstBloomTruePositivesTotal = _telemetry.SstBloomTruePositives,
+                SstBloomFalsePositivesTotal = _telemetry.SstBloomFalsePositives,
+                SstKeyRangeRejectsTotal = _telemetry.SstKeyRangeRejects,
                 SstDataBlocksReadTotal = _telemetry.SstDataBlocksRead,
+                ReadAmplificationCompactionTriggersTotal =
+                    _telemetry.ReadAmplificationCompactionTriggers,
                 WalRecoveryRecordsReplayed = _diskStore?.WalRecoveryRecordsReplayed ?? 0,
                 WalRecoveryBytesReplayed = _diskStore?.WalRecoveryBytesReplayed ?? 0,
                 IntentLogReplayRuns = state.IntentLogReplayRuns,
@@ -528,18 +533,27 @@ internal sealed class PantsActor : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         _ = await SendAsync(
-            _ =>
+            async state =>
             {
+                bool exceedsBudget;
                 if (_diskStore is null)
                 {
-                    _telemetry.RecordSstRead(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    exceedsBudget = _telemetry.RecordSstRead(default);
                 }
                 else
                 {
-                    _diskStore.RecordPointRead(_telemetry, columnFamily, key.Span);
+                    exceedsBudget = _diskStore.RecordPointRead(
+                        _telemetry,
+                        columnFamily,
+                        key.Span);
                 }
 
-                return ValueTask.FromResult(true);
+                if (exceedsBudget && _options.BackgroundCompaction && _diskStore is not null)
+                {
+                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                }
+
+                return true;
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -1131,6 +1145,22 @@ internal sealed class PantsActor : IAsyncDisposable
         await _compactionWorker
             .ExecuteAsync(() => bytesRewritten = _diskStore.Compact(state, force: false))
             .ConfigureAwait(false);
+        if (bytesRewritten > 0)
+        {
+            _telemetry.RecordCompaction(bytesRewritten);
+            await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask RunReadAmplificationCompactionAsync(PantsRuntimeState state)
+    {
+        _telemetry.RecordReadAmplificationCompactionTrigger();
+        long bytesRewritten = 0;
+        await _compactionWorker
+            .ExecuteAsync(() => bytesRewritten = _diskStore!.Compact(state, force: true))
+            .ConfigureAwait(false);
+        state.UnflushedFamilies.Clear();
+        ClearMemtableAccounting(state);
         if (bytesRewritten > 0)
         {
             _telemetry.RecordCompaction(bytesRewritten);

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using K4os.Compression.LZ4;
+using Microsoft.Win32.SafeHandles;
 using ZstdSharp;
 
 namespace Pants;
@@ -25,14 +26,16 @@ internal static class MidgeSstCodec
             .ThenByDescending(entry => entry.Sequence)
             .ToList();
         using var file = new MemoryStream();
-        var index = new List<(byte[] FirstKey, BlockHandle Handle)>();
+        var index = new List<(byte[] FirstKey, MidgeSstBlockHandle Handle)>();
         var blockKeys = new List<IReadOnlyList<byte[]>>();
         var currentBlockKeys = new List<byte[]>();
+        var keyProfiler = new KeyStructureProfiler();
         using var block = new MemoryStream();
         byte[] previousKey = [];
         byte[]? firstKey = null;
         foreach (var entry in entries)
         {
+            keyProfiler.Add(entry.Key);
             var encoded = EncodeEntry(previousKey, entry);
             if (block.Length > 0 && block.Length + encoded.Length > TargetBlockSize)
             {
@@ -57,13 +60,23 @@ internal static class MidgeSstCodec
             blockKeys.Add(currentBlockKeys.ToArray());
         }
 
-        BlockHandle? rangeHandle = tombstones.Count == 0
+        MidgeSstBlockHandle? rangeHandle = tombstones.Count == 0
             ? null
             : AppendBlock(file, EncodeRangeTombstones(tombstones), performanceGoal);
+        MidgeSstIndexKind indexKind = MidgeSstIndexTuner.Decide(keyProfiler.Finish());
+        MidgeSstBlockHandle? trieHandle = indexKind == MidgeSstIndexKind.Trie
+            ? AppendBlock(
+                file,
+                MidgeTrieIndex.Encode(index.Select(static entry => entry.FirstKey).ToArray()),
+                performanceGoal)
+            : null;
         var blockBloomHandle = AppendBlock(file, EncodeBlockBlooms(blockKeys), performanceGoal);
-        var metaHandle = AppendBlock(file, EncodeMetadata(entries, tombstones, rangeHandle), performanceGoal);
+        var metaHandle = AppendBlock(
+            file,
+            EncodeMetadata(entries, tombstones, rangeHandle, indexKind),
+            performanceGoal);
         var indexHandle = AppendBlock(file, EncodeIndex(index), performanceGoal);
-        file.Write(EncodeFooter(metaHandle, indexHandle, blockBloomHandle));
+        file.Write(EncodeFooter(metaHandle, indexHandle, trieHandle, blockBloomHandle));
         return file.ToArray();
     }
 
@@ -76,26 +89,15 @@ internal static class MidgeSstCodec
 
         var footerOffset = bytes.Length - MidgeDiskFormat.SstFooterSize;
         var footer = bytes.AsSpan(footerOffset);
-        var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(footer[80..84]);
-        if (MidgeDiskFormat.Crc32C(footer[..80]) != storedCrc)
-        {
-            throw new PantsStorageException("SST V4 footer checksum mismatch.");
-        }
-
-        if (BinaryPrimitives.ReadUInt32LittleEndian(footer[64..68]) != MidgeDiskFormat.SstFormatVersion ||
-            BinaryPrimitives.ReadUInt32LittleEndian(footer[68..72]) != MidgeDiskFormat.SstFooterSize ||
-            BinaryPrimitives.ReadUInt64LittleEndian(footer[72..80]) != MidgeDiskFormat.SstFooterMagic)
-        {
-            throw new PantsStorageException("SST V4 footer format or magic is invalid.");
-        }
+        ValidateFooter(footer);
 
         var metaHandle = ReadHandle(footer, 0);
         var indexHandle = ReadHandle(footer, 16);
-        BlockHandle? trieHandle = ReadOptionalHandle(footer, 32, "trie");
-        BlockHandle? bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
+        MidgeSstBlockHandle? trieHandle = ReadOptionalHandle(footer, 32, "trie");
+        MidgeSstBlockHandle? bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
         var meta = ReadBlock(bytes, metaHandle);
         var index = DecodeIndex(ReadBlock(bytes, indexHandle));
-        SstMetadata metadata = DecodeMetadata(meta);
+        MidgeSstMetadata metadata = DecodeMetadata(meta);
         var tombstones = metadata.RangeHandle is null
             ? []
             : DecodeRangeTombstones(ReadBlock(bytes, metadata.RangeHandle.Value));
@@ -104,10 +106,7 @@ internal static class MidgeSstCodec
             ValidateBlockBlooms(ReadBlock(bytes, bloom), index.Count);
         }
 
-        if (trieHandle is { } trie)
-        {
-            _ = ReadBlock(bytes, trie);
-        }
+        _ = DecodeTrieIndex(bytes, metadata.IndexKind, trieHandle, index);
 
         ValidateBlockCoverage(
             footerOffset,
@@ -145,24 +144,22 @@ internal static class MidgeSstCodec
         }
 
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
-        List<(byte[] FirstKey, BlockHandle Handle)> index = DecodeIndex(
+        List<(byte[] FirstKey, MidgeSstBlockHandle Handle)> index = DecodeIndex(
             ReadBlock(bytes, ReadHandle(footer, 16)));
-        BlockHandle? bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
+        MidgeSstMetadata metadata = DecodeMetadata(ReadBlock(bytes, ReadHandle(footer, 0)));
+        MidgeTrieIndex? trieIndex = DecodeTrieIndex(
+            bytes,
+            metadata.IndexKind,
+            ReadOptionalHandle(footer, 32, "trie"),
+            index);
+        MidgeSstBlockHandle? bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
         if (index.Count == 0 || bloomHandle is null)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
-        int candidate = -1;
-        for (int blockIndex = 0; blockIndex < index.Count; blockIndex++)
-        {
-            if (key.SequenceCompareTo(index[blockIndex].FirstKey) < 0)
-            {
-                break;
-            }
-
-            candidate = blockIndex;
-        }
+        int trieCandidate = trieIndex?.FindFloorBlock(key) ?? -1;
+        int candidate = trieCandidate >= 0 ? trieCandidate : FindFloorBlock(index, key);
 
         if (candidate < 0)
         {
@@ -173,24 +170,45 @@ internal static class MidgeSstCodec
             ReadBlock(bytes, bloomHandle.Value),
             candidate,
             key);
-        BlockHandle candidateHandle = index[candidate].Handle;
+        MidgeSstBlockHandle candidateHandle = index[candidate].Handle;
         int blockSizeBytes = checked((int)candidateHandle.Size);
         return mightContain
             ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
             : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
     }
 
-    internal static void ValidatePointReadDataBlock(byte[] bytes, int blockIndex)
+    internal static MidgeSstIndexKind GetIndexKind(byte[] bytes)
     {
-        ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
-        List<(byte[] FirstKey, BlockHandle Handle)> index = DecodeIndex(
-            ReadBlock(bytes, ReadHandle(footer, 16)));
-        if ((uint)blockIndex >= (uint)index.Count)
+        if (bytes.Length < MidgeDiskFormat.SstFooterSize)
         {
-            throw new PantsStorageException("SST point-read block index is invalid.");
+            throw new PantsStorageException("SST is shorter than its V4 footer.");
         }
 
-        _ = ReadBlock(bytes, index[blockIndex].Handle);
+        ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
+        MidgeSstMetadata metadata = DecodeMetadata(ReadBlock(bytes, ReadHandle(footer, 0)));
+        List<(byte[] FirstKey, MidgeSstBlockHandle Handle)> index = DecodeIndex(
+            ReadBlock(bytes, ReadHandle(footer, 16)));
+        _ = DecodeTrieIndex(
+            bytes,
+            metadata.IndexKind,
+            ReadOptionalHandle(footer, 32, "trie"),
+            index);
+        return metadata.IndexKind;
+    }
+
+    internal static bool DataBlockContainsKey(byte[] block, ReadOnlySpan<byte> key)
+    {
+        var entries = new List<MidgeSstEntry>();
+        DecodeEntries(block, entries);
+        foreach (MidgeSstEntry entry in entries)
+        {
+            if (entry.Key.AsSpan().SequenceEqual(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static byte[] EncodeEntry(byte[] previousKey, MidgeSstEntry entry)
@@ -289,7 +307,7 @@ internal static class MidgeSstCodec
         }
     }
 
-    private static BlockHandle AppendBlock(Stream stream, byte[] raw, PantsPerformanceGoal performanceGoal)
+    private static MidgeSstBlockHandle AppendBlock(Stream stream, byte[] raw, PantsPerformanceGoal performanceGoal)
     {
         (byte[] payload, MidgeCompressionAlgorithm algorithm) = CompressBlock(raw, performanceGoal);
         var offset = checked((ulong)stream.Position);
@@ -301,7 +319,7 @@ internal static class MidgeSstCodec
             MidgeDiskFormat.Crc32C(withTrailer.AsSpan(0, payload.Length + 1)));
         MidgeDiskFormat.WriteUInt32(stream, (uint)withTrailer.Length);
         stream.Write(withTrailer);
-        return new BlockHandle(offset, checked((ulong)withTrailer.Length + 4));
+        return new MidgeSstBlockHandle(offset, checked((ulong)withTrailer.Length + 4));
     }
 
     private static (byte[] Payload, MidgeCompressionAlgorithm Algorithm) CompressBlock(
@@ -382,7 +400,7 @@ internal static class MidgeSstCodec
         return (compressor.Wrap(raw).ToArray(), algorithm);
     }
 
-    private static byte[] ReadBlock(byte[] file, BlockHandle handle)
+    internal static byte[] ReadBlock(byte[] file, MidgeSstBlockHandle handle)
     {
         if (handle.Offset > (ulong)file.Length || handle.Size < 9 || handle.Size > (ulong)file.Length - handle.Offset)
         {
@@ -407,7 +425,31 @@ internal static class MidgeSstCodec
         return MidgeDiskFormat.Decompress(encoded[..^5], algorithm);
     }
 
-    private static byte[] EncodeMetadata(IReadOnlyList<MidgeSstEntry> entries, IReadOnlyList<MidgeRangeTombstone> tombstones, BlockHandle? rangeHandle)
+    internal static byte[] ReadBlock(
+        SafeFileHandle file,
+        long fileLength,
+        MidgeSstBlockHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        if (handle.Offset > (ulong)fileLength ||
+            handle.Size > int.MaxValue ||
+            handle.Size > (ulong)fileLength - handle.Offset)
+        {
+            throw new PantsStorageException("SST block handle is outside the file.");
+        }
+
+        byte[] encoded = PositionalFile.ReadExactly(
+            file,
+            checked((long)handle.Offset),
+            checked((int)handle.Size));
+        return ReadBlock(encoded, new MidgeSstBlockHandle(0, handle.Size));
+    }
+
+    private static byte[] EncodeMetadata(
+        IReadOnlyList<MidgeSstEntry> entries,
+        IReadOnlyList<MidgeRangeTombstone> tombstones,
+        MidgeSstBlockHandle? rangeHandle,
+        MidgeSstIndexKind indexKind)
     {
         var keys = entries.Select(entry => entry.Key)
             .Concat(tombstones.SelectMany(tombstone => new[] { tombstone.Start, tombstone.End }))
@@ -415,7 +457,7 @@ internal static class MidgeSstCodec
             .ToList();
         using var output = new MemoryStream();
         MidgeDiskFormat.WriteUInt32(output, MidgeDiskFormat.SstFormatVersion);
-        output.WriteByte(0);
+        output.WriteByte((byte)indexKind);
         output.WriteByte(keys.Count > 0 ? (byte)1 : (byte)0);
         WriteUInt16(output, 0);
         WriteHandle(output, rangeHandle ?? default);
@@ -428,7 +470,7 @@ internal static class MidgeSstCodec
         return output.ToArray();
     }
 
-    private static SstMetadata DecodeMetadata(byte[] metadata)
+    internal static MidgeSstMetadata DecodeMetadata(byte[] metadata)
     {
         if (metadata.Length < 24)
         {
@@ -441,20 +483,20 @@ internal static class MidgeSstCodec
             throw new PantsStorageException($"Unsupported SST metadata format version '{version}'.");
         }
 
-        byte indexKind = metadata[4];
+        byte rawIndexKind = metadata[4];
         byte flags = metadata[5];
-        if (indexKind is not (0 or 1) || (flags & ~1) != 0 || metadata[6] != 0 || metadata[7] != 0)
+        if (rawIndexKind is not (0 or 1) || (flags & ~1) != 0 || metadata[6] != 0 || metadata[7] != 0)
         {
             throw new PantsStorageException("SST metadata flags, index kind, or reserved bytes are invalid.");
         }
 
-        BlockHandle rawRangeHandle = ReadHandle(metadata, 8);
+        MidgeSstBlockHandle rawRangeHandle = ReadHandle(metadata, 8);
         if (rawRangeHandle.Size == 0 && rawRangeHandle.Offset != 0)
         {
             throw new PantsStorageException("SST range-tombstone handle is only partially present.");
         }
 
-        BlockHandle? rangeHandle = rawRangeHandle.Offset == 0 && rawRangeHandle.Size == 0
+        MidgeSstBlockHandle? rangeHandle = rawRangeHandle.Offset == 0 && rawRangeHandle.Size == 0
             ? null
             : rawRangeHandle;
         int cursor = 24;
@@ -478,10 +520,10 @@ internal static class MidgeSstCodec
             }
         }
 
-        return new SstMetadata(indexKind, rangeHandle, smallestKey, largestKey);
+        return new MidgeSstMetadata((MidgeSstIndexKind)rawIndexKind, rangeHandle, smallestKey, largestKey);
     }
 
-    private static void ValidateBlockBlooms(byte[] bytes, int expectedBlockCount)
+    internal static void ValidateBlockBlooms(byte[] bytes, int expectedBlockCount)
     {
         if (bytes.Length < sizeof(uint))
         {
@@ -537,16 +579,16 @@ internal static class MidgeSstCodec
         }
     }
 
-    private static void ValidateBlockCoverage(
-        int footerOffset,
-        BlockHandle metadata,
-        BlockHandle index,
-        BlockHandle? trie,
-        BlockHandle? bloom,
-        BlockHandle? range,
-        List<(byte[] FirstKey, BlockHandle Handle)> dataBlocks)
+    internal static void ValidateBlockCoverage(
+        long footerOffset,
+        MidgeSstBlockHandle metadata,
+        MidgeSstBlockHandle index,
+        MidgeSstBlockHandle? trie,
+        MidgeSstBlockHandle? bloom,
+        MidgeSstBlockHandle? range,
+        List<(byte[] FirstKey, MidgeSstBlockHandle Handle)> dataBlocks)
     {
-        var handles = new List<BlockHandle>(checked(2 + dataBlocks.Count + 3))
+        var handles = new List<MidgeSstBlockHandle>(checked(2 + dataBlocks.Count + 3))
         {
             metadata,
             index
@@ -585,7 +627,7 @@ internal static class MidgeSstCodec
             }
         }
 
-        BlockHandle last = handles[^1];
+        MidgeSstBlockHandle last = handles[^1];
         if (checked(last.Offset + last.Size) != checked((ulong)footerOffset))
         {
             throw new PantsStorageException("SST block references do not exactly reach the footer.");
@@ -606,7 +648,7 @@ internal static class MidgeSstCodec
     }
 
     private static void ValidateMetadataKeyRange(
-        SstMetadata metadata,
+        MidgeSstMetadata metadata,
         List<MidgeSstEntry> entries,
         List<MidgeRangeTombstone> tombstones)
     {
@@ -633,7 +675,7 @@ internal static class MidgeSstCodec
         }
     }
 
-    private static byte[] EncodeIndex(IEnumerable<(byte[] FirstKey, BlockHandle Handle)> entries)
+    private static byte[] EncodeIndex(IEnumerable<(byte[] FirstKey, MidgeSstBlockHandle Handle)> entries)
     {
         using var output = new MemoryStream();
         foreach (var (key, handle) in entries)
@@ -645,9 +687,9 @@ internal static class MidgeSstCodec
         return output.ToArray();
     }
 
-    private static List<(byte[] FirstKey, BlockHandle Handle)> DecodeIndex(byte[] bytes)
+    internal static List<(byte[] FirstKey, MidgeSstBlockHandle Handle)> DecodeIndex(byte[] bytes)
     {
-        var output = new List<(byte[], BlockHandle)>();
+        var output = new List<(byte[], MidgeSstBlockHandle)>();
         var cursor = 0;
         while (cursor < bytes.Length)
         {
@@ -671,6 +713,59 @@ internal static class MidgeSstCodec
         }
 
         return output;
+    }
+
+    internal static MidgeTrieIndex? DecodeTrieIndex(
+        byte[] file,
+        MidgeSstIndexKind indexKind,
+        MidgeSstBlockHandle? trieHandle,
+        IReadOnlyList<(byte[] FirstKey, MidgeSstBlockHandle Handle)> blockIndex)
+    {
+        byte[]? trie = trieHandle is { } handle ? ReadBlock(file, handle) : null;
+        return DecodeTrieIndex(indexKind, trie, blockIndex);
+    }
+
+    internal static MidgeTrieIndex? DecodeTrieIndex(
+        MidgeSstIndexKind indexKind,
+        byte[]? trie,
+        IReadOnlyList<(byte[] FirstKey, MidgeSstBlockHandle Handle)> blockIndex)
+    {
+        return (indexKind, trie) switch
+        {
+            (MidgeSstIndexKind.Trie, { } bytes) => MidgeTrieIndex.Decode(
+                bytes,
+                blockIndex.Select(static entry => entry.FirstKey).ToArray()),
+            (MidgeSstIndexKind.Trie, null) => throw new PantsStorageException(
+                "Trie-selected SST metadata is missing its trie footer handle."),
+            (MidgeSstIndexKind.Sparse, not null) => throw new PantsStorageException(
+                "Sparse-selected SST metadata unexpectedly carries a trie footer handle."),
+            (MidgeSstIndexKind.Sparse, null) => null,
+            _ => throw new PantsStorageException("SST metadata selects an unsupported index kind.")
+        };
+    }
+
+    internal static int FindFloorBlock(
+        IReadOnlyList<(byte[] FirstKey, MidgeSstBlockHandle Handle)> index,
+        ReadOnlySpan<byte> key)
+    {
+        var low = 0;
+        int high = index.Count - 1;
+        var result = -1;
+        while (low <= high)
+        {
+            int middle = low + ((high - low) / 2);
+            if (key.SequenceCompareTo(index[middle].FirstKey) < 0)
+            {
+                high = middle - 1;
+            }
+            else
+            {
+                result = middle;
+                low = middle + 1;
+            }
+        }
+
+        return result;
     }
 
     private static byte[] EncodeBlockBlooms(IReadOnlyList<IReadOnlyList<byte[]>> blockKeys)
@@ -720,7 +815,7 @@ internal static class MidgeSstCodec
         return output.ToArray();
     }
 
-    private static bool BloomMightContain(
+    internal static bool BloomMightContain(
         ReadOnlySpan<byte> serializedBlooms,
         int blockIndex,
         ReadOnlySpan<byte> key)
@@ -825,11 +920,20 @@ internal static class MidgeSstCodec
         return output;
     }
 
-    private static byte[] EncodeFooter(BlockHandle meta, BlockHandle index, BlockHandle bloom)
+    private static byte[] EncodeFooter(
+        MidgeSstBlockHandle meta,
+        MidgeSstBlockHandle index,
+        MidgeSstBlockHandle? trie,
+        MidgeSstBlockHandle bloom)
     {
         var footer = new byte[MidgeDiskFormat.SstFooterSize];
         WriteHandle(footer, 0, meta);
         WriteHandle(footer, 16, index);
+        if (trie.HasValue)
+        {
+            WriteHandle(footer, 32, trie.Value);
+        }
+
         WriteHandle(footer, 48, bloom);
         BinaryPrimitives.WriteUInt32LittleEndian(footer.AsSpan(64), MidgeDiskFormat.SstFormatVersion);
         BinaryPrimitives.WriteUInt32LittleEndian(footer.AsSpan(68), MidgeDiskFormat.SstFooterSize);
@@ -838,16 +942,37 @@ internal static class MidgeSstCodec
         return footer;
     }
 
-    private static BlockHandle ReadHandle(ReadOnlySpan<byte> bytes, int offset) => new(
+    internal static void ValidateFooter(ReadOnlySpan<byte> footer)
+    {
+        if (footer.Length != MidgeDiskFormat.SstFooterSize)
+        {
+            throw new PantsStorageException("SST V4 footer size is invalid.");
+        }
+
+        uint storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(footer[80..84]);
+        if (MidgeDiskFormat.Crc32C(footer[..80]) != storedCrc)
+        {
+            throw new PantsStorageException("SST V4 footer checksum mismatch.");
+        }
+
+        if (BinaryPrimitives.ReadUInt32LittleEndian(footer[64..68]) != MidgeDiskFormat.SstFormatVersion ||
+            BinaryPrimitives.ReadUInt32LittleEndian(footer[68..72]) != MidgeDiskFormat.SstFooterSize ||
+            BinaryPrimitives.ReadUInt64LittleEndian(footer[72..80]) != MidgeDiskFormat.SstFooterMagic)
+        {
+            throw new PantsStorageException("SST V4 footer format or magic is invalid.");
+        }
+    }
+
+    internal static MidgeSstBlockHandle ReadHandle(ReadOnlySpan<byte> bytes, int offset) => new(
         BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, 8)),
         BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset + 8, 8)));
 
-    private static BlockHandle? ReadOptionalHandle(
+    internal static MidgeSstBlockHandle? ReadOptionalHandle(
         ReadOnlySpan<byte> bytes,
         int offset,
         string description)
     {
-        BlockHandle handle = ReadHandle(bytes, offset);
+        MidgeSstBlockHandle handle = ReadHandle(bytes, offset);
         if (handle.Offset == 0 && handle.Size == 0)
         {
             return null;
@@ -861,13 +986,13 @@ internal static class MidgeSstCodec
         return handle;
     }
 
-    private static void WriteHandle(Stream stream, BlockHandle handle)
+    private static void WriteHandle(Stream stream, MidgeSstBlockHandle handle)
     {
         MidgeDiskFormat.WriteUInt64(stream, handle.Offset);
         MidgeDiskFormat.WriteUInt64(stream, handle.Size);
     }
 
-    private static void WriteHandle(Span<byte> bytes, int offset, BlockHandle handle)
+    private static void WriteHandle(Span<byte> bytes, int offset, MidgeSstBlockHandle handle)
     {
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.Slice(offset, 8), handle.Offset);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.Slice(offset + 8, 8), handle.Size);
@@ -905,11 +1030,4 @@ internal static class MidgeSstCodec
         stream.Write(bytes);
     }
 
-    private readonly record struct BlockHandle(ulong Offset, ulong Size);
-
-    private sealed record SstMetadata(
-        byte IndexKind,
-        BlockHandle? RangeHandle,
-        byte[]? SmallestKey,
-        byte[]? LargestKey);
 }
