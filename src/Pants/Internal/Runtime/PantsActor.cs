@@ -53,7 +53,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     failpoints: dependencies.Failpoints,
                     l0CompactionTrigger: options.L0CompactionTrigger,
                     blockCachePolicy: options.BlockCachePolicy,
-                    blockCacheBytes: options.BlockCacheBytes);
+                    blockCacheBytes: options.BlockCacheBytes,
+                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -70,7 +71,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     dependencies.Failpoints,
                     options.L0CompactionTrigger,
                     options.BlockCachePolicy,
-                    options.BlockCacheBytes);
+                    options.BlockCacheBytes,
+                    dependencies.LeaseHeartbeatInterval);
                 _simulatedCloud = new SimulatedCloudPersistence(
                     simulated.LocalCachePath,
                     _diskStore.WriterEpoch);

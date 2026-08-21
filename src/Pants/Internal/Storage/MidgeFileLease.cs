@@ -14,7 +14,12 @@ internal sealed class MidgeFileLease : IDisposable
     private bool _disposed;
     private int _leaseLossNotified;
 
-    private MidgeFileLease(string root, string holderId, ulong epoch, Action? leaseLossCallback)
+    private MidgeFileLease(
+        string root,
+        string holderId,
+        ulong epoch,
+        Action? leaseLossCallback,
+        TimeSpan heartbeatInterval)
     {
         _root = root;
         _leaderPath = Path.Combine(root, ".midge_leader");
@@ -22,7 +27,7 @@ internal sealed class MidgeFileLease : IDisposable
         _holderId = holderId;
         _leaseLossCallback = leaseLossCallback;
         Epoch = epoch;
-        _heartbeat = new Timer(_ => Renew(), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+        _heartbeat = new Timer(_ => Renew(), null, heartbeatInterval, heartbeatInterval);
     }
 
     public ulong Epoch { get; }
@@ -31,7 +36,8 @@ internal sealed class MidgeFileLease : IDisposable
         string root,
         ulong minimumEpoch,
         TimeSpan clockSkewTolerance,
-        Action? leaseLossCallback)
+        Action? leaseLossCallback,
+        TimeSpan heartbeatInterval)
     {
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
@@ -75,7 +81,7 @@ internal sealed class MidgeFileLease : IDisposable
             throw new PantsLeaseHeldException("Lost the Midge leader publication race.");
         }
 
-        return new MidgeFileLease(root, holderId, epoch, leaseLossCallback);
+        return new MidgeFileLease(root, holderId, epoch, leaseLossCallback, heartbeatInterval);
     }
 
     public void EnsureValid()
