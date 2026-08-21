@@ -44,6 +44,24 @@ public sealed class MidgeContractManifestTests
         });
     }
 
+    [Fact]
+    public void ShouldMapEveryM1ContractToAnExecutablePantsTest()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+
+        JsonElement[] plannedM1Contracts = document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(static entry =>
+                entry.GetProperty("issue").ValueKind == JsonValueKind.Number &&
+                entry.GetProperty("issue").GetInt32() is 1 or 2 or 3 &&
+                entry.GetProperty("status").GetString() == "planned")
+            .ToArray();
+
+        Assert.Empty(plannedM1Contracts);
+    }
+
     private static bool TestExists(string fullyQualifiedName)
     {
         int separator = fullyQualifiedName.LastIndexOf('.');
