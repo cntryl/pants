@@ -76,6 +76,7 @@ internal sealed class LocalDiskStore : IDisposable
     }
 
     public int WalRecords => _walRecords;
+    public long ActiveWalBytes => _walStream.Length;
     public string RootPath => _root;
     public bool IsLeaseHealthy
     {

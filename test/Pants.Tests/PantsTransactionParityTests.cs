@@ -274,6 +274,87 @@ public sealed class PantsTransactionParityTests
         Assert.Equal(initial, (await database.GetRuntimeMetricsAsync()).CurrentSequence);
     }
 
+    [Fact]
+    public async Task ShouldPublishOnlyAtomicSnapshotsToConcurrentReaders()
+    {
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await SeedAsync(database, ("first", "old-first"), ("second", "old-second"));
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task writer = Task.Run(async () =>
+        {
+            await start.Task;
+            await SeedAsync(database, ("first", "new-first"), ("second", "new-second"));
+        });
+        start.SetResult();
+
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            await using IPantsTransaction reader = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly);
+            string first = TestBytes.ToText((await reader.GetAsync("first"u8.ToArray()))!.Value);
+            string second = TestBytes.ToText((await reader.GetAsync("second"u8.ToArray()))!.Value);
+            Assert.True(
+                (first == "old-first" && second == "old-second") ||
+                (first == "new-first" && second == "new-second"),
+                $"Observed a partial transaction snapshot: {first}, {second}.");
+        }
+
+        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin()
+    {
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        IPantsColumnFamily dropped = await database.CreateColumnFamilyAsync("dropped");
+        await database.DropColumnFamilyAsync(dropped);
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => database.BeginTransactionAsync(dropped, PantsTransactionMode.ReadOnly).AsTask());
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+
+        await using (IPantsTransaction committed = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+            await committed.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+        await using (IPantsTransaction rolledBack = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+            await rolledBack.RollbackAsync();
+        }
+
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+    }
+
+    [Fact]
+    public async Task ShouldBoundRuntimeStateAcrossTwoThousandCommits()
+    {
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        for (var index = 0; index < 2_000; index++)
+        {
+            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put(
+                TestBytes.FromString($"key-{index:0000}"),
+                "value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(0, metrics.ActiveSnapshots);
+        Assert.Equal(2_000, metrics.CurrentSequence);
+        Assert.Equal("value", await ReadAsync(database, "key-1999"));
+    }
+
     private static async Task WriteDisjointAsync(IPantsDatabase database, int index)
     {
         await using IPantsTransaction transaction = await database.BeginTransactionAsync(

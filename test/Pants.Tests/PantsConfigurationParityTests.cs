@@ -62,6 +62,35 @@ public sealed class PantsConfigurationParityTests
                 options.BlockCacheBytes <= options.MemoryBudgetBytes));
     }
 
+    [Theory]
+    [InlineData(3)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(31)]
+    [InlineData(1_024)]
+    [InlineData(131_072)]
+    public void ShouldAccountForEveryPoolWithinSmallExplicitBudgets(long budget)
+    {
+        PantsOpenOptions options = PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+
+        Assert.Equal(budget, options.MemoryBudgetBytes);
+        Assert.True(options.TransactionMemoryPoolBytes > 0);
+        Assert.True(
+            (2 * options.MemtableSizeLimitBytes) +
+            options.TransactionMemoryPoolBytes +
+            options.BlockCacheBytes <= budget);
+    }
+
+    [Fact]
+    public void ShouldAllocateTenPercentOfExplicitBudgetToTransactionsByDefault()
+    {
+        PantsOpenOptions options = PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(1_000));
+
+        Assert.Equal(100, options.TransactionMemoryPoolBytes);
+    }
+
     [Fact]
     public void ShouldValidateEveryExplicitConfigurationBoundary()
     {
@@ -69,6 +98,7 @@ public sealed class PantsConfigurationParityTests
             .WithStorageTimeout(TimeSpan.FromMilliseconds(1))
             .WithTransactionMemoryPool(1024)
             .WithMemtableLimits(2048, 1024)
+            .WithWalBufferSize(4096)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(8192))
             .WithBlockCachePolicy(PantsBlockCachePolicy.TinyLfu);
 
@@ -76,6 +106,7 @@ public sealed class PantsConfigurationParityTests
         Assert.Equal(1024, valid.TransactionMemoryPoolBytes);
         Assert.Equal(2048, valid.MemtableSizeLimitBytes);
         Assert.Equal(1024, valid.MemtableFlushThresholdBytes);
+        Assert.Equal(4096, valid.WalBufferSizeBytes);
         Assert.Equal(PantsBlockCachePolicy.TinyLfu, valid.BlockCachePolicy);
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
             .WithStorageTimeout(TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond - 1)));
@@ -86,5 +117,7 @@ public sealed class PantsConfigurationParityTests
             .WithTransactionMemoryPool(1025));
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
             .WithMemtableLimits(1024, 1025));
+        Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
+            .WithWalBufferSize(0));
     }
 }

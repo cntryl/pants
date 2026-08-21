@@ -8,12 +8,16 @@ public sealed class PantsDurabilityParityTests
         using var directory = new TemporaryDirectory();
         const int commitCount = 48;
         await using (IPantsDatabase database = await PantsDatabase.OpenAsync(
-                         PantsOpenOptions.Local(directory.Path)))
+                         PantsOpenOptions.Local(directory.Path).WithWalBufferSize(128)))
         {
             Task[] commits = Enumerable.Range(0, commitCount)
                 .Select(index => CommitAsync(database, index))
                 .ToArray();
             await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(20));
+
+            PantsRuntimeMetrics liveMetrics = await database.GetRuntimeMetricsAsync();
+            Assert.True(liveMetrics.DurabilityWaitersFannedOutTotal > 0);
+            Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
         }
 
         await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
@@ -61,6 +65,38 @@ public sealed class PantsDurabilityParityTests
         }
 
         Assert.Equal("present", await ReadAsync(reopened, "delete-4"));
+    }
+
+    [Fact]
+    public async Task ShouldRotateAndReplayEveryWalSegmentWhenBufferLimitIsExceeded()
+    {
+        using var directory = new TemporaryDirectory();
+        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+            .WithWalBufferSize(128);
+        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(options))
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                await CommitValueAsync(
+                    database,
+                    $"key-{index}",
+                    new string((char)('a' + index), 256));
+            }
+
+            Assert.Equal(
+                3,
+                Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal").Length);
+        }
+
+        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(options);
+        for (var index = 0; index < 3; index++)
+        {
+            Assert.Equal(
+                new string((char)('a' + index), 256),
+                await ReadAsync(reopened, $"key-{index}"));
+        }
+
+        Assert.True((await reopened.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed >= 3);
     }
 
     [Theory]

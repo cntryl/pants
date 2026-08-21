@@ -61,12 +61,12 @@ public sealed class PantsEngineExclusivityParityTests
             .WithLeaseLossCallback(() => leaseLost.TrySetResult());
         await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromMilliseconds(10)));
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, ".midge_leader"),
-            $"epoch: 999\nholder_id: replacement\nacquired_at: {DateTimeOffset.UtcNow:O}\n");
-
-        await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100)));
+        await using (FileStream mutationLock = await AcquireLeaseMutationLockAsync(
+                         Path.Combine(directory.Path, ".midge_leader.lock")))
+        {
+            await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
 
         Assert.False(database.IsPrimaryLeaseHealthy);
         await using IPantsTransaction transaction = await database.BeginTransactionAsync(
@@ -76,6 +76,22 @@ public sealed class PantsEngineExclusivityParityTests
         PantsFencedException error = await Assert.ThrowsAsync<PantsFencedException>(
             () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         Assert.Equal(PantsErrorCode.Fenced, error.Code);
+    }
+
+    private static async Task<FileStream> AcquireLeaseMutationLockAsync(string path)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (true)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (!deadline.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), deadline.Token);
+            }
+        }
     }
 
     private static async Task<OpenResult> AttemptOpenAsync(string path, Task start)

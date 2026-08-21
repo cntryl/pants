@@ -6,9 +6,13 @@ public sealed class PantsColumnFamilyParityTests
     public async Task ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities()
     {
         await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        string maximumName = new('a', 255);
+        string maximumName = $"{new string('\u00e9', 127)}a";
 
         IPantsColumnFamily first = await database.CreateColumnFamilyAsync("first");
+        IPantsColumnFamily duplicate = await database.CreateColumnFamilyAsync("first");
+        Assert.Equal(first.Id, duplicate.Id);
+        Assert.Equal(first.Name, duplicate.Name);
+        Assert.Equal(2, (await database.ListColumnFamiliesAsync()).Count);
         await database.DropColumnFamilyAsync(first);
         IPantsColumnFamily recreated = await database.CreateColumnFamilyAsync("first");
         IPantsColumnFamily maximum = await database.CreateColumnFamilyAsync(maximumName);
@@ -22,9 +26,13 @@ public sealed class PantsColumnFamilyParityTests
         await Assert.ThrowsAsync<PantsInvalidArgumentException>(
             () => database.CreateColumnFamilyAsync("contains\0nul").AsTask());
         await Assert.ThrowsAsync<PantsInvalidArgumentException>(
-            () => database.CreateColumnFamilyAsync(new string('a', 256)).AsTask());
+            () => database.CreateColumnFamilyAsync(new string('\u00e9', 128)).AsTask());
         await Assert.ThrowsAsync<PantsInvalidArgumentException>(
             () => database.BeginTransactionAsync(first, PantsTransactionMode.ReadOnly).AsTask());
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => database.DropColumnFamilyAsync(first).AsTask());
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => database.DropColumnFamilyAsync(database.DefaultColumnFamily).AsTask());
     }
 
     [Fact]
@@ -117,6 +125,46 @@ public sealed class PantsColumnFamilyParityTests
 
         Assert.Equal("first", await ReadAsync(first, first.DefaultColumnFamily, "key"));
         Assert.Equal("second", await ReadAsync(second, second.DefaultColumnFamily, "key"));
+    }
+
+    [Fact]
+    public async Task ShouldKeepInMemoryOperationsEphemeralAndIsolated()
+    {
+        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory()))
+        {
+            IPantsColumnFamily family = await database.CreateColumnFamilyAsync("ephemeral");
+            await using (IPantsTransaction writes = await database.BeginTransactionAsync(
+                             family,
+                             PantsTransactionMode.ReadWrite))
+            {
+                for (var index = 0; index < 100; index++)
+                {
+                    writes.Put(TestBytes.FromString($"key-{index:000}"), "initial"u8.ToArray());
+                }
+
+                await writes.CommitAsync(PantsWriteOptions.Buffered);
+            }
+
+            await using (IPantsTransaction mutations = await database.BeginTransactionAsync(
+                             family,
+                             PantsTransactionMode.ReadWrite))
+            {
+                for (var index = 0; index < 50; index++)
+                {
+                    mutations.Delete(TestBytes.FromString($"key-{index:000}"));
+                }
+
+                mutations.Put("key-050"u8.ToArray(), "updated"u8.ToArray());
+                await mutations.CommitAsync(PantsWriteOptions.Buffered);
+            }
+
+            Assert.Null(await ReadAsync(database, family, "key-000"));
+            Assert.Equal("updated", await ReadAsync(database, family, "key-050"));
+            Assert.Equal("initial", await ReadAsync(database, family, "key-099"));
+        }
+
+        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        Assert.Null(await reopened.GetColumnFamilyAsync("ephemeral"));
     }
 
     private static async Task PutAsync(

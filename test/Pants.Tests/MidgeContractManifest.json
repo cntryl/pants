@@ -1767,7 +1767,8 @@
         "Pants.Tests.PantsConfigurationParityTests.ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder",
         "Pants.Tests.PantsConfigurationParityTests.ShouldDeriveDistinctWorkloadAndPerformanceProfilesWithinTheBudget",
         "Pants.Tests.PantsConfigurationParityTests.ShouldValidateEveryExplicitConfigurationBoundary",
-        "Pants.Tests.PantsConfigurationContractTests.ShouldDeriveMemoryPoolsWithoutExceedingExplicitBudget"
+        "Pants.Tests.PantsConfigurationContractTests.ShouldDeriveMemoryPoolsWithoutExceedingExplicitBudget",
+        "Pants.Tests.PantsConfigurationParityTests.ShouldAllocateTenPercentOfExplicitBudgetToTransactionsByDefault"
       ]
     },
     {
@@ -1863,7 +1864,8 @@
         "Pants.Tests.PantsConfigurationParityTests.ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder",
         "Pants.Tests.PantsConfigurationParityTests.ShouldDeriveDistinctWorkloadAndPerformanceProfilesWithinTheBudget",
         "Pants.Tests.PantsConfigurationParityTests.ShouldValidateEveryExplicitConfigurationBoundary",
-        "Pants.Tests.PantsConfigurationContractTests.ShouldDeriveMemoryPoolsWithoutExceedingExplicitBudget"
+        "Pants.Tests.PantsConfigurationContractTests.ShouldDeriveMemoryPoolsWithoutExceedingExplicitBudget",
+        "Pants.Tests.PantsConfigurationParityTests.ShouldAccountForEveryPoolWithinSmallExplicitBudgets"
       ]
     },
     {
@@ -2245,7 +2247,8 @@
         "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
         "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles",
         "Pants.Tests.PantsDiskStorageTests.ShouldDeleteProvenFlushOutputLeftBeforeManifestPublication",
-        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen",
+        "Pants.Tests.PantsTransactionParityTests.ShouldBoundRuntimeStateAcrossTwoThousandCommits"
       ]
     },
     {
@@ -2277,7 +2280,8 @@
         "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
         "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles",
         "Pants.Tests.PantsDiskStorageTests.ShouldDeleteProvenFlushOutputLeftBeforeManifestPublication",
-        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen",
+        "Pants.Tests.PantsTransactionParityTests.ShouldPublishOnlyAtomicSnapshotsToConcurrentReaders"
       ]
     },
     {
@@ -2876,7 +2880,8 @@
         "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverEveryConcurrentSyncCommitExactlyOnce",
         "Pants.Tests.PantsDiskStorageTests.ShouldFailStrictRecoveryButSalvageValidWalPrefix",
         "Pants.Tests.PantsDiskStorageTests.StrictRecoveryTruncatesZeroFilledActiveWalPreallocation",
-        "Pants.Tests.PantsDiskStorageTests.ShouldSkipWalForBestEffortUntilExplicitFlush"
+        "Pants.Tests.PantsDiskStorageTests.ShouldSkipWalForBestEffortUntilExplicitFlush",
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRotateAndReplayEveryWalSegmentWhenBufferLimitIsExceeded"
       ]
     },
     {
@@ -2910,7 +2915,8 @@
         "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverEveryConcurrentSyncCommitExactlyOnce",
         "Pants.Tests.PantsDiskStorageTests.ShouldFailStrictRecoveryButSalvageValidWalPrefix",
         "Pants.Tests.PantsDiskStorageTests.StrictRecoveryTruncatesZeroFilledActiveWalPreallocation",
-        "Pants.Tests.PantsDiskStorageTests.ShouldSkipWalForBestEffortUntilExplicitFlush"
+        "Pants.Tests.PantsDiskStorageTests.ShouldSkipWalForBestEffortUntilExplicitFlush",
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRotateAndReplayEveryWalSegmentWhenBufferLimitIsExceeded"
       ]
     },
     {
@@ -5121,7 +5127,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -5136,7 +5143,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -5151,7 +5159,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -5166,7 +5175,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -5181,7 +5191,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -5196,7 +5207,8 @@
       "pantsTests": [
         "Pants.Tests.PantsColumnFamilyParityTests.ShouldIsolateIndependentInMemoryDatabaseInstances",
         "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
-        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse"
+        "Pants.Tests.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Pants.Tests.PantsColumnFamilyParityTests.ShouldKeepInMemoryOperationsEphemeralAndIsolated"
       ]
     },
     {
@@ -9482,7 +9494,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
@@ -9546,7 +9559,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
@@ -9562,7 +9576,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
@@ -9642,7 +9657,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
@@ -9658,7 +9674,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
@@ -9674,7 +9691,8 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
     {
