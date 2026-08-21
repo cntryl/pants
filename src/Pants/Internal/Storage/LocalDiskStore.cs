@@ -177,7 +177,7 @@ internal sealed class LocalDiskStore : IDisposable
                 readerCacheHits++;
             }
 
-            byte[] bytes = File.ReadAllBytes(Path.Combine(_sstDirectory, candidate.Name));
+            byte[] bytes = PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, candidate.Name));
             SstPointReadDecision decision = MidgeSstCodec.GetPointReadDecision(bytes, keyCopy);
             bloomChecks = checked(bloomChecks + decision.BloomChecks);
             candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
@@ -238,7 +238,7 @@ internal sealed class LocalDiskStore : IDisposable
             }
 
             MidgeSstContents contents = MidgeSstCodec.Decode(
-                File.ReadAllBytes(Path.Combine(_sstDirectory, file.Name)));
+                PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, file.Name)));
             candidateSsts++;
             candidateBlocks = checked(candidateBlocks + contents.DataBlockCount);
         }
@@ -306,12 +306,12 @@ internal sealed class LocalDiskStore : IDisposable
             string intentPath = Path.Combine(root, "intent_log.json");
             if (!File.Exists(intentPath))
             {
-                AtomicWrite(intentPath, "[]"u8.ToArray());
+                AtomicStagedFile.Write(intentPath, "[]"u8);
             }
             string journalPath = Path.Combine(root, "manifest.journal");
             if (!File.Exists(journalPath))
             {
-                AtomicWrite(journalPath, []);
+                AtomicStagedFile.Write(journalPath, []);
             }
             foreach (var temporary in Directory.GetFiles(Path.Combine(root, "sst", ".flush-staging"), "*.tmp"))
             {
@@ -441,7 +441,8 @@ internal sealed class LocalDiskStore : IDisposable
             _failpoints.Hit(PantsFailpoint.BeforeWalAppend);
             var encoded = MidgeWalCodec.EncodeTransactionBatch(checked((ulong)payload.TransactionId), beginSequence, _lease.Epoch, mutations);
             MidgeWalCodec.AppendFrame(
-                _walStream,
+                _walStream.SafeFileHandle,
+                _walStream.Length,
                 encoded,
                 () => _failpoints.Hit(PantsFailpoint.MidWalAppend));
             _failpoints.Hit(PantsFailpoint.AfterWalAppend);
@@ -718,7 +719,7 @@ internal sealed class LocalDiskStore : IDisposable
 
             MidgeSstContents[] contents = plan.Inputs
                 .Select(input => MidgeSstCodec.Decode(
-                    File.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
+                    PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
                 .ToArray();
             MidgeSstEntry[] entries = contents
                 .SelectMany(static content => content.Entries)
@@ -817,7 +818,7 @@ internal sealed class LocalDiskStore : IDisposable
                     throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
                 }
 
-                byte[] bytes = File.ReadAllBytes(path);
+                byte[] bytes = PositionalFile.ReadAllBytes(path);
                 if (file.ContentCrc32C.HasValue && MidgeDiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
                 {
                     throw new PantsStorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
@@ -1176,7 +1177,7 @@ internal sealed class LocalDiskStore : IDisposable
 
         if (File.Exists(finalPath))
         {
-            byte[] existing = File.ReadAllBytes(finalPath);
+            byte[] existing = PositionalFile.ReadAllBytes(finalPath);
             if (!existing.AsSpan().SequenceEqual(bytes))
             {
                 throw new PantsCorruptionException(
@@ -1233,12 +1234,14 @@ internal sealed class LocalDiskStore : IDisposable
 
     private void SaveIntentLog(List<JsonElement> intents)
     {
-        _failpoints.Hit(PantsFailpoint.BeforeIntentLogReplace);
-        AtomicWrite(_intentPath, JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions));
+        AtomicStagedFile.Write(
+            _intentPath,
+            JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions),
+            beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeIntentLogReplace));
         _failpoints.Hit(PantsFailpoint.AfterIntentLogReplace);
     }
 
-    private void ClearIntentLog() => AtomicWrite(_intentPath, "[]"u8.ToArray());
+    private void ClearIntentLog() => AtomicStagedFile.Write(_intentPath, "[]"u8);
 
     private static JsonElement CreateManifestEdit(string variant, object value) =>
         JsonSerializer.SerializeToElement(
@@ -1281,21 +1284,13 @@ internal sealed class LocalDiskStore : IDisposable
             },
             JsonOptions);
         byte[] marker = EncodeManifestJournalRecord(9, markerPayload);
-        using (var journal = new FileStream(
-                   _manifestJournalPath,
-                   FileMode.OpenOrCreate,
-                   FileAccess.Write,
-                   FileShare.Read))
-        {
-            journal.Seek(0, SeekOrigin.End);
-            _failpoints.Hit(PantsFailpoint.BeforeManifestJournalAppend);
-            journal.Write(record);
-            journal.Write(marker);
-            _failpoints.Hit(PantsFailpoint.AfterManifestJournalAppend);
-            _failpoints.Hit(PantsFailpoint.BeforeManifestJournalSync);
-            journal.Flush(flushToDisk: true);
-            _failpoints.Hit(PantsFailpoint.AfterManifestJournalSync);
-        }
+        _failpoints.Hit(PantsFailpoint.BeforeManifestJournalAppend);
+        PositionalFile.AppendAndFlush(
+            _manifestJournalPath,
+            [record, marker],
+            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalAppend),
+            () => _failpoints.Hit(PantsFailpoint.BeforeManifestJournalSync),
+            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalSync));
 
         ApplyManifestEdit(_manifest, edit, recordType);
         _manifest.EditCheckpointId = editId;
@@ -1316,11 +1311,12 @@ internal sealed class LocalDiskStore : IDisposable
     private void SaveManifestCheckpoint()
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(_manifest, JsonOptions);
-        _failpoints.Hit(PantsFailpoint.BeforeManifestCheckpointReplace);
-        AtomicWrite(_manifestSnapshotPath, json);
-        using var journal = new FileStream(_manifestJournalPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        journal.Flush(flushToDisk: true);
-        AtomicWrite(_manifestPath, json);
+        AtomicStagedFile.Write(
+            _manifestSnapshotPath,
+            json,
+            beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeManifestCheckpointReplace));
+        AtomicStagedFile.Write(_manifestJournalPath, []);
+        AtomicStagedFile.Write(_manifestPath, json);
         _failpoints.Hit(PantsFailpoint.AfterManifestCheckpointReplace);
     }
 
@@ -1397,7 +1393,7 @@ internal sealed class LocalDiskStore : IDisposable
                 "Persisted state without a Midge FORMAT marker is unsupported.");
         }
 
-        AtomicWrite(path, System.Text.Encoding.UTF8.GetBytes(expected));
+        AtomicStagedFile.Write(path, System.Text.Encoding.UTF8.GetBytes(expected));
     }
 
     private static MidgeManifest LoadManifest(
@@ -1768,7 +1764,7 @@ internal sealed class LocalDiskStore : IDisposable
         string path = Path.Combine(root, "sst", metadata.Name);
         try
         {
-            byte[] bytes = File.ReadAllBytes(path);
+            byte[] bytes = PositionalFile.ReadAllBytes(path);
             if ((metadata.SizeBytes != 0 && metadata.SizeBytes != checked((ulong)bytes.Length)) ||
                 (metadata.ContentCrc32C.HasValue &&
                  metadata.ContentCrc32C.Value != MidgeDiskFormat.Crc32C(bytes)))
@@ -1840,7 +1836,7 @@ internal sealed class LocalDiskStore : IDisposable
 
         state.MarkSalvageMode();
         RetainCorruptFile(path);
-        AtomicWrite(path, replacement);
+        AtomicStagedFile.Write(path, replacement);
     }
 
     internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes)
@@ -2215,18 +2211,6 @@ internal sealed class LocalDiskStore : IDisposable
         }
 
         File.Move(path, retained);
-    }
-
-    private static void AtomicWrite(string path, byte[] bytes)
-    {
-        var temporary = path + ".tmp";
-        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            stream.Write(bytes);
-            stream.Flush(flushToDisk: true);
-        }
-
-        File.Move(temporary, path, overwrite: true);
     }
 
     private static string ValidateSstName(string name)
