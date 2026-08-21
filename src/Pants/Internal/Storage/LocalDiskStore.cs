@@ -190,16 +190,18 @@ internal sealed class LocalDiskStore : IDisposable
             }
 
             var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-            if (_blockCache.TryGet(cacheKey))
+            if (_blockCache.TryGet(cacheKey, out _))
             {
                 blockCacheHits++;
                 continue;
             }
 
             blockCacheMisses++;
-            MidgeSstCodec.ValidatePointReadDataBlock(bytes, decision.CandidateBlockIndex);
+            byte[] blockContent = MidgeSstCodec.ReadPointReadDataBlock(
+                bytes,
+                decision.CandidateBlockIndex);
             dataBlocksRead = checked(dataBlocksRead + 1);
-            _blockCache.Add(cacheKey, decision.CandidateBlockSizeBytes);
+            _ = _blockCache.Add(cacheKey, blockContent);
         }
 
         telemetry.RecordSstRead(

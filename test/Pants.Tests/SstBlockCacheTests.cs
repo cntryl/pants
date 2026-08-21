@@ -3,75 +3,149 @@ namespace Pants.Tests;
 public sealed class SstBlockCacheTests
 {
     [Fact]
-    public void ShouldUseRecencyForLruAdmission()
+    public void ShouldCreateSixteenIndependentShardsByDefault()
     {
-        var cache = new SstBlockCache(PantsBlockCachePolicy.Lru, capacityBytes: 2);
-        SstBlockCacheKey hot = new("sst", 0);
-        SstBlockCacheKey recent = new("sst", 1);
-        SstBlockCacheKey incoming = new("sst", 2);
-        cache.Add(hot, 1);
-        cache.Add(recent, 1);
-        Assert.True(cache.TryGet(hot));
-        Assert.True(cache.TryGet(recent));
+        var cache = new SstBlockCache(PantsBlockCachePolicy.Lru, capacityBytes: 1024);
 
-        cache.Add(incoming, 1);
-
-        Assert.False(cache.TryGet(hot));
-        Assert.True(cache.TryGet(recent));
-        Assert.True(cache.TryGet(incoming));
+        Assert.Equal(16, cache.ShardCount);
     }
 
     [Fact]
-    public void ShouldProtectFrequentlyUsedBlocksWithTinyLfu()
+    public async Task ShouldNotContendAcrossDifferentShards()
     {
-        var cache = new SstBlockCache(PantsBlockCachePolicy.TinyLfu, capacityBytes: 2);
-        SstBlockCacheKey hot = new("sst", 0);
-        SstBlockCacheKey recent = new("sst", 1);
-        SstBlockCacheKey incoming = new("sst", 2);
-        cache.Add(hot, 1);
-        cache.Add(recent, 1);
-        for (int access = 0; access < 8; access++)
+        ControllableSstBlockCachePolicy[] policies = [new(), new()];
+        var cache = new SstBlockCache(
+            PantsBlockCachePolicy.Lru,
+            capacityBytes: 32,
+            shardCount: policies.Length,
+            policyFactory: shard => policies[shard]);
+        SstBlockCacheKey first = FindKeyForShard(cache, 0);
+        SstBlockCacheKey second = FindKeyForShard(cache, 1);
+        Assert.True(cache.Add(first, [1]));
+        Assert.True(cache.Add(second, [2]));
+        policies[0].PauseAccess = true;
+
+        Task<bool> blockedRead = Task.Run(() => cache.TryGet(first, out _));
+        Assert.True(policies[0].AccessEntered.Wait(TimeSpan.FromSeconds(2)));
+        try
         {
-            Assert.True(cache.TryGet(hot));
+            Task<bool> independentRead = Task.Run(() => cache.TryGet(second, out _));
+
+            Assert.True(await independentRead.WaitAsync(TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            policies[0].ReleaseAccess.Set();
         }
 
-        Assert.True(cache.TryGet(recent));
-        cache.Add(incoming, 1);
-
-        Assert.True(cache.TryGet(hot));
-        Assert.True(cache.TryGet(recent));
-        Assert.False(cache.TryGet(incoming));
+        Assert.True(await blockedRead);
     }
 
     [Fact]
-    public void ShouldGiveReferencedBlocksASecondChanceWithClockPro()
+    public void ShouldUseRecencyForLruEviction()
     {
-        var cache = new SstBlockCache(PantsBlockCachePolicy.ClockPro, capacityBytes: 2);
-        SstBlockCacheKey first = new("sst", 0);
-        SstBlockCacheKey second = new("sst", 1);
+        var cache = new SstBlockCache(
+            PantsBlockCachePolicy.Lru,
+            capacityBytes: 2,
+            shardCount: 1);
+        SstBlockCacheKey hot = new("sst", 0);
+        SstBlockCacheKey recent = new("sst", 1);
         SstBlockCacheKey incoming = new("sst", 2);
-        cache.Add(first, 1);
-        cache.Add(second, 1);
-        Assert.True(cache.TryGet(first));
+        Assert.True(cache.Add(hot, [1]));
+        Assert.True(cache.Add(recent, [2]));
+        Assert.True(cache.TryGet(hot, out _));
+        Assert.True(cache.TryGet(recent, out _));
 
-        cache.Add(incoming, 1);
+        Assert.True(cache.Add(incoming, [3]));
 
-        Assert.Equal(2, cache.Count);
-        Assert.True(cache.TryGet(incoming));
+        Assert.False(cache.TryGet(hot, out _));
+        Assert.True(cache.TryGet(recent, out _));
+        Assert.True(cache.TryGet(incoming, out _));
+    }
+
+    [Fact]
+    public void ShouldRetainHotBlocksBetterThanLruGivenZipfianReadsAndOnePassScan()
+    {
+        int lruSurvivors = CountHotSurvivors(PantsBlockCachePolicy.Lru);
+        int tinyLfuSurvivors = CountHotSurvivors(PantsBlockCachePolicy.TinyLfu);
+        int clockProSurvivors = CountHotSurvivors(PantsBlockCachePolicy.ClockPro);
+
+        Assert.Equal(0, lruSurvivors);
+        Assert.True(tinyLfuSurvivors > lruSurvivors);
+        Assert.True(clockProSurvivors > lruSurvivors);
     }
 
     [Fact]
     public void ShouldRemoveAllCachedBlocksGivenObsoleteSst()
     {
-        var cache = new SstBlockCache(PantsBlockCachePolicy.Lru, capacityBytes: 3);
-        cache.Add(new SstBlockCacheKey("obsolete.sst", 0), 1);
-        cache.Add(new SstBlockCacheKey("obsolete.sst", 1), 1);
-        cache.Add(new SstBlockCacheKey("live.sst", 0), 1);
+        var cache = new SstBlockCache(
+            PantsBlockCachePolicy.Lru,
+            capacityBytes: 3,
+            shardCount: 1);
+        Assert.True(cache.Add(new SstBlockCacheKey("obsolete.sst", 0), [1]));
+        Assert.True(cache.Add(new SstBlockCacheKey("obsolete.sst", 1), [2]));
+        Assert.True(cache.Add(new SstBlockCacheKey("live.sst", 0), [3]));
 
         cache.RemoveFile("obsolete.sst");
 
         Assert.Equal(1, cache.Count);
-        Assert.False(cache.TryGet(new SstBlockCacheKey("obsolete.sst", 0)));
-        Assert.True(cache.TryGet(new SstBlockCacheKey("live.sst", 0)));
+        Assert.False(cache.TryGet(new SstBlockCacheKey("obsolete.sst", 0), out _));
+        Assert.True(cache.TryGet(new SstBlockCacheKey("live.sst", 0), out _));
+    }
+
+    [Fact]
+    public void ShouldOwnCachedBlockContent()
+    {
+        var cache = new SstBlockCache(
+            PantsBlockCachePolicy.Lru,
+            capacityBytes: 4,
+            shardCount: 1);
+        SstBlockCacheKey key = new("sst", 0);
+        byte[] source = [1, 2, 3, 4];
+        Assert.True(cache.Add(key, source));
+
+        source[0] = 99;
+
+        Assert.True(cache.TryGet(key, out ReadOnlyMemory<byte> cached));
+        Assert.Equal([1, 2, 3, 4], cached.ToArray());
+    }
+
+    private static int CountHotSurvivors(PantsBlockCachePolicy policy)
+    {
+        var cache = new SstBlockCache(policy, capacityBytes: 4, shardCount: 1);
+        SstBlockCacheKey[] hot = [new("hot", 0), new("hot", 1)];
+        Assert.True(cache.Add(hot[0], [0]));
+        Assert.True(cache.Add(hot[1], [1]));
+        Assert.True(cache.Add(new SstBlockCacheKey("cold", 0), [2]));
+        Assert.True(cache.Add(new SstBlockCacheKey("cold", 1), [3]));
+        for (var access = 0; access < 50; access++)
+        {
+            Assert.True(cache.TryGet(hot[0], out _));
+            if (access % 3 == 0)
+            {
+                Assert.True(cache.TryGet(hot[1], out _));
+            }
+        }
+
+        for (var scanBlock = 0; scanBlock < 8; scanBlock++)
+        {
+            _ = cache.Add(new SstBlockCacheKey("scan", scanBlock), [checked((byte)scanBlock)]);
+        }
+
+        return hot.Count(key => cache.TryGet(key, out _));
+    }
+
+    private static SstBlockCacheKey FindKeyForShard(SstBlockCache cache, int shard)
+    {
+        for (var index = 0; index < 10_000; index++)
+        {
+            var key = new SstBlockCacheKey($"sst-{index}", index);
+            if (cache.GetShardIndex(key) == shard)
+            {
+                return key;
+            }
+        }
+
+        throw new InvalidOperationException($"Could not find a key for shard {shard}.");
     }
 }

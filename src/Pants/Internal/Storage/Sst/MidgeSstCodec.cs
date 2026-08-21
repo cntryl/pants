@@ -208,6 +208,11 @@ internal static class MidgeSstCodec
 
     internal static void ValidatePointReadDataBlock(byte[] bytes, int blockIndex)
     {
+        _ = ReadPointReadDataBlock(bytes, blockIndex);
+    }
+
+    internal static byte[] ReadPointReadDataBlock(byte[] bytes, int blockIndex)
+    {
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
         List<(byte[] FirstKey, BlockHandle Handle)> index = DecodeIndex(
             ReadBlock(bytes, ReadHandle(footer, 16)));
@@ -216,7 +221,7 @@ internal static class MidgeSstCodec
             throw new PantsStorageException("SST point-read block index is invalid.");
         }
 
-        _ = ReadBlock(bytes, index[blockIndex].Handle);
+        return ReadBlock(bytes, index[blockIndex].Handle);
     }
 
     private static byte[] EncodeEntry(byte[] previousKey, MidgeSstEntry entry)
