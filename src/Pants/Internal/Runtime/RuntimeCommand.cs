@@ -22,18 +22,7 @@ internal sealed class RuntimeCommand<T> : IRuntimeCommand
         }
         catch (Exception exception)
         {
-            Exception publicException = exception switch
-            {
-                OperationCanceledException => exception,
-                PantsException => exception,
-                IOException ioException => PantsException.FromIOException(ioException),
-                UnauthorizedAccessException accessException => new PantsIOException(
-                    accessException.Message,
-                    accessException),
-                _ => new PantsInternalException(
-                    "An unexpected runtime failure occurred.",
-                    exception)
-            };
+            Exception publicException = RuntimeExceptionMapper.ToPublicException(exception);
             if (publicException is PantsNoSpaceException)
             {
                 state.NoSpaceEvents = checked(state.NoSpaceEvents + 1);

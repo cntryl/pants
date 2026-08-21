@@ -6,7 +6,6 @@ namespace Pants;
 internal sealed class SimulatedCloudPersistence
 {
     private const uint CatalogFormatVersion = 1;
-    private const string DdlRegistryObjectKey = "metadata/ddl.registry.json";
     private static readonly string[] MetadataFiles =
     [
         "FORMAT",
@@ -122,8 +121,9 @@ internal sealed class SimulatedCloudPersistence
                 "A WAL segment from a stale writer epoch cannot be published.");
         }
 
-        string objectKey =
-            $"wal/epochs/{segment.WriterEpoch:00000000000000000000}/{segment.SegmentId:00000000000000000000}.wal";
+        string objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+            segment.WriterEpoch,
+            segment.SegmentId);
         var publication = new PublishedWalSegment
         {
             SegmentId = segment.SegmentId,
@@ -278,10 +278,17 @@ internal sealed class SimulatedCloudPersistence
         PublishedWalSegment publication,
         ulong fencingEpoch)
     {
-        string expectedKey =
-            $"wal/epochs/{publication.WriterEpoch:00000000000000000000}/{segmentId:00000000000000000000}.wal";
+        if (segmentId == 0 || publication.WriterEpoch == 0)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                $"Cloud WAL catalog entry {segmentId} is invalid.");
+        }
+
+        string expectedKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+            publication.WriterEpoch,
+            segmentId);
         if (publication.SegmentId != segmentId ||
-            publication.WriterEpoch == 0 ||
             publication.WriterEpoch > fencingEpoch ||
             publication.SizeBytes == 0 ||
             publication.ObjectKey != expectedKey)
@@ -298,7 +305,7 @@ internal sealed class SimulatedCloudPersistence
 
     private void EnsureDdlRegistry()
     {
-        string path = ResolveObjectPath(_cloudRoot, DdlRegistryObjectKey);
+        string path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
         if (!File.Exists(path))
         {
             AtomicWrite(path, "{\n  \"epoch\": 0,\n  \"column_families\": [],\n  \"operations\": []\n}"u8.ToArray());
@@ -311,7 +318,9 @@ internal sealed class SimulatedCloudPersistence
         try
         {
             return JsonSerializer.Deserialize<DdlRegistry>(
-                File.ReadAllBytes(ResolveObjectPath(_cloudRoot, DdlRegistryObjectKey)),
+                File.ReadAllBytes(ResolveObjectPath(
+                    _cloudRoot,
+                    PantsCloudObjectLayout.DdlRegistryObjectKey)),
                 JsonOptions) ?? throw new JsonException("Cloud DDL registry is empty.");
         }
         catch (JsonException exception)
@@ -324,7 +333,7 @@ internal sealed class SimulatedCloudPersistence
     }
 
     private void SaveDdlRegistry(DdlRegistry registry) => AtomicWrite(
-        ResolveObjectPath(_cloudRoot, DdlRegistryObjectKey),
+        ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey),
         JsonSerializer.SerializeToUtf8Bytes(registry, JsonOptions));
 
     private static void CopyIfPresent(string source, string destination)

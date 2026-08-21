@@ -7,6 +7,8 @@ internal sealed class PantsActor : IAsyncDisposable
 {
     private readonly PantsRuntimeState _state;
     private readonly PantsOpenOptions _options;
+    private readonly RuntimeTelemetry _telemetry;
+    private readonly PantsStorageVerificationDelegate _storageVerifier;
     private readonly Channel<IRuntimeCommand> _commands;
     private readonly RuntimeWorker _walWorker;
     private readonly RuntimeWorker _flushWorker;
@@ -23,12 +25,17 @@ internal sealed class PantsActor : IAsyncDisposable
     private int _queuedCommands;
     private int _disposed;
     private bool _shutdownRequested;
-    private long _compactionsRun;
-    private long _writeConflicts;
+    private bool _verificationInProgress;
 
-    public PantsActor(PantsOpenOptions options, IPantsClock ttlClock)
+    public PantsActor(
+        PantsOpenOptions options,
+        IPantsClock ttlClock,
+        RuntimeTelemetry telemetry,
+        PantsRuntimeDependencies dependencies)
     {
         _options = options;
+        _telemetry = telemetry;
+        _storageVerifier = dependencies.StorageVerifier;
         _state = new PantsRuntimeState(ttlClock);
         switch (options.Storage)
         {
@@ -42,7 +49,11 @@ internal sealed class PantsActor : IAsyncDisposable
                     recoveryPolicy: options.RecoveryPolicy,
                     performanceGoal: options.PerformanceGoal,
                     leaseClockSkewTolerance: options.LeaseClockSkewTolerance,
-                    leaseLossCallback: options.LeaseLossCallback);
+                    leaseLossCallback: options.LeaseLossCallback,
+                    failpoints: dependencies.Failpoints,
+                    l0CompactionTrigger: options.L0CompactionTrigger,
+                    blockCachePolicy: options.BlockCachePolicy,
+                    blockCacheBytes: options.BlockCacheBytes);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -55,7 +66,11 @@ internal sealed class PantsActor : IAsyncDisposable
                     options.RecoveryPolicy,
                     options.PerformanceGoal,
                     options.LeaseClockSkewTolerance,
-                    options.LeaseLossCallback);
+                    options.LeaseLossCallback,
+                    dependencies.Failpoints,
+                    options.L0CompactionTrigger,
+                    options.BlockCachePolicy,
+                    options.BlockCacheBytes);
                 _simulatedCloud = new SimulatedCloudPersistence(
                     simulated.LocalCachePath,
                     _diskStore.WriterEpoch);
@@ -100,6 +115,7 @@ internal sealed class PantsActor : IAsyncDisposable
             async state =>
             {
                 ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
                 if (state.ActiveFamilyVersions.ContainsKey(name))
                 {
                     throw PantsException.InvalidArgument($"Column family '{name}' already exists.");
@@ -147,6 +163,7 @@ internal sealed class PantsActor : IAsyncDisposable
             async state =>
             {
                 ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
                 ValidateActiveFamily(state, identity);
                 if (!discardUnflushed && state.UnflushedFamilies.Contains(identity))
                 {
@@ -225,6 +242,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     snapshot.Sequence,
                     state.Clock.UtcNow,
                     snapshot);
+                _telemetry.RecordSnapshotRegister();
                 return ValueTask.FromResult(snapshotId);
             },
             cancellationToken);
@@ -238,6 +256,7 @@ internal sealed class PantsActor : IAsyncDisposable
             {
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
+                    _telemetry.RecordSnapshotUnregister();
                     if (_diskStore is not null)
                     {
                         await _garbageCollectionWorker
@@ -278,6 +297,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     snapshot.Sequence,
                     state.Clock.UtcNow,
                     snapshot);
+                _telemetry.RecordTransactionBegin(mode);
                 PantsDiagnostics.TransactionsStarted.Add(1);
                 return ValueTask.FromResult<IPantsTransaction>(transaction);
             },
@@ -296,62 +316,9 @@ internal sealed class PantsActor : IAsyncDisposable
                 $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
         }
 
-        await SendAsync(
-            async state =>
-            {
-                ThrowIfShuttingDown(state);
-                if (!state.ActiveTransactions.Remove(payload.TransactionId))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.InvalidArgument,
-                        $"Transaction {payload.TransactionId} is not active.");
-                }
-
-                if (_diskStore is not null)
-                {
-                    await _garbageCollectionWorker
-                        .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
-                        .ConfigureAwait(false);
-                }
-
-                try
-                {
-                    ValidateCommit(state, payload);
-                }
-                catch (PantsException exception) when (exception.Code == PantsErrorCode.WriteConflict)
-                {
-                    _writeConflicts++;
-                    PantsDiagnostics.TransactionsConflicted.Add(1);
-                    throw;
-                }
-
-                if (payload.OrderedOperations.Count != 0)
-                {
-                    await RelieveWritePressureAsync(state, payload).ConfigureAwait(false);
-                    if (_diskStore is null)
-                    {
-                        state.Sequence++;
-                    }
-                    else
-                    {
-                        await PersistCommitAsync(state, payload, writeOptions.Durability)
-                            .ConfigureAwait(false);
-                    }
-
-                    ApplyOperations(state, payload, state.Sequence);
-                    RecordMemtableBytes(state, payload);
-                    foreach (ColumnFamilyIdentity family in payload.Writes.Keys.Concat(payload.DeleteRanges.Keys))
-                    {
-                        state.UnflushedFamilies.Add(family);
-                    }
-
-                    await FlushAtConfiguredThresholdAsync(state, payload).ConfigureAwait(false);
-                }
-
-                PublishSnapshot(state);
-                PantsDiagnostics.TransactionsCommitted.Add(1);
-                return true;
-            },
+        await SendCommitAsync(
+            writeOptions,
+            payload,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -362,6 +329,7 @@ internal sealed class PantsActor : IAsyncDisposable
             {
                 if (state.ActiveTransactions.Remove(transactionId))
                 {
+                    _telemetry.RecordSnapshotUnregister();
                     PantsDiagnostics.TransactionsRolledBack.Add(1);
                     if (_diskStore is not null)
                     {
@@ -384,17 +352,21 @@ internal sealed class PantsActor : IAsyncDisposable
             async state =>
             {
                 ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
                 ValidateActiveFamily(state, identity);
                 if (_diskStore is not null)
                 {
+                    long started = Stopwatch.GetTimestamp();
                     await _flushWorker
                         .ExecuteAsync(() => _diskStore.Flush(state, identity))
                         .ConfigureAwait(false);
+                    _telemetry.RecordFlush(Stopwatch.GetElapsedTime(started));
                 }
 
                 await MirrorCloudStorageAsync().ConfigureAwait(false);
-                state.UnflushedFamilies.Clear();
-                ClearMemtableAccounting(state);
+                state.UnflushedFamilies.Remove(identity);
+                ClearMemtableAccounting(state, identity);
+                await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
                 PublishSnapshot(state);
                 return true;
             },
@@ -407,17 +379,22 @@ internal sealed class PantsActor : IAsyncDisposable
             async state =>
             {
                 ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
                 if (_diskStore is not null)
                 {
+                    long bytesRewritten = 0;
                     await _compactionWorker
-                        .ExecuteAsync(() => _diskStore.Compact(state))
+                        .ExecuteAsync(() => bytesRewritten = _diskStore.Compact(state, force: true))
                         .ConfigureAwait(false);
+                    if (bytesRewritten > 0)
+                    {
+                        _telemetry.RecordCompaction(bytesRewritten);
+                    }
                 }
 
                 await MirrorCloudStorageAsync().ConfigureAwait(false);
                 state.UnflushedFamilies.Clear();
                 ClearMemtableAccounting(state);
-                _compactionsRun++;
                 PublishSnapshot(state);
                 return true;
             },
@@ -465,6 +442,7 @@ internal sealed class PantsActor : IAsyncDisposable
         await MirrorCloudStorageAsync().ConfigureAwait(false);
         state.UnflushedFamilies.Clear();
         ClearMemtableAccounting(state);
+        await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
     }
 
     public ValueTask<PantsRuntimeMetrics> GetRuntimeMetricsAsync(CancellationToken cancellationToken) =>
@@ -490,11 +468,26 @@ internal sealed class PantsActor : IAsyncDisposable
                 SstBytes = _diskStore?.SstBytes ?? 0,
                 SalvageModeOpens = state.SalvageModeOpens,
                 NoSpaceEvents = state.NoSpaceEvents,
-                CompactionsRun = _compactionsRun,
+                CompactionsRun = _telemetry.CompactionsRun,
+                CompactionBytesRewritten = _telemetry.CompactionBytesRewritten,
                 CompactionFailures = _compactionWorker.Failures,
                 ObsoleteFileBacklog = _diskStore?.GetObsoleteFiles().Count ?? 0,
-                WriteConflictsTotal = _writeConflicts,
-                WalAppendCount = _diskStore?.WalRecords ?? 0,
+                WriteConflictsTotal = checked(
+                    _telemetry.WriteConflictsPointTotal + _telemetry.WriteConflictsRangeTotal),
+                WriteConflictsPointTotal = _telemetry.WriteConflictsPointTotal,
+                WriteConflictsRangeTotal = _telemetry.WriteConflictsRangeTotal,
+                CacheHits = _telemetry.CacheHits,
+                CacheMisses = _telemetry.CacheMisses,
+                WalAppendCount = _telemetry.WalAppendCount,
+                WalFlushCount = _telemetry.WalFlushCount,
+                WalFsyncCount = _telemetry.WalFsyncCount,
+                WalAppendNanosecondsTotal = _telemetry.WalAppendNanosecondsTotal,
+                WalFsyncNanosecondsTotal = _telemetry.WalFsyncNanosecondsTotal,
+                WalFsyncNanosecondsMaximum = _telemetry.WalFsyncNanosecondsMaximum,
+                DurabilityWaitersFannedOutTotal = _telemetry.DurabilityWaitersFannedOut,
+                SstBloomRejectsTotal = _telemetry.SstBloomRejects,
+                SstBloomChecksTotal = _telemetry.SstBloomChecks,
+                SstDataBlocksReadTotal = _telemetry.SstDataBlocksRead,
                 WalRecoveryRecordsReplayed = _diskStore?.WalRecoveryRecordsReplayed ?? 0,
                 WalRecoveryBytesReplayed = _diskStore?.WalRecoveryBytesReplayed ?? 0,
                 IntentLogReplayRuns = state.IntentLogReplayRuns,
@@ -502,8 +495,14 @@ internal sealed class PantsActor : IAsyncDisposable
                 FlushQueueDepth = _flushWorker.QueueDepth,
                 FlushInFlight = _flushWorker.InFlight,
                 FlushEnqueuedTotal = _flushWorker.Enqueued,
+                FlushBuildCount = _telemetry.FlushBuildCount,
+                FlushBuildNanosecondsTotal = _telemetry.FlushBuildNanosecondsTotal,
+                FlushBuildNanosecondsMaximum = _telemetry.FlushBuildNanosecondsMaximum,
+                FlushPublishCount = _telemetry.FlushPublishCount,
+                FlushPublishNanosecondsTotal = _telemetry.FlushPublishNanosecondsTotal,
+                FlushPublishNanosecondsMaximum = _telemetry.FlushPublishNanosecondsMaximum,
                 FlushFailuresTotal = _flushWorker.Failures,
-                PendingEvictions = _garbageCollectionWorker.QueueDepth +
+                HybridPendingEvictions = _garbageCollectionWorker.QueueDepth +
                     _garbageCollectionWorker.InFlight
             }),
             cancellationToken);
@@ -511,18 +510,49 @@ internal sealed class PantsActor : IAsyncDisposable
     public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
         CancellationToken cancellationToken) =>
         SendAsync(
-            _ => ValueTask.FromResult(new PantsReadAmplificationMetrics(
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0)),
+            _ => ValueTask.FromResult(_telemetry.GetReadAmplificationMetrics()),
             cancellationToken);
+
+    public ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
+        CancellationToken cancellationToken) =>
+        SendAsync(
+            _ => ValueTask.FromResult(_telemetry.GetReadPathDiagnostics()),
+            cancellationToken);
+
+    public async ValueTask RecordPointReadAsync(
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        _ = await SendAsync(
+            _ =>
+            {
+                if (_diskStore is null)
+                {
+                    _telemetry.RecordSstRead(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                }
+                else
+                {
+                    _diskStore.RecordPointRead(_telemetry, columnFamily, key.Span);
+                }
+
+                return ValueTask.FromResult(true);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask ValidateScanReadAsync(
+        ColumnFamilyIdentity columnFamily,
+        CancellationToken cancellationToken)
+    {
+        _ = await SendAsync(
+            _ =>
+            {
+                _diskStore?.ValidateScanRead(_telemetry, columnFamily);
+                return ValueTask.FromResult(true);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
 
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken) =>
@@ -549,9 +579,21 @@ internal sealed class PantsActor : IAsyncDisposable
             throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
         }
 
-        string? path = _diskStore?.RootPath;
+        string? path = await SendAsync(
+            _ =>
+            {
+                if (_verificationInProgress)
+                {
+                    throw new PantsBusyException("Storage verification is already in progress.");
+                }
+
+                _verificationInProgress = true;
+                return ValueTask.FromResult(_diskStore?.RootPath);
+            },
+            cancellationToken).ConfigureAwait(false);
         if (path is null)
         {
+            await ReleaseVerificationBarrierAsync().ConfigureAwait(false);
             throw PantsException.Create(
                 PantsErrorCode.NotSupported,
                 "In-memory storage has no persistent path to verify.");
@@ -563,13 +605,17 @@ internal sealed class PantsActor : IAsyncDisposable
             deadline.Token);
         try
         {
-            return await PantsStorageVerifier.VerifyPathAsync(path, linked.Token).ConfigureAwait(false);
+            return await _storageVerifier(path, linked.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw PantsException.Create(
                 PantsErrorCode.Timeout,
                 "Storage verification did not complete before its deadline.");
+        }
+        finally
+        {
+            await ReleaseVerificationBarrierAsync().ConfigureAwait(false);
         }
     }
 
@@ -582,6 +628,8 @@ internal sealed class PantsActor : IAsyncDisposable
                 {
                     return true;
                 }
+
+                ThrowIfVerificationInProgress();
 
                 if (state.ActiveSnapshotCount != 0)
                 {
@@ -673,6 +721,47 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
+    private async ValueTask SendCommitAsync(
+        PantsWriteOptions writeOptions,
+        CommitPayload payload,
+        CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
+        }
+
+        var command = new CommitRuntimeCommand(
+            writeOptions,
+            payload,
+            state => ExecuteCommitAsync(state, writeOptions, payload));
+        Interlocked.Increment(ref _queuedCommands);
+        long started = Stopwatch.GetTimestamp();
+        try
+        {
+            await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            _ = await command.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            PantsDiagnostics.CommandsRejected.Add(1);
+            throw;
+        }
+        catch (ChannelClosedException exception)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Aborted,
+                "The Pants runtime is closed.",
+                exception);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _queuedCommands);
+            PantsDiagnostics.CommandLatencyMilliseconds.Record(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
+    }
+
     private async Task RunLoopAsync()
     {
         try
@@ -681,11 +770,198 @@ internal sealed class PantsActor : IAsyncDisposable
                                .ReadAllAsync(_loopCancellation.Token)
                                .ConfigureAwait(false))
             {
-                await command.ExecuteAsync(_state).ConfigureAwait(false);
+                if (command is not CommitRuntimeCommand firstCommit)
+                {
+                    await command.ExecuteAsync(_state).ConfigureAwait(false);
+                    continue;
+                }
+
+                var commits = new List<CommitRuntimeCommand> { firstCommit };
+                await Task.Yield();
+                while (commits.Count < 64 &&
+                       _commands.Reader.TryPeek(out IRuntimeCommand? next) &&
+                       next is CommitRuntimeCommand &&
+                       _commands.Reader.TryRead(out IRuntimeCommand? admitted))
+                {
+                    commits.Add((CommitRuntimeCommand)admitted);
+                }
+
+                if (CanCoalesceSyncCommits(commits))
+                {
+                    await ExecuteCoalescedSyncCommitsAsync(_state, commits).ConfigureAwait(false);
+                }
+                else
+                {
+                    foreach (CommitRuntimeCommand commit in commits)
+                    {
+                        await commit.ExecuteAsync(_state).ConfigureAwait(false);
+                    }
+                }
             }
         }
         catch (OperationCanceledException) when (_loopCancellation.IsCancellationRequested)
         {
+        }
+    }
+
+    private bool CanCoalesceSyncCommits(List<CommitRuntimeCommand> commits) =>
+        commits.Count > 1 &&
+        _diskStore is not null &&
+        _simulatedCloud is null &&
+        _options.FlushAfterWalRecords == 0 &&
+        commits.All(static command =>
+            command.WriteOptions.Durability == PantsDurability.Sync &&
+            command.Payload.OrderedOperations.Count != 0);
+
+    private async ValueTask ExecuteCoalescedSyncCommitsAsync(
+        PantsRuntimeState state,
+        List<CommitRuntimeCommand> commits)
+    {
+        LocalDiskStore diskStore = _diskStore ??
+            throw new PantsInternalException("A coalesced commit requires persistent storage.");
+        var accepted = new List<CommitRuntimeCommand>(commits.Count);
+        for (int index = 0; index < commits.Count; index++)
+        {
+            CommitRuntimeCommand command = commits[index];
+            try
+            {
+                await PrepareCommitAsync(state, command.Payload).ConfigureAwait(false);
+                long started = Stopwatch.GetTimestamp();
+                await _walWorker.ExecuteAsync(() => diskStore.AppendCommit(
+                        command.Payload,
+                        state,
+                        PantsDurability.Buffered))
+                    .ConfigureAwait(false);
+                _telemetry.RecordWalAppend(
+                    Stopwatch.GetElapsedTime(started),
+                    PantsDurability.Buffered);
+                ApplyCommittedOperations(state, command.Payload);
+                accepted.Add(command);
+            }
+            catch (Exception exception)
+            {
+                command.Fail(state, exception);
+                if (exception is PantsWriteConflictException)
+                {
+                    continue;
+                }
+
+                for (int remaining = index + 1; remaining < commits.Count; remaining++)
+                {
+                    commits[remaining].Fail(
+                        state,
+                        new PantsAbortedException(
+                            "The coalesced commit group stopped after a persistence failure.",
+                            exception));
+                }
+
+                break;
+            }
+        }
+
+        if (accepted.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            long started = Stopwatch.GetTimestamp();
+            await _walWorker.ExecuteAsync(diskStore.FlushDurabilityBoundary).ConfigureAwait(false);
+            _telemetry.RecordCoalescedWalFsync(
+                Stopwatch.GetElapsedTime(started),
+                accepted.Count);
+            foreach (CommitRuntimeCommand command in accepted)
+            {
+                await FlushAtConfiguredThresholdAsync(state, command.Payload).ConfigureAwait(false);
+                PantsDiagnostics.TransactionsCommitted.Add(1);
+            }
+
+            PublishSnapshot(state);
+            foreach (CommitRuntimeCommand command in accepted)
+            {
+                command.Complete(true);
+            }
+        }
+        catch (Exception exception)
+        {
+            foreach (CommitRuntimeCommand command in accepted)
+            {
+                command.Fail(state, exception);
+            }
+        }
+    }
+
+    private async ValueTask<bool> ExecuteCommitAsync(
+        PantsRuntimeState state,
+        PantsWriteOptions writeOptions,
+        CommitPayload payload)
+    {
+        await PrepareCommitAsync(state, payload).ConfigureAwait(false);
+        if (payload.OrderedOperations.Count != 0)
+        {
+            if (_diskStore is null)
+            {
+                state.Sequence++;
+            }
+            else
+            {
+                await PersistCommitAsync(state, payload, writeOptions.Durability)
+                    .ConfigureAwait(false);
+            }
+
+            ApplyCommittedOperations(state, payload);
+            await FlushAtConfiguredThresholdAsync(state, payload).ConfigureAwait(false);
+        }
+
+        PublishSnapshot(state);
+        PantsDiagnostics.TransactionsCommitted.Add(1);
+        return true;
+    }
+
+    private async ValueTask PrepareCommitAsync(PantsRuntimeState state, CommitPayload payload)
+    {
+        ThrowIfShuttingDown(state);
+        ThrowIfVerificationInProgress();
+        if (!state.ActiveTransactions.Remove(payload.TransactionId))
+        {
+            throw PantsException.Create(
+                PantsErrorCode.InvalidArgument,
+                $"Transaction {payload.TransactionId} is not active.");
+        }
+
+        _telemetry.RecordSnapshotUnregister();
+        if (_diskStore is not null)
+        {
+            await _garbageCollectionWorker
+                .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                .ConfigureAwait(false);
+        }
+
+        try
+        {
+            CommitValidator.Validate(state, payload);
+        }
+        catch (PantsException exception) when (exception.Code == PantsErrorCode.WriteConflict)
+        {
+            _telemetry.RecordWriteConflict(CommitValidator.HasRangeConflict(state, payload));
+            PantsDiagnostics.TransactionsConflicted.Add(1);
+            throw;
+        }
+
+        if (payload.OrderedOperations.Count != 0)
+        {
+            await RelieveWritePressureAsync(state, payload).ConfigureAwait(false);
+        }
+    }
+
+    private static void ApplyCommittedOperations(PantsRuntimeState state, CommitPayload payload)
+    {
+        ApplyOperations(state, payload, state.Sequence);
+        RecordMemtableBytes(state, payload);
+        foreach (ColumnFamilyIdentity family in payload.Writes.Keys.Concat(payload.DeleteRanges.Keys))
+        {
+            state.UnflushedFamilies.Add(family);
         }
     }
 
@@ -696,6 +972,7 @@ internal sealed class PantsActor : IAsyncDisposable
     {
         LocalDiskStore diskStore = _diskStore ??
             throw new PantsInternalException("Persistent commit has no disk store.");
+        long started = Stopwatch.GetTimestamp();
         await _walWorker.ExecuteAsync(() => diskStore.AppendCommit(
                 payload,
                 state,
@@ -703,11 +980,16 @@ internal sealed class PantsActor : IAsyncDisposable
                     ? PantsDurability.Buffered
                     : durability))
             .ConfigureAwait(false);
+        if (durability != PantsDurability.BestEffort)
+        {
+            _telemetry.RecordWalAppend(Stopwatch.GetElapsedTime(started), durability);
+        }
         if (_options.FlushAfterWalRecords > 0 && diskStore.WalRecords >= _options.FlushAfterWalRecords)
         {
             await _flushWorker.ExecuteAsync(() => diskStore.Flush(state)).ConfigureAwait(false);
             await MirrorCloudStorageAsync().ConfigureAwait(false);
             state.UnflushedFamilies.Clear();
+            await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
         }
 
         if (_simulatedCloud is not null && durability == PantsDurability.CloudAsync)
@@ -735,177 +1017,6 @@ internal sealed class PantsActor : IAsyncDisposable
             }
         }
 
-    }
-
-    private static void ValidateCommit(PantsRuntimeState state, CommitPayload payload)
-    {
-        DateTimeOffset now = state.Clock.UtcNow;
-        ValidateInsertOnlyOperations(state, payload, now);
-        foreach ((ColumnFamilyIdentity identity, IReadOnlyList<TransactionAssertion> assertions) in payload.Asserts)
-        {
-            ValidateActiveFamily(state, identity);
-            SortedDictionary<byte[], CellState> startFamily = payload.StartSnapshot.Families[identity];
-            SortedDictionary<byte[], CellState> currentFamily = GetFamily(state, identity);
-            foreach (TransactionAssertion assertion in assertions)
-            {
-                byte[] key = assertion.Key;
-                TransactionReadValue expected = assertion.Expected;
-                CellState? start = ResolveVisibleCell(startFamily, key, payload.SnapshotTime);
-                if (!Matches(expected, start, payload.SnapshotTime))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.WriteConflict,
-                        "A value assertion did not match the transaction's start snapshot.");
-                }
-
-                if (currentFamily.TryGetValue(key, out CellState? current) &&
-                    current.WriteSequence > payload.StartSnapshot.Sequence)
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.WriteConflict,
-                        "An asserted key changed after the transaction began.");
-                }
-
-                if (state.RangeTombstones[identity].Any(tombstone =>
-                        tombstone.WriteSequence > payload.StartSnapshot.Sequence &&
-                        IsInRange(key, tombstone.Start, tombstone.EndExclusive)))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.WriteConflict,
-                        "An asserted key was covered by a range deletion after the transaction began.");
-                }
-            }
-        }
-
-        foreach ((ColumnFamilyIdentity identity, Dictionary<byte[], TransactionPendingWrite> writes) in payload.Writes)
-        {
-            ValidateActiveFamily(state, identity);
-            SortedDictionary<byte[], CellState> family = GetFamily(state, identity);
-            foreach (byte[] key in writes.Keys)
-            {
-                if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict &&
-                    family.TryGetValue(key, out CellState? rawCurrent) &&
-                    rawCurrent.WriteSequence > payload.StartSnapshot.Sequence)
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.WriteConflict,
-                        "A write-set key changed after the transaction began.");
-                }
-
-                if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict &&
-                    state.RangeTombstones[identity].Any(tombstone =>
-                        tombstone.WriteSequence > payload.StartSnapshot.Sequence &&
-                        IsInRange(key, tombstone.Start, tombstone.EndExclusive)))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.WriteConflict,
-                        "A recent range deletion covers a write-set key.");
-                }
-            }
-        }
-
-        if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
-        {
-            foreach ((ColumnFamilyIdentity identity, List<DeleteRange> ranges) in payload.DeleteRanges)
-            {
-                ValidateActiveFamily(state, identity);
-                SortedDictionary<byte[], CellState> family = GetFamily(state, identity);
-                foreach (DeleteRange range in ranges)
-                {
-                    if (family.Any(pair =>
-                            IsInRange(pair.Key, range.Start, range.EndExclusive) &&
-                            pair.Value.WriteSequence > payload.StartSnapshot.Sequence))
-                    {
-                        throw PantsException.Create(
-                            PantsErrorCode.WriteConflict,
-                            "A covered range changed after the transaction began.");
-                    }
-                    if (state.RangeTombstones[identity].Any(tombstone =>
-                            tombstone.WriteSequence > payload.StartSnapshot.Sequence &&
-                            RangesOverlap(
-                                range.Start,
-                                range.EndExclusive,
-                                tombstone.Start,
-                                tombstone.EndExclusive)))
-                    {
-                        throw PantsException.Create(
-                            PantsErrorCode.WriteConflict,
-                            "A covered range was deleted after the transaction began.");
-                    }
-                }
-            }
-        }
-    }
-
-    private static void ValidateInsertOnlyOperations(
-        PantsRuntimeState state,
-        CommitPayload payload,
-        DateTimeOffset now)
-    {
-        foreach (IGrouping<ColumnFamilyIdentity, TransactionIntentOperation> familyOperations in
-                 payload.OrderedOperations.GroupBy(
-                     static operation => operation.Family,
-                     ColumnFamilyIdentityComparer.Instance))
-        {
-            ColumnFamilyIdentity identity = familyOperations.Key;
-            ValidateActiveFamily(state, identity);
-            SortedDictionary<byte[], CellState> family = GetFamily(state, identity);
-            var pointStates = new Dictionary<byte[], (ulong Ordinal, bool Exists)>(
-                ByteArrayComparer.Instance);
-            var rangeDeletes = new List<(ulong Ordinal, byte[] Start, byte[] EndExclusive)>();
-            foreach (TransactionIntentOperation operation in familyOperations)
-            {
-                switch (operation.Kind)
-                {
-                    case CommitOperationKind.Put:
-                        if (operation.InsertOnly && ResolvePriorExists(
-                                operation.Key,
-                                pointStates,
-                                rangeDeletes,
-                                family,
-                                now))
-                        {
-                            throw PantsException.Create(
-                                PantsErrorCode.WriteConflict,
-                                "Insert requires an absent key.");
-                        }
-
-                        pointStates[operation.Key] = (operation.Ordinal, true);
-                        break;
-                    case CommitOperationKind.Delete:
-                        pointStates[operation.Key] = (operation.Ordinal, false);
-                        break;
-                    case CommitOperationKind.DeleteRange when operation.EndExclusive is not null:
-                        rangeDeletes.Add((operation.Ordinal, operation.Key, operation.EndExclusive));
-                        break;
-                }
-            }
-        }
-    }
-
-    private static bool ResolvePriorExists(
-        byte[] key,
-        Dictionary<byte[], (ulong Ordinal, bool Exists)> pointStates,
-        List<(ulong Ordinal, byte[] Start, byte[] EndExclusive)> rangeDeletes,
-        SortedDictionary<byte[], CellState> family,
-        DateTimeOffset now)
-    {
-        bool hasPrior = pointStates.TryGetValue(key, out (ulong Ordinal, bool Exists) pointState);
-        ulong latestOrdinal = hasPrior ? pointState.Ordinal : 0;
-        bool exists = hasPrior && pointState.Exists;
-        foreach ((ulong ordinal, byte[] start, byte[] endExclusive) in rangeDeletes)
-        {
-            if (IsInRange(key, start, endExclusive) && (!hasPrior || ordinal > latestOrdinal))
-            {
-                hasPrior = true;
-                latestOrdinal = ordinal;
-                exists = false;
-            }
-        }
-
-        return hasPrior
-            ? exists
-            : ResolveVisibleCell(family, key, now)?.Value is not null;
     }
 
     private static void ApplyOperations(PantsRuntimeState state, CommitPayload payload, long sequence)
@@ -966,38 +1077,9 @@ internal sealed class PantsActor : IAsyncDisposable
                 PantsErrorCode.InvalidArgument,
                 $"Column family '{identity.Name}' is unavailable.");
 
-    private static CellState? ResolveVisibleCell(
-        SortedDictionary<byte[], CellState> family,
-        byte[] key,
-        DateTimeOffset now) =>
-        family.TryGetValue(key, out CellState? cell) && !cell.IsExpired(now) && cell.Value is not null
-            ? cell
-            : null;
-
-    private static bool Matches(
-        TransactionReadValue expected,
-        CellState? actual,
-        DateTimeOffset now)
-    {
-        if (expected.Missing)
-        {
-            return actual is null || actual.Value is null || actual.IsExpired(now);
-        }
-
-        return actual?.Value is { } value && value.AsSpan().SequenceEqual(expected.Value);
-    }
-
     private static bool IsInRange(byte[] key, byte[] start, byte[] end) =>
         ByteArrayComparer.Instance.Compare(key, start) >= 0 &&
         ByteArrayComparer.Instance.Compare(key, end) < 0;
-
-    private static bool RangesOverlap(
-        byte[] leftStart,
-        byte[] leftEnd,
-        byte[] rightStart,
-        byte[] rightEnd) =>
-        ByteArrayComparer.Instance.Compare(leftStart, rightEnd) < 0 &&
-        ByteArrayComparer.Instance.Compare(rightStart, leftEnd) < 0;
 
     private async ValueTask FlushAtConfiguredThresholdAsync(
         PantsRuntimeState state,
@@ -1015,6 +1097,25 @@ internal sealed class PantsActor : IAsyncDisposable
         await MirrorCloudStorageAsync().ConfigureAwait(false);
         state.UnflushedFamilies.Clear();
         ClearMemtableAccounting(state);
+        await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+    }
+
+    private async ValueTask RunBackgroundCompactionAsync(PantsRuntimeState state)
+    {
+        if (!_options.BackgroundCompaction || _diskStore is null)
+        {
+            return;
+        }
+
+        long bytesRewritten = 0;
+        await _compactionWorker
+            .ExecuteAsync(() => bytesRewritten = _diskStore.Compact(state, force: false))
+            .ConfigureAwait(false);
+        if (bytesRewritten > 0)
+        {
+            _telemetry.RecordCompaction(bytesRewritten);
+            await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
     }
 
     private ValueTask MirrorCloudStorageAsync() =>
@@ -1048,6 +1149,11 @@ internal sealed class PantsActor : IAsyncDisposable
             state.ActiveMemtableBytes[identity] = 0;
         }
     }
+
+    private static void ClearMemtableAccounting(
+        PantsRuntimeState state,
+        ColumnFamilyIdentity identity) =>
+        state.ActiveMemtableBytes[identity] = 0;
 
     private static PantsStorageLayout EmptyStorageLayout(PantsRuntimeState state) => new(
         state.Health,
@@ -1084,6 +1190,38 @@ internal sealed class PantsActor : IAsyncDisposable
         if (state.IsShuttingDown)
         {
             throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is shutting down.");
+        }
+    }
+
+    private void ThrowIfVerificationInProgress()
+    {
+        if (_verificationInProgress)
+        {
+            throw new PantsBusyException(
+                "The storage layout is pinned by online verification.");
+        }
+    }
+
+    private async ValueTask ReleaseVerificationBarrierAsync()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = await SendAsync(
+                _ =>
+                {
+                    _verificationInProgress = false;
+                    return ValueTask.FromResult(true);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+            // Disposal owns the remaining lease and filesystem lifetime.
         }
     }
 }

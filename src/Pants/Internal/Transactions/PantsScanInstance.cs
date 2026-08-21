@@ -2,23 +2,22 @@ namespace Pants;
 
 internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
 {
-    private Func<IReadOnlyList<PantsEntry>>? _entriesFactory;
+    private Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>>? _entriesFactory;
     private readonly Func<ValueTask> _releaseSnapshot;
     private readonly byte[]? _startInclusive;
     private readonly byte[]? _endExclusive;
     private readonly byte[]? _prefix;
     private readonly int _limit;
-    private IReadOnlyList<PantsEntry>? _entries;
+    private IEnumerator<PantsEntry>? _entries;
     private CancellationToken _cancellationToken;
     private Exception? _failure;
-    private int _cursor;
     private int _emitted;
     private int _enumerationStarted;
     private int _disposed;
     private int _snapshotReleased;
 
     internal PantsScanInstance(
-        Func<IReadOnlyList<PantsEntry>> entriesFactory,
+        Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
         Func<ValueTask> releaseSnapshot)
     {
@@ -97,6 +96,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         {
             State = PantsIteratorState.Exhausted;
             Current = default;
+            _entries?.Dispose();
+            _entries = null;
         }
 
         await ReleaseSnapshotAsync().ConfigureAwait(false);
@@ -113,11 +114,10 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
                 return false;
             }
 
-            EnsureEntriesInitialized();
-            while (IsCursorInRange())
+            await EnsureEntriesInitializedAsync().ConfigureAwait(false);
+            while (_entries!.MoveNext())
             {
-                PantsEntry candidate = _entries![_cursor];
-                _cursor += Direction == PantsScanDirection.Forward ? 1 : -1;
+                PantsEntry candidate = _entries.Current;
                 ReadOnlySpan<byte> key = candidate.Key.Span;
                 if (!MatchesBounds(key) || !MatchesPrefix(key))
                 {
@@ -148,20 +148,17 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         }
     }
 
-    private bool IsCursorInRange() => _entries is not null && _cursor >= 0 && _cursor < _entries.Count;
-
-    private void EnsureEntriesInitialized()
+    private async ValueTask EnsureEntriesInitializedAsync()
     {
         if (_entries is not null)
         {
             return;
         }
 
-        Func<IReadOnlyList<PantsEntry>> factory = _entriesFactory ??
+        Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> factory = _entriesFactory ??
             throw new PantsInternalException("The scan entry source is unavailable.");
-        _entries = factory();
+        _entries = await factory(_cancellationToken).ConfigureAwait(false);
         _entriesFactory = null;
-        _cursor = Direction == PantsScanDirection.Forward ? 0 : _entries.Count - 1;
     }
 
     private bool MatchesBounds(ReadOnlySpan<byte> key) =>
@@ -175,6 +172,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
     {
         State = PantsIteratorState.Exhausted;
         Current = default;
+        _entries?.Dispose();
+        _entries = null;
         await ReleaseSnapshotAsync().ConfigureAwait(false);
     }
 
@@ -183,6 +182,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         _failure ??= exception;
         State = PantsIteratorState.Failed;
         Current = default;
+        _entries?.Dispose();
+        _entries = null;
     }
 
     private ValueTask ReleaseSnapshotAsync() =>

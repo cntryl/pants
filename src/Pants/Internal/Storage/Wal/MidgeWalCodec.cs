@@ -149,7 +149,10 @@ internal static class MidgeWalCodec
         return mutations;
     }
 
-    public static void AppendFrame(Stream stream, byte[] payload)
+    public static void AppendFrame(
+        Stream stream,
+        byte[] payload,
+        Action? afterPartialPayload = null)
     {
         if (payload.Length > MidgeDiskFormat.WalMaximumRecordBytes)
         {
@@ -158,7 +161,16 @@ internal static class MidgeWalCodec
 
         MidgeDiskFormat.WriteUInt32(stream, (uint)payload.Length);
         MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
-        stream.Write(payload);
+        if (afterPartialPayload is null)
+        {
+            stream.Write(payload);
+            return;
+        }
+
+        int partialLength = Math.Max(1, payload.Length / 2);
+        stream.Write(payload.AsSpan(0, partialLength));
+        afterPartialPayload();
+        stream.Write(payload.AsSpan(partialLength));
     }
 
     private static void WriteTlv(Stream stream, byte tag, ReadOnlySpan<byte> value)

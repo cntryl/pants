@@ -34,21 +34,52 @@ public sealed record PantsRuntimeMetrics
     public long CompactionFailures { get; init; }
     public int ObsoleteFileBacklog { get; init; }
     public long WriteStallsTotal { get; init; }
+    public long WriteStallsMemoryTotal { get; init; }
+    public long WriteStallsCompactionTotal { get; init; }
+    public long WriteStallsCloudTotal { get; init; }
+    public long WriteStallsNoSpaceTotal { get; init; }
     public long WriteConflictsTotal { get; init; }
+    public long WriteConflictsPointTotal { get; init; }
+    public long WriteConflictsRangeTotal { get; init; }
     public long CacheHits { get; init; }
     public long CacheMisses { get; init; }
     public long WalAppendCount { get; init; }
     public long WalFlushCount { get; init; }
     public long WalFsyncCount { get; init; }
+    public long WalAppendNanosecondsTotal { get; init; }
+    public long WalFsyncNanosecondsTotal { get; init; }
+    public long WalFsyncNanosecondsMaximum { get; init; }
+    public long DurabilityWaitersFannedOutTotal { get; init; }
     public long SstBloomRejectsTotal { get; init; }
     public long SstBloomChecksTotal { get; init; }
     public long SstDataBlocksReadTotal { get; init; }
     public int FlushQueueDepth { get; init; }
     public int FlushInFlight { get; init; }
     public long FlushEnqueuedTotal { get; init; }
+    public long FlushBuildCount { get; init; }
+    public long FlushBuildNanosecondsTotal { get; init; }
+    public long FlushBuildNanosecondsMaximum { get; init; }
+    public long FlushPublishCount { get; init; }
+    public long FlushPublishNanosecondsTotal { get; init; }
+    public long FlushPublishNanosecondsMaximum { get; init; }
     public long FlushFailuresTotal { get; init; }
     public long FlushRetriesTotal { get; init; }
-    public long PendingEvictions { get; init; }
+    public long WriteStallNanosecondsTotal { get; init; }
+    public long WriteStallNanosecondsMaximum { get; init; }
+    public long WriteStallActiveNanoseconds { get; init; }
+    public long CloudAsyncWalSegmentsSealed { get; init; }
+    public long CloudAsyncWalBytesSealed { get; init; }
+    public long CloudAsyncWalSealLatencyMicroseconds { get; init; }
+    public long CloudAsyncWalUploadsStarted { get; init; }
+    public long CloudAsyncWalUploadsCompleted { get; init; }
+    public long CloudAsyncWalUploadsFailed { get; init; }
+    public long CloudAsyncWalUploadLatencyMicroseconds { get; init; }
+    public long CloudAsyncWalAcknowledgementLatencyMicroseconds { get; init; }
+    public long HybridMaximumLocalBytes { get; init; }
+    public long HybridTotalCommittedBytes { get; init; }
+    public long HybridFreeBytes { get; init; }
+    public int HybridUsagePercent { get; init; }
+    public int HybridPendingEvictions { get; init; }
     public long WalRecoveryRecordsReplayed { get; init; }
     public long WalRecoveryBytesReplayed { get; init; }
     public long IntentLogReplayRuns { get; init; }

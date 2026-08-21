@@ -3,6 +3,28 @@ namespace Pants.Tests;
 public sealed class PantsRuntimeOperationsTests
 {
     [Fact]
+    public async Task ShouldFlushOnlyRequestedColumnFamily()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        IPantsColumnFamily flushed = await database.CreateColumnFamilyAsync("flushed");
+        IPantsColumnFamily pending = await database.CreateColumnFamilyAsync("pending");
+        await PutAsync(database, flushed, "flushed-key", "flushed-value");
+        await PutAsync(database, pending, "pending-key", "pending-value");
+        long bytesBefore = (await database.GetRuntimeMetricsAsync()).TotalMemtableBytes;
+
+        await database.FlushAsync(flushed);
+
+        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        Assert.InRange(metrics.TotalMemtableBytes, 1, bytesBefore - 1);
+        await database.DropColumnFamilyAsync(flushed);
+        PantsBusyException error = await Assert.ThrowsAsync<PantsBusyException>(() =>
+            database.DropColumnFamilyAsync(pending).AsTask());
+        Assert.Equal(PantsErrorCode.Busy, error.Code);
+    }
+
+    [Fact]
     public async Task ShouldAutoFlushLocalMemtableAtConfiguredThreshold()
     {
         using var directory = new TemporaryDirectory();
@@ -31,6 +53,19 @@ public sealed class PantsRuntimeOperationsTests
         Assert.Equal(1, metrics.SstCount);
         Assert.True(metrics.FlushEnqueuedTotal >= 1);
         Assert.Equal(0, metrics.FlushFailuresTotal);
+    }
+
+    private static async ValueTask PutAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily columnFamily,
+        string key,
+        string value)
+    {
+        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+            columnFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
+        await transaction.CommitAsync(PantsWriteOptions.Buffered);
     }
 
     [Fact]

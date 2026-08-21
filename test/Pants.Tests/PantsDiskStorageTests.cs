@@ -40,7 +40,7 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        byte[] wal = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"));
+        byte[] wal = await ReadSharedFileAsync(Path.Combine(directory.Path, "wal", "wal.log"));
         Assert.Equal((byte)'M', wal[8]);
         Assert.Equal((byte)'W', wal[9]);
         Assert.Equal(1, wal[10]);
@@ -53,6 +53,20 @@ public sealed class PantsDiskStorageTests
         byte[] sst = await File.ReadAllBytesAsync(sstPath);
         Assert.Equal(4u, BitConverter.ToUInt32(sst, sst.Length - 20));
         Assert.Equal(0xdb4775248b80fb57ul, BitConverter.ToUInt64(sst, sst.Length - 12));
+    }
+
+    private static async ValueTask<byte[]> ReadSharedFileAsync(string path)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)stream.Length));
+        await stream.ReadExactlyAsync(data);
+        return data;
     }
 
     [Theory]
