@@ -90,5 +90,9 @@ public sealed class PantsConfigurationContractTests
 
         Assert.Equal(prefixes.Length, prefixes.Distinct(StringComparer.Ordinal).Count());
         Assert.DoesNotContain('/', PantsCloudObjectLayout.LeaseObjectKey);
+        Assert.StartsWith(PantsCloudObjectLayout.MetadataPrefix, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        Assert.Equal(
+            "wal/epochs/00000000000000000007/00000000000000000011.wal",
+            PantsCloudObjectLayout.WalSegmentObjectKey(7, 11));
     }
 }

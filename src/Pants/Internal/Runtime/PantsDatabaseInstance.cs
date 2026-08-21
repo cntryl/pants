@@ -8,14 +8,16 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
     private readonly object _handleOwner = new();
     private readonly TransactionMemoryPool _transactionMemoryPool;
     private readonly IPantsClock _ttlClock;
+    private readonly RuntimeTelemetry _telemetry;
     private int _lifecycleState;
 
-    internal PantsDatabaseInstance(PantsOpenOptions options)
+    internal PantsDatabaseInstance(PantsOpenOptions options, PantsRuntimeDependencies dependencies)
     {
         Options = options;
         _transactionMemoryPool = new TransactionMemoryPool(options.TransactionMemoryPoolBytes);
         _ttlClock = new MonotonicPantsClock(options.TtlClock);
-        _actor = new PantsActor(options, _ttlClock);
+        _telemetry = new RuntimeTelemetry();
+        _actor = new PantsActor(options, _ttlClock, _telemetry, dependencies);
         DefaultColumnFamily = CreateHandle(new ColumnFamilyIdentity(
             0,
             "default",
@@ -148,6 +150,13 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         return _actor.GetReadAmplificationMetricsAsync(cancellationToken);
     }
 
+    public ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _actor.GetReadPathDiagnosticsAsync(cancellationToken);
+    }
+
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken = default)
     {
@@ -224,6 +233,8 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
 
     internal TransactionMemoryPool TransactionMemoryPool => _transactionMemoryPool;
 
+    internal RuntimeTelemetry Telemetry => _telemetry;
+
     internal void EnsureOpen()
     {
         int state = Volatile.Read(ref _lifecycleState);
@@ -261,6 +272,17 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
 
     internal ValueTask ReleaseScanSnapshotAsync(long snapshotId) =>
         _actor.ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None);
+
+    internal ValueTask RecordPointReadAsync(
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken) =>
+        _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
+
+    internal ValueTask ValidateScanReadAsync(
+        ColumnFamilyIdentity columnFamily,
+        CancellationToken cancellationToken) =>
+        _actor.ValidateScanReadAsync(columnFamily, cancellationToken);
 
     internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
 

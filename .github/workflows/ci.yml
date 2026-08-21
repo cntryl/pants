@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore locked dependencies
+        run: dotnet restore Pants.slnx --locked-mode
+
+      - name: Verify formatting and analyzers
+        run: dotnet format Pants.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build Pants.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Pants.slnx --configuration Release --no-build

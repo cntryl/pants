@@ -49,6 +49,9 @@ public interface IPantsDatabase : IAsyncDisposable
     ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
         CancellationToken cancellationToken = default);
 
+    ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
+        CancellationToken cancellationToken = default);
+
     ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken = default);
 

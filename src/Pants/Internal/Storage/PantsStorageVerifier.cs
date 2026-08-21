@@ -149,6 +149,7 @@ internal static class PantsStorageVerifier
                     throw new JsonException("The intent log root is not an array.");
                 }
 
+                ValidateIntentLogSstNames(document.RootElement);
                 intentEntries = document.RootElement.GetArrayLength();
                 if (intentEntries != 0)
                 {
@@ -182,10 +183,13 @@ internal static class PantsStorageVerifier
                 exception);
         }
 
-        foreach (string retained in Directory.EnumerateFiles(
-                     Path.Combine(root, "wal"),
-                     "*.salvage-retained*",
-                     SearchOption.TopDirectoryOnly))
+        string retainedWalDirectory = Path.Combine(root, "wal");
+        foreach (string retained in Directory.Exists(retainedWalDirectory)
+                     ? Directory.EnumerateFiles(
+                         retainedWalDirectory,
+                         "*.salvage-retained*",
+                         SearchOption.TopDirectoryOnly)
+                     : [])
         {
             warnings.Add($"Salvage-retained WAL preserved: {Path.GetFileName(retained)}");
         }
@@ -330,5 +334,34 @@ internal static class PantsStorageVerifier
         }
 
         return name;
+    }
+
+    private static void ValidateIntentLogSstNames(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    ValidateIntentLogSstNames(property.Value);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (JsonElement item in element.EnumerateArray())
+                {
+                    ValidateIntentLogSstNames(item);
+                }
+
+                break;
+            case JsonValueKind.String:
+                string? value = element.GetString();
+                if (value is not null && value.EndsWith(".sst", StringComparison.Ordinal))
+                {
+                    _ = ValidateFileName(value);
+                }
+
+                break;
+        }
     }
 }

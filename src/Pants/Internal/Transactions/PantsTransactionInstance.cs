@@ -154,24 +154,28 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         }
     }
 
-    public ValueTask<ReadOnlyMemory<byte>?> GetAsync(
+    public async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        byte[] keyCopy;
+        byte[]? value;
         lock (_gate)
         {
             EnsureActive();
             _database.EnsureOpen();
-            byte[] keyCopy = key.ToArray();
-            byte[]? value = ReadVisibleValue(keyCopy);
-            if (value is null)
-            {
-                return ValueTask.FromResult<ReadOnlyMemory<byte>?>(null);
-            }
-
-            return ValueTask.FromResult<ReadOnlyMemory<byte>?>(value.ToArray());
+            keyCopy = key.ToArray();
+            value = ReadVisibleValue(keyCopy);
         }
+
+        await _database.RecordPointReadAsync(
+            _columnFamily.Identity,
+            keyCopy,
+            cancellationToken).ConfigureAwait(false);
+        return value is null
+            ? (ReadOnlyMemory<byte>?)null
+            : new ReadOnlyMemory<byte>(value.ToArray());
     }
 
     public async ValueTask<IPantsScan> ScanAsync(
@@ -194,7 +198,13 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         try
         {
             return new PantsScanInstance(
-                () => ComposeVisibleSnapshot(operations),
+                async scanCancellationToken =>
+                {
+                    await _database.ValidateScanReadAsync(
+                        _columnFamily.Identity,
+                        scanCancellationToken).ConfigureAwait(false);
+                    return EnumerateVisibleSnapshot(operations, query.Direction).GetEnumerator();
+                },
                 query,
                 () => _database.ReleaseScanSnapshotAsync(snapshotId));
         }
@@ -442,8 +452,9 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         return cell.Value.ToArray();
     }
 
-    private PantsEntry[] ComposeVisibleSnapshot(
-        IReadOnlyList<TransactionIntentOperation> operations)
+    private IEnumerable<PantsEntry> EnumerateVisibleSnapshot(
+        IReadOnlyList<TransactionIntentOperation> operations,
+        PantsScanDirection direction)
     {
         if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family))
         {
@@ -452,44 +463,102 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                 $"Column family '{_columnFamily.Name}' is not in the transaction snapshot.");
         }
 
-        var visible = new SortedDictionary<byte[], byte[]>(ByteArrayComparer.Instance);
-        foreach ((byte[] key, CellState cell) in family)
-        {
-            if (cell.Value is not null && !cell.IsExpired(_snapshotTime))
-            {
-                visible[key.ToArray()] = cell.Value.ToArray();
-            }
-        }
-
+        var stagedPointKeys = new SortedSet<byte[]>(ByteArrayComparer.Instance);
         foreach (TransactionIntentOperation operation in operations)
         {
-            switch (operation.Kind)
+            if (operation.Kind is CommitOperationKind.Put or CommitOperationKind.Delete)
             {
-                case CommitOperationKind.Put:
-                    if (operation.Value is not null)
-                    {
-                        visible[operation.Key.ToArray()] = operation.Value.ToArray();
-                    }
-
-                    break;
-                case CommitOperationKind.Delete:
-                    visible.Remove(operation.Key);
-                    break;
-                case CommitOperationKind.DeleteRange when operation.EndExclusive is not null:
-                    foreach (byte[] key in visible.Keys
-                                 .Where(key => IsInRange(key, operation.Key, operation.EndExclusive))
-                                 .ToArray())
-                    {
-                        visible.Remove(key);
-                    }
-
-                    break;
+                stagedPointKeys.Add(operation.Key);
             }
         }
 
-        return visible
-            .Select(static pair => new PantsEntry(pair.Key.ToArray(), pair.Value.ToArray()))
-            .ToArray();
+        IEnumerable<byte[]> snapshotKeys = direction == PantsScanDirection.Forward
+            ? family.Keys
+            : family.Keys.Reverse();
+        IEnumerable<byte[]> pointKeys = direction == PantsScanDirection.Forward
+            ? stagedPointKeys
+            : stagedPointKeys.Reverse();
+        using IEnumerator<byte[]> snapshotEnumerator = snapshotKeys.GetEnumerator();
+        using IEnumerator<byte[]> pointEnumerator = pointKeys.GetEnumerator();
+        bool hasSnapshot = snapshotEnumerator.MoveNext();
+        bool hasPoint = pointEnumerator.MoveNext();
+        while (hasSnapshot || hasPoint)
+        {
+            byte[] key;
+            if (!hasPoint)
+            {
+                key = snapshotEnumerator.Current;
+                hasSnapshot = snapshotEnumerator.MoveNext();
+            }
+            else if (!hasSnapshot)
+            {
+                key = pointEnumerator.Current;
+                hasPoint = pointEnumerator.MoveNext();
+            }
+            else
+            {
+                int comparison = ByteArrayComparer.Instance.Compare(
+                    snapshotEnumerator.Current,
+                    pointEnumerator.Current);
+                if (direction == PantsScanDirection.Reverse)
+                {
+                    comparison = -comparison;
+                }
+
+                if (comparison < 0)
+                {
+                    key = snapshotEnumerator.Current;
+                    hasSnapshot = snapshotEnumerator.MoveNext();
+                }
+                else if (comparison > 0)
+                {
+                    key = pointEnumerator.Current;
+                    hasPoint = pointEnumerator.MoveNext();
+                }
+                else
+                {
+                    key = pointEnumerator.Current;
+                    hasSnapshot = snapshotEnumerator.MoveNext();
+                    hasPoint = pointEnumerator.MoveNext();
+                }
+            }
+
+            byte[]? value = ResolveScanValue(family, operations, key);
+            if (value is not null)
+            {
+                yield return new PantsEntry(key.ToArray(), value.ToArray());
+            }
+        }
+    }
+
+    private byte[]? ResolveScanValue(
+        SortedDictionary<byte[], CellState> family,
+        IReadOnlyList<TransactionIntentOperation> operations,
+        byte[] key)
+    {
+        byte[]? value = family.TryGetValue(key, out CellState? cell) &&
+            cell.Value is not null &&
+            !cell.IsExpired(_snapshotTime)
+                ? cell.Value
+                : null;
+        foreach (TransactionIntentOperation operation in operations)
+        {
+            if (operation.Kind == CommitOperationKind.Put &&
+                ByteArrayComparer.Instance.Equals(operation.Key, key))
+            {
+                value = operation.Value;
+            }
+            else if ((operation.Kind == CommitOperationKind.Delete &&
+                      ByteArrayComparer.Instance.Equals(operation.Key, key)) ||
+                     (operation.Kind == CommitOperationKind.DeleteRange &&
+                      operation.EndExclusive is not null &&
+                      IsInRange(key, operation.Key, operation.EndExclusive)))
+            {
+                value = null;
+            }
+        }
+
+        return value;
     }
 
     private void StageIntent(TransactionIntentOperation operation, long bytes)

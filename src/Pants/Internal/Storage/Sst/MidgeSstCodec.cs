@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Hashing;
 using K4os.Compression.LZ4;
 using ZstdSharp;
 
@@ -11,6 +12,8 @@ internal static class MidgeSstCodec
     private const int MinimumCompressionInputSize = 256;
     private const int AdaptiveMinimumSavings = 256;
     private const float AdaptiveMaximumRatio = 0.95F;
+    private const ulong BloomSeedOne = 0x9E37_79B1_85EB_CA87;
+    private const ulong BloomSeedTwo = 0xC2B2_AE3D_27D4_EB4F;
 
     public static byte[] Encode(
         IReadOnlyList<MidgeSstEntry> sourceEntries,
@@ -23,6 +26,8 @@ internal static class MidgeSstCodec
             .ToList();
         using var file = new MemoryStream();
         var index = new List<(byte[] FirstKey, BlockHandle Handle)>();
+        var blockKeys = new List<IReadOnlyList<byte[]>>();
+        var currentBlockKeys = new List<byte[]>();
         using var block = new MemoryStream();
         byte[] previousKey = [];
         byte[]? firstKey = null;
@@ -32,6 +37,8 @@ internal static class MidgeSstCodec
             if (block.Length > 0 && block.Length + encoded.Length > TargetBlockSize)
             {
                 index.Add((firstKey!, AppendBlock(file, block.ToArray(), performanceGoal)));
+                blockKeys.Add(currentBlockKeys.ToArray());
+                currentBlockKeys.Clear();
                 block.SetLength(0);
                 previousKey = [];
                 firstKey = null;
@@ -40,18 +47,20 @@ internal static class MidgeSstCodec
 
             firstKey ??= entry.Key;
             block.Write(encoded);
+            currentBlockKeys.Add(entry.Key);
             previousKey = entry.Key;
         }
 
         if (block.Length > 0)
         {
             index.Add((firstKey!, AppendBlock(file, block.ToArray(), performanceGoal)));
+            blockKeys.Add(currentBlockKeys.ToArray());
         }
 
         BlockHandle? rangeHandle = tombstones.Count == 0
             ? null
             : AppendBlock(file, EncodeRangeTombstones(tombstones), performanceGoal);
-        var blockBloomHandle = AppendBlock(file, EncodeAlwaysPositiveBlockBlooms(index.Count), performanceGoal);
+        var blockBloomHandle = AppendBlock(file, EncodeBlockBlooms(blockKeys), performanceGoal);
         var metaHandle = AppendBlock(file, EncodeMetadata(entries, tombstones, rangeHandle), performanceGoal);
         var indexHandle = AppendBlock(file, EncodeIndex(index), performanceGoal);
         file.Write(EncodeFooter(metaHandle, indexHandle, blockBloomHandle));
@@ -124,6 +133,64 @@ internal static class MidgeSstCodec
         ValidateMetadataKeyRange(metadata, entries, tombstones);
 
         return new MidgeSstContents(entries, tombstones, index.Count);
+    }
+
+    internal static SstPointReadDecision GetPointReadDecision(
+        byte[] bytes,
+        ReadOnlySpan<byte> key)
+    {
+        if (bytes.Length < MidgeDiskFormat.SstFooterSize)
+        {
+            throw new PantsStorageException("SST is shorter than its V4 footer.");
+        }
+
+        ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
+        List<(byte[] FirstKey, BlockHandle Handle)> index = DecodeIndex(
+            ReadBlock(bytes, ReadHandle(footer, 16)));
+        BlockHandle? bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
+        if (index.Count == 0 || bloomHandle is null)
+        {
+            return new SstPointReadDecision(0, 0, 0, false, -1, 0);
+        }
+
+        int candidate = -1;
+        for (int blockIndex = 0; blockIndex < index.Count; blockIndex++)
+        {
+            if (key.SequenceCompareTo(index[blockIndex].FirstKey) < 0)
+            {
+                break;
+            }
+
+            candidate = blockIndex;
+        }
+
+        if (candidate < 0)
+        {
+            return new SstPointReadDecision(0, 0, 0, false, -1, 0);
+        }
+
+        bool mightContain = BloomMightContain(
+            ReadBlock(bytes, bloomHandle.Value),
+            candidate,
+            key);
+        BlockHandle candidateHandle = index[candidate].Handle;
+        int blockSizeBytes = checked((int)candidateHandle.Size);
+        return mightContain
+            ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
+            : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
+    }
+
+    internal static void ValidatePointReadDataBlock(byte[] bytes, int blockIndex)
+    {
+        ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - MidgeDiskFormat.SstFooterSize);
+        List<(byte[] FirstKey, BlockHandle Handle)> index = DecodeIndex(
+            ReadBlock(bytes, ReadHandle(footer, 16)));
+        if ((uint)blockIndex >= (uint)index.Count)
+        {
+            throw new PantsStorageException("SST point-read block index is invalid.");
+        }
+
+        _ = ReadBlock(bytes, index[blockIndex].Handle);
     }
 
     private static byte[] EncodeEntry(byte[] previousKey, MidgeSstEntry entry)
@@ -606,24 +673,110 @@ internal static class MidgeSstCodec
         return output;
     }
 
-    private static byte[] EncodeAlwaysPositiveBlockBlooms(int blockCount)
+    private static byte[] EncodeBlockBlooms(IReadOnlyList<IReadOnlyList<byte[]>> blockKeys)
     {
+        byte[][] blooms = blockKeys.Select(EncodeBloom).ToArray();
         using var output = new MemoryStream();
-        MidgeDiskFormat.WriteUInt32(output, (uint)blockCount);
-        for (var index = 0; index < blockCount; index++)
+        MidgeDiskFormat.WriteUInt32(output, checked((uint)blooms.Length));
+        uint offset = 0;
+        foreach (byte[] bloom in blooms)
         {
-            MidgeDiskFormat.WriteUInt32(output, checked((uint)(index * 17)));
+            MidgeDiskFormat.WriteUInt32(output, offset);
+            offset = checked(offset + (uint)bloom.Length);
         }
 
-        for (var index = 0; index < blockCount; index++)
+        foreach (byte[] bloom in blooms)
         {
-            MidgeDiskFormat.WriteUInt32(output, 64);
-            MidgeDiskFormat.WriteUInt32(output, 0);
-            output.WriteByte(1);
-            output.Write([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+            output.Write(bloom);
         }
 
         return output.ToArray();
+    }
+
+    private static byte[] EncodeBloom(IReadOnlyList<byte[]> keys)
+    {
+        int estimatedKeys = Math.Max(1, keys.Count);
+        int numberOfBits = Math.Max(
+            64,
+            checked((int)Math.Ceiling(
+                -estimatedKeys * Math.Log(0.01) / Math.Pow(Math.Log(2), 2))));
+        byte hashFunctions = checked((byte)Math.Clamp(
+            (int)Math.Round(
+                ((double)numberOfBits / estimatedKeys) * Math.Log(2),
+                MidpointRounding.AwayFromZero),
+            1,
+            8));
+        byte[] bits = new byte[(numberOfBits + 7) / 8];
+        foreach (byte[] key in keys)
+        {
+            SetBloomBits(bits, numberOfBits, hashFunctions, key);
+        }
+
+        using var output = new MemoryStream(checked(9 + bits.Length));
+        MidgeDiskFormat.WriteUInt32(output, checked((uint)numberOfBits));
+        MidgeDiskFormat.WriteUInt32(output, checked((uint)keys.Count));
+        output.WriteByte(hashFunctions);
+        output.Write(bits);
+        return output.ToArray();
+    }
+
+    private static bool BloomMightContain(
+        ReadOnlySpan<byte> serializedBlooms,
+        int blockIndex,
+        ReadOnlySpan<byte> key)
+    {
+        int blockCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(serializedBlooms));
+        if (blockIndex >= blockCount)
+        {
+            return true;
+        }
+
+        int headerLength = checked(sizeof(uint) + (blockCount * sizeof(uint)));
+        int start = checked(headerLength + (int)BinaryPrimitives.ReadUInt32LittleEndian(
+            serializedBlooms.Slice(sizeof(uint) + (blockIndex * sizeof(uint)), sizeof(uint))));
+        int end = blockIndex + 1 == blockCount
+            ? serializedBlooms.Length
+            : checked(headerLength + (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                serializedBlooms.Slice(sizeof(uint) + ((blockIndex + 1) * sizeof(uint)), sizeof(uint))));
+        ReadOnlySpan<byte> bloom = serializedBlooms[start..end];
+        ValidateBloomFilter(bloom);
+        int numberOfBits = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bloom));
+        byte hashFunctions = bloom[8];
+        ReadOnlySpan<byte> bits = bloom[9..];
+        ulong firstHash = Hash(key, BloomSeedOne);
+        ulong secondHash = Hash(key, BloomSeedTwo);
+        for (ulong hashIndex = 0; hashIndex < hashFunctions; hashIndex++)
+        {
+            ulong bitIndex = unchecked(firstHash + (hashIndex * secondHash)) % checked((ulong)numberOfBits);
+            if ((bits[checked((int)(bitIndex / 8))] & (1 << checked((int)(bitIndex % 8)))) == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void SetBloomBits(
+        Span<byte> bits,
+        int numberOfBits,
+        byte hashFunctions,
+        ReadOnlySpan<byte> key)
+    {
+        ulong firstHash = Hash(key, BloomSeedOne);
+        ulong secondHash = Hash(key, BloomSeedTwo);
+        for (ulong hashIndex = 0; hashIndex < hashFunctions; hashIndex++)
+        {
+            ulong bitIndex = unchecked(firstHash + (hashIndex * secondHash)) % checked((ulong)numberOfBits);
+            bits[checked((int)(bitIndex / 8))] |= checked((byte)(1 << checked((int)(bitIndex % 8))));
+        }
+    }
+
+    private static ulong Hash(ReadOnlySpan<byte> key, ulong seed)
+    {
+        var hasher = new XxHash3(unchecked((long)seed));
+        hasher.Append(key);
+        return hasher.GetCurrentHashAsUInt64();
     }
 
     private static byte[] EncodeRangeTombstones(IReadOnlyList<MidgeRangeTombstone> tombstones)
