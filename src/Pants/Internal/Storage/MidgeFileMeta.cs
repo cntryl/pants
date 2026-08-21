@@ -1,0 +1,33 @@
+using System.Text.Json.Serialization;
+
+namespace Pants;
+
+internal sealed class MidgeFileMeta
+{
+    public string Name { get; set; } = string.Empty;
+
+    public uint Level { get; set; }
+
+    public ulong SizeBytes { get; set; }
+
+    [JsonPropertyName("content_crc32c")]
+    public uint? ContentCrc32C { get; set; }
+
+    [JsonPropertyName("cf_id")]
+    public uint ColumnFamilyId { get; set; }
+
+    [JsonPropertyName("sst_seq")]
+    public ulong SstSequence { get; set; }
+
+    public int[]? SmallestKey { get; set; }
+
+    public int[]? LargestKey { get; set; }
+
+    [JsonPropertyName("smallest_seq")]
+    public ulong? SmallestSequence { get; set; }
+
+    [JsonPropertyName("largest_seq")]
+    public ulong? LargestSequence { get; set; }
+
+    public uint Sublevel { get; set; }
+}

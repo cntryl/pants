@@ -1,0 +1,2007 @@
+using System.Buffers.Binary;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Pants;
+
+internal sealed class LocalDiskStore : IDisposable
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private readonly string _root;
+    private readonly string _walDirectory;
+    private readonly string _sstDirectory;
+    private readonly string _walPath;
+    private readonly string _manifestPath;
+    private readonly string _manifestSnapshotPath;
+    private readonly string _manifestJournalPath;
+    private readonly string _intentPath;
+    private readonly FileStream _lockStream;
+    private readonly MidgeFileLease _lease;
+    private readonly PantsRecoveryPolicy _recoveryPolicy;
+    private readonly PantsPerformanceGoal _performanceGoal;
+    private readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
+    private readonly List<MidgeWalMutation> _mutableOperations = [];
+    private readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
+    private FileStream _walStream;
+    private readonly MidgeManifest _manifest;
+    private ulong _nextSequence;
+    private ulong _unflushedCommitSequence;
+    private int _walRecords;
+    private long _walRecoveryRecordsReplayed;
+    private long _walRecoveryBytesReplayed;
+    private bool _disposed;
+
+    private LocalDiskStore(
+        string root,
+        FileStream lockStream,
+        MidgeFileLease lease,
+        FileStream walStream,
+        MidgeManifest manifest,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsPerformanceGoal performanceGoal)
+    {
+        _root = root;
+        _walDirectory = Path.Combine(root, "wal");
+        _sstDirectory = Path.Combine(root, "sst");
+        _walPath = Path.Combine(_walDirectory, "wal.log");
+        _manifestPath = Path.Combine(root, "manifest.json");
+        _manifestSnapshotPath = Path.Combine(root, "manifest.snapshot.json");
+        _manifestJournalPath = Path.Combine(root, "manifest.journal");
+        _intentPath = Path.Combine(root, "intent_log.json");
+        _lockStream = lockStream;
+        _lease = lease;
+        _recoveryPolicy = recoveryPolicy;
+        _performanceGoal = performanceGoal;
+        _walStream = walStream;
+        _manifest = manifest;
+        _nextSequence = manifest.LastPersistedSequence;
+        _unflushedCommitSequence = manifest.LastPersistedSequence;
+    }
+
+    public int WalRecords => _walRecords;
+    public string RootPath => _root;
+    public bool IsLeaseHealthy
+    {
+        get
+        {
+            try
+            {
+                _lease.EnsureValid();
+                return true;
+            }
+            catch (PantsException)
+            {
+                return false;
+            }
+        }
+    }
+
+    public long LastPersistedSequence => checked((long)_manifest.LastPersistedSequence);
+    public long NextWalSequence => checked((long)_manifest.NextWalSeq);
+    public int SstCount => _manifest.Files.Count;
+    public long SstBytes => checked((long)_manifest.Files.Aggregate(0UL, static (total, file) => total + file.SizeBytes));
+    public long WalRecoveryRecordsReplayed => _walRecoveryRecordsReplayed;
+    public long WalRecoveryBytesReplayed => _walRecoveryBytesReplayed;
+    public ulong WriterEpoch => _lease.Epoch;
+
+    public PantsEngineHealth GetHealth(PantsRuntimeState state)
+    {
+        if (state.Health == PantsEngineHealth.SalvageMode)
+        {
+            return PantsEngineHealth.SalvageMode;
+        }
+
+        return GetObsoleteFiles().Any(name => !_snapshotPinnedObsoleteFiles.Contains(name))
+            ? PantsEngineHealth.Degraded
+            : PantsEngineHealth.Healthy;
+    }
+
+    public IReadOnlyList<string> GetObsoleteFiles()
+    {
+        var owned = _manifest.Files.Select(static file => file.Name).ToHashSet(StringComparer.Ordinal);
+        return Directory
+            .EnumerateFiles(_sstDirectory, "*.sst", SearchOption.TopDirectoryOnly)
+            .Select(static path => Path.GetFileName(path))
+            .Where(name => !owned.Contains(name))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public void CollectObsoleteFiles(PantsRuntimeState state)
+    {
+        if (state.ActiveSnapshotCount != 0)
+        {
+            return;
+        }
+
+        foreach (string name in _snapshotPinnedObsoleteFiles.ToArray())
+        {
+            File.Delete(Path.Combine(_sstDirectory, name));
+            _snapshotPinnedObsoleteFiles.Remove(name);
+        }
+    }
+
+    public MidgeColumnFamilyMeta GetColumnFamilyMetadata(ColumnFamilyIdentity identity)
+    {
+        MidgeColumnFamilyMeta metadata = _manifest.ColumnFamilies.Single(family => family.Id == identity.Id);
+        return metadata.Clone();
+    }
+
+    public static LocalDiskStore Open(
+        string directory,
+        PantsRuntimeState state,
+        ulong minimumWriterEpoch = 0,
+        PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict,
+        PantsPerformanceGoal performanceGoal = PantsPerformanceGoal.Latency,
+        TimeSpan? leaseClockSkewTolerance = null,
+        Action? leaseLossCallback = null)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new PantsInvalidArgumentException("DataDirectory must not be empty.");
+        }
+
+        var root = Path.GetFullPath(directory);
+        FileStream? lockStream = null;
+        FileStream? walStream = null;
+        MidgeFileLease? lease = null;
+        try
+        {
+            Directory.CreateDirectory(root);
+            try
+            {
+                lockStream = new FileStream(
+                    Path.Combine(root, "LOCK"),
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            catch (IOException exception)
+            {
+                throw new PantsLeaseHeldException(
+                    "Another Midge-compatible writer holds the database lock.",
+                    exception);
+            }
+
+            lease = MidgeFileLease.Acquire(
+                root,
+                minimumWriterEpoch,
+                leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
+                leaseLossCallback);
+            EnsureFormat(root);
+            Directory.CreateDirectory(Path.Combine(root, "wal"));
+            Directory.CreateDirectory(Path.Combine(root, "sst"));
+            Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
+            string intentPath = Path.Combine(root, "intent_log.json");
+            if (!File.Exists(intentPath))
+            {
+                AtomicWrite(intentPath, "[]"u8.ToArray());
+            }
+            string journalPath = Path.Combine(root, "manifest.journal");
+            if (!File.Exists(journalPath))
+            {
+                AtomicWrite(journalPath, []);
+            }
+            foreach (var temporary in Directory.GetFiles(Path.Combine(root, "sst", ".flush-staging"), "*.tmp"))
+            {
+                File.Delete(temporary);
+            }
+            TransactionSpillStore.CleanupOrphans(root);
+            MidgeManifest manifest = LoadManifest(root, recoveryPolicy, state);
+            bool clearRecoveredIntents = ValidateRecoveryMetadata(
+                root,
+                manifest,
+                recoveryPolicy,
+                state);
+            walStream = new FileStream(Path.Combine(root, "wal", "wal.log"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+            var store = new LocalDiskStore(
+                root,
+                lockStream,
+                lease,
+                walStream,
+                manifest,
+                recoveryPolicy,
+                performanceGoal);
+            store.Recover(state);
+            store.SaveManifestCheckpoint();
+            if (clearRecoveredIntents)
+            {
+                store.ClearIntentLog();
+            }
+
+            store._walStream.Seek(0, SeekOrigin.End);
+            return store;
+        }
+        catch (PantsException)
+        {
+            walStream?.Dispose();
+            lease?.Dispose();
+            lockStream?.Dispose();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            walStream?.Dispose();
+            lease?.Dispose();
+            lockStream?.Dispose();
+            throw new PantsStorageException($"Could not open Pants database at '{root}'.", ex);
+        }
+    }
+
+    public void CreateColumnFamily(ColumnFamilyIdentity identity)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        JsonElement edit = CreateManifestEdit(
+            "CreateColumnFamily",
+            new
+            {
+                id = identity.Id,
+                name = identity.Name,
+                created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            });
+        DurablyApplyManifestEdit(edit);
+        _familyIds[identity] = identity.Id;
+        SaveManifestCheckpoint();
+    }
+
+    public void DropColumnFamily(PantsRuntimeState state, ColumnFamilyIdentity identity)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        if (!_familyIds.TryGetValue(identity, out uint id))
+        {
+            throw new PantsStorageException($"Column family '{identity}' has no persistent Midge identity.");
+        }
+
+        string[] droppedSstNames = _manifest.Files
+            .Where(file => file.ColumnFamilyId == id)
+            .Select(file => file.Name)
+            .ToArray();
+        JsonElement edit = CreateManifestEdit(
+            "DropColumnFamilyAt",
+            new
+            {
+                id,
+                drop_sequence = checked((ulong)state.Sequence),
+                dropped_sst_names = droppedSstNames
+            });
+        DurablyApplyManifestEdit(edit);
+        _familyIds.Remove(identity);
+        SaveManifestCheckpoint();
+    }
+
+    public void AppendCommit(CommitPayload payload, PantsRuntimeState state, PantsDurability durability)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        if (payload.OrderedOperations.Count == 0)
+        {
+            return;
+        }
+
+        var beginSequence = _nextSequence;
+        var mutations = payload.OrderedOperations.Select(operation => new MidgeWalMutation(
+            ResolveFamilyId(operation.Family),
+            operation.Kind switch
+            {
+                CommitOperationKind.Put => MidgeWalOperation.Put,
+                CommitOperationKind.Delete => MidgeWalOperation.Delete,
+                CommitOperationKind.DeleteRange => MidgeWalOperation.DeleteRange,
+                _ => throw new PantsStorageException($"Unsupported WAL operation '{operation.Kind}'.")
+            },
+            operation.Key.ToArray(),
+            operation.Value?.ToArray(),
+            0,
+            ToUnixMilliseconds(operation.ExpiryUtc),
+            operation.EndExclusive?.ToArray())).ToList();
+        for (var index = 0; index < mutations.Count; index++)
+        {
+            mutations[index] = mutations[index] with { Sequence = beginSequence + (ulong)index + 1 };
+        }
+
+        var commitSequence = beginSequence + (ulong)mutations.Count + 1;
+        if (durability != PantsDurability.BestEffort)
+        {
+            var encoded = MidgeWalCodec.EncodeTransactionBatch(checked((ulong)payload.TransactionId), beginSequence, _lease.Epoch, mutations);
+            MidgeWalCodec.AppendFrame(_walStream, encoded);
+            _walRecords++;
+            if (durability == PantsDurability.Sync)
+            {
+                _walStream.Flush(flushToDisk: true);
+            }
+            else
+            {
+                _walStream.Flush(flushToDisk: false);
+            }
+        }
+
+        _mutableOperations.AddRange(mutations);
+        _nextSequence = commitSequence;
+        _unflushedCommitSequence = commitSequence;
+        state.Sequence = checked((long)commitSequence);
+    }
+
+    public void Flush(PantsRuntimeState state)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        if (_mutableOperations.Count == 0)
+        {
+            SaveManifestCheckpoint();
+            return;
+        }
+
+        var edits = new List<JsonElement>();
+        var intents = new List<JsonElement>();
+        foreach (var familyGroup in _mutableOperations.GroupBy(operation => operation.ColumnFamilyId))
+        {
+            var familyMetadata = _manifest.ColumnFamilies.SingleOrDefault(family => family.Id == familyGroup.Key);
+            if (familyMetadata?.DeletedAt is not null)
+            {
+                continue;
+            }
+
+            var entries = familyGroup
+                .Where(operation => operation.Operation != MidgeWalOperation.DeleteRange)
+                .Select(operation => new MidgeSstEntry(
+                    operation.Key,
+                    operation.Value,
+                    operation.Sequence,
+                    operation.Expiration,
+                    operation.Operation == MidgeWalOperation.Delete))
+                .ToList();
+            var ranges = familyGroup
+                .Where(operation => operation.Operation == MidgeWalOperation.DeleteRange && operation.RangeEnd is not null)
+                .Select(operation => new MidgeRangeTombstone(operation.Key, operation.RangeEnd!, operation.Sequence))
+                .ToList();
+            MidgeFileMeta metadata = CreateSst(familyGroup.Key, 0, entries, ranges);
+            edits.Add(CreateManifestEdit(
+                "BumpNextSstSeq",
+                new
+                {
+                    cf_id = familyGroup.Key,
+                    next_seq = checked(metadata.SstSequence + 1)
+                }));
+            edits.Add(CreateManifestEdit("AddSst", metadata));
+            intents.Add(CreateIntentEntry(
+                "FlushPublish",
+                new
+                {
+                    phase = "OutputDurable",
+                    cf_id = familyGroup.Key,
+                    sequence = metadata.LargestSequence ?? 0,
+                    file_meta = CreateIntentFileMetadata(metadata)
+                }));
+        }
+
+        SaveIntentLog(intents);
+        DurablyApplyManifestBatch(edits);
+        _manifest.LastPersistedSequence = Math.Max(_manifest.LastPersistedSequence, _unflushedCommitSequence);
+        SaveManifestCheckpoint();
+        ClearIntentLog();
+        RotateWal();
+        _mutableOperations.Clear();
+    }
+
+    public void Flush(PantsRuntimeState state, ColumnFamilyIdentity identity)
+    {
+        if (!_familyIds.ContainsKey(identity))
+        {
+            throw PantsException.Create(
+                PantsErrorCode.InvalidArgument,
+                $"Column family '{identity.Name}' is not active in persistent storage.");
+        }
+
+        // Midge's durability frontier is database-wide. Until Pants carries
+        // per-segment coverage proofs, flushing all admitted families is the
+        // conservative operation and never advances past unpersisted data.
+        Flush(state);
+    }
+
+    public void FlushDurabilityBoundary()
+    {
+        ThrowIfDisposed();
+        _walStream.Flush(flushToDisk: true);
+    }
+
+    public SealedWalSegment? SealActiveWal()
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        if (_walStream.Length == 0)
+        {
+            return null;
+        }
+
+        _walStream.Flush(flushToDisk: true);
+        _walStream.Dispose();
+        ulong segmentId = _manifest.NextWalSeq;
+        string fileName = $"{segmentId:00000000000000000000}.wal";
+        string sealedPath = Path.Combine(_walDirectory, fileName);
+        try
+        {
+            File.Move(_walPath, sealedPath, overwrite: false);
+            byte[] bytes = File.ReadAllBytes(sealedPath);
+            _manifest.NextWalSeq = checked(segmentId + 1);
+            SaveManifestCheckpoint();
+            _walStream = new FileStream(
+                _walPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.Read);
+            _walRecords = 0;
+            return new SealedWalSegment(
+                segmentId,
+                _lease.Epoch,
+                _nextSequence,
+                fileName,
+                bytes);
+        }
+        catch
+        {
+            if (!File.Exists(_walPath) && File.Exists(sealedPath))
+            {
+                try
+                {
+                    File.Move(sealedPath, _walPath, overwrite: false);
+                }
+                catch (IOException)
+                {
+                    // The sealed segment remains immutable and recoverable. A
+                    // fresh active segment is safer than appending to it.
+                }
+            }
+
+            _walStream = new FileStream(
+                _walPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read);
+            _walStream.Seek(0, SeekOrigin.End);
+            throw;
+        }
+    }
+
+    public PantsStorageLayout GetStorageLayout(PantsRuntimeState state)
+    {
+        PantsStorageLevelLayout[] levels = _manifest.Files
+            .GroupBy(static file => file.Level)
+            .OrderBy(static group => group.Key)
+            .Select(group =>
+            {
+                PantsStorageFileLayout[] files = group
+                    .OrderBy(static file => file.Name, StringComparer.Ordinal)
+                    .Select(static file => new PantsStorageFileLayout(
+                        file.Name,
+                        checked((int)file.Level),
+                        file.ColumnFamilyId,
+                        checked((long)file.SizeBytes),
+                        file.SmallestKey is null
+                            ? null
+                            : new ReadOnlyMemory<byte>(file.SmallestKey.Select(static value => checked((byte)value)).ToArray()),
+                        file.LargestKey is null
+                            ? null
+                            : new ReadOnlyMemory<byte>(file.LargestKey.Select(static value => checked((byte)value)).ToArray()),
+                        file.SmallestSequence is null ? null : checked((long)file.SmallestSequence.Value),
+                        file.LargestSequence is null ? null : checked((long)file.LargestSequence.Value)))
+                    .ToArray();
+                return new PantsStorageLevelLayout(
+                    checked((int)group.Key),
+                    files.Length,
+                    files.Sum(static file => file.SizeBytes),
+                    files);
+            })
+            .ToArray();
+        DateTimeOffset now = state.Clock.UtcNow;
+        PantsSnapshotPin[] snapshots = state.ActiveSnapshots
+            .Select(snapshot => new PantsSnapshotPin(
+                snapshot.SnapshotId,
+                snapshot.BeginSequence,
+                now <= snapshot.StartedAtUtc ? TimeSpan.Zero : now - snapshot.StartedAtUtc,
+                1))
+            .ToArray();
+        return new PantsStorageLayout(
+            GetHealth(state),
+            checked((long)_manifest.LastPersistedSequence),
+            checked((long)_manifest.NextWalSeq),
+            levels,
+            snapshots,
+            0,
+            [],
+            GetObsoleteFiles());
+    }
+
+    public void Compact(PantsRuntimeState state)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        Flush(state);
+        var obsoleteNames = new List<string>();
+        var edits = new List<JsonElement>();
+        var intents = new List<JsonElement>();
+        foreach (var familyIdentity in _familyIds.ToList())
+        {
+            var familyId = familyIdentity.Value;
+            var inputs = _manifest.Files.Where(file => file.ColumnFamilyId == familyId).ToList();
+            if (inputs.Count <= 1)
+            {
+                continue;
+            }
+
+            var entries = state.FamilyData[familyIdentity.Key].Select(cell => new MidgeSstEntry(
+                cell.Key.ToArray(),
+                cell.Value.Value?.ToArray(),
+                checked((ulong)cell.Value.WriteSequence),
+                ToUnixMilliseconds(cell.Value.ExpiresAtUtc),
+                cell.Value.Value is null)).ToList();
+            List<MidgeRangeTombstone> ranges = state.RangeTombstones[familyIdentity.Key]
+                .Select(static tombstone => new MidgeRangeTombstone(
+                    tombstone.Start.ToArray(),
+                    tombstone.EndExclusive.ToArray(),
+                    checked((ulong)tombstone.WriteSequence)))
+                .ToList();
+            MidgeFileMeta output = CreateSst(familyId, 1, entries, ranges);
+            edits.Add(CreateManifestEdit(
+                "BumpNextSstSeq",
+                new
+                {
+                    cf_id = familyId,
+                    next_seq = checked(output.SstSequence + 1)
+                }));
+            edits.Add(CreateManifestEdit("AddSst", output));
+            edits.AddRange(inputs.Select(static input => CreateManifestEdit(
+                "RemoveSst",
+                new { name = input.Name })));
+            intents.Add(CreateIntentEntry(
+                "CompactionPublish",
+                new
+                {
+                    phase = "OutputDurable",
+                    cf_id = familyId,
+                    removed = inputs.Select(static input => input.Name).ToArray(),
+                    added = new[] { CreateIntentFileMetadata(output) }
+                }));
+
+            obsoleteNames.AddRange(inputs.Select(input => input.Name));
+        }
+
+        foreach (var family in _manifest.ColumnFamilies.Where(family => family.DeletedAt is not null && !family.Reclaimed))
+        {
+            var droppedFiles = _manifest.Files.Where(file => file.ColumnFamilyId == family.Id).ToList();
+            obsoleteNames.AddRange(droppedFiles.Select(file => file.Name));
+            edits.Add(CreateManifestEdit(
+                "ReclaimColumnFamily",
+                new
+                {
+                    id = family.Id,
+                    names = droppedFiles.Select(static file => file.Name).ToArray()
+                }));
+        }
+
+        SaveIntentLog(intents);
+        DurablyApplyManifestBatch(edits);
+        SaveManifestCheckpoint();
+        ClearIntentLog();
+        foreach (string name in obsoleteNames)
+        {
+            if (state.ActiveSnapshotCount == 0)
+            {
+                File.Delete(Path.Combine(_sstDirectory, name));
+            }
+            else
+            {
+                _snapshotPinnedObsoleteFiles.Add(name);
+            }
+        }
+    }
+
+    private void Recover(PantsRuntimeState state)
+    {
+        RestoreColumnFamilies(state);
+        var recoveredOperations = new List<MidgeWalMutation>();
+        foreach (MidgeFileMeta file in _manifest.Files.ToArray())
+        {
+            try
+            {
+                string path = Path.Combine(_sstDirectory, ValidateSstName(file.Name));
+                if (!File.Exists(path))
+                {
+                    throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
+                }
+
+                byte[] bytes = File.ReadAllBytes(path);
+                if (file.ContentCrc32C.HasValue && MidgeDiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                {
+                    throw new PantsStorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
+                }
+
+                MidgeSstContents contents = MidgeSstCodec.Decode(bytes);
+                recoveredOperations.AddRange(contents.Entries.Select(entry => new MidgeWalMutation(
+                    file.ColumnFamilyId,
+                    entry.IsDelete ? MidgeWalOperation.Delete : MidgeWalOperation.Put,
+                    entry.Key,
+                    entry.Value,
+                    entry.Sequence,
+                    entry.Expiration,
+                    null)));
+                recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new MidgeWalMutation(
+                    file.ColumnFamilyId,
+                    MidgeWalOperation.DeleteRange,
+                    range.Start,
+                    null,
+                    range.Sequence,
+                    null,
+                    range.End)));
+            }
+            catch (Exception exception) when (
+                _recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                exception is PantsException or IOException)
+            {
+                state.MarkSalvageMode();
+                _manifest.Files.Remove(file);
+            }
+            catch (Exception exception) when (exception is PantsException or IOException)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.RecoveryFailed,
+                    $"Manifest SST '{file.Name}' could not be recovered strictly.",
+                    exception);
+            }
+        }
+
+        ApplyMutations(state, recoveredOperations.OrderBy(operation => operation.Sequence));
+        ReplayWal(state);
+        state.Sequence = checked((long)_nextSequence);
+    }
+
+    private void ReplayWal(PantsRuntimeState state)
+    {
+        string[] sealedSegments = Directory
+            .EnumerateFiles(_walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+            .Where(static path => Path.GetFileName(path) != "wal.log")
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .ToArray();
+        for (int index = 0; index < sealedSegments.Length; index++)
+        {
+            string sealedSegment = sealedSegments[index];
+            WalReplayOutcome outcome;
+            using (var stream = new FileStream(
+                       sealedSegment,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.Read))
+            {
+                outcome = ReplayWalStream(state, stream, allowIncompleteTail: false);
+            }
+
+            if (outcome == WalReplayOutcome.Salvaged)
+            {
+                RetainCorruptFile(sealedSegment);
+                for (int laterIndex = index + 1; laterIndex < sealedSegments.Length; laterIndex++)
+                {
+                    RetainCorruptFile(sealedSegments[laterIndex]);
+                }
+
+                ResetActiveWalAfterSalvage();
+                return;
+            }
+        }
+
+        _walStream.Seek(0, SeekOrigin.Begin);
+        if (ReplayWalStream(state, _walStream, allowIncompleteTail: true) == WalReplayOutcome.Salvaged)
+        {
+            ResetActiveWalAfterSalvage();
+        }
+    }
+
+    private WalReplayOutcome ReplayWalStream(
+        PantsRuntimeState state,
+        FileStream stream,
+        bool allowIncompleteTail)
+    {
+        Span<byte> header = stackalloc byte[8];
+        while (stream.Position < stream.Length)
+        {
+            long recordStart = stream.Position;
+            if (!MidgeDiskFormat.ReadExactly(stream, header))
+            {
+                return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
+            }
+
+            if (header.IndexOfAnyExcept((byte)0) < 0 && IsZeroFilledTail(stream))
+            {
+                return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
+            }
+
+            uint length = BinaryPrimitives.ReadUInt32LittleEndian(header);
+            if (length > MidgeDiskFormat.WalMaximumRecordBytes)
+            {
+                return HandleWalCorruption(
+                    state,
+                    "WAL record exceeds Midge's 64 MiB frame limit.");
+            }
+
+            byte[] payload = new byte[length];
+            if (!MidgeDiskFormat.ReadExactly(stream, payload))
+            {
+                return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
+            }
+
+            if (MidgeDiskFormat.Crc32C(payload) != BinaryPrimitives.ReadUInt32LittleEndian(header[4..]))
+            {
+                return HandleWalCorruption(state, "WAL frame CRC32C mismatch.");
+            }
+
+            IReadOnlyList<MidgeWalMutation> mutations;
+            ulong commitSequence;
+            try
+            {
+                mutations = MidgeWalCodec.DecodeTransactionBatch(payload, out commitSequence);
+            }
+            catch (PantsException exception)
+            {
+                return HandleWalCorruption(state, "WAL transaction batch is corrupt.", exception);
+            }
+
+            _walRecoveryRecordsReplayed++;
+            _walRecoveryBytesReplayed = checked(_walRecoveryBytesReplayed + payload.Length);
+            _nextSequence = Math.Max(_nextSequence, commitSequence);
+            if (commitSequence > _manifest.LastPersistedSequence)
+            {
+                ApplyMutations(state, mutations);
+                RecordRecoveredMemtableBytes(state, mutations);
+                _mutableOperations.AddRange(mutations);
+                _unflushedCommitSequence = Math.Max(_unflushedCommitSequence, commitSequence);
+            }
+
+            _walRecords++;
+        }
+
+        return WalReplayOutcome.Complete;
+    }
+
+    private void RecordRecoveredMemtableBytes(
+        PantsRuntimeState state,
+        IReadOnlyList<MidgeWalMutation> mutations)
+    {
+        Dictionary<uint, ColumnFamilyIdentity> identities = _familyIds.ToDictionary(
+            static pair => pair.Value,
+            static pair => pair.Key);
+        foreach (IGrouping<uint, MidgeWalMutation> operations in mutations.GroupBy(
+                     static mutation => mutation.ColumnFamilyId))
+        {
+            if (!identities.TryGetValue(operations.Key, out ColumnFamilyIdentity identity))
+            {
+                continue;
+            }
+
+            state.ActiveMemtableBytes[identity] = checked(
+                state.ActiveMemtableBytes.GetValueOrDefault(identity) +
+                operations.Sum(static operation =>
+                    (long)operation.Key.Length +
+                    (operation.Value?.Length ?? 0) +
+                    (operation.RangeEnd?.Length ?? 0) +
+                    64));
+        }
+    }
+
+    private WalReplayOutcome HandleIncompleteWalTail(
+        PantsRuntimeState state,
+        FileStream stream,
+        long validLength,
+        bool allowIncompleteTail)
+    {
+        if (!allowIncompleteTail)
+        {
+            return HandleWalCorruption(
+                state,
+                "A sealed WAL segment has an incomplete final frame.");
+        }
+
+        stream.SetLength(validLength);
+        return WalReplayOutcome.ToleratedIncompleteTail;
+    }
+
+    private WalReplayOutcome HandleWalCorruption(
+        PantsRuntimeState state,
+        string message,
+        Exception? innerException = null)
+    {
+        if (_recoveryPolicy == PantsRecoveryPolicy.Salvage)
+        {
+            state.MarkSalvageMode();
+            return WalReplayOutcome.Salvaged;
+        }
+
+        throw innerException is null
+            ? PantsException.Create(PantsErrorCode.RecoveryFailed, message)
+            : PantsException.Create(PantsErrorCode.RecoveryFailed, message, innerException);
+    }
+
+    private static bool IsZeroFilledTail(FileStream stream)
+    {
+        Span<byte> buffer = stackalloc byte[4096];
+        while (stream.Position < stream.Length)
+        {
+            int requested = checked((int)Math.Min(buffer.Length, stream.Length - stream.Position));
+            int read = stream.Read(buffer[..requested]);
+            if (read == 0 || buffer[..read].IndexOfAnyExcept((byte)0) >= 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void ResetActiveWalAfterSalvage()
+    {
+        _walStream.Dispose();
+        RetainCorruptFile(_walPath);
+        _walStream = new FileStream(
+            _walPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.Read);
+        _walRecords = 0;
+    }
+
+    private void RestoreColumnFamilies(PantsRuntimeState state)
+    {
+        state.FamilyGeneration.Clear();
+        state.ActiveFamilyVersions.Clear();
+        state.FamilyData.Clear();
+        state.RangeTombstones.Clear();
+        state.ActiveMemtableBytes.Clear();
+        if (!_manifest.ColumnFamilies.Any(family => family.Id == 0 && family.Name == "default"))
+        {
+            var defaultIdentity = new ColumnFamilyIdentity(0, "default", PantsRuntimeState.DefaultFamilyVersion);
+            state.FamilyGeneration["default"] = PantsRuntimeState.DefaultFamilyVersion;
+            state.ActiveFamilyVersions["default"] = PantsRuntimeState.DefaultFamilyVersion;
+            state.FamilyData[defaultIdentity] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+            state.RangeTombstones[defaultIdentity] = [];
+            state.ActiveMemtableBytes[defaultIdentity] = 0;
+            _familyIds[defaultIdentity] = 0;
+        }
+
+        foreach (var nameGroup in _manifest.ColumnFamilies.GroupBy(family => family.Name, StringComparer.Ordinal))
+        {
+            var ordered = nameGroup.OrderBy(family => family.Id).ToList();
+            state.FamilyGeneration[nameGroup.Key] = ordered.Count - 1;
+            for (var version = 0; version < ordered.Count; version++)
+            {
+                var family = ordered[version];
+                if (family.DeletedAt is not null)
+                {
+                    continue;
+                }
+
+                var identity = new ColumnFamilyIdentity(family.Id, family.Name, version);
+                state.ActiveFamilyVersions[family.Name] = version;
+                state.FamilyData[identity] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+                state.RangeTombstones[identity] = [];
+                state.ActiveMemtableBytes[identity] = 0;
+                _familyIds[identity] = family.Id;
+            }
+        }
+
+        if (!state.ActiveFamilyVersions.ContainsKey("default"))
+        {
+            throw new PantsStorageException("Midge manifest does not contain the active default column family.");
+        }
+
+        state.NextColumnFamilyId = _manifest.ColumnFamilies.Count == 0
+            ? 1
+            : checked(_manifest.ColumnFamilies.Max(family => family.Id) + 1);
+    }
+
+    private void ApplyMutations(PantsRuntimeState state, IEnumerable<MidgeWalMutation> mutations)
+    {
+        var identityById = _familyIds.ToDictionary(pair => pair.Value, pair => pair.Key);
+        foreach (var mutation in mutations)
+        {
+            if (!identityById.TryGetValue(mutation.ColumnFamilyId, out var identity) || !state.FamilyData.TryGetValue(identity, out var family))
+            {
+                continue;
+            }
+
+            switch (mutation.Operation)
+            {
+                case MidgeWalOperation.Put:
+                case MidgeWalOperation.Insert:
+                    family[mutation.Key] = new CellState(
+                        mutation.Value?.ToArray(),
+                        checked((long)mutation.Sequence),
+                        FromUnixMilliseconds(mutation.Expiration));
+                    break;
+                case MidgeWalOperation.Delete:
+                    family.Remove(mutation.Key);
+                    break;
+                case MidgeWalOperation.DeleteRange when mutation.RangeEnd is not null:
+                    state.RangeTombstones[identity].Add(new CommittedRangeTombstone(
+                        mutation.Key.ToArray(),
+                        mutation.RangeEnd.ToArray(),
+                        checked((long)mutation.Sequence)));
+                    foreach (var key in family.Keys.Where(key =>
+                                 ByteArrayComparer.Instance.Compare(key, mutation.Key) >= 0 &&
+                                 ByteArrayComparer.Instance.Compare(key, mutation.RangeEnd) < 0).ToList())
+                    {
+                        family.Remove(key);
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    private MidgeFileMeta CreateSst(uint familyId, uint level, IReadOnlyList<MidgeSstEntry> entries, IReadOnlyList<MidgeRangeTombstone> ranges)
+    {
+        var sequence = _manifest.NextSstSeqs.TryGetValue(familyId, out var nextSequence) ? nextSequence : 1UL;
+        var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
+        var bytes = MidgeSstCodec.Encode(entries, ranges, _performanceGoal);
+        var stagingPath = Path.Combine(_sstDirectory, ".flush-staging", name + ".tmp");
+        var finalPath = Path.Combine(_sstDirectory, name);
+        using (var stream = new FileStream(stagingPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
+
+        File.Move(stagingPath, finalPath, overwrite: false);
+        var allKeys = entries.Select(entry => entry.Key)
+            .Concat(ranges.SelectMany(range => new[] { range.Start, range.End }))
+            .OrderBy(key => key, ByteArrayComparer.Instance)
+            .ToList();
+        var allSequences = entries.Select(entry => entry.Sequence).Concat(ranges.Select(range => range.Sequence)).ToList();
+        var metadata = new MidgeFileMeta
+        {
+            Name = name,
+            Level = level,
+            SizeBytes = checked((ulong)bytes.Length),
+            ContentCrc32C = MidgeDiskFormat.Crc32C(bytes),
+            ColumnFamilyId = familyId,
+            SstSequence = sequence,
+            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
+            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].Select(value => (int)value).ToArray(),
+            SmallestSequence = allSequences.Count == 0 ? null : allSequences.Min(),
+            LargestSequence = allSequences.Count == 0 ? null : allSequences.Max(),
+            Sublevel = 0
+        };
+        return metadata;
+    }
+
+    private static Dictionary<string, object?> CreateIntentFileMetadata(MidgeFileMeta metadata) => new()
+    {
+        ["name"] = metadata.Name,
+        ["level"] = metadata.Level,
+        ["size_bytes"] = metadata.SizeBytes,
+        ["content_crc32c"] = metadata.ContentCrc32C,
+        ["cf_id"] = metadata.ColumnFamilyId,
+        ["smallest_key"] = metadata.SmallestKey,
+        ["largest_key"] = metadata.LargestKey,
+        ["smallest_seq"] = metadata.SmallestSequence,
+        ["largest_seq"] = metadata.LargestSequence
+    };
+
+    private static JsonElement CreateIntentEntry(string variant, object value) =>
+        JsonSerializer.SerializeToElement(
+            new Dictionary<string, object?> { [variant] = value },
+            JsonOptions);
+
+    private void SaveIntentLog(List<JsonElement> intents) =>
+        AtomicWrite(_intentPath, JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions));
+
+    private void ClearIntentLog() => AtomicWrite(_intentPath, "[]"u8.ToArray());
+
+    private static JsonElement CreateManifestEdit(string variant, object value) =>
+        JsonSerializer.SerializeToElement(
+            new Dictionary<string, object?> { [variant] = value },
+            JsonOptions);
+
+    private void DurablyApplyManifestBatch(List<JsonElement> edits)
+    {
+        if (edits.Count == 0)
+        {
+            return;
+        }
+
+        DurablyApplyManifestEdit(CreateManifestEdit("Batch", edits));
+    }
+
+    private void DurablyApplyManifestEdit(JsonElement edit)
+    {
+        byte recordType = GetManifestEditRecordType(edit);
+        ulong editId = checked(_manifest.EditCheckpointId + 1);
+        byte[] payload;
+        using (var buffer = new MemoryStream())
+        {
+            using var writer = new Utf8JsonWriter(buffer);
+            writer.WriteStartObject();
+            writer.WriteNumber("edit_id", editId);
+            writer.WritePropertyName("edit");
+            edit.WriteTo(writer);
+            writer.WriteEndObject();
+            writer.Flush();
+            payload = buffer.ToArray();
+        }
+
+        byte[] record = EncodeManifestJournalRecord(recordType, payload);
+        byte[] markerPayload = JsonSerializer.SerializeToUtf8Bytes(
+            new
+            {
+                last_persisted_sequence = editId,
+                ts_millis = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            },
+            JsonOptions);
+        byte[] marker = EncodeManifestJournalRecord(9, markerPayload);
+        using (var journal = new FileStream(
+                   _manifestJournalPath,
+                   FileMode.OpenOrCreate,
+                   FileAccess.Write,
+                   FileShare.Read))
+        {
+            journal.Seek(0, SeekOrigin.End);
+            journal.Write(record);
+            journal.Write(marker);
+            journal.Flush(flushToDisk: true);
+        }
+
+        ApplyManifestEdit(_manifest, edit, recordType);
+        _manifest.EditCheckpointId = editId;
+    }
+
+    private static byte[] EncodeManifestJournalRecord(byte recordType, ReadOnlySpan<byte> payload)
+    {
+        byte[] record = GC.AllocateUninitializedArray<byte>(checked(1 + sizeof(uint) + payload.Length + sizeof(uint)));
+        record[0] = recordType;
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), checked((uint)payload.Length));
+        payload.CopyTo(record.AsSpan(1 + sizeof(uint)));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            record.AsSpan(1 + sizeof(uint) + payload.Length),
+            Crc32(payload));
+        return record;
+    }
+
+    private void SaveManifestCheckpoint()
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(_manifest, JsonOptions);
+        AtomicWrite(_manifestSnapshotPath, json);
+        using var journal = new FileStream(_manifestJournalPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        journal.Flush(flushToDisk: true);
+        AtomicWrite(_manifestPath, json);
+    }
+
+    private void RotateWal()
+    {
+        _walStream.Dispose();
+        using (var truncate = new FileStream(_walPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+        {
+            truncate.Flush(flushToDisk: true);
+        }
+
+        _walStream = new FileStream(_walPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
+        _walRecords = 0;
+        foreach (string sealedSegment in Directory.EnumerateFiles(
+                     _walDirectory,
+                     "*.wal",
+                     SearchOption.TopDirectoryOnly))
+        {
+            File.Delete(sealedSegment);
+        }
+    }
+
+    private uint ResolveFamilyId(ColumnFamilyIdentity identity) =>
+        _familyIds.TryGetValue(identity, out var id)
+            ? id
+            : throw new PantsStorageException($"Column family '{identity}' has no persistent Midge identity.");
+
+    private static ulong? ToUnixMilliseconds(DateTimeOffset? value) =>
+        value.HasValue ? checked((ulong)value.Value.ToUnixTimeMilliseconds()) : null;
+
+    private static DateTimeOffset? FromUnixMilliseconds(ulong? value) =>
+        value.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(checked((long)value.Value)) : null;
+
+    private static void EnsureFormat(string root)
+    {
+        var path = Path.Combine(root, "FORMAT");
+        const string expected = "midge-format-version=3\n";
+        if (File.Exists(path))
+        {
+            if (File.ReadAllText(path) != expected)
+            {
+                throw new PantsCompatibilityException("Unsupported or invalid Midge FORMAT marker.");
+            }
+
+            return;
+        }
+
+        var hasState = Directory.EnumerateFileSystemEntries(root)
+            .Select(Path.GetFileName)
+            .Any(static name => name is not (
+                "FORMAT.tmp" or
+                "LOCK" or
+                ".midge_leader" or
+                ".midge_leader.lock") &&
+                !name!.StartsWith(".midge_leader.", StringComparison.Ordinal));
+        if (hasState)
+        {
+            throw new PantsCompatibilityException(
+                "Persisted state without a Midge FORMAT marker is unsupported.");
+        }
+
+        AtomicWrite(path, System.Text.Encoding.UTF8.GetBytes(expected));
+    }
+
+    private static MidgeManifest LoadManifest(
+        string root,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        string snapshot = Path.Combine(root, "manifest.snapshot.json");
+        string legacy = Path.Combine(root, "manifest.json");
+        string[] sources = new[] { snapshot, legacy }.Where(File.Exists).ToArray();
+        if (sources.Length == 0)
+        {
+            return MidgeManifest.CreateInitial();
+        }
+
+        Exception? failure = null;
+        foreach (string source in sources)
+        {
+            try
+            {
+                MidgeManifest manifest = JsonSerializer.Deserialize<MidgeManifest>(
+                    File.ReadAllBytes(source),
+                    JsonOptions) ?? throw new JsonException("Midge manifest is empty.");
+                if (failure is not null)
+                {
+                    state.MarkSalvageMode();
+                }
+
+                return manifest;
+            }
+            catch (Exception exception) when (exception is JsonException or IOException)
+            {
+                failure = exception;
+                if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.RecoveryFailed,
+                        "The manifest could not be recovered strictly.",
+                        exception);
+                }
+
+                state.MarkSalvageMode();
+                RetainCorruptFile(source);
+            }
+        }
+
+        return MidgeManifest.CreateInitial();
+    }
+
+    private static bool ValidateRecoveryMetadata(
+        string root,
+        MidgeManifest manifest,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        string journalPath = Path.Combine(root, "manifest.journal");
+        try
+        {
+            ReplayManifestJournal(File.ReadAllBytes(journalPath), manifest);
+        }
+        catch (Exception exception) when (exception is PantsException or IOException)
+        {
+            RecoverMetadataFile(
+                journalPath,
+                "The manifest journal could not be recovered strictly.",
+                [],
+                recoveryPolicy,
+                state,
+                exception);
+        }
+
+        string intentPath = Path.Combine(root, "intent_log.json");
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new JsonException("The intent log root must be an array.");
+            }
+
+            return ReplayIntentLog(root, manifest, document.RootElement, recoveryPolicy, state);
+        }
+        catch (Exception exception) when (exception is JsonException or PantsException or IOException)
+        {
+            RecoverMetadataFile(
+                intentPath,
+                "The intent log could not be recovered strictly.",
+                "[]"u8.ToArray(),
+                recoveryPolicy,
+                state,
+                exception);
+            return false;
+        }
+    }
+
+    private static bool ReplayIntentLog(
+        string root,
+        MidgeManifest manifest,
+        JsonElement intentLog,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        int entryCount = intentLog.GetArrayLength();
+        if (entryCount == 0)
+        {
+            return false;
+        }
+
+        state.IntentLogReplayRuns = checked(state.IntentLogReplayRuns + 1);
+        state.IntentLogEntriesReplayed = checked(state.IntentLogEntriesReplayed + entryCount);
+        bool hasEntries = false;
+        bool safeToClear = true;
+        foreach (JsonElement entry in intentLog.EnumerateArray())
+        {
+            hasEntries = true;
+            if (entry.ValueKind != JsonValueKind.Object || entry.EnumerateObject().Count() != 1)
+            {
+                safeToClear &= HandleIntentRecoveryIssue(
+                    "The intent log contains a malformed entry.",
+                    recoveryPolicy,
+                    state);
+                continue;
+            }
+
+            JsonProperty variant = entry.EnumerateObject().Single();
+            switch (variant.Name)
+            {
+                case "FlushPublish":
+                    safeToClear &= ReplayFlushIntent(
+                        root,
+                        manifest,
+                        variant.Value,
+                        GetRequiredString(variant.Value, "phase"),
+                        recoveryPolicy,
+                        state);
+                    break;
+                case "SstAdded":
+                    safeToClear &= ReplayFlushIntent(
+                        root,
+                        manifest,
+                        variant.Value,
+                        "ManifestPublished",
+                        recoveryPolicy,
+                        state);
+                    break;
+                case "CompactionPublish":
+                    safeToClear &= ReplayCompactionIntent(
+                        root,
+                        manifest,
+                        variant.Value,
+                        GetRequiredString(variant.Value, "phase"),
+                        recoveryPolicy,
+                        state);
+                    break;
+                case "CompactionApplied":
+                    safeToClear &= ReplayCompactionIntent(
+                        root,
+                        manifest,
+                        variant.Value,
+                        "ManifestPublished",
+                        recoveryPolicy,
+                        state);
+                    break;
+                case "CompactionPlanned":
+                    foreach (string name in GetStringArray(variant.Value, "input_files"))
+                    {
+                        _ = ValidateSstName(name);
+                    }
+
+                    break;
+                case "SeqnoAllocated":
+                case "FlushPlanned":
+                case "WalSynced":
+                case "CloudUploadComplete":
+                    break;
+                default:
+                    safeToClear &= HandleIntentRecoveryIssue(
+                        $"The intent log entry '{variant.Name}' is unsupported.",
+                        recoveryPolicy,
+                        state);
+                    break;
+            }
+        }
+
+        return hasEntries && safeToClear;
+    }
+
+    private static bool ReplayFlushIntent(
+        string root,
+        MidgeManifest manifest,
+        JsonElement intent,
+        string phase,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        JsonElement metadataElement = intent.TryGetProperty("file_meta", out JsonElement fileMetadata)
+            ? fileMetadata
+            : intent;
+        MidgeFileMeta metadata = ParseIntentFileMetadata(metadataElement);
+        if (manifest.Files.Any(file => file.Name == metadata.Name))
+        {
+            return true;
+        }
+
+        return phase switch
+        {
+            "OutputDurable" => DeleteUnpublishedIntentSst(
+                root,
+                metadata,
+                recoveryPolicy,
+                state),
+            "ManifestPublished" => PublishRecoveredIntentSst(
+                root,
+                manifest,
+                metadata,
+                recoveryPolicy,
+                state),
+            _ => HandleIntentRecoveryIssue(
+                $"Flush publication intent has unknown phase '{phase}'.",
+                recoveryPolicy,
+                state)
+        };
+    }
+
+    private static bool ReplayCompactionIntent(
+        string root,
+        MidgeManifest manifest,
+        JsonElement intent,
+        string phase,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        string[] removed = GetStringArray(intent, "removed");
+        if (removed.Length == 0)
+        {
+            return HandleIntentRecoveryIssue(
+                "Compaction publication intent has no inputs.",
+                recoveryPolicy,
+                state);
+        }
+
+        foreach (string name in removed)
+        {
+            _ = ValidateSstName(name);
+        }
+
+        if (!intent.TryGetProperty("added", out JsonElement addedElement) ||
+            addedElement.ValueKind != JsonValueKind.Array)
+        {
+            return HandleIntentRecoveryIssue(
+                "Compaction publication intent has invalid outputs.",
+                recoveryPolicy,
+                state);
+        }
+
+        MidgeFileMeta[] added = addedElement
+            .EnumerateArray()
+            .Select(ParseIntentFileMetadata)
+            .ToArray();
+        bool allInputsPresent = removed.All(name => manifest.Files.Any(file => file.Name == name));
+        bool allInputsAbsent = removed.All(name => manifest.Files.All(file => file.Name != name));
+        bool allOutputsPresent = added.All(output => manifest.Files.Any(file => file.Name == output.Name));
+        bool allOutputsAbsent = added.All(output => manifest.Files.All(file => file.Name != output.Name));
+
+        if (phase == "OutputDurable" && allInputsPresent && allOutputsAbsent)
+        {
+            return added.All(output => DeleteUnpublishedIntentSst(
+                root,
+                output,
+                recoveryPolicy,
+                state));
+        }
+
+        if ((phase is "OutputDurable" or "ManifestPublished") &&
+            allInputsAbsent &&
+            allOutputsPresent)
+        {
+            if (!added.All(output => ValidateIntentSst(root, output, recoveryPolicy, state)))
+            {
+                return false;
+            }
+
+            return removed.All(name => DeleteRecoveredSst(
+                root,
+                name,
+                recoveryPolicy,
+                state));
+        }
+
+        if (phase == "ManifestPublished" && allInputsPresent && allOutputsAbsent)
+        {
+            if (!added.All(output => ValidateIntentSst(root, output, recoveryPolicy, state)))
+            {
+                return false;
+            }
+
+            manifest.Files.RemoveAll(file => removed.Contains(file.Name, StringComparer.Ordinal));
+            manifest.Files.AddRange(added);
+            if (!removed.All(name => DeleteRecoveredSst(root, name, recoveryPolicy, state)))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        return HandleIntentRecoveryIssue(
+            $"Compaction publication intent has partial manifest visibility (phase={phase}).",
+            recoveryPolicy,
+            state);
+    }
+
+    private static MidgeFileMeta ParseIntentFileMetadata(JsonElement element)
+    {
+        string name = ValidateSstName(GetRequiredString(element, "name"));
+        return new MidgeFileMeta
+        {
+            Name = name,
+            Level = GetRequiredUInt32(element, "level"),
+            SizeBytes = GetRequiredUInt64(element, "size_bytes"),
+            ContentCrc32C = GetOptionalUInt32(element, "content_crc32c"),
+            ColumnFamilyId = GetRequiredUInt32(element, "cf_id"),
+            SmallestKey = GetOptionalByteArray(element, "smallest_key"),
+            LargestKey = GetOptionalByteArray(element, "largest_key"),
+            SmallestSequence = GetOptionalUInt64(element, "smallest_seq"),
+            LargestSequence = GetOptionalUInt64(element, "largest_seq")
+        };
+    }
+
+    private static bool PublishRecoveredIntentSst(
+        string root,
+        MidgeManifest manifest,
+        MidgeFileMeta metadata,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        if (!ValidateIntentSst(root, metadata, recoveryPolicy, state))
+        {
+            return false;
+        }
+
+        manifest.Files.Add(metadata);
+        return true;
+    }
+
+    private static bool DeleteUnpublishedIntentSst(
+        string root,
+        MidgeFileMeta metadata,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        string path = Path.Combine(root, "sst", metadata.Name);
+        if (!File.Exists(path))
+        {
+            return true;
+        }
+
+        return ValidateIntentSst(root, metadata, recoveryPolicy, state) &&
+            DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state);
+    }
+
+    private static bool ValidateIntentSst(
+        string root,
+        MidgeFileMeta metadata,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        string path = Path.Combine(root, "sst", metadata.Name);
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if ((metadata.SizeBytes != 0 && metadata.SizeBytes != checked((ulong)bytes.Length)) ||
+                (metadata.ContentCrc32C.HasValue &&
+                 metadata.ContentCrc32C.Value != MidgeDiskFormat.Crc32C(bytes)))
+            {
+                return HandleIntentRecoveryIssue(
+                    $"Recovery intent SST '{metadata.Name}' does not match its publication proof.",
+                    recoveryPolicy,
+                    state);
+            }
+
+            _ = MidgeSstCodec.Decode(bytes);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or PantsException)
+        {
+            return HandleIntentRecoveryIssue(
+                $"Recovery intent references invalid SST '{metadata.Name}': {exception.Message}",
+                recoveryPolicy,
+                state);
+        }
+    }
+
+    private static bool DeleteRecoveredSst(
+        string root,
+        string name,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        try
+        {
+            File.Delete(Path.Combine(root, "sst", ValidateSstName(name)));
+            return true;
+        }
+        catch (IOException exception)
+        {
+            return HandleIntentRecoveryIssue(
+                $"Recovery could not delete SST '{name}': {exception.Message}",
+                recoveryPolicy,
+                state);
+        }
+    }
+
+    private static bool HandleIntentRecoveryIssue(
+        string message,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state)
+    {
+        if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+        {
+            throw PantsException.Create(PantsErrorCode.RecoveryFailed, message);
+        }
+
+        state.MarkSalvageMode();
+        return false;
+    }
+
+    private static void RecoverMetadataFile(
+        string path,
+        string strictMessage,
+        byte[] replacement,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsRuntimeState state,
+        Exception exception)
+    {
+        if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+        {
+            throw PantsException.Create(PantsErrorCode.RecoveryFailed, strictMessage, exception);
+        }
+
+        state.MarkSalvageMode();
+        RetainCorruptFile(path);
+        AtomicWrite(path, replacement);
+    }
+
+    internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes)
+    {
+        _ = ReadDurableJournalRecords(bytes);
+    }
+
+    private static void ReplayManifestJournal(ReadOnlySpan<byte> bytes, MidgeManifest manifest)
+    {
+        JournalRecord[] records = ReadDurableJournalRecords(bytes);
+        ulong nextLegacyEditId = manifest.EditCheckpointId;
+        foreach (JournalRecord record in records)
+        {
+            using JsonDocument document = JsonDocument.Parse(record.Payload);
+            JsonElement edit = document.RootElement;
+            ulong editId;
+            if (edit.ValueKind == JsonValueKind.Object &&
+                edit.TryGetProperty("edit_id", out JsonElement editIdElement) &&
+                edit.TryGetProperty("edit", out JsonElement envelopedEdit))
+            {
+                editId = editIdElement.GetUInt64();
+                edit = envelopedEdit;
+            }
+            else
+            {
+                editId = checked(++nextLegacyEditId);
+            }
+
+            nextLegacyEditId = Math.Max(nextLegacyEditId, editId);
+            if (editId <= manifest.EditCheckpointId)
+            {
+                continue;
+            }
+
+            ApplyManifestEdit(manifest, edit, record.Type);
+            manifest.EditCheckpointId = editId;
+        }
+    }
+
+    private static JournalRecord[] ReadDurableJournalRecords(ReadOnlySpan<byte> bytes)
+    {
+        int cursor = 0;
+        var pending = new List<JournalRecord>();
+        int durableCount = 0;
+        while (cursor < bytes.Length)
+        {
+            int remaining = bytes.Length - cursor;
+            if (remaining < 5)
+            {
+                break;
+            }
+
+            byte recordType = bytes[cursor];
+            if (recordType is < 1 or > 11)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal contains an unknown record type.");
+            }
+
+            uint payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(cursor + 1)..]);
+            if (payloadLength > MidgeDiskFormat.WalMaximumRecordBytes)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal record exceeds the recovery limit.");
+            }
+
+            int recordLength = checked(1 + sizeof(uint) + (int)payloadLength + sizeof(uint));
+            if (recordLength > remaining)
+            {
+                break;
+            }
+
+            ReadOnlySpan<byte> payload = bytes.Slice(cursor + 5, checked((int)payloadLength));
+            uint expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.Slice(cursor + 5 + checked((int)payloadLength), sizeof(uint)));
+            if (Crc32(payload) != expectedChecksum)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal record checksum does not match.");
+            }
+
+            byte[] payloadCopy = payload.ToArray();
+            try
+            {
+                using JsonDocument _ = JsonDocument.Parse(payloadCopy);
+            }
+            catch (JsonException exception)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal payload cannot be decoded.",
+                    exception);
+            }
+
+            if (recordType == 9)
+            {
+                durableCount = pending.Count;
+            }
+            else
+            {
+                pending.Add(new JournalRecord(recordType, payloadCopy));
+            }
+
+            cursor += recordLength;
+        }
+
+        return pending.Take(durableCount).ToArray();
+    }
+
+    private static void ApplyManifestEdit(
+        MidgeManifest manifest,
+        JsonElement edit,
+        byte recordType)
+    {
+        if (recordType == 8 && edit.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement nested in edit.EnumerateArray())
+            {
+                ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
+            }
+
+            return;
+        }
+
+        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest journal edit shape is invalid.");
+        }
+
+        JsonProperty variant = edit.EnumerateObject().Single();
+        byte actualRecordType = GetManifestEditRecordType(variant.Name);
+        if (actualRecordType != recordType)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest journal record type does not match its edit payload.");
+        }
+
+        JsonElement value = variant.Value;
+        switch (variant.Name)
+        {
+            case "AddSst":
+                {
+                    MidgeFileMeta metadata = value.Deserialize<MidgeFileMeta>(JsonOptions) ??
+                        throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty.");
+                    manifest.Files.RemoveAll(file => file.Name == metadata.Name);
+                    manifest.Files.Add(metadata);
+                    break;
+                }
+            case "RemoveSst":
+                manifest.Files.RemoveAll(file => file.Name == GetRequiredString(value, "name"));
+                break;
+            case "CreateColumnFamily":
+                {
+                    uint id = GetRequiredUInt32(value, "id");
+                    string name = GetRequiredString(value, "name");
+                    ulong createdAt = GetRequiredUInt64(value, "created_at");
+                    MidgeColumnFamilyMeta? existing = manifest.ColumnFamilies.SingleOrDefault(family => family.Id == id);
+                    if (existing is null)
+                    {
+                        manifest.ColumnFamilies.Add(new MidgeColumnFamilyMeta
+                        {
+                            Id = id,
+                            Name = name,
+                            CreatedAt = createdAt
+                        });
+                    }
+                    else if (existing.DeletedAt.HasValue)
+                    {
+                        existing.Name = name;
+                        existing.CreatedAt = createdAt;
+                        existing.DeletedAt = null;
+                    }
+
+                    break;
+                }
+            case "DropColumnFamily":
+                ApplyDropColumnFamily(manifest, GetRequiredUInt32(value, "id"), 0, []);
+                break;
+            case "DropColumnFamilyAt":
+                ApplyDropColumnFamily(
+                    manifest,
+                    GetRequiredUInt32(value, "id"),
+                    GetRequiredUInt64(value, "drop_sequence"),
+                    GetStringArray(value, "dropped_sst_names"));
+                break;
+            case "ReclaimColumnFamily":
+                {
+                    uint id = GetRequiredUInt32(value, "id");
+                    string[] names = GetStringArray(value, "names");
+                    manifest.Files.RemoveAll(file => names.Contains(file.Name, StringComparer.Ordinal));
+                    MidgeColumnFamilyMeta? family = manifest.ColumnFamilies.SingleOrDefault(candidate => candidate.Id == id);
+                    if (family is not null)
+                    {
+                        family.DroppedSstNames.RemoveAll(name => names.Contains(name, StringComparer.Ordinal));
+                        family.Reclaimed = family.DroppedSstNames.Count == 0;
+                    }
+
+                    break;
+                }
+            case "BumpWalSeq":
+                manifest.LastPersistedSequence = Math.Max(
+                    manifest.LastPersistedSequence,
+                    GetRequiredUInt64(value, "seq"));
+                break;
+            case "BumpNextSstSeq":
+                {
+                    uint id = GetRequiredUInt32(value, "cf_id");
+                    ulong sequence = GetRequiredUInt64(value, "next_seq");
+                    manifest.NextSstSeqs[id] = Math.Max(
+                        manifest.NextSstSeqs.GetValueOrDefault(id),
+                        sequence);
+                    break;
+                }
+            case "SetCloudCheckpoint":
+                manifest.CloudCheckpoint = JsonSerializer.Deserialize<object>(value.GetRawText(), JsonOptions);
+                break;
+            case "Batch":
+                foreach (JsonElement nested in value.EnumerateArray())
+                {
+                    ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
+                }
+
+                break;
+            default:
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"The manifest journal edit '{variant.Name}' is unsupported.");
+        }
+    }
+
+    private static void ApplyDropColumnFamily(
+        MidgeManifest manifest,
+        uint id,
+        ulong dropSequence,
+        string[] droppedNames)
+    {
+        MidgeColumnFamilyMeta? family = manifest.ColumnFamilies.SingleOrDefault(candidate => candidate.Id == id);
+        if (family is null || family.DeletedAt.HasValue)
+        {
+            return;
+        }
+
+        family.DeletedAt = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        family.DropSequence = dropSequence;
+        family.DroppedSstNames = droppedNames.Length == 0
+            ? manifest.Files
+                .Where(file => file.ColumnFamilyId == id)
+                .Select(file => file.Name)
+                .ToList()
+            : [.. droppedNames];
+        family.Reclaimed = false;
+    }
+
+    private static byte GetManifestEditRecordType(JsonElement edit)
+    {
+        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
+        {
+            throw PantsException.Create(PantsErrorCode.Corruption, "The manifest edit is malformed.");
+        }
+
+        return GetManifestEditRecordType(edit.EnumerateObject().Single().Name);
+    }
+
+    private static byte GetManifestEditRecordType(string variant) => variant switch
+    {
+        "AddSst" => 1,
+        "RemoveSst" => 2,
+        "CreateColumnFamily" => 3,
+        "DropColumnFamily" => 4,
+        "BumpWalSeq" => 5,
+        "BumpNextSstSeq" => 6,
+        "SetCloudCheckpoint" => 7,
+        "Batch" => 8,
+        "DropColumnFamilyAt" => 10,
+        "ReclaimColumnFamily" => 11,
+        _ => throw PantsException.Create(
+            PantsErrorCode.Corruption,
+            $"The manifest edit '{variant}' is unknown.")
+    };
+
+    private static string GetRequiredString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()!
+            : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    private static uint GetRequiredUInt32(JsonElement element, string name) =>
+        element.TryGetProperty(name, out JsonElement value) && value.TryGetUInt32(out uint result)
+            ? result
+            : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    private static ulong GetRequiredUInt64(JsonElement element, string name) =>
+        element.TryGetProperty(name, out JsonElement value) && value.TryGetUInt64(out ulong result)
+            ? result
+            : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    private static uint? GetOptionalUInt32(JsonElement element, string name) =>
+        !element.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null
+            ? null
+            : value.TryGetUInt32(out uint result)
+                ? result
+                : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    private static ulong? GetOptionalUInt64(JsonElement element, string name) =>
+        !element.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null
+            ? null
+            : value.TryGetUInt64(out ulong result)
+                ? result
+                : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    private static int[]? GetOptionalByteArray(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+        }
+
+        return value.EnumerateArray().Select(static item => checked((int)item.GetByte())).ToArray();
+    }
+
+    private static string[] GetStringArray(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out JsonElement value))
+        {
+            return [];
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+        }
+
+        return value.EnumerateArray().Select(static item => item.GetString() ?? string.Empty).ToArray();
+    }
+
+    private static uint Crc32(ReadOnlySpan<byte> bytes)
+    {
+        uint crc = uint.MaxValue;
+        foreach (byte value in bytes)
+        {
+            crc ^= value;
+            for (int bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
+            }
+        }
+
+        return ~crc;
+    }
+
+    private static void RetainCorruptFile(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        string retained = $"{path}.salvage-retained";
+        for (int suffix = 1; File.Exists(retained); suffix++)
+        {
+            retained = $"{path}.salvage-retained.{suffix}";
+        }
+
+        File.Move(path, retained);
+    }
+
+    private static void AtomicWrite(string path, byte[] bytes)
+    {
+        var temporary = path + ".tmp";
+        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
+
+        File.Move(temporary, path, overwrite: true);
+    }
+
+    private static string ValidateSstName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name != Path.GetFileName(name) || !name.EndsWith(".sst", StringComparison.Ordinal) || name.Contains(':'))
+        {
+            throw new PantsStorageException($"Manifest SST name '{name}' is unsafe.");
+        }
+
+        return name;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _walStream.Dispose();
+        _lease.Dispose();
+        _lockStream.Dispose();
+    }
+
+    private enum WalReplayOutcome
+    {
+        Complete,
+        ToleratedIncompleteTail,
+        Salvaged
+    }
+
+    private sealed record JournalRecord(byte Type, byte[] Payload);
+}

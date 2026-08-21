@@ -1,0 +1,469 @@
+namespace Pants;
+
+/// <summary>Immutable and fully validated database-open configuration.</summary>
+public sealed class PantsOpenOptions
+{
+    private const long FallbackMemoryBudgetBytes = 512L * 1024 * 1024;
+    private readonly Configuration _configuration;
+
+    private PantsOpenOptions(Configuration configuration)
+    {
+        _configuration = configuration;
+        MemoryBudgetBytes = ResolveMemoryBudget(configuration.MemoryBudget);
+        TransactionMemoryPoolBytes = configuration.TransactionMemoryPoolBytes ??
+            Math.Max(1, MemoryBudgetBytes / 10);
+
+        long maximumMemtable = (MemoryBudgetBytes - TransactionMemoryPoolBytes) / 2;
+        long baseMemtable = configuration.PerformanceGoal switch
+        {
+            PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
+            PantsPerformanceGoal.Throughput => 256L * 1024 * 1024,
+            PantsPerformanceGoal.Economy => 32L * 1024 * 1024,
+            _ => throw PantsException.InvalidArgument("Unknown performance goal.")
+        };
+        long desiredMemtable = configuration.WorkloadProfile switch
+        {
+            PantsWorkloadProfile.WriteHeavy => baseMemtable * 2,
+            PantsWorkloadProfile.ReadMostly => baseMemtable / 2,
+            _ => baseMemtable
+        };
+        MemtableSizeLimitBytes = configuration.MemtableSizeLimitBytes ??
+            Math.Max(1, Math.Min(desiredMemtable, maximumMemtable));
+        MemtableFlushThresholdBytes = configuration.MemtableFlushThresholdBytes ??
+            MemtableSizeLimitBytes;
+        BlockCacheBytes = Math.Max(
+            0,
+            MemoryBudgetBytes - TransactionMemoryPoolBytes - (2 * MemtableSizeLimitBytes));
+        if (configuration.PerformanceGoal == PantsPerformanceGoal.Economy)
+        {
+            BlockCacheBytes = Math.Min(BlockCacheBytes, 256L * 1024 * 1024);
+        }
+
+        BlockSizeBytes = (configuration.PerformanceGoal, configuration.WorkloadProfile) switch
+        {
+            (PantsPerformanceGoal.Latency, _) => 16 * 1024,
+            (PantsPerformanceGoal.Economy, _) => 32 * 1024,
+            (PantsPerformanceGoal.Throughput, PantsWorkloadProfile.RangeScan) => 128 * 1024,
+            _ => 64 * 1024
+        };
+        TargetSstSizeBytes = configuration.PerformanceGoal switch
+        {
+            PantsPerformanceGoal.Latency => 128L * 1024 * 1024,
+            PantsPerformanceGoal.Throughput => 512L * 1024 * 1024,
+            _ => 256L * 1024 * 1024
+        };
+        WalBufferSizeBytes = checked((int)Math.Clamp(
+            configuration.PerformanceGoal switch
+            {
+                PantsPerformanceGoal.Latency => 128L * 1024,
+                PantsPerformanceGoal.Throughput => 1024L * 1024,
+                _ => 256L * 1024
+            },
+            1,
+            MemoryBudgetBytes));
+        L0CompactionTrigger = (configuration.PerformanceGoal, configuration.WorkloadProfile) switch
+        {
+            (PantsPerformanceGoal.Latency, _) => 3,
+            (_, PantsWorkloadProfile.WriteHeavy) => 8,
+            (PantsPerformanceGoal.Throughput, _) => 6,
+            _ => 4
+        };
+
+        Validate();
+    }
+
+    public PantsStorageConfiguration Storage => _configuration.Storage;
+
+    public PantsPerformanceGoal PerformanceGoal => _configuration.PerformanceGoal;
+
+    public PantsMemoryBudget MemoryBudget => _configuration.MemoryBudget;
+
+    public long MemoryBudgetBytes { get; }
+
+    public PantsWorkloadProfile WorkloadProfile => _configuration.WorkloadProfile;
+
+    public PantsRecoveryPolicy RecoveryPolicy => _configuration.RecoveryPolicy;
+
+    public PantsBlockCachePolicy BlockCachePolicy => _configuration.BlockCachePolicy;
+
+    public PantsCloudWritePolicy CloudWritePolicy => _configuration.CloudWritePolicy;
+
+    public TimeSpan StorageTimeout => _configuration.StorageTimeout;
+
+    public TimeSpan ShutdownTimeout => _configuration.ShutdownTimeout;
+
+    public bool BackgroundCompaction => _configuration.BackgroundCompaction;
+
+    public long MemtableSizeLimitBytes { get; }
+
+    public long MemtableFlushThresholdBytes { get; }
+
+    public long TransactionMemoryPoolBytes { get; }
+
+    public long BlockCacheBytes { get; }
+
+    public int BlockSizeBytes { get; }
+
+    public long TargetSstSizeBytes { get; }
+
+    public int WalBufferSizeBytes { get; }
+
+    public int L0CompactionTrigger { get; }
+
+    public TimeSpan LeaseClockSkewTolerance => _configuration.LeaseClockSkewTolerance;
+
+    public Action? LeaseLossCallback => _configuration.LeaseLossCallback;
+
+    public IPantsClock TtlClock => _configuration.TtlClock;
+
+    internal int CoordinatorQueueCapacity => _configuration.CoordinatorQueueCapacity;
+
+    internal int FlushAfterWalRecords => _configuration.FlushAfterWalRecords;
+
+    public static PantsOpenOptions InMemory() =>
+        new(Configuration.Default(new PantsStorageConfiguration.InMemory()));
+
+    public static PantsOpenOptions Local(string path) =>
+        new(Configuration.Default(new PantsStorageConfiguration.Local(ValidatePath(path, nameof(path)))));
+
+    public static PantsOpenOptions Cloud(
+        string localCachePath,
+        PantsCloudStorageLocation location) =>
+        CloudMulti(localCachePath, PantsCloudStorageTopology.Shared(location));
+
+    public static PantsOpenOptions CloudMulti(
+        string localCachePath,
+        PantsCloudStorageTopology topology) =>
+        new(Configuration.Default(new PantsStorageConfiguration.Cloud(
+            ValidatePath(localCachePath, nameof(localCachePath)),
+            topology ?? throw new ArgumentNullException(nameof(topology)))));
+
+    public static PantsOpenOptions SimulatedCloud(
+        string localCachePath,
+        string bucket,
+        string prefix) =>
+        new(Configuration.Default(new PantsStorageConfiguration.SimulatedCloud(
+            ValidatePath(localCachePath, nameof(localCachePath)),
+            ValidateNonEmpty(bucket, nameof(bucket)),
+            prefix ?? throw new ArgumentNullException(nameof(prefix)))));
+
+    public PantsOpenOptions WithPerformanceGoal(PantsPerformanceGoal goal) =>
+        With(_configuration with { PerformanceGoal = goal });
+
+    public PantsOpenOptions WithMemoryBudget(PantsMemoryBudget budget) =>
+        With(_configuration with { MemoryBudget = budget });
+
+    public PantsOpenOptions WithWorkloadProfile(PantsWorkloadProfile profile) =>
+        With(_configuration with { WorkloadProfile = profile });
+
+    public PantsOpenOptions WithRecoveryPolicy(PantsRecoveryPolicy policy) =>
+        With(_configuration with { RecoveryPolicy = policy });
+
+    public PantsOpenOptions WithBlockCachePolicy(PantsBlockCachePolicy policy) =>
+        With(_configuration with { BlockCachePolicy = policy });
+
+    public PantsOpenOptions WithCloudWritePolicy(PantsCloudWritePolicy policy) =>
+        With(_configuration with
+        {
+            CloudWritePolicy = policy ?? throw new ArgumentNullException(nameof(policy))
+        });
+
+    public PantsOpenOptions WithStorageTimeout(TimeSpan timeout) =>
+        With(_configuration with { StorageTimeout = timeout });
+
+    public PantsOpenOptions WithShutdownTimeout(TimeSpan timeout) =>
+        With(_configuration with { ShutdownTimeout = timeout });
+
+    public PantsOpenOptions WithBackgroundCompaction(bool enabled) =>
+        With(_configuration with { BackgroundCompaction = enabled });
+
+    public PantsOpenOptions WithMemtableLimits(
+        long sizeLimitBytes,
+        long? flushThresholdBytes = null) =>
+        With(_configuration with
+        {
+            MemtableSizeLimitBytes = sizeLimitBytes,
+            MemtableFlushThresholdBytes = flushThresholdBytes ?? sizeLimitBytes
+        });
+
+    public PantsOpenOptions WithTransactionMemoryPool(long bytes) =>
+        With(_configuration with { TransactionMemoryPoolBytes = bytes });
+
+    public PantsOpenOptions WithLeaseLossCallback(Action callback) =>
+        With(_configuration with
+        {
+            LeaseLossCallback = callback ?? throw new ArgumentNullException(nameof(callback))
+        });
+
+    public PantsOpenOptions WithLeaseClockSkewTolerance(TimeSpan tolerance) =>
+        With(_configuration with { LeaseClockSkewTolerance = tolerance });
+
+    public PantsOpenOptions WithTtlClock(IPantsClock clock) =>
+        With(_configuration with
+        {
+            TtlClock = clock ?? throw new ArgumentNullException(nameof(clock))
+        });
+
+    public PantsOpenOptions WithSimulatedCloudLocalStorageBudget(long bytes)
+    {
+        if (Storage is not PantsStorageConfiguration.SimulatedCloud simulatedCloud)
+        {
+            throw PantsException.InvalidArgument(
+                "A simulated-cloud budget requires simulated-cloud storage.");
+        }
+
+        return With(_configuration with
+        {
+            Storage = simulatedCloud with { LocalStorageBudgetBytes = bytes }
+        });
+    }
+
+    internal PantsOpenOptions WithCoordinatorQueueCapacityForTesting(int capacity) =>
+        With(_configuration with { CoordinatorQueueCapacity = capacity });
+
+    internal PantsOpenOptions WithFlushAfterWalRecordsForTesting(int count) =>
+        With(_configuration with { FlushAfterWalRecords = count });
+
+    private static PantsOpenOptions With(Configuration configuration) => new(configuration);
+
+    private void Validate()
+    {
+        ValidateEnum(PerformanceGoal, nameof(PerformanceGoal));
+        ValidateEnum(WorkloadProfile, nameof(WorkloadProfile));
+        ValidateEnum(RecoveryPolicy, nameof(RecoveryPolicy));
+        ValidateEnum(BlockCachePolicy, nameof(BlockCachePolicy));
+
+        if (MemoryBudgetBytes < 3)
+        {
+            throw PantsException.ResourceLimit(
+                "The memory budget must hold two memtable generations and a transaction pool.");
+        }
+
+        if (TransactionMemoryPoolBytes <= 0)
+        {
+            throw PantsException.InvalidArgument("Transaction memory pool size must be greater than zero.");
+        }
+
+        if (TransactionMemoryPoolBytes > MemoryBudgetBytes)
+        {
+            throw PantsException.ResourceLimit("Transaction memory pool exceeds the total memory budget.");
+        }
+
+        if (MemtableSizeLimitBytes <= 0 || MemtableFlushThresholdBytes <= 0)
+        {
+            throw PantsException.InvalidArgument("Memtable limits must be greater than zero.");
+        }
+
+        if (MemtableFlushThresholdBytes > MemtableSizeLimitBytes)
+        {
+            throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
+        }
+
+        if ((2 * MemtableSizeLimitBytes) + TransactionMemoryPoolBytes > MemoryBudgetBytes)
+        {
+            throw PantsException.ResourceLimit(
+                "Two memtables and the transaction pool exceed the total memory budget.");
+        }
+
+        if (StorageTimeout < TimeSpan.FromMilliseconds(1))
+        {
+            throw PantsException.InvalidArgument("Storage timeout must be at least one millisecond.");
+        }
+
+        if (ShutdownTimeout <= TimeSpan.Zero)
+        {
+            throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
+        }
+
+        if (LeaseClockSkewTolerance < TimeSpan.Zero ||
+            LeaseClockSkewTolerance > TimeSpan.FromSeconds(30))
+        {
+            throw PantsException.InvalidArgument(
+                "Lease clock-skew tolerance must be between zero and 30 seconds.");
+        }
+
+        if (CloudWritePolicy.EventualFlushSegmentGap <= 0 ||
+            CloudWritePolicy.WalSealMinimumSegmentBytes <= 0 ||
+            CloudWritePolicy.WalSealMaximumFlushDelay <= TimeSpan.Zero ||
+            CloudWritePolicy.WalSealMaximumPendingWrites <= 0)
+        {
+            throw PantsException.InvalidArgument("Cloud write-policy limits must be greater than zero.");
+        }
+
+        if (Storage is PantsStorageConfiguration.SimulatedCloud { LocalStorageBudgetBytes: <= 0 })
+        {
+            throw PantsException.InvalidArgument(
+                "Simulated-cloud local storage budget must be greater than zero.");
+        }
+
+        if (_configuration.CoordinatorQueueCapacity <= 0 || _configuration.FlushAfterWalRecords < 0)
+        {
+            throw PantsException.InvalidArgument("Internal runtime limits are invalid.");
+        }
+
+        ValidateStorage(Storage);
+    }
+
+    private static void ValidateStorage(PantsStorageConfiguration storage)
+    {
+        switch (storage)
+        {
+            case PantsStorageConfiguration.InMemory:
+            case PantsStorageConfiguration.Local:
+            case PantsStorageConfiguration.SimulatedCloud:
+                return;
+            case PantsStorageConfiguration.Cloud cloud:
+                ValidateCloudLocation(cloud.Topology.Wal, "WAL");
+                ValidateCloudLocation(cloud.Topology.Sst, "SST");
+                ValidateCloudLocation(cloud.Topology.Control, "control");
+                return;
+            default:
+                throw PantsException.InvalidArgument("The storage configuration is invalid.");
+        }
+    }
+
+    private static void ValidateCloudLocation(PantsCloudStorageLocation? location, string objectClass)
+    {
+        if (location?.Provider is null)
+        {
+            throw PantsException.InvalidArgument($"The {objectClass} cloud location is incomplete.");
+        }
+
+        if (location.Prefix is null || location.Prefix.StartsWith('/'))
+        {
+            throw PantsException.InvalidArgument(
+                $"The {objectClass} cloud prefix must be relative and non-null.");
+        }
+
+        switch (location.Provider)
+        {
+            case PantsCloudProviderConfiguration.AwsS3 aws:
+                ValidateProviderText(aws.Bucket, "AWS S3 bucket");
+                ValidateProviderText(aws.Region, "AWS region");
+                ArgumentNullException.ThrowIfNull(aws.Credentials);
+                break;
+            case PantsCloudProviderConfiguration.S3Compatible compatible:
+                ValidateProviderText(compatible.Bucket, "S3-compatible bucket");
+                ValidateProviderText(compatible.Region, "S3-compatible region");
+                ValidateHttpEndpoint(compatible.Endpoint, "S3-compatible endpoint");
+                ArgumentNullException.ThrowIfNull(compatible.Credentials);
+                break;
+            case PantsCloudProviderConfiguration.AzureBlob azure:
+                ValidateProviderText(azure.Account, "Azure account");
+                ValidateProviderText(azure.Container, "Azure container");
+                ValidateOptionalHttpEndpoint(azure.Endpoint, "Azure endpoint");
+                ArgumentNullException.ThrowIfNull(azure.Credential);
+                break;
+            case PantsCloudProviderConfiguration.Gcs gcs:
+                ValidateProviderText(gcs.Bucket, "GCS bucket");
+                ValidateProviderText(gcs.ProjectId, "GCS project ID");
+                ValidateOptionalHttpEndpoint(gcs.Endpoint, "GCS endpoint");
+                ValidateEnum(gcs.ApiStyle, nameof(gcs.ApiStyle));
+                ArgumentNullException.ThrowIfNull(gcs.Credential);
+                break;
+            default:
+                throw PantsException.InvalidArgument(
+                    $"The {objectClass} cloud provider is unsupported.");
+        }
+    }
+
+    private static void ValidateProviderText(string? value, string description)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw PantsException.InvalidArgument($"The {description} must not be empty.");
+        }
+    }
+
+    private static void ValidateOptionalHttpEndpoint(Uri? endpoint, string description)
+    {
+        if (endpoint is not null)
+        {
+            ValidateHttpEndpoint(endpoint, description);
+        }
+    }
+
+    private static void ValidateHttpEndpoint(Uri? endpoint, string description)
+    {
+        if (endpoint is null ||
+            !endpoint.IsAbsoluteUri ||
+            (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
+        {
+            throw PantsException.InvalidArgument(
+                $"The {description} must be an absolute HTTP or HTTPS URI.");
+        }
+    }
+
+    private static void ValidateEnum<TEnum>(TEnum value, string description)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw PantsException.InvalidArgument($"The {description} value is invalid.");
+        }
+    }
+
+    private static long ResolveMemoryBudget(PantsMemoryBudget budget)
+    {
+        if (budget.Bytes is { } bytes)
+        {
+            return bytes;
+        }
+
+        long available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+        return available > 0 ? Math.Max(3, available / 2) : FallbackMemoryBudgetBytes;
+    }
+
+    private static string ValidatePath(string value, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
+        return value;
+    }
+
+    private static string ValidateNonEmpty(string value, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
+        return value;
+    }
+
+    private sealed record Configuration(
+        PantsStorageConfiguration Storage,
+        PantsPerformanceGoal PerformanceGoal,
+        PantsMemoryBudget MemoryBudget,
+        PantsWorkloadProfile WorkloadProfile,
+        PantsRecoveryPolicy RecoveryPolicy,
+        PantsBlockCachePolicy BlockCachePolicy,
+        PantsCloudWritePolicy CloudWritePolicy,
+        TimeSpan StorageTimeout,
+        TimeSpan ShutdownTimeout,
+        bool BackgroundCompaction,
+        long? MemtableSizeLimitBytes,
+        long? MemtableFlushThresholdBytes,
+        long? TransactionMemoryPoolBytes,
+        TimeSpan LeaseClockSkewTolerance,
+        Action? LeaseLossCallback,
+        IPantsClock TtlClock,
+        int CoordinatorQueueCapacity,
+        int FlushAfterWalRecords)
+    {
+        public static Configuration Default(PantsStorageConfiguration storage) => new(
+            storage,
+            PantsPerformanceGoal.Latency,
+            PantsMemoryBudget.Auto,
+            PantsWorkloadProfile.Mixed,
+            PantsRecoveryPolicy.Strict,
+            PantsBlockCachePolicy.Lru,
+            new PantsCloudWritePolicy(),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(30),
+            true,
+            null,
+            null,
+            null,
+            TimeSpan.FromSeconds(15),
+            null,
+            SystemPantsClock.Instance,
+            128,
+            0);
+    }
+}
