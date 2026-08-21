@@ -52,15 +52,16 @@ public sealed class PantsOpenOptions
             PantsPerformanceGoal.Throughput => 512L * 1024 * 1024,
             _ => 256L * 1024 * 1024
         };
-        WalBufferSizeBytes = checked((int)Math.Clamp(
-            configuration.PerformanceGoal switch
-            {
-                PantsPerformanceGoal.Latency => 128L * 1024,
-                PantsPerformanceGoal.Throughput => 1024L * 1024,
-                _ => 256L * 1024
-            },
-            1,
-            MemoryBudgetBytes));
+        WalBufferSizeBytes = configuration.WalBufferSizeBytes ??
+            checked((int)Math.Clamp(
+                configuration.PerformanceGoal switch
+                {
+                    PantsPerformanceGoal.Latency => 128L * 1024,
+                    PantsPerformanceGoal.Throughput => 1024L * 1024,
+                    _ => 256L * 1024
+                },
+                1,
+                MemoryBudgetBytes));
         L0CompactionTrigger = (configuration.PerformanceGoal, configuration.WorkloadProfile) switch
         {
             (PantsPerformanceGoal.Latency, _) => 3,
@@ -189,6 +190,9 @@ public sealed class PantsOpenOptions
     public PantsOpenOptions WithTransactionMemoryPool(long bytes) =>
         With(_configuration with { TransactionMemoryPoolBytes = bytes });
 
+    public PantsOpenOptions WithWalBufferSize(int bytes) =>
+        With(_configuration with { WalBufferSizeBytes = bytes });
+
     public PantsOpenOptions WithLeaseLossCallback(Action callback) =>
         With(_configuration with
         {
@@ -252,6 +256,11 @@ public sealed class PantsOpenOptions
         if (MemtableSizeLimitBytes <= 0 || MemtableFlushThresholdBytes <= 0)
         {
             throw PantsException.InvalidArgument("Memtable limits must be greater than zero.");
+        }
+
+        if (WalBufferSizeBytes <= 0)
+        {
+            throw PantsException.InvalidArgument("WAL buffer size must be greater than zero.");
         }
 
         if (MemtableFlushThresholdBytes > MemtableSizeLimitBytes)
@@ -440,6 +449,7 @@ public sealed class PantsOpenOptions
         long? MemtableSizeLimitBytes,
         long? MemtableFlushThresholdBytes,
         long? TransactionMemoryPoolBytes,
+        int? WalBufferSizeBytes,
         TimeSpan LeaseClockSkewTolerance,
         Action? LeaseLossCallback,
         IPantsClock TtlClock,
@@ -457,6 +467,7 @@ public sealed class PantsOpenOptions
             TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(30),
             true,
+            null,
             null,
             null,
             null,

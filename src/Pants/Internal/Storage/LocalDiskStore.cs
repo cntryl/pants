@@ -76,6 +76,7 @@ internal sealed class LocalDiskStore : IDisposable
     }
 
     public int WalRecords => _walRecords;
+    public long ActiveWalBytes => _walStream.Length;
     public string RootPath => _root;
     public bool IsLeaseHealthy
     {
@@ -262,7 +263,8 @@ internal sealed class LocalDiskStore : IDisposable
         IPantsFailpointHandler? failpoints = null,
         int l0CompactionTrigger = 4,
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
-        long blockCacheBytes = 0)
+        long blockCacheBytes = 0,
+        TimeSpan? leaseHeartbeatInterval = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -295,7 +297,8 @@ internal sealed class LocalDiskStore : IDisposable
                 root,
                 minimumWriterEpoch,
                 leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
-                leaseLossCallback);
+                leaseLossCallback,
+                leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10));
             EnsureFormat(root);
             Directory.CreateDirectory(Path.Combine(root, "wal"));
             Directory.CreateDirectory(Path.Combine(root, "sst"));

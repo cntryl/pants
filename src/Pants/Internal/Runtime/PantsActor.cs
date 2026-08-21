@@ -53,7 +53,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     failpoints: dependencies.Failpoints,
                     l0CompactionTrigger: options.L0CompactionTrigger,
                     blockCachePolicy: options.BlockCachePolicy,
-                    blockCacheBytes: options.BlockCacheBytes);
+                    blockCacheBytes: options.BlockCacheBytes,
+                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -70,7 +71,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     dependencies.Failpoints,
                     options.L0CompactionTrigger,
                     options.BlockCachePolicy,
-                    options.BlockCacheBytes);
+                    options.BlockCacheBytes,
+                    dependencies.LeaseHeartbeatInterval);
                 _simulatedCloud = new SimulatedCloudPersistence(
                     simulated.LocalCachePath,
                     _diskStore.WriterEpoch);
@@ -116,9 +118,10 @@ internal sealed class PantsActor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
-                if (state.ActiveFamilyVersions.ContainsKey(name))
+                if (state.ActiveFamilyVersions.TryGetValue(name, out int activeGeneration))
                 {
-                    throw PantsException.InvalidArgument($"Column family '{name}' already exists.");
+                    return state.FamilyData.Keys.Single(identity =>
+                        identity.Name == name && identity.Generation == activeGeneration);
                 }
 
                 int generation = state.FamilyGeneration.TryGetValue(name, out int currentGeneration)
@@ -877,6 +880,7 @@ internal sealed class PantsActor : IAsyncDisposable
                 PantsDiagnostics.TransactionsCommitted.Add(1);
             }
 
+            await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
             PublishSnapshot(state);
             foreach (CommitRuntimeCommand command in accepted)
             {
@@ -992,6 +996,8 @@ internal sealed class PantsActor : IAsyncDisposable
             await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
         }
 
+        await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
+
         if (_simulatedCloud is not null && durability == PantsDurability.CloudAsync)
         {
             SealedWalSegment? asynchronousSegment = null;
@@ -1017,6 +1023,20 @@ internal sealed class PantsActor : IAsyncDisposable
             }
         }
 
+    }
+
+    private async ValueTask RotateLocalWalAtConfiguredThresholdAsync(LocalDiskStore diskStore)
+    {
+        if (_options.Storage is not PantsStorageConfiguration.Local ||
+            diskStore.ActiveWalBytes < _options.WalBufferSizeBytes)
+        {
+            return;
+        }
+
+        await _walWorker.ExecuteAsync(() =>
+        {
+            _ = diskStore.SealActiveWal();
+        }).ConfigureAwait(false);
     }
 
     private static void ApplyOperations(PantsRuntimeState state, CommitPayload payload, long sequence)
