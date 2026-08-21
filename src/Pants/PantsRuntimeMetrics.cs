@@ -52,7 +52,11 @@ public sealed record PantsRuntimeMetrics
     public long DurabilityWaitersFannedOutTotal { get; init; }
     public long SstBloomRejectsTotal { get; init; }
     public long SstBloomChecksTotal { get; init; }
+    public long SstBloomTruePositivesTotal { get; init; }
+    public long SstBloomFalsePositivesTotal { get; init; }
+    public long SstKeyRangeRejectsTotal { get; init; }
     public long SstDataBlocksReadTotal { get; init; }
+    public long ReadAmplificationCompactionTriggersTotal { get; init; }
     public int FlushQueueDepth { get; init; }
     public int FlushInFlight { get; init; }
     public long FlushEnqueuedTotal { get; init; }

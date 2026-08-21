@@ -106,8 +106,8 @@ public sealed class SstBlockCacheTests
 
         source[0] = 99;
 
-        Assert.True(cache.TryGet(key, out ReadOnlyMemory<byte> cached));
-        Assert.Equal([1, 2, 3, 4], cached.ToArray());
+        Assert.True(cache.TryGet(key, out SstBlockCacheEntry? cached));
+        Assert.Equal([1, 2, 3, 4], Assert.IsType<SstBlockCacheEntry>(cached).Content.ToArray());
     }
 
     private static int CountHotSurvivors(PantsBlockCachePolicy policy)

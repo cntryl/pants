@@ -21,11 +21,11 @@ internal sealed class SstBlockCacheShard
 
     public long UsedBytes => Volatile.Read(ref _usedBytes);
 
-    public bool TryGet(SstBlockCacheKey key, out ReadOnlyMemory<byte> content)
+    public bool TryGet(SstBlockCacheKey key, out SstBlockCacheEntry? entry)
     {
-        if (!_entries.TryGetValue(key, out SstBlockCacheEntry? observed))
+        if (!_entries.ContainsKey(key))
         {
-            content = default;
+            entry = null;
             return false;
         }
 
@@ -33,12 +33,12 @@ internal sealed class SstBlockCacheShard
         {
             if (!_entries.TryGetValue(key, out SstBlockCacheEntry? current))
             {
-                content = default;
+                entry = null;
                 return false;
             }
 
             _policy.RecordAccess(key);
-            content = current.Content;
+            entry = current;
             return true;
         }
     }

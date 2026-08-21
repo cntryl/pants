@@ -35,6 +35,30 @@ internal static class PositionalFile
         return bytes;
     }
 
+    public static byte[] ReadExactly(SafeFileHandle handle, long offset, int length)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        byte[] bytes = GC.AllocateUninitializedArray<byte>(length);
+        var consumed = 0;
+        while (consumed < bytes.Length)
+        {
+            int read = RandomAccess.Read(
+                handle,
+                bytes.AsSpan(consumed),
+                checked(offset + consumed));
+            if (read == 0)
+            {
+                throw new EndOfStreamException("The file changed during a positional read.");
+            }
+
+            consumed = checked(consumed + read);
+        }
+
+        return bytes;
+    }
+
     public static void AppendAndFlush(
         string path,
         IReadOnlyList<ReadOnlyMemory<byte>> buffers,

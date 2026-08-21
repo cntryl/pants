@@ -36,8 +36,8 @@ internal sealed class SstBlockCache
 
     public long UsedBytes => _shards.Sum(static shard => shard.UsedBytes);
 
-    public bool TryGet(SstBlockCacheKey key, out ReadOnlyMemory<byte> content) =>
-        GetShard(key).TryGet(key, out content);
+    public bool TryGet(SstBlockCacheKey key, out SstBlockCacheEntry? entry) =>
+        GetShard(key).TryGet(key, out entry);
 
     public bool Add(SstBlockCacheKey key, ReadOnlySpan<byte> content) =>
         GetShard(key).Add(key, content);

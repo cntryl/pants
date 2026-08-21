@@ -30,5 +30,13 @@ public sealed record PantsReadPathDiagnostics
 
     public long BloomRejects { get; init; }
 
+    public long BloomTruePositives { get; init; }
+
+    public long BloomFalsePositives { get; init; }
+
+    public long BloomTrueNegatives { get; init; }
+
+    public long KeyRangeRejects { get; init; }
+
     public long RangeTombstoneScans { get; init; }
 }

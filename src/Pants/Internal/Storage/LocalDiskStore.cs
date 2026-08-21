@@ -31,7 +31,7 @@ internal sealed class LocalDiskStore : IDisposable
     private readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
     private readonly List<MidgeWalMutation> _mutableOperations = [];
     private readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _readerCache = new(StringComparer.Ordinal);
+    private readonly SstReaderCache _readerCache = new();
     private FileStream _walStream;
     private readonly MidgeManifest _manifest;
     private ulong _nextSequence;
@@ -146,42 +146,49 @@ internal sealed class LocalDiskStore : IDisposable
         return metadata.Clone();
     }
 
-    public void RecordPointRead(
+    public bool RecordPointRead(
         RuntimeTelemetry telemetry,
         ColumnFamilyIdentity columnFamily,
         ReadOnlySpan<byte> key)
     {
         byte[] keyCopy = key.ToArray();
-        MidgeFileMeta[] candidates = _manifest.Files
-            .Where(file =>
-                file.ColumnFamilyId == columnFamily.Id &&
-                IsWithinFileRange(file, keyCopy))
+        MidgeFileMeta[] familyFiles = _manifest.Files
+            .Where(file => file.ColumnFamilyId == columnFamily.Id)
+            .ToArray();
+        MidgeFileMeta[] candidates = familyFiles
+            .Where(file => IsWithinFileRange(file, keyCopy))
             .ToArray();
         int bloomChecks = 0;
         int candidateBlocks = 0;
         int amplificationBlocksRead = 0;
         int dataBlocksRead = 0;
-        int bloomRejects = 0;
+        int bloomTruePositives = 0;
+        int bloomFalsePositives = 0;
+        int bloomTrueNegatives = 0;
         int blockCacheHits = 0;
         int blockCacheMisses = 0;
         int readerCacheHits = 0;
         int readerCacheMisses = 0;
         foreach (MidgeFileMeta candidate in candidates)
         {
-            if (_readerCache.Add(candidate.Name))
-            {
-                readerCacheMisses++;
-            }
-            else
+            string path = Path.Combine(_sstDirectory, candidate.Name);
+            MidgeSstReader reader = _readerCache.GetOrAdd(
+                candidate.Name,
+                path,
+                out bool readerCacheHit);
+            if (readerCacheHit)
             {
                 readerCacheHits++;
             }
+            else
+            {
+                readerCacheMisses++;
+            }
 
-            byte[] bytes = PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, candidate.Name));
-            SstPointReadDecision decision = MidgeSstCodec.GetPointReadDecision(bytes, keyCopy);
+            SstPointReadDecision decision = reader.GetPointReadDecision(keyCopy);
             bloomChecks = checked(bloomChecks + decision.BloomChecks);
             candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomRejects = checked(bloomRejects + (decision.Rejected ? 1 : 0));
+            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
             amplificationBlocksRead = checked(
                 amplificationBlocksRead + 1 + decision.BlocksRead);
             if (decision.BlocksRead == 0)
@@ -190,33 +197,49 @@ internal sealed class LocalDiskStore : IDisposable
             }
 
             var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-            if (_blockCache.TryGet(cacheKey, out _))
+            bool containsKey;
+            if (_blockCache.TryGet(cacheKey, out SstBlockCacheEntry? cachedBlock) &&
+                cachedBlock is not null)
             {
                 blockCacheHits++;
-                continue;
+                containsKey = cachedBlock.ContainsKey(keyCopy);
+            }
+            else
+            {
+                blockCacheMisses++;
+                byte[] blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
+                dataBlocksRead = checked(dataBlocksRead + 1);
+                containsKey = MidgeSstCodec.DataBlockContainsKey(blockContent, keyCopy);
+                _ = _blockCache.Add(cacheKey, blockContent);
             }
 
-            blockCacheMisses++;
-            byte[] blockContent = MidgeSstCodec.ReadPointReadDataBlock(
-                bytes,
-                decision.CandidateBlockIndex);
-            dataBlocksRead = checked(dataBlocksRead + 1);
-            _ = _blockCache.Add(cacheKey, blockContent);
+            if (containsKey)
+            {
+                bloomTruePositives++;
+            }
+            else
+            {
+                bloomFalsePositives++;
+            }
         }
 
-        telemetry.RecordSstRead(
-            candidates.Length,
-            candidates.Count(static file => file.Level == 0),
-            amplificationBlocksRead,
-            dataBlocksRead,
-            readerCacheHits,
-            readerCacheMisses,
-            blockCacheHits,
-            blockCacheMisses,
-            candidateBlocks,
-            bloomChecks,
-            bloomRejects,
-            rangeTombstoneScans: 0);
+        return telemetry.RecordSstRead(new SstReadSample
+        {
+            SstsTouched = candidates.Length,
+            L0SstsTouched = candidates.Count(static file => file.Level == 0),
+            AmplificationBlocksRead = amplificationBlocksRead,
+            DataBlocksRead = dataBlocksRead,
+            ReaderCacheHits = readerCacheHits,
+            ReaderCacheMisses = readerCacheMisses,
+            BlockCacheHits = blockCacheHits,
+            BlockCacheMisses = blockCacheMisses,
+            CandidateBlocks = candidateBlocks,
+            KeyRangeRejects = familyFiles.Length - candidates.Length,
+            BloomChecks = bloomChecks,
+            BloomTruePositives = bloomTruePositives,
+            BloomFalsePositives = bloomFalsePositives,
+            BloomTrueNegatives = bloomTrueNegatives
+        });
     }
 
     public void ValidateScanRead(
@@ -230,17 +253,19 @@ internal sealed class LocalDiskStore : IDisposable
         foreach (MidgeFileMeta file in _manifest.Files.Where(
                      file => file.ColumnFamilyId == columnFamily.Id))
         {
-            if (_readerCache.Add(file.Name))
-            {
-                readerCacheMisses++;
-            }
-            else
+            string path = Path.Combine(_sstDirectory, file.Name);
+            _ = _readerCache.GetOrAdd(file.Name, path, out bool readerCacheHit);
+            if (readerCacheHit)
             {
                 readerCacheHits++;
             }
+            else
+            {
+                readerCacheMisses++;
+            }
 
             MidgeSstContents contents = MidgeSstCodec.Decode(
-                PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, file.Name)));
+                PositionalFile.ReadAllBytes(path));
             candidateSsts++;
             candidateBlocks = checked(candidateBlocks + contents.DataBlockCount);
         }
@@ -802,7 +827,7 @@ internal sealed class LocalDiskStore : IDisposable
 
     private void RemoveSstFromCaches(string name)
     {
-        _readerCache.Remove(name);
+        _readerCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
     }
 
@@ -2238,6 +2263,7 @@ internal sealed class LocalDiskStore : IDisposable
         }
 
         _disposed = true;
+        _readerCache.Dispose();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
