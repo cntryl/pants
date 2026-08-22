@@ -2,7 +2,7 @@ namespace Pants;
 
 public abstract record PantsS3CredentialSource
 {
-    private PantsS3CredentialSource()
+    PantsS3CredentialSource()
     {
     }
 

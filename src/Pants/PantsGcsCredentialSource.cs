@@ -2,7 +2,7 @@ namespace Pants;
 
 public abstract record PantsGcsCredentialSource
 {
-    private PantsGcsCredentialSource()
+    PantsGcsCredentialSource()
     {
     }
 

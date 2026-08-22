@@ -17,7 +17,7 @@ Run formatting, a Release build, and relevant tests before submitting changes.
 
 ## Coding Style & Naming Conventions
 
-Follow `.editorconfig` and modern C# conventions: four-space C# indentation, two-space project/JSON indentation, LF endings, file-scoped namespaces, braces, nullable annotations, and explicit accessibility outside interfaces. Use PascalCase for types and public members, camelCase for parameters and locals, and `_camelCase` for private fields. Prefer immutable records for public data contracts and interfaces at public boundaries. Keep one top-level type per file and organize implementation details into focused internal directories. Async methods end in `Async` and accept an optional trailing `CancellationToken`.
+Follow `.editorconfig` and modern C# conventions: four-space C# indentation, two-space project/JSON indentation, LF endings, file-scoped namespaces, braces, and nullable annotations. Prefer `var` for locals and omit redundant accessibility modifiers such as the default `private`; retain modifiers that change the contract. Use PascalCase for types and public members, camelCase for parameters and locals, and `_camelCase` for fields. Prefer immutable records for public data contracts and interfaces at public boundaries. Keep one top-level type per file and organize implementation details into focused internal directories. Async methods end in `Async` and accept an optional trailing `CancellationToken`.
 
 ## Testing Guidelines
 

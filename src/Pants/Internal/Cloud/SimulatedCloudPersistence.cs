@@ -1,12 +1,13 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Pants;
 
-internal sealed class SimulatedCloudPersistence
+sealed class SimulatedCloudPersistence : ICloudPersistence
 {
-    private const uint CatalogFormatVersion = 1;
-    private static readonly string[] MetadataFiles =
+    const uint CatalogFormatVersion = 1;
+    static readonly string[] MetadataFiles =
     [
         "FORMAT",
         "manifest.snapshot.json",
@@ -15,23 +16,31 @@ internal sealed class SimulatedCloudPersistence
         "intent_log.json"
     ];
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly string _localRoot;
-    private readonly string _cloudRoot;
-    private readonly ulong _writerEpoch;
-    private readonly WalPublicationCatalog _catalog;
+    readonly string _localRoot;
+    readonly string _cloudRoot;
+    readonly ulong _writerEpoch;
+    readonly WalPublicationCatalog _catalog;
+    readonly IPantsFailpointHandler _failpoints;
+    int _persistenceAnomaly;
 
-    public SimulatedCloudPersistence(string localRoot, ulong writerEpoch)
+    public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
+
+    public SimulatedCloudPersistence(
+        string localRoot,
+        ulong writerEpoch,
+        IPantsFailpointHandler? failpoints = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
         _writerEpoch = writerEpoch;
+        _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         Directory.CreateDirectory(_cloudRoot);
         _catalog = LoadCatalog(_cloudRoot) ?? WalPublicationCatalog.Empty(writerEpoch);
         if (_catalog.FencingEpoch > writerEpoch)
@@ -44,51 +53,93 @@ internal sealed class SimulatedCloudPersistence
         _catalog.FencingEpoch = writerEpoch;
         SaveCatalog();
         MirrorMetadataAndSsts();
-        EnsureDdlRegistry();
     }
 
-    public static ulong PrepareLocalCache(string localRoot)
+    public static SimulatedCloudHydrationResult PrepareLocalCache(
+        string localRoot,
+        PantsRecoveryPolicy recoveryPolicy)
     {
-        string root = Path.GetFullPath(localRoot);
-        string cloudRoot = Path.Combine(root, "cloud_store");
+        var root = Path.GetFullPath(localRoot);
+        var cloudRoot = Path.Combine(root, "cloud_store");
         if (!Directory.Exists(cloudRoot))
         {
-            return 0;
+            return new SimulatedCloudHydrationResult(
+                0,
+                new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal),
+                false);
         }
 
-        foreach (string fileName in MetadataFiles)
+        var localManifest = CloudManifestReader.ReadManifest(root);
+        var remoteManifestPath = File.Exists(Path.Combine(
+            cloudRoot,
+            "metadata",
+            "manifest.snapshot.json"))
+            ? Path.Combine(cloudRoot, "metadata", "manifest.snapshot.json")
+            : Path.Combine(cloudRoot, "metadata", "manifest.json");
+        var remoteManifest = File.Exists(remoteManifestPath)
+            ? CloudManifestReader.DecodeManifest(File.ReadAllBytes(remoteManifestPath))
+            : null;
+        foreach (var fileName in MetadataFiles)
         {
             CopyIfPresent(
                 Path.Combine(cloudRoot, "metadata", fileName),
                 Path.Combine(root, fileName));
         }
 
-        string cloudSstDirectory = Path.Combine(cloudRoot, "sst");
-        if (Directory.Exists(cloudSstDirectory))
+        var activeManifest = localManifest ?? remoteManifest;
+
+        var recoverySsts = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal);
+        var localSstDirectory = Path.Combine(root, "sst");
+        Directory.CreateDirectory(localSstDirectory);
+        foreach (var file in activeManifest?.Files ?? [])
         {
-            string localSstDirectory = Path.Combine(root, "sst");
-            Directory.CreateDirectory(localSstDirectory);
-            foreach (string cloudSst in Directory.EnumerateFiles(
-                         cloudSstDirectory,
-                         "*.sst",
-                         SearchOption.TopDirectoryOnly))
+            var localPath = Path.Combine(localSstDirectory, file.Name);
+            var cloudPath = Path.Combine(cloudRoot, "sst", file.Name);
+            if (!File.Exists(cloudPath))
             {
-                CopyIfPresent(cloudSst, Path.Combine(localSstDirectory, Path.GetFileName(cloudSst)));
+                var isRemoteAuthoritative = localManifest is null || remoteManifest?.Files.Any(
+                    remoteFile => StringComparer.Ordinal.Equals(
+                        remoteFile.Name,
+                        file.Name)) == true;
+                if (isRemoteAuthoritative || !File.Exists(localPath))
+                {
+                    throw new PantsRecoveryFailedException(
+                        $"Authoritative simulated-cloud SST '{file.Name}' is missing.");
+                }
+
+                continue;
+            }
+
+            var bytes = File.ReadAllBytes(cloudPath);
+            CloudSstValidator.Validate(bytes, file);
+            if (File.Exists(localPath))
+            {
+                continue;
+            }
+
+            if (localManifest is not null)
+            {
+                recoverySsts[file.Name] = bytes;
+            }
+            else
+            {
+                AtomicStagedFile.Write(localPath, bytes);
             }
         }
 
-        WalPublicationCatalog? catalog = LoadCatalog(cloudRoot);
+        var catalog = LoadCatalog(cloudRoot);
         if (catalog is null)
         {
-            return 0;
+            return new SimulatedCloudHydrationResult(0, recoverySsts, false);
         }
 
-        string localWalDirectory = Path.Combine(root, "wal");
+        var localWalDirectory = Path.Combine(root, "wal");
         Directory.CreateDirectory(localWalDirectory);
-        foreach ((ulong segmentId, PublishedWalSegment publication) in catalog.Segments)
+        var requiresSalvage = false;
+        foreach ((var segmentId, var publication) in catalog.Segments)
         {
             ValidatePublication(segmentId, publication, catalog.FencingEpoch);
-            string remotePath = ResolveObjectPath(cloudRoot, publication.ObjectKey);
+            var remotePath = ResolveObjectPath(cloudRoot, publication.ObjectKey);
             if (!File.Exists(remotePath))
             {
                 throw PantsException.Create(
@@ -96,32 +147,40 @@ internal sealed class SimulatedCloudPersistence
                     $"Published cloud WAL object '{publication.ObjectKey}' is missing.");
             }
 
-            byte[] bytes = File.ReadAllBytes(remotePath);
+            var bytes = File.ReadAllBytes(remotePath);
             if (checked((ulong)bytes.Length) != publication.SizeBytes ||
                 MidgeDiskFormat.Crc32C(bytes) != publication.ContentCrc32C)
             {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Published cloud WAL object '{publication.ObjectKey}' failed catalog validation.");
+                if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+                {
+                    throw new PantsRecoveryFailedException(
+                        $"Published cloud WAL object '{publication.ObjectKey}' failed catalog validation.");
+                }
+
+                requiresSalvage = true;
+                bytes = CloudWalSalvage.CreateLocalRecoveryBytes(bytes).ToArray();
             }
 
-            string localName = $"{segmentId:00000000000000000000}.wal";
+            var localName = $"{segmentId:00000000000000000000}.wal";
             AtomicStagedFile.Write(Path.Combine(localWalDirectory, localName), bytes);
         }
 
-        return catalog.FencingEpoch;
+        return new SimulatedCloudHydrationResult(
+            catalog.FencingEpoch,
+            recoverySsts,
+            requiresSalvage);
     }
 
     public void PublishWal(SealedWalSegment segment)
     {
-        if (segment.WriterEpoch != _writerEpoch)
+        if (segment.WriterEpoch > _writerEpoch)
         {
             throw PantsException.Create(
                 PantsErrorCode.Fenced,
-                "A WAL segment from a stale writer epoch cannot be published.");
+                "A WAL segment from a future writer epoch cannot be published.");
         }
 
-        string objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+        var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
             segment.WriterEpoch,
             segment.SegmentId);
         var publication = new PublishedWalSegment
@@ -134,7 +193,7 @@ internal sealed class SimulatedCloudPersistence
             ObjectKey = objectKey
         };
 
-        if (_catalog.Segments.TryGetValue(segment.SegmentId, out PublishedWalSegment? existing))
+        if (_catalog.Segments.TryGetValue(segment.SegmentId, out var existing))
         {
             if (!existing.Equals(publication))
             {
@@ -154,9 +213,37 @@ internal sealed class SimulatedCloudPersistence
 
     public void MirrorMetadataAndSsts()
     {
-        foreach (string fileName in MetadataFiles)
+        var localSstDirectory = Path.Combine(_localRoot, "sst");
+        if (!Directory.Exists(localSstDirectory))
         {
-            string localPath = Path.Combine(_localRoot, fileName);
+            return;
+        }
+
+        var localSsts = Directory.EnumerateFiles(
+                localSstDirectory,
+                "*.sst",
+                SearchOption.TopDirectoryOnly)
+            .ToArray();
+        if (localSsts.Length > 0)
+        {
+            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+        }
+
+        foreach (var localSst in localSsts)
+        {
+            AtomicStagedFile.Write(
+                Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
+                File.ReadAllBytes(localSst));
+        }
+
+        if (localSsts.Length > 0)
+        {
+            _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
+        }
+
+        foreach (var fileName in MetadataFiles)
+        {
+            var localPath = Path.Combine(_localRoot, fileName);
             if (File.Exists(localPath))
             {
                 AtomicStagedFile.Write(
@@ -165,101 +252,120 @@ internal sealed class SimulatedCloudPersistence
             }
         }
 
-        string localSstDirectory = Path.Combine(_localRoot, "sst");
-        if (!Directory.Exists(localSstDirectory))
+        CollectObsoleteSsts();
+
+        PruneCoveredWal(CloudManifestReader.ReadLastPersistedSequence(_localRoot));
+    }
+
+    public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(
+            _cloudRoot,
+            PantsCloudObjectLayout.SstPrefix + name);
+        return ValueTask.FromResult<ReadOnlyMemory<byte>?>(
+            File.Exists(path) ? File.ReadAllBytes(path) : null);
+    }
+
+    public ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        if (!File.Exists(path))
         {
-            return;
+            return ValueTask.FromResult<CloudDdlRegistryObject?>(null);
         }
 
-        string[] localSsts = Directory.EnumerateFiles(
-                localSstDirectory,
-                "*.sst",
-                SearchOption.TopDirectoryOnly)
-            .ToArray();
-        foreach (string localSst in localSsts)
+        var bytes = File.ReadAllBytes(path);
+        return ValueTask.FromResult<CloudDdlRegistryObject?>(new(
+            CloudDdlJson.DeserializeRegistry(bytes),
+            CreateVersion(bytes)));
+    }
+
+    public ValueTask FenceDdlRegistryAsync(
+        CloudDdlRegistry bootstrap,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        var current = File.Exists(path)
+            ? File.ReadAllBytes(path)
+            : CloudDdlJson.SerializeRegistry(bootstrap);
+        var fenced = CloudDdlFence.Encode(current, _writerEpoch);
+        if (!File.Exists(path) || !current.AsSpan().SequenceEqual(fenced))
         {
-            AtomicStagedFile.Write(
-                Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
-                File.ReadAllBytes(localSst));
+            AtomicStagedFile.Write(path, fenced);
         }
 
-        var retainedNames = localSsts
-            .Select(static path => Path.GetFileName(path))
-            .ToHashSet(StringComparer.Ordinal);
-        string cloudSstDirectory = Path.Combine(_cloudRoot, "sst");
-        Directory.CreateDirectory(cloudSstDirectory);
-        foreach (string cloudSst in Directory.EnumerateFiles(
-                     cloudSstDirectory,
-                     "*.sst",
-                     SearchOption.TopDirectoryOnly))
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<bool> CompareExchangeDdlRegistryAsync(
+        CloudDdlRegistry registry,
+        string? expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        var exists = File.Exists(path);
+        if (expectedVersion is null)
         {
-            if (!retainedNames.Contains(Path.GetFileName(cloudSst)))
+            if (exists)
             {
-                File.Delete(cloudSst);
+                return ValueTask.FromResult(false);
             }
+        }
+        else if (!exists || !StringComparer.Ordinal.Equals(
+                     CreateVersion(File.ReadAllBytes(path)),
+                     expectedVersion))
+        {
+            return ValueTask.FromResult(false);
+        }
+
+        AtomicStagedFile.Write(path, CloudDdlJson.SerializeRegistry(registry));
+        return ValueTask.FromResult(true);
+    }
+
+    public ValueTask PublishWalAsync(
+        SealedWalSegment segment,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        PublishWal(segment);
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        MirrorMetadataAndSsts();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CollectObsoleteSsts();
+        return ValueTask.CompletedTask;
+    }
+
+    void CollectObsoleteSsts()
+    {
+        if (!SimulatedCloudSstGarbageCollector.Collect(
+                _localRoot,
+                _cloudRoot,
+                _failpoints))
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
         }
     }
 
-    public void PublishColumnFamilyCreate(MidgeColumnFamilyMeta metadata)
+    static WalPublicationCatalog? LoadCatalog(string cloudRoot)
     {
-        DdlRegistry registry = LoadDdlRegistry();
-        if (registry.ColumnFamilies.Any(family => family.Id == metadata.Id))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Fenced,
-                $"The cloud DDL registry already contains column family {metadata.Id}.");
-        }
-
-        registry.ColumnFamilies.Add(metadata.Clone());
-        registry.Epoch = checked(registry.Epoch + 1);
-        registry.Operations.Add(new DdlOperation
-        {
-            OperationId = Guid.NewGuid().ToString(),
-            Edit = new Dictionary<string, object>(StringComparer.Ordinal)
-            {
-                ["CreateColumnFamily"] = new
-                {
-                    id = metadata.Id,
-                    name = metadata.Name,
-                    created_at = metadata.CreatedAt
-                }
-            }
-        });
-        SaveDdlRegistry(registry);
-    }
-
-    public void PublishColumnFamilyDrop(MidgeColumnFamilyMeta metadata)
-    {
-        DdlRegistry registry = LoadDdlRegistry();
-        int index = registry.ColumnFamilies.FindIndex(family => family.Id == metadata.Id);
-        if (index < 0)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Fenced,
-                $"The cloud DDL registry does not contain column family {metadata.Id}.");
-        }
-
-        registry.ColumnFamilies[index] = metadata.Clone();
-        registry.Epoch = checked(registry.Epoch + 1);
-        registry.Operations.Add(new DdlOperation
-        {
-            OperationId = Guid.NewGuid().ToString(),
-            Edit = new Dictionary<string, object>(StringComparer.Ordinal)
-            {
-                ["DropColumnFamilyAt"] = new
-                {
-                    id = metadata.Id,
-                    drop_sequence = metadata.DropSequence ?? 0,
-                    dropped_sst_names = metadata.DroppedSstNames
-                }
-            }
-        });
-        SaveDdlRegistry(registry);
-    }
-
-    private static WalPublicationCatalog? LoadCatalog(string cloudRoot)
-    {
-        string path = Path.Combine(cloudRoot, "wal", "publication-catalog.v1.json");
+        var path = Path.Combine(cloudRoot, "wal", "publication-catalog.v1.json");
         if (!File.Exists(path))
         {
             return null;
@@ -267,7 +373,7 @@ internal sealed class SimulatedCloudPersistence
 
         try
         {
-            WalPublicationCatalog catalog = JsonSerializer.Deserialize<WalPublicationCatalog>(
+            var catalog = JsonSerializer.Deserialize<WalPublicationCatalog>(
                 File.ReadAllBytes(path),
                 JsonOptions) ?? throw new JsonException("Cloud WAL catalog is empty.");
             if (catalog.FormatVersion != CatalogFormatVersion || catalog.FencingEpoch == 0)
@@ -275,7 +381,7 @@ internal sealed class SimulatedCloudPersistence
                 throw new JsonException("Cloud WAL catalog header is invalid.");
             }
 
-            foreach ((ulong segmentId, PublishedWalSegment publication) in catalog.Segments)
+            foreach ((var segmentId, var publication) in catalog.Segments)
             {
                 ValidatePublication(segmentId, publication, catalog.FencingEpoch);
             }
@@ -291,7 +397,7 @@ internal sealed class SimulatedCloudPersistence
         }
     }
 
-    private static void ValidatePublication(
+    static void ValidatePublication(
         ulong segmentId,
         PublishedWalSegment publication,
         ulong fencingEpoch)
@@ -303,7 +409,7 @@ internal sealed class SimulatedCloudPersistence
                 $"Cloud WAL catalog entry {segmentId} is invalid.");
         }
 
-        string expectedKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+        var expectedKey = PantsCloudObjectLayout.WalSegmentObjectKey(
             publication.WriterEpoch,
             segmentId);
         if (publication.SegmentId != segmentId ||
@@ -317,44 +423,153 @@ internal sealed class SimulatedCloudPersistence
         }
     }
 
-    private void SaveCatalog() => AtomicStagedFile.Write(
+    void SaveCatalog() => AtomicStagedFile.Write(
         Path.Combine(_cloudRoot, "wal", "publication-catalog.v1.json"),
         JsonSerializer.SerializeToUtf8Bytes(_catalog, JsonOptions));
 
-    private void EnsureDdlRegistry()
+    void PruneCoveredWal(ulong coveredSequence)
     {
-        string path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
-        if (!File.Exists(path))
+        if (coveredSequence == 0)
         {
-            AtomicStagedFile.Write(path, "{\n  \"epoch\": 0,\n  \"column_families\": [],\n  \"operations\": []\n}"u8);
+            return;
+        }
+
+        var manifest = CloudManifestReader.ReadManifest(_localRoot) ??
+            throw new PantsCorruptionException(
+                "Simulated-cloud WAL pruning requires a committed local manifest.");
+        if (manifest.LastPersistedSequence != coveredSequence)
+        {
+            throw new PantsCorruptionException(
+                "Simulated-cloud WAL pruning sequence differs from the committed manifest.");
+        }
+
+        var retired = _catalog.Segments.Values
+            .Where(segment => segment.MaximumSequence <= coveredSequence)
+            .ToArray();
+        if (retired.Length == 0)
+        {
+            return;
+        }
+
+        var dependencyGuards = ValidateManifestDependencies(manifest);
+        var walGuards = new Dictionary<ulong, SimulatedCloudObjectGuard>();
+        foreach (var segment in retired)
+        {
+            var path = ResolveObjectPath(_cloudRoot, segment.ObjectKey);
+            if (!File.Exists(path))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Published simulated-cloud WAL '{segment.ObjectKey}' is missing during pruning.");
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            if (checked((ulong)bytes.Length) != segment.SizeBytes ||
+                MidgeDiskFormat.Crc32C(bytes) != segment.ContentCrc32C)
+            {
+                throw new PantsCorruptionException(
+                    $"Published simulated-cloud WAL '{segment.ObjectKey}' differs from its catalog proof.");
+            }
+
+            CloudWalCoverageValidator.ValidateAndEnsureCovered(
+                bytes,
+                segment.MaximumSequence,
+                segment.WriterEpoch,
+                manifest);
+            walGuards.Add(
+                segment.SegmentId,
+                new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
+        }
+
+        VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
+
+        foreach (var segment in retired)
+        {
+            _catalog.Segments.Remove(segment.SegmentId);
+        }
+
+        SaveCatalog();
+        foreach (var segment in retired)
+        {
+            var guard = walGuards[segment.SegmentId];
+            if (File.Exists(guard.Path) &&
+                StringComparer.Ordinal.Equals(
+                    CreateVersion(File.ReadAllBytes(guard.Path)),
+                    guard.Version))
+            {
+                File.Delete(guard.Path);
+            }
         }
     }
 
-    private DdlRegistry LoadDdlRegistry()
+    List<SimulatedCloudObjectGuard> ValidateManifestDependencies(
+        MidgeManifest manifest)
     {
-        EnsureDdlRegistry();
-        try
+        var guards = new List<SimulatedCloudObjectGuard>(
+            manifest.Files.Count + MetadataFiles.Length);
+        foreach (var file in manifest.Files)
         {
-            return JsonSerializer.Deserialize<DdlRegistry>(
-                File.ReadAllBytes(ResolveObjectPath(
-                    _cloudRoot,
-                    PantsCloudObjectLayout.DdlRegistryObjectKey)),
-                JsonOptions) ?? throw new JsonException("Cloud DDL registry is empty.");
+            var path = ResolveObjectPath(
+                _cloudRoot,
+                PantsCloudObjectLayout.SstPrefix + file.Name);
+            if (!File.Exists(path))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Manifest simulated-cloud SST '{file.Name}' is missing during WAL pruning.");
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            CloudSstValidator.Validate(bytes, file);
+
+            guards.Add(new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
         }
-        catch (JsonException exception)
+
+        foreach (var fileName in MetadataFiles)
         {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Cloud DDL registry cannot be decoded.",
-                exception);
+            var localPath = Path.Combine(_localRoot, fileName);
+            if (!File.Exists(localPath))
+            {
+                continue;
+            }
+
+            var remotePath = Path.Combine(_cloudRoot, "metadata", fileName);
+            if (!File.Exists(remotePath))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Simulated-cloud metadata object '{fileName}' is missing during WAL pruning.");
+            }
+
+            var localBytes = File.ReadAllBytes(localPath);
+            var remoteBytes = File.ReadAllBytes(remotePath);
+            if (!remoteBytes.AsSpan().SequenceEqual(localBytes))
+            {
+                throw new PantsCorruptionException(
+                    $"Simulated-cloud metadata object '{fileName}' differs from local committed bytes.");
+            }
+
+            guards.Add(new SimulatedCloudObjectGuard(
+                remotePath,
+                CreateVersion(remoteBytes)));
+        }
+
+        return guards;
+    }
+
+    static void VerifyIdentityGuards(IEnumerable<SimulatedCloudObjectGuard> guards)
+    {
+        foreach (var guard in guards)
+        {
+            if (!File.Exists(guard.Path) ||
+                !StringComparer.Ordinal.Equals(
+                    CreateVersion(File.ReadAllBytes(guard.Path)),
+                    guard.Version))
+            {
+                throw new PantsLeaseIndeterminateException(
+                    $"Simulated-cloud WAL pruning dependency '{guard.Path}' changed after validation.");
+            }
         }
     }
 
-    private void SaveDdlRegistry(DdlRegistry registry) => AtomicStagedFile.Write(
-        ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey),
-        JsonSerializer.SerializeToUtf8Bytes(registry, JsonOptions));
-
-    private static void CopyIfPresent(string source, string destination)
+    static void CopyIfPresent(string source, string destination)
     {
         if (File.Exists(source) && !File.Exists(destination))
         {
@@ -362,7 +577,7 @@ internal sealed class SimulatedCloudPersistence
         }
     }
 
-    private static string ResolveObjectPath(string cloudRoot, string objectKey)
+    static string ResolveObjectPath(string cloudRoot, string objectKey)
     {
         if (string.IsNullOrEmpty(objectKey) ||
             objectKey.StartsWith('/') ||
@@ -375,7 +590,10 @@ internal sealed class SimulatedCloudPersistence
         return Path.Combine(cloudRoot, objectKey.Replace('/', Path.DirectorySeparatorChar));
     }
 
-    private sealed class WalPublicationCatalog
+    static string CreateVersion(ReadOnlySpan<byte> bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes));
+
+    sealed class WalPublicationCatalog
     {
         public uint FormatVersion { get; set; }
 
@@ -390,7 +608,7 @@ internal sealed class SimulatedCloudPersistence
         };
     }
 
-    private sealed class PublishedWalSegment : IEquatable<PublishedWalSegment>
+    sealed class PublishedWalSegment : IEquatable<PublishedWalSegment>
     {
         public ulong SegmentId { get; set; }
 
@@ -426,20 +644,4 @@ internal sealed class SimulatedCloudPersistence
             ObjectKey);
     }
 
-    private sealed class DdlRegistry
-    {
-        public ulong Epoch { get; set; }
-
-        public List<MidgeColumnFamilyMeta> ColumnFamilies { get; set; } = [];
-
-        public List<DdlOperation> Operations { get; set; } = [];
-    }
-
-    private sealed class DdlOperation
-    {
-        [JsonPropertyName("op_id")]
-        public string OperationId { get; set; } = string.Empty;
-
-        public Dictionary<string, object> Edit { get; set; } = [];
-    }
 }

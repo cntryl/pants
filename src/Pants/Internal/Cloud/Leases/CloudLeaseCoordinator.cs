@@ -2,18 +2,19 @@ namespace Pants;
 
 internal sealed class CloudLeaseCoordinator : IDisposable
 {
-    private readonly ICloudLeaseStore _store;
-    private readonly IPantsClock _clock;
-    private readonly string _holderId;
-    private readonly string _ownerToken = Guid.NewGuid().ToString("N");
-    private readonly TimeSpan _leaseDuration;
-    private readonly TimeSpan _clockSkewTolerance;
-    private readonly Action? _leaseLossCallback;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private ulong _epoch;
-    private long _expiresAtUtcTicks;
-    private int _lost;
-    private int _disposed;
+    readonly ICloudLeaseStore _store;
+    readonly IPantsClock _clock;
+    readonly string _holderId;
+    readonly string _ownerToken = Guid.NewGuid().ToString("N");
+    readonly TimeSpan _leaseDuration;
+    readonly TimeSpan _clockSkewTolerance;
+    readonly Action? _leaseLossCallback;
+    readonly SemaphoreSlim _gate = new(1, 1);
+    ulong _epoch;
+    long _expiresAtUtcTicks;
+    long _latestObservedUtcTicks;
+    int _lost;
+    int _disposed;
 
     public CloudLeaseCoordinator(
         ICloudLeaseStore store,
@@ -45,11 +46,24 @@ internal sealed class CloudLeaseCoordinator : IDisposable
 
     public ulong Epoch => Volatile.Read(ref _epoch);
 
-    public bool IsHealthy =>
-        Volatile.Read(ref _lost) == 0 &&
-        Epoch != 0 &&
-        _clock.UtcNow.UtcTicks + _clockSkewTolerance.Ticks <
-        Volatile.Read(ref _expiresAtUtcTicks);
+    public bool IsHealthy
+    {
+        get
+        {
+            if (Volatile.Read(ref _lost) != 0 || Epoch == 0)
+            {
+                return false;
+            }
+
+            if (ObserveMonotonicUtcTicks() < Volatile.Read(ref _expiresAtUtcTicks))
+            {
+                return true;
+            }
+
+            LoseLease();
+            return false;
+        }
+    }
 
     public async ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken)
     {
@@ -61,8 +75,8 @@ internal sealed class CloudLeaseCoordinator : IDisposable
             {
                 throw new PantsFencedException("The cloud primary lease coordinator is fenced.");
             }
-            DateTimeOffset now = _clock.UtcNow;
-            CloudLeaseSnapshot? current = await _store.ReadAsync(cancellationToken)
+            var now = ObserveMonotonicUtcNow();
+            var current = await _store.ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
             ulong nextEpoch;
             bool acquired;
@@ -126,31 +140,54 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         try
         {
             EnsureValid();
-            CloudLeaseSnapshot? current = await _store.ReadAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (current is null ||
-                current.Lease.Epoch != Epoch ||
-                !StringComparer.Ordinal.Equals(current.Lease.HolderId, _holderId) ||
-                !StringComparer.Ordinal.Equals(current.Lease.OwnerToken, _ownerToken))
+            var current = await ReadForRenewalAsync(cancellationToken).ConfigureAwait(false);
+            EnsureValid();
+            var epoch = Epoch;
+            if (!Owns(current.Lease, epoch))
             {
                 LoseLease();
                 throw new PantsFencedException("The cloud primary lease is owned by another writer.");
             }
 
-            DateTimeOffset expiresAt = _clock.UtcNow + _leaseDuration;
-            bool renewed = await _store.TryReplaceAsync(
-                current.Version,
-                current.Lease with { ExpiresAtUtc = expiresAt },
-                cancellationToken).ConfigureAwait(false);
-            if (!renewed)
+            var expiresAt = ObserveMonotonicUtcNow() + _leaseDuration;
+            var proposed = current.Lease with { ExpiresAtUtc = expiresAt };
+            EnsureValid();
+            CloudLeaseSnapshot? confirmed = null;
+            try
             {
-                LoseLease();
-                throw new PantsFencedException("The cloud primary lease renewal was fenced.");
+                var renewed = await _store.TryReplaceAsync(
+                    current.Version,
+                    proposed,
+                    cancellationToken).ConfigureAwait(false);
+                if (!renewed)
+                {
+                    LoseLease();
+                    throw new PantsFencedException("The cloud primary lease renewal was fenced.");
+                }
+            }
+            catch (PantsLeaseIndeterminateException error)
+            {
+                confirmed = await ConfirmIndeterminateRenewalAsync(
+                    proposed,
+                    error,
+                    cancellationToken).ConfigureAwait(false);
             }
 
-            Volatile.Write(ref _expiresAtUtcTicks, expiresAt.UtcTicks);
+            if (!TryAdvanceDeadline(epoch, expiresAt))
+            {
+                LoseLease();
+                await TryExpireLateRenewalAsync(proposed, confirmed, cancellationToken)
+                    .ConfigureAwait(false);
+                throw new PantsFencedException(
+                    "The cloud primary lease renewal completed after its monotonic deadline.");
+            }
         }
-        catch (PantsLeaseIndeterminateException)
+        catch (PantsException)
+        {
+            LoseLease();
+            throw;
+        }
+        catch (OperationCanceledException)
         {
             LoseLease();
             throw;
@@ -170,6 +207,45 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    public async ValueTask ReleaseAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (Volatile.Read(ref _lost) != 0 || Epoch == 0)
+            {
+                return;
+            }
+
+            var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (current is null ||
+                current.Lease.Epoch != Epoch ||
+                !StringComparer.Ordinal.Equals(current.Lease.HolderId, _holderId) ||
+                !StringComparer.Ordinal.Equals(current.Lease.OwnerToken, _ownerToken))
+            {
+                LoseLease();
+                return;
+            }
+
+            var released = await _store.TryReplaceAsync(
+                current.Version,
+                current.Lease with
+                {
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (!released)
+            {
+                LoseLease();
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
@@ -179,7 +255,119 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
-    private void LoseLease()
+    async ValueTask<CloudLeaseSnapshot> ReadForRenewalAsync(
+        CancellationToken cancellationToken)
+    {
+        var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (current is not null)
+        {
+            return current;
+        }
+
+        LoseLease();
+        throw new PantsFencedException("The cloud primary lease document disappeared.");
+    }
+
+    async ValueTask<CloudLeaseSnapshot> ConfirmIndeterminateRenewalAsync(
+        CloudLeaseRecord proposed,
+        PantsLeaseIndeterminateException writeError,
+        CancellationToken cancellationToken)
+    {
+        CloudLeaseSnapshot? current;
+        try
+        {
+            current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (PantsException readError)
+        {
+            throw new PantsLeaseIndeterminateException(
+                "The cloud primary lease renewal could not be confirmed by readback.",
+                new AggregateException(writeError, readError));
+        }
+
+        if (current?.Lease != proposed)
+        {
+            throw new PantsLeaseUnavailableException(
+                "The cloud primary lease renewal was not confirmed by readback.",
+                writeError);
+        }
+
+        return current;
+    }
+
+    bool TryAdvanceDeadline(ulong epoch, DateTimeOffset candidate)
+    {
+        if (Volatile.Read(ref _lost) != 0 || Epoch != epoch)
+        {
+            return false;
+        }
+
+        var currentDeadline = Volatile.Read(ref _expiresAtUtcTicks);
+        var now = ObserveMonotonicUtcTicks();
+        if (now >= currentDeadline || candidate.UtcTicks <= now)
+        {
+            return false;
+        }
+
+        Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentDeadline, candidate.UtcTicks));
+        return Volatile.Read(ref _lost) == 0;
+    }
+
+    async ValueTask TryExpireLateRenewalAsync(
+        CloudLeaseRecord proposed,
+        CloudLeaseSnapshot? confirmed,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var current = confirmed ?? await _store.ReadAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null || !Owns(current.Lease, proposed.Epoch))
+            {
+                return;
+            }
+
+            await _store.TryReplaceAsync(
+                current.Version,
+                current.Lease with
+                {
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is PantsException or OperationCanceledException)
+        {
+            // A bounded best-effort release must never restore local authority.
+        }
+    }
+
+    bool Owns(CloudLeaseRecord lease, ulong epoch) =>
+        lease.Epoch == epoch &&
+        StringComparer.Ordinal.Equals(lease.HolderId, _holderId) &&
+        StringComparer.Ordinal.Equals(lease.OwnerToken, _ownerToken);
+
+    DateTimeOffset ObserveMonotonicUtcNow() =>
+        new(ObserveMonotonicUtcTicks(), TimeSpan.Zero);
+
+    long ObserveMonotonicUtcTicks()
+    {
+        var observed = _clock.UtcNow.UtcTicks;
+        while (true)
+        {
+            var latest = Volatile.Read(ref _latestObservedUtcTicks);
+            if (observed <= latest)
+            {
+                return latest;
+            }
+
+            if (Interlocked.CompareExchange(ref _latestObservedUtcTicks, observed, latest) == latest)
+            {
+                return observed;
+            }
+        }
+    }
+
+    void LoseLease()
     {
         if (Interlocked.Exchange(ref _lost, 1) == 0)
         {
