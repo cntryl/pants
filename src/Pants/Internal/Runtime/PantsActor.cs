@@ -200,6 +200,18 @@ internal sealed class PantsActor : IAsyncDisposable
                 state.RangeTombstones.Remove(identity);
                 state.ActiveMemtableBytes.Remove(identity);
                 state.UnflushedFamilies.Remove(identity);
+                if (_diskStore is not null)
+                {
+                    await _garbageCollectionWorker
+                        .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                        .ConfigureAwait(false);
+                    if (_simulatedCloud is not null)
+                    {
+                        await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                            .ConfigureAwait(false);
+                    }
+                }
+
                 PublishSnapshot(state);
                 return true;
             },

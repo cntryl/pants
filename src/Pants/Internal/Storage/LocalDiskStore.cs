@@ -141,6 +141,36 @@ internal sealed class LocalDiskStore : IDisposable
             RemoveSstFromCaches(name);
             _snapshotPinnedObsoleteFiles.Remove(name);
         }
+
+        MidgeColumnFamilyMeta[] droppedFamilies = _manifest.ColumnFamilies
+            .Where(static family => family.DeletedAt is not null && !family.Reclaimed)
+            .ToArray();
+        if (droppedFamilies.Length == 0)
+        {
+            return;
+        }
+
+        var edits = new List<JsonElement>();
+        var obsoleteNames = new List<string>();
+        foreach (MidgeColumnFamilyMeta family in droppedFamilies)
+        {
+            string[] names = _manifest.Files
+                .Where(file => file.ColumnFamilyId == family.Id)
+                .Select(static file => file.Name)
+                .ToArray();
+            edits.Add(CreateManifestEdit(
+                "ReclaimColumnFamily",
+                new { id = family.Id, names }));
+            obsoleteNames.AddRange(names);
+        }
+
+        DurablyApplyManifestBatch(edits);
+        SaveManifestCheckpoint();
+        foreach (string name in obsoleteNames)
+        {
+            File.Delete(Path.Combine(_sstDirectory, name));
+            RemoveSstFromCaches(name);
+        }
     }
 
     public MidgeColumnFamilyMeta GetColumnFamilyMetadata(ColumnFamilyIdentity identity)

@@ -55,6 +55,39 @@ public sealed class PantsRuntimeOperationsTests
         Assert.Equal(0, metrics.FlushFailuresTotal);
     }
 
+    [Fact]
+    public async Task ShouldRelieveConcurrentLocalWritePressureWithoutAStickyStall()
+    {
+        using var directory = new TemporaryDirectory();
+        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(256 * 1024))
+            .WithMemtableLimits(64 * 1024, 16 * 1024)
+            .WithTransactionMemoryPool(64 * 1024)
+            .WithBackgroundCompaction(false);
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(options);
+
+        await Task.WhenAll(Enumerable.Range(0, 200).Select(async index =>
+        {
+            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put(TestBytes.FromString($"key-{index:000}"), new byte[512]);
+            await transaction.CommitAsync(PantsWriteOptions.Buffered);
+        }));
+
+        Assert.True(await database.WaitForWriteStallClearAsync(
+            database.DefaultColumnFamily,
+            TimeSpan.FromMilliseconds(500)));
+        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        Assert.False(metrics.WriteStalled);
+        Assert.True(metrics.SstCount >= 2);
+        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.NotNull(await reader.GetAsync(TestBytes.FromString("key-000")));
+        Assert.NotNull(await reader.GetAsync(TestBytes.FromString("key-199")));
+    }
+
     private static async ValueTask PutAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
