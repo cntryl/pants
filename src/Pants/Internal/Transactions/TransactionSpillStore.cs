@@ -10,6 +10,8 @@ internal sealed class TransactionSpillStore : IDisposable
     private const int RangeTableEntryLength = 12;
     private const ulong NoRangeChild = ulong.MaxValue;
 
+    static readonly Lock DirectoryMutationGate = new();
+
     private static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
 
     private static ReadOnlySpan<byte> RangeMagic => "MDGRNG01"u8;
@@ -34,10 +36,13 @@ internal sealed class TransactionSpillStore : IDisposable
 
     public static void CleanupOrphans(string databasePath)
     {
-        string directory = Path.Combine(databasePath, "txn");
-        if (Directory.Exists(directory))
+        var directory = Path.Combine(databasePath, "txn");
+        lock (DirectoryMutationGate)
         {
-            Directory.Delete(directory, recursive: true);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
         }
     }
 
@@ -49,21 +54,24 @@ internal sealed class TransactionSpillStore : IDisposable
             return;
         }
 
-        Directory.CreateDirectory(_directory);
-        int runNumber = _runs.Count;
-        string stem = $"{_transactionId:x16}-{runNumber:x8}";
-        string runPath = Path.Combine(_directory, $"{stem}.run");
-        string runTemporaryPath = $"{runPath}.tmp";
-        string rangePath = Path.Combine(_directory, $"{stem}.ranges");
-        string rangeTemporaryPath = $"{rangePath}.tmp";
-        TransactionIntentOperation[] sorted = operations
+        var runNumber = _runs.Count;
+        var stem = $"{_transactionId:x16}-{runNumber:x8}";
+        var runPath = Path.Combine(_directory, $"{stem}.run");
+        var runTemporaryPath = $"{runPath}.tmp";
+        var rangePath = Path.Combine(_directory, $"{stem}.ranges");
+        var rangeTemporaryPath = $"{rangePath}.tmp";
+        var sorted = operations
             .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
             .ThenBy(static operation => operation.Ordinal)
             .ToArray();
 
         try
         {
-            WriteRunFile(runTemporaryPath, sorted);
+            using (var stream = CreateRunTemporaryFile(runTemporaryPath))
+            {
+                WriteRunFile(stream, sorted);
+            }
+
             WriteRangeFile(rangeTemporaryPath, sorted);
             File.Move(rangeTemporaryPath, rangePath);
             File.Move(runTemporaryPath, runPath);
@@ -119,9 +127,12 @@ internal sealed class TransactionSpillStore : IDisposable
         _runs.Clear();
         try
         {
-            if (Directory.Exists(_directory) && !Directory.EnumerateFileSystemEntries(_directory).Any())
+            lock (DirectoryMutationGate)
             {
-                Directory.Delete(_directory);
+                if (Directory.Exists(_directory) && !Directory.EnumerateFileSystemEntries(_directory).Any())
+                {
+                    Directory.Delete(_directory);
+                }
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -130,15 +141,23 @@ internal sealed class TransactionSpillStore : IDisposable
         }
     }
 
-    private static void WriteRunFile(string path, TransactionIntentOperation[] operations)
+    FileStream CreateRunTemporaryFile(string path)
     {
-        using var stream = new FileStream(
-            path,
-            FileMode.CreateNew,
-            FileAccess.ReadWrite,
-            FileShare.None,
-            bufferSize: 16 * 1024,
-            FileOptions.WriteThrough);
+        lock (DirectoryMutationGate)
+        {
+            Directory.CreateDirectory(_directory);
+            return new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 16 * 1024,
+                FileOptions.WriteThrough);
+        }
+    }
+
+    static void WriteRunFile(FileStream stream, TransactionIntentOperation[] operations)
+    {
         stream.Write(new byte[HeaderLength]);
         var ordinalOffsets = new List<(ulong Ordinal, ulong Offset)>(operations.Length);
         var sparseEntries = new List<(byte[] Key, ulong Offset)>(
