@@ -96,7 +96,14 @@ internal static class PantsStorageVerifier
                     $"Manifest SST '{safeName}' has an unexpected length.");
             }
 
-            if (file.ContentCrc32C is { } expectedCrc && MidgeDiskFormat.Crc32C(bytes) != expectedCrc)
+            if (file.ContentCrc32C is not { } expectedCrc)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"Manifest SST '{safeName}' is missing its content checksum.");
+            }
+
+            if (MidgeDiskFormat.Crc32C(bytes) != expectedCrc)
             {
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
@@ -107,6 +114,7 @@ internal static class PantsStorageVerifier
             try
             {
                 contents = MidgeSstCodec.Decode(bytes);
+                SstManifestMetadataValidator.Validate(contents, file, "Manifest SST");
             }
             catch (PantsException exception)
             {
@@ -199,7 +207,7 @@ internal static class PantsStorageVerifier
             : PantsEngineHealth.Degraded;
         return new PantsStorageVerificationReport(
             checked((long)manifest.EditCheckpointId),
-            1,
+            manifest.Files.Count,
             sstFilesVerified,
             bytesVerified,
             dataBlocksVerified,
@@ -326,7 +334,7 @@ internal static class PantsStorageVerifier
         if (string.IsNullOrEmpty(name) ||
             name != Path.GetFileName(name) ||
             !name.EndsWith(".sst", StringComparison.Ordinal) ||
-            name.Contains(':'))
+            name.IndexOfAny(['/', '\\', ':', '\0']) >= 0)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
