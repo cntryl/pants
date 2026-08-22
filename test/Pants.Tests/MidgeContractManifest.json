@@ -4731,9 +4731,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_handle_large_values_in_wal",
       "observableBehavior": "handle large values in wal",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalIntegrationBehaviorTests.ShouldHandleLargeValueInWalAcrossFlushAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_handle_wal_rotation_multiple_segments",
@@ -4741,9 +4744,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_handle_wal_rotation_multiple_segments",
       "observableBehavior": "handle wal rotation multiple segments",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRotateAndReplayEveryWalSegmentWhenBufferLimitIsExceeded"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_recover_data_from_wal_after_flush",
@@ -4751,9 +4757,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_recover_data_from_wal_after_flush",
       "observableBehavior": "recover data from wal after flush",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalIntegrationBehaviorTests.ShouldRecoverDataFromWalAfterFlushAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_recover_deletes_from_wal",
@@ -4761,9 +4770,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_recover_deletes_from_wal",
       "observableBehavior": "recover deletes from wal",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_recover_mixed_operations_from_wal",
@@ -4771,9 +4783,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_recover_mixed_operations_from_wal",
       "observableBehavior": "recover mixed operations from wal",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalIntegrationBehaviorTests.ShouldRecoverMixedOperationsFromWalAfterFlushAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_recover_range_tombstones_from_wal",
@@ -4781,9 +4796,12 @@
       "source": "tests/engine_wal.rs",
       "sourceSymbolOrTest": "should_recover_range_tombstones_from_wal",
       "observableBehavior": "recover range tombstones from wal",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/external_adopter_smoke.rs:should_filter_point_delete_tombstones_during_cross_sst_iteration",
