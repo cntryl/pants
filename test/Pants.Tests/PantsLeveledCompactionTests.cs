@@ -37,8 +37,30 @@ public sealed class PantsLeveledCompactionTests
 
         PantsStorageLayout layout = await database.GetStorageLayoutAsync();
         Assert.Equal([0, 1], layout.Levels.Select(static level => level.Level));
-        Assert.Equal(1, layout.Levels.Single(static level => level.Level == 0).FileCount);
-        Assert.Equal(1, layout.Levels.Single(static level => level.Level == 1).FileCount);
+        Assert.Equal(2, layout.Levels.Single(static level => level.Level == 0).FileCount);
+        Assert.Equal(21, layout.Levels.Single(static level => level.Level == 1).FileCount);
+    }
+
+    [Fact]
+    public async Task ShouldChangeBackgroundCompactionAtRuntime()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
+        for (int index = 0; index < 3; index++)
+        {
+            await PutAndFlushAsync(database, index);
+        }
+
+        Assert.Equal(3, Assert.Single((await database.GetStorageLayoutAsync()).Levels).FileCount);
+
+        await database.SetBackgroundCompactionAsync(true);
+        await PutAndFlushAsync(database, 3);
+
+        PantsStorageLayout layout = await database.GetStorageLayoutAsync();
+        Assert.Contains(layout.Levels, static level => level.Level == 1);
     }
 
     private static async ValueTask PutAndFlushAsync(IPantsDatabase database, int index)

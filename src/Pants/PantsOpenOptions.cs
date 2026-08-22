@@ -69,6 +69,8 @@ public sealed class PantsOpenOptions
             (PantsPerformanceGoal.Throughput, _) => 6,
             _ => 4
         };
+        Compaction = configuration.Compaction ?? new PantsCompactionConfiguration(
+            L0FileCountTrigger: L0CompactionTrigger);
 
         Validate();
     }
@@ -110,6 +112,8 @@ public sealed class PantsOpenOptions
     public int WalBufferSizeBytes { get; }
 
     public int L0CompactionTrigger { get; }
+
+    public PantsCompactionConfiguration Compaction { get; }
 
     public TimeSpan LeaseClockSkewTolerance => _configuration.LeaseClockSkewTolerance;
 
@@ -177,6 +181,12 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithBackgroundCompaction(bool enabled) =>
         With(_configuration with { BackgroundCompaction = enabled });
+
+    public PantsOpenOptions WithCompaction(PantsCompactionConfiguration configuration) =>
+        With(_configuration with
+        {
+            Compaction = configuration ?? throw new ArgumentNullException(nameof(configuration))
+        });
 
     public PantsOpenOptions WithMemtableLimits(
         long sizeLimitBytes,
@@ -308,6 +318,13 @@ public sealed class PantsOpenOptions
         if (_configuration.CoordinatorQueueCapacity <= 0 || _configuration.FlushAfterWalRecords < 0)
         {
             throw PantsException.InvalidArgument("Internal runtime limits are invalid.");
+        }
+
+        if (Compaction.L0SizeTriggerBytes <= 0 || Compaction.L0FileCountTrigger <= 0 ||
+            Compaction.MaximumInputFiles <= 0 || Compaction.LevelMultiplier <= 1 ||
+            Compaction.L1TargetSizeBytes <= 0 || Compaction.MaximumLevels < 2)
+        {
+            throw PantsException.InvalidArgument("Compaction limits are invalid.");
         }
 
         ValidateStorage(Storage);
@@ -453,6 +470,7 @@ public sealed class PantsOpenOptions
         TimeSpan LeaseClockSkewTolerance,
         Action? LeaseLossCallback,
         IPantsClock TtlClock,
+        PantsCompactionConfiguration? Compaction,
         int CoordinatorQueueCapacity,
         int FlushAfterWalRecords)
     {
@@ -474,6 +492,7 @@ public sealed class PantsOpenOptions
             TimeSpan.FromSeconds(15),
             null,
             SystemPantsClock.Instance,
+            null,
             128,
             0);
     }

@@ -26,7 +26,7 @@ internal sealed class LocalDiskStore : IDisposable
     private readonly PantsRecoveryPolicy _recoveryPolicy;
     private readonly PantsPerformanceGoal _performanceGoal;
     private readonly IPantsFailpointHandler _failpoints;
-    private readonly int _l0CompactionTrigger;
+    private readonly PantsCompactionConfiguration _compaction;
     private readonly SstBlockCache _blockCache;
     private readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
     private readonly List<MidgeWalMutation> _mutableOperations = [];
@@ -50,7 +50,7 @@ internal sealed class LocalDiskStore : IDisposable
         PantsRecoveryPolicy recoveryPolicy,
         PantsPerformanceGoal performanceGoal,
         IPantsFailpointHandler failpoints,
-        int l0CompactionTrigger,
+        PantsCompactionConfiguration compaction,
         PantsBlockCachePolicy blockCachePolicy,
         long blockCacheBytes)
     {
@@ -67,7 +67,7 @@ internal sealed class LocalDiskStore : IDisposable
         _recoveryPolicy = recoveryPolicy;
         _performanceGoal = performanceGoal;
         _failpoints = failpoints;
-        _l0CompactionTrigger = l0CompactionTrigger;
+        _compaction = compaction;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
         _walStream = walStream;
         _manifest = manifest;
@@ -288,7 +288,7 @@ internal sealed class LocalDiskStore : IDisposable
         TimeSpan? leaseClockSkewTolerance = null,
         Action? leaseLossCallback = null,
         IPantsFailpointHandler? failpoints = null,
-        int l0CompactionTrigger = 4,
+        PantsCompactionConfiguration? compaction = null,
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null)
@@ -361,7 +361,7 @@ internal sealed class LocalDiskStore : IDisposable
                 recoveryPolicy,
                 performanceGoal,
                 failpoints ?? NullPantsFailpointHandler.Instance,
-                l0CompactionTrigger,
+                compaction ?? new PantsCompactionConfiguration(),
                 blockCachePolicy,
                 blockCacheBytes);
             store.Recover(state);
@@ -735,9 +735,8 @@ internal sealed class LocalDiskStore : IDisposable
             CompactionPlan? plan = LeveledCompactionPlanner.Pick(
                 _manifest.Files,
                 familyId,
-                _l0CompactionTrigger,
-                40L * 1024 * 1024,
-                maximumInputs: 64,
+                _compaction,
+                state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
                 force);
             if (plan is null)
             {
@@ -820,6 +819,11 @@ internal sealed class LocalDiskStore : IDisposable
             {
                 _snapshotPinnedObsoleteFiles.Add(name);
             }
+        }
+
+        if (force && bytesRewritten > 0)
+        {
+            bytesRewritten = checked(bytesRewritten + Compact(state, force: true));
         }
 
         return bytesRewritten;

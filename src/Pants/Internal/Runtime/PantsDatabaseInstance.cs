@@ -121,6 +121,14 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         return _actor.CompactAsync(cancellationToken);
     }
 
+    public ValueTask SetBackgroundCompactionAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _actor.SetBackgroundCompactionAsync(enabled, cancellationToken);
+    }
+
     public ValueTask<bool> WaitForWriteStallClearAsync(
         IPantsColumnFamily columnFamily,
         TimeSpan timeout,

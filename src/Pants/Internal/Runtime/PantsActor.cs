@@ -26,6 +26,7 @@ internal sealed class PantsActor : IAsyncDisposable
     private int _disposed;
     private bool _shutdownRequested;
     private bool _verificationInProgress;
+    private bool _backgroundCompactionEnabled;
 
     public PantsActor(
         PantsOpenOptions options,
@@ -34,6 +35,7 @@ internal sealed class PantsActor : IAsyncDisposable
         PantsRuntimeDependencies dependencies)
     {
         _options = options;
+        _backgroundCompactionEnabled = options.BackgroundCompaction;
         _telemetry = telemetry;
         _storageVerifier = dependencies.StorageVerifier;
         _state = new PantsRuntimeState(ttlClock);
@@ -51,7 +53,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     leaseClockSkewTolerance: options.LeaseClockSkewTolerance,
                     leaseLossCallback: options.LeaseLossCallback,
                     failpoints: dependencies.Failpoints,
-                    l0CompactionTrigger: options.L0CompactionTrigger,
+                    compaction: options.Compaction,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
                     leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
@@ -69,7 +71,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     options.LeaseClockSkewTolerance,
                     options.LeaseLossCallback,
                     dependencies.Failpoints,
-                    options.L0CompactionTrigger,
+                    options.Compaction,
                     options.BlockCachePolicy,
                     options.BlockCacheBytes,
                     dependencies.LeaseHeartbeatInterval);
@@ -404,6 +406,18 @@ internal sealed class PantsActor : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask SetBackgroundCompactionAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        await SendAsync(
+            state =>
+            {
+                ThrowIfShuttingDown(state);
+                _backgroundCompactionEnabled = enabled;
+                return ValueTask.FromResult(true);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public ValueTask<bool> WaitForWriteStallClearAsync(
         ColumnFamilyIdentity identity,
         TimeSpan timeout,
@@ -548,7 +562,7 @@ internal sealed class PantsActor : IAsyncDisposable
                         key.Span);
                 }
 
-                if (exceedsBudget && _options.BackgroundCompaction && _diskStore is not null)
+                if (exceedsBudget && _backgroundCompactionEnabled && _diskStore is not null)
                 {
                     await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
                 }
@@ -1136,7 +1150,7 @@ internal sealed class PantsActor : IAsyncDisposable
 
     private async ValueTask RunBackgroundCompactionAsync(PantsRuntimeState state)
     {
-        if (!_options.BackgroundCompaction || _diskStore is null)
+        if (!_backgroundCompactionEnabled || _diskStore is null)
         {
             return;
         }
