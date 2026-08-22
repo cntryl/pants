@@ -1757,7 +1757,7 @@
       "observableBehavior": "reject future v4 fixture given unsupported version when reopening",
       "status": "planned",
       "expectedError": null,
-      "issue": 10
+      "issue": 11
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compatibility_fixtures.rs:should_reject_v2_empty_fixture_given_breaking_v4_sst_format",
@@ -1767,7 +1767,7 @@
       "observableBehavior": "reject v2 empty fixture given breaking v4 sst format",
       "status": "planned",
       "expectedError": null,
-      "issue": 10
+      "issue": 11
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compatibility_fixtures.rs:should_verify_populated_release_v3_v4_fixture_given_supported_format_when_reopening",
@@ -1777,7 +1777,7 @@
       "observableBehavior": "verify populated release v3 v4 fixture given supported format when reopening",
       "status": "planned",
       "expectedError": null,
-      "issue": 10
+      "issue": 11
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_baseline_compressed_block_fixture",
@@ -5682,9 +5682,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_emit_json_error_object_given_verify_failure_when_json_flag_requested",
       "observableBehavior": "emit json error object given verify failure when json flag requested",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_exit_four_given_corrupt_database_when_midge_verify_runs",
@@ -5692,9 +5693,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_exit_four_given_corrupt_database_when_midge_verify_runs",
       "observableBehavior": "exit four given corrupt database when midge verify runs",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_exit_three_given_inaccessible_storage_when_midge_verify_runs",
@@ -5702,9 +5704,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_exit_three_given_inaccessible_storage_when_midge_verify_runs",
       "observableBehavior": "exit three given inaccessible storage when midge verify runs",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_exit_zero_given_healthy_database_when_midge_verify_runs",
@@ -5712,9 +5715,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_exit_zero_given_healthy_database_when_midge_verify_runs",
       "observableBehavior": "exit zero given healthy database when midge verify runs",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_expose_local_engine_observability_surfaces",
@@ -5832,9 +5836,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_report_usage_error_given_missing_db_path_when_verify_invoked",
       "observableBehavior": "report usage error given missing db path when verify invoked",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_return_runtime_metrics_when_stall_clears_before_deadline",
@@ -5862,9 +5867,10 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_treat_unrecognized_flag_as_path_given_typoed_json_flag_when_verify_invoked",
       "observableBehavior": "treat unrecognized flag as path given typoed json flag when verify invoked",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Product CLI support is intentionally out of scope; Pants exposes verification through async database APIs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_unregister_response_slot_when_runtime_metrics_response_times_out",

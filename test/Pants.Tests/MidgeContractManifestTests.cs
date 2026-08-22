@@ -116,6 +116,57 @@ public sealed class MidgeContractManifestTests
         Assert.Empty(plannedM3Contracts);
     }
 
+    [Fact]
+    public void ShouldReserveCompatibilityFixturesForM5Qualification()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var fixtures = document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(static entry =>
+                entry.GetProperty("source").GetString() == "tests/compatibility_fixtures.rs")
+            .ToArray();
+
+        Assert.NotEmpty(fixtures);
+        Assert.All(fixtures, static entry =>
+            Assert.Equal(11, entry.GetProperty("issue").GetInt32()));
+    }
+
+    [Fact]
+    public void ShouldMarkRetiredCliContractsAsNotApplicable()
+    {
+        string[] retiredCliContracts =
+        [
+            "should_emit_json_error_object_given_verify_failure_when_json_flag_requested",
+            "should_exit_four_given_corrupt_database_when_midge_verify_runs",
+            "should_exit_three_given_inaccessible_storage_when_midge_verify_runs",
+            "should_exit_zero_given_healthy_database_when_midge_verify_runs",
+            "should_report_usage_error_given_missing_db_path_when_verify_invoked",
+            "should_treat_unrecognized_flag_as_path_given_typoed_json_flag_when_verify_invoked"
+        ];
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var entries = document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(static entry => entry.GetProperty("source").GetString() == "tests/observability_api.rs")
+            .ToDictionary(
+                static entry => Assert.IsType<string>(entry.GetProperty("sourceSymbolOrTest").GetString()),
+                static entry => entry,
+                StringComparer.Ordinal);
+
+        Assert.All(retiredCliContracts, contract =>
+        {
+            var entry = Assert.Contains(contract, entries);
+            Assert.Equal("n/a", entry.GetProperty("status").GetString());
+            Assert.Contains(
+                "CLI",
+                Assert.IsType<string>(entry.GetProperty("rationale").GetString()),
+                StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
     private static bool TestExists(string fullyQualifiedName)
     {
         int separator = fullyQualifiedName.LastIndexOf('.');
