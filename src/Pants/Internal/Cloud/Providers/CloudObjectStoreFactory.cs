@@ -26,14 +26,19 @@ internal static class CloudObjectStoreFactory
                 location.Prefix,
                 httpClient ?? SharedHttpClient,
                 timeout),
-            PantsCloudProviderConfiguration.AwsS3 => throw ProviderNotQualified("AWS S3"),
-            PantsCloudProviderConfiguration.S3Compatible => throw ProviderNotQualified(
-                "S3-compatible/OCI"),
-            PantsCloudProviderConfiguration.Gcs => throw ProviderNotQualified("GCS"),
+            PantsCloudProviderConfiguration.AwsS3 or
+                PantsCloudProviderConfiguration.S3Compatible => new S3ObjectStore(
+                    location.Provider,
+                    location.Prefix,
+                    httpClient ?? SharedHttpClient,
+                    timeout),
+            PantsCloudProviderConfiguration.Gcs gcs => new GcsObjectStore(
+                gcs,
+                location.Prefix,
+                httpClient ?? SharedHttpClient,
+                timeout),
             _ => throw new PantsNotSupportedException("The cloud provider is unsupported.")
         };
     }
 
-    private static PantsNotSupportedException ProviderNotQualified(string provider) => new(
-        $"The direct-HTTP {provider} client has not completed qualification.");
 }
