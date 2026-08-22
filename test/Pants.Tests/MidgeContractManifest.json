@@ -6893,9 +6893,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_allow_read_only_snapshot_given_committed_value_when_snapshot_reads",
       "observableBehavior": "allow read only snapshot given committed value when snapshot reads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsSmokeBehaviorTests.ShouldAllowReadOnlySnapshotGivenCommittedValue"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_hide_value_given_deleted_key_when_read",
@@ -6903,9 +6906,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_hide_value_given_deleted_key_when_read",
       "observableBehavior": "hide value given deleted key when read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldReturnMissingGivenDeletedKeyWhenGet"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_persist_data_given_write_when_restarted",
@@ -6913,9 +6919,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_persist_data_given_write_when_restarted",
       "observableBehavior": "persist data given write when restarted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldRecoverAtomicCommitFromMidgeWalAfterReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_persist_tombstone_given_delete_when_restarted",
@@ -6923,9 +6932,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_persist_tombstone_given_delete_when_restarted",
       "observableBehavior": "persist tombstone given delete when restarted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_preserve_all_committed_values_given_multiple_writes_when_written",
@@ -6933,9 +6945,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_preserve_all_committed_values_given_multiple_writes_when_written",
       "observableBehavior": "preserve all committed values given multiple writes when written",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldHandleManyOperationsWhenSequential"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_preserve_latest_version_given_repeated_flushes_when_read",
@@ -6943,9 +6958,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_preserve_latest_version_given_repeated_flushes_when_read",
       "observableBehavior": "preserve latest version given repeated flushes when read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldCompactMultipleL0FilesAndPreserveLatestValue"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_preserve_tombstone_given_flushed_tombstone_when_read",
@@ -6953,9 +6971,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_preserve_tombstone_given_flushed_tombstone_when_read",
       "observableBehavior": "preserve tombstone given flushed tombstone when read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_read_written_value_given_flushed_value_when_read",
@@ -6963,9 +6984,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_read_written_value_given_flushed_value_when_read",
       "observableBehavior": "read written value given flushed value when read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsSstReadIntegrationTests.ShouldReadFromSstAfterFlush"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_read_written_value_given_memory_mode_when_written",
@@ -6973,9 +6997,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_read_written_value_given_memory_mode_when_written",
       "observableBehavior": "read written value given memory mode when written",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldGetValueGivenExistingKeyWhenPut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_reopen_committed_values_given_engine_dropped_without_close_when_reopened",
@@ -6983,9 +7010,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_reopen_committed_values_given_engine_dropped_without_close_when_reopened",
       "observableBehavior": "reopen committed values given engine dropped without close when reopened",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldRecoverAtomicCommitFromMidgeWalAfterReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/smoke.rs:should_respect_visibility_rules_given_range_scan_when_scanning",
@@ -6993,9 +7023,12 @@
       "source": "tests/smoke.rs",
       "sourceSymbolOrTest": "should_respect_visibility_rules_given_range_scan_when_scanning",
       "observableBehavior": "respect visibility rules given range scan when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsSmokeBehaviorTests.ShouldRespectVisibilityRulesGivenDeletedKeyWhenScanning"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_construct_runtime_observability_dtos_from_shared_types",
