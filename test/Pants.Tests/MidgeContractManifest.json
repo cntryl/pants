@@ -5986,9 +5986,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_install_explicit_memtable_limits_in_runtime_metrics_when_both_are_set",
       "observableBehavior": "install explicit memtable limits in runtime metrics when both are set",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsObservabilityApiContractTests.ShouldExposeExplicitMemtableLimitsGivenRuntimeMetrics"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_install_explicit_memtable_size_in_runtime_metrics",
@@ -5996,9 +5999,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_install_explicit_memtable_size_in_runtime_metrics",
       "observableBehavior": "install explicit memtable size in runtime metrics",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsObservabilityApiContractTests.ShouldExposeExplicitMemtableSizeGivenRuntimeMetrics"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_not_leak_response_slots_across_repeated_timeouts",
@@ -6027,8 +6033,11 @@
       "sourceSymbolOrTest": "should_reject_storage_verification_in_memory_mode",
       "observableBehavior": "reject storage verification in memory mode",
       "expectedError": "NotSupported",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsObservabilityApiContractTests.ShouldRejectStorageVerificationGivenInMemoryDatabase"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_reject_zero_deadline_for_runtime_metrics_without_sending_a_request",
