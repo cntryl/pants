@@ -8,7 +8,8 @@ namespace Pants;
 
 internal sealed class AzureBlobObjectStore : ICloudObjectStore
 {
-    private const string ServiceVersion = "2023-11-03";
+    const int MaximumAttempts = 3;
+    const string ServiceVersion = "2023-11-03";
     private readonly HttpClient _httpClient;
     private readonly Uri _containerEndpoint;
     private readonly string _account;
@@ -44,9 +45,9 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         string objectKey,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
-        PrepareRequest(request);
-        using HttpResponseMessage response = await SendAsync(request, cancellationToken)
+        using var response = await SendAsync(
+            () => CreateGetRequest(objectKey),
+            cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -54,9 +55,9 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         }
 
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        byte[] data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
+        var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
-        string version = response.Headers.ETag?.Tag ??
+        var version = response.Headers.ETag?.Tag ??
             throw new PantsIOException("Azure Blob GET response did not include an ETag.");
         return new CloudObject(data, version);
     }
@@ -68,7 +69,32 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(condition);
-        using var request = new HttpRequestMessage(HttpMethod.Put, BuildObjectUri(objectKey))
+        using var response = await SendAsync(
+            () => CreatePutRequest(objectKey, data, condition),
+            cancellationToken)
+            .ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+        {
+            return false;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    HttpRequestMessage CreateGetRequest(string objectKey)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
+        PrepareRequest(request);
+        return request;
+    }
+
+    HttpRequestMessage CreatePutRequest(
+        string objectKey,
+        ReadOnlyMemory<byte> data,
+        CloudObjectWriteCondition condition)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, BuildObjectUri(objectKey))
         {
             Content = new ByteArrayContent(data.ToArray())
         };
@@ -88,41 +114,54 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         }
 
         PrepareRequest(request);
-        using HttpResponseMessage response = await SendAsync(request, cancellationToken)
-            .ConfigureAwait(false);
-        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
-        {
-            return false;
-        }
-
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        return true;
+        return request;
     }
 
-    private async ValueTask<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
+    async ValueTask<HttpResponseMessage> SendAsync(
+        Func<HttpRequestMessage> requestFactory,
         CancellationToken cancellationToken)
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            return await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                linked.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new PantsTimeoutException("Azure Blob operation exceeded its deadline.", exception);
-        }
-        catch (HttpRequestException exception)
-        {
-            throw new PantsIOException("Azure Blob transport failed.", exception);
+            using var request = requestFactory();
+            try
+            {
+                var response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    linked.Token).ConfigureAwait(false);
+                if (!IsRetryable(response.StatusCode) || attempt >= MaximumAttempts)
+                {
+                    return response;
+                }
+
+                response.Dispose();
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new PantsTimeoutException("Azure Blob operation exceeded its deadline.", exception);
+            }
+            catch (HttpRequestException exception) when (attempt >= MaximumAttempts)
+            {
+                throw new PantsIOException(
+                    "Azure Blob transport failed after bounded retries.",
+                    exception);
+            }
+            catch (HttpRequestException)
+            {
+            }
+
+            await Task.Yield();
         }
     }
+
+    static bool IsRetryable(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests ||
+        (int)statusCode >= 500;
 
     private void PrepareRequest(HttpRequestMessage request)
     {

@@ -97,6 +97,34 @@ public sealed class AzureBlobObjectStoreTests
         Assert.IsType<AzureBlobObjectStore>(store);
     }
 
+    [Fact]
+    public async Task ShouldRetryTransientFailuresWithinOperationDeadline()
+    {
+        var attempts = 0;
+        var handler = new RecordingHandler(_ => ++attempts < 3
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent("value"u8.ToArray()),
+                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+            });
+        using var client = new HttpClient(handler);
+        var store = new AzureBlobObjectStore(
+            new PantsCloudProviderConfiguration.AzureBlob(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=value")),
+            "database",
+            client,
+            TimeSpan.FromSeconds(5));
+
+        var value = await store.GetAsync("object", CancellationToken.None);
+
+        Assert.NotNull(value);
+        Assert.Equal(3, attempts);
+    }
+
     private sealed class RecordingHandler(
         Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
     {

@@ -653,8 +653,11 @@
       "sourceSymbolOrTest": "should_fail_cloud_strict_commit_given_cloud_upload_failure_when_waiting_for_ack",
       "observableBehavior": "fail cloud strict commit given cloud upload failure when waiting for ack",
       "expectedError": "Internal",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldFailCloudStrictCommitGivenWalUploadFailure"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_fail_strict_recovery_given_authoritative_remote_sst_missing_when_reopening",
@@ -682,9 +685,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_keep_cloud_async_commit_visible_given_cloud_upload_failure_when_committing",
       "observableBehavior": "keep cloud async commit visible given cloud upload failure when committing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldKeepCloudAsyncCommitVisibleGivenWalUploadFailure"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_preserve_remote_wal_when_unflushed_column_family_still_depends_on_it_given_partial_gc",
@@ -722,9 +728,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_recover_cloud_strict_write_from_authoritative_remote_wal_after_local_cache_loss",
       "observableBehavior": "recover cloud strict write from authoritative remote wal after local cache loss",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldRecoverCloudStrictCommitGivenEmptyReplacementCache"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_recover_delete_range_given_remote_wal_only_when_local_cache_is_lost",
@@ -812,9 +821,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_recover_engine_from_sqrzl_azure_after_local_cache_loss",
       "observableBehavior": "recover engine from sqrzl azure after local cache loss",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldRecoverCloudStrictCommitGivenEmptyReplacementCache"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_recover_engine_from_sqrzl_gcs_json_after_local_cache_loss",
@@ -962,9 +974,12 @@
       "source": "tests/cloudfirst_benchmark_safe.rs",
       "sourceSymbolOrTest": "should_support_cloud_strict_for_explicit_durability",
       "observableBehavior": "support cloud strict for explicit durability",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldRecoverCloudStrictCommitGivenEmptyReplacementCache"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/column_families.rs:should_accept_column_family_name_at_maximum_byte_length",
@@ -5652,9 +5667,10 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_assign_each_provider_dependency_set_to_its_cargo_feature",
       "observableBehavior": "assign each provider dependency set to its cargo feature",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Rust Cargo feature dependency partitioning has no equivalent in the single Pants .NET assembly."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_compile_provider_modules_only_for_their_owner_features",
@@ -5662,9 +5678,10 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_compile_provider_modules_only_for_their_owner_features",
       "observableBehavior": "compile provider modules only for their owner features",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Rust conditional module compilation has no equivalent in the single Pants .NET assembly."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_expose_provider_configuration_without_implementation_features",
@@ -5672,9 +5689,10 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_expose_provider_configuration_without_implementation_features",
       "observableBehavior": "expose provider configuration without implementation features",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Pants does not expose Cargo-style implementation feature flags; provider configuration is always available."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_keep_common_cloud_transport_provider_neutral_when_features_are_split",
@@ -5682,9 +5700,10 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_keep_common_cloud_transport_provider_neutral_when_features_are_split",
       "observableBehavior": "keep common cloud transport provider neutral when features are split",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Rust feature-split transport compilation has no equivalent in the single Pants .NET assembly."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_keep_provider_dtos_in_configuration_layer",
@@ -5692,9 +5711,10 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_keep_provider_dtos_in_configuration_layer",
       "observableBehavior": "keep provider dtos in configuration layer",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Rust Cargo feature ownership of configuration DTOs has no equivalent in the single Pants .NET assembly."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_accumulate_exact_average_across_multiple_local_sst_reads",

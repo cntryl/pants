@@ -145,7 +145,11 @@ internal sealed class GcsObjectStore : ICloudObjectStore
         Uri uri = _configuration.ApiStyle == PantsGcsApiStyle.Json
             ? BuildJsonUri(method, fullKey, condition)
             : BuildXmlUri(fullKey);
-        var request = new HttpRequestMessage(method, uri);
+        var requestMethod = method == HttpMethod.Put &&
+            _configuration.ApiStyle == PantsGcsApiStyle.Json
+                ? HttpMethod.Post
+                : method;
+        var request = new HttpRequestMessage(requestMethod, uri);
         if (method == HttpMethod.Put)
         {
             request.Content = new ByteArrayContent(data.ToArray());

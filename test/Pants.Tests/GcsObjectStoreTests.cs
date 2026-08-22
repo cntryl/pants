@@ -37,6 +37,7 @@ public sealed class GcsObjectStoreTests
             handler.Requests[0].Uri.AbsolutePath);
         Assert.Equal("alt=media", handler.Requests[0].Uri.Query.TrimStart('?'));
         Assert.Contains("ifGenerationMatch=7", handler.Requests[1].Uri.Query, StringComparison.Ordinal);
+        Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
         Assert.All(handler.Requests, static request => Assert.Equal(
             "Bearer secret-token",
             request.Authorization));
@@ -142,6 +143,7 @@ public sealed class GcsObjectStoreTests
             CancellationToken cancellationToken)
         {
             Requests.Add(new RecordedRequest(
+                request.Method,
                 request.RequestUri!,
                 request.Headers.Authorization?.ToString(),
                 request.Headers.IfNoneMatch.SingleOrDefault()?.Tag));
@@ -150,6 +152,7 @@ public sealed class GcsObjectStoreTests
     }
 
     private sealed record RecordedRequest(
+        HttpMethod Method,
         Uri Uri,
         string? Authorization,
         string? IfNoneMatch);
