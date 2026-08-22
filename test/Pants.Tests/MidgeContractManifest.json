@@ -2392,9 +2392,12 @@
       "source": "tests/coverage_manifests.rs",
       "sourceSymbolOrTest": "should_keep_coverage_manifest_exhaustive_given_public_behavior_axes",
       "observableBehavior": "keep coverage manifest exhaustive given public behavior axes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCoverageManifestTests.ShouldKeepCoverageManifestExhaustiveGivenPublicBehaviorAxes"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/delete_range_audit.rs:should_delete_only_keys_within_requested_range_when_delete_range_commits",
@@ -5612,9 +5615,12 @@
       "source": "tests/memory_management.rs",
       "sourceSymbolOrTest": "should_complete_shutdown_when_wal_writer_drops",
       "observableBehavior": "complete shutdown when wal writer drops",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsMemoryManagementContractTests.ShouldCompleteDisposalGivenWalWriterHasPendingData"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/memory_management.rs:should_handle_small_memory_budget_without_unexpected_errors",
@@ -5623,8 +5629,11 @@
       "sourceSymbolOrTest": "should_handle_small_memory_budget_without_unexpected_errors",
       "observableBehavior": "handle small memory budget without unexpected errors",
       "expectedError": "WriteStall",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsMemoryManagementContractTests.ShouldMakeProgressWithoutStickyStallGivenSmallMemoryBudget"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/memory_mode_isolation.rs:should_handle_many_deletes_efficiently_when_deleting_50_keys",
@@ -5821,9 +5830,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_expose_local_engine_observability_surfaces",
       "observableBehavior": "expose local engine observability surfaces",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsObservabilitySurfaceTests.ShouldExposeHealthyLocalRuntimeLayoutAndVerificationSurfaces"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_ignore_stale_metadata_temp_files_on_reopen",
