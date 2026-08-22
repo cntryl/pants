@@ -171,14 +171,32 @@ internal sealed class SimulatedCloudPersistence
             return;
         }
 
-        foreach (string localSst in Directory.EnumerateFiles(
-                     localSstDirectory,
-                     "*.sst",
-                     SearchOption.TopDirectoryOnly))
+        string[] localSsts = Directory.EnumerateFiles(
+                localSstDirectory,
+                "*.sst",
+                SearchOption.TopDirectoryOnly)
+            .ToArray();
+        foreach (string localSst in localSsts)
         {
             AtomicStagedFile.Write(
                 Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
                 File.ReadAllBytes(localSst));
+        }
+
+        var retainedNames = localSsts
+            .Select(static path => Path.GetFileName(path))
+            .ToHashSet(StringComparer.Ordinal);
+        string cloudSstDirectory = Path.Combine(_cloudRoot, "sst");
+        Directory.CreateDirectory(cloudSstDirectory);
+        foreach (string cloudSst in Directory.EnumerateFiles(
+                     cloudSstDirectory,
+                     "*.sst",
+                     SearchOption.TopDirectoryOnly))
+        {
+            if (!retainedNames.Contains(Path.GetFileName(cloudSst)))
+            {
+                File.Delete(cloudSst);
+            }
         }
     }
 

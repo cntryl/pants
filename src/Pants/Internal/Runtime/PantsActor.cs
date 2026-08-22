@@ -281,6 +281,11 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
+                        if (_simulatedCloud is not null)
+                        {
+                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -355,6 +360,11 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
+                        if (_simulatedCloud is not null)
+                        {
+                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -984,6 +994,11 @@ internal sealed class PantsActor : IAsyncDisposable
             await _garbageCollectionWorker
                 .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
+            if (_simulatedCloud is not null)
+            {
+                await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                    .ConfigureAwait(false);
+            }
         }
 
         try
