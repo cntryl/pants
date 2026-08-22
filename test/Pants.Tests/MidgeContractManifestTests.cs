@@ -167,17 +167,77 @@ public sealed class MidgeContractManifestTests
         });
     }
 
-    private static bool TestExists(string fullyQualifiedName)
+    [Fact]
+    public void ShouldMarkRustArchitectureContractsAsNotApplicable()
     {
-        int separator = fullyQualifiedName.LastIndexOf('.');
+        var entries = ReadEntries("tests/architecture_ladder.rs");
+
+        Assert.Equal(7, entries.Length);
+        Assert.All(entries, static entry =>
+        {
+            Assert.Equal("n/a", entry.GetProperty("status").GetString());
+            Assert.Contains(
+                "private implementation",
+                Assert.IsType<string>(entry.GetProperty("rationale").GetString()),
+                StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Fact]
+    public void ShouldMarkMidgeRepositoryToolingContractsAsNotApplicable()
+    {
+        var entries = ReadEntries("tests/testing_governance.rs");
+
+        Assert.Equal(10, entries.Length);
+        Assert.All(entries, static entry =>
+        {
+            Assert.Equal("n/a", entry.GetProperty("status").GetString());
+            Assert.Contains(
+                "repository tooling",
+                Assert.IsType<string>(entry.GetProperty("rationale").GetString()),
+                StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Fact]
+    public void ShouldMapEveryExternalAdopterSmokeContractToExecutablePantsTest()
+    {
+        var entries = ReadEntries("tests/external_adopter_smoke.rs");
+
+        Assert.Equal(4, entries.Length);
+        Assert.All(entries, static entry =>
+        {
+            Assert.Equal("mapped", entry.GetProperty("status").GetString());
+            var pantsTests = entry.GetProperty("pantsTests").EnumerateArray().ToArray();
+            Assert.NotEmpty(pantsTests);
+            Assert.All(pantsTests, static pantsTest =>
+                Assert.True(TestExists(Assert.IsType<string>(pantsTest.GetString()))));
+        });
+    }
+
+    static JsonElement[] ReadEntries(string source)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        return document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(entry => entry.GetProperty("source").GetString() == source)
+            .Select(static entry => entry.Clone())
+            .ToArray();
+    }
+
+    static bool TestExists(string fullyQualifiedName)
+    {
+        var separator = fullyQualifiedName.LastIndexOf('.');
         if (separator <= 0 || separator == fullyQualifiedName.Length - 1)
         {
             return false;
         }
 
-        string typeName = fullyQualifiedName[..separator];
-        string methodName = fullyQualifiedName[(separator + 1)..];
-        Type? type = typeof(MidgeContractManifestTests).Assembly.GetType(typeName);
+        var typeName = fullyQualifiedName[..separator];
+        var methodName = fullyQualifiedName[(separator + 1)..];
+        var type = typeof(MidgeContractManifestTests).Assembly.GetType(typeName);
         return type?.GetMethod(
             methodName,
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static) is not null;

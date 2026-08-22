@@ -9,9 +9,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_enforce_declared_architecture_boundaries_given_diagnostics_and_cli",
       "observableBehavior": "enforce declared architecture boundaries given diagnostics and cli",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust diagnostics and CLI module dependency ladder is a private implementation constraint; Pants uses an idiomatic C# architecture and has no product CLI."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_common_independent_from_higher_subsystems",
@@ -19,9 +20,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_common_independent_from_higher_subsystems",
       "observableBehavior": "keep common independent from higher subsystems",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust common-module dependency ladder is a private implementation constraint; Pants uses an idiomatic C# internal structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_iterator_contracts_in_lower_layer",
@@ -29,9 +31,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_iterator_contracts_in_lower_layer",
       "observableBehavior": "keep iterator contracts in lower layer",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust iterator-module dependency ladder is a private implementation constraint; Pants uses interface-first C# scan contracts."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_persistence_formats_below_storage_orchestration",
@@ -39,9 +42,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_persistence_formats_below_storage_orchestration",
       "observableBehavior": "keep persistence formats below storage orchestration",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust persistence-module dependency ladder is a private implementation constraint; persisted byte compatibility is covered independently."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_provider_configuration_owned_by_config_layer",
@@ -49,9 +53,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_provider_configuration_owned_by_config_layer",
       "observableBehavior": "keep provider configuration owned by config layer",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust configuration-module dependency ladder is a private implementation constraint; Pants enforces its native public configuration surface separately."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_sst_below_read_layers",
@@ -59,9 +64,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_sst_below_read_layers",
       "observableBehavior": "keep sst below read layers",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust SST-module dependency ladder is a private implementation constraint; Pants preserves the observable SST format and read behavior."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/architecture_ladder.rs:should_keep_storage_as_raw_object_io",
@@ -69,9 +75,10 @@
       "source": "tests/architecture_ladder.rs",
       "sourceSymbolOrTest": "should_keep_storage_as_raw_object_io",
       "observableBehavior": "keep storage as raw object io",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust storage-module dependency ladder is a private implementation constraint; Pants uses native C# object-store interfaces."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/background_flush_pipeline.rs:should_defer_drop_until_flush_pipeline_completes_given_immutable_flush_inflight",
@@ -4658,9 +4665,12 @@
       "source": "tests/external_adopter_smoke.rs",
       "sourceSymbolOrTest": "should_filter_point_delete_tombstones_during_cross_sst_iteration",
       "observableBehavior": "filter point delete tombstones during cross sst iteration",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsExternalAdopterSmokeTests.ShouldFilterPointDeleteTombstonesGivenCrossSstScan"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/external_adopter_smoke.rs:should_keep_compacted_data_visible_when_compaction_crashes_before_publish",
@@ -4668,9 +4678,12 @@
       "source": "tests/external_adopter_smoke.rs",
       "sourceSymbolOrTest": "should_keep_compacted_data_visible_when_compaction_crashes_before_publish",
       "observableBehavior": "keep compacted data visible when compaction crashes before publish",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/external_adopter_smoke.rs:should_keep_data_recoverable_when_flush_publication_is_interrupted",
@@ -4678,9 +4691,12 @@
       "source": "tests/external_adopter_smoke.rs",
       "sourceSymbolOrTest": "should_keep_data_recoverable_when_flush_publication_is_interrupted",
       "observableBehavior": "keep data recoverable when flush publication is interrupted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverReadableDataAtEveryFlushPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/external_adopter_smoke.rs:should_recover_wal_backed_commit_when_reopening_local_engine",
@@ -4688,9 +4704,12 @@
       "source": "tests/external_adopter_smoke.rs",
       "sourceSymbolOrTest": "should_recover_wal_backed_commit_when_reopening_local_engine",
       "observableBehavior": "recover wal backed commit when reopening local engine",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldRecoverAtomicCommitFromMidgeWalAfterReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failpoints_contract.rs:should_cascade_no_further_test_failures_when_prior_failpoint_guard_panics",
@@ -7767,9 +7786,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_accept_benchmark_candidate_at_regression_budget",
       "observableBehavior": "accept benchmark candidate at regression budget",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's benchmark comparison script is repository tooling; Pants keeps benchmarks informational rather than a feature-parity gate."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_document_testing_review_contracts",
@@ -7777,9 +7797,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_document_testing_review_contracts",
       "observableBehavior": "document testing review contracts",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's testing guide and pull-request template assertions are repository tooling, not observable engine behavior."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_keep_expensive_testing_governance_scheduled_or_manual",
@@ -7787,9 +7808,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_keep_expensive_testing_governance_scheduled_or_manual",
       "observableBehavior": "keep expensive testing governance scheduled or manual",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust coverage and mutation workflow is repository tooling; Pants uses its native .NET validation workflow."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_reject_benchmark_candidate_beyond_regression_budget",
@@ -7797,9 +7819,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_reject_benchmark_candidate_beyond_regression_budget",
       "observableBehavior": "reject benchmark candidate beyond regression budget",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's benchmark comparison script is repository tooling; Pants keeps benchmarks informational rather than a feature-parity gate."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_reject_empty_mutation_pilot_given_no_viable_outcome",
@@ -7807,9 +7830,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_reject_empty_mutation_pilot_given_no_viable_outcome",
       "observableBehavior": "reject empty mutation pilot given no viable outcome",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust mutation-report script is repository tooling and is not part of the Pants product surface."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_reject_incomplete_acceptance_audit_given_renamed_test_claim",
@@ -7817,9 +7841,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_reject_incomplete_acceptance_audit_given_renamed_test_claim",
       "observableBehavior": "reject incomplete acceptance audit given renamed test claim",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's pull-request acceptance-audit script is repository tooling and is not part of the Pants product surface."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_report_unit_only_coverage_islands_given_distinct_tier_reports",
@@ -7827,9 +7852,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_report_unit_only_coverage_islands_given_distinct_tier_reports",
       "observableBehavior": "report unit only coverage islands given distinct tier reports",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust coverage-tier analysis script is repository tooling; Pants uses native .NET coverage inputs."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_require_complete_acceptance_audit_given_pull_request_body",
@@ -7837,9 +7863,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_require_complete_acceptance_audit_given_pull_request_body",
       "observableBehavior": "require complete acceptance audit given pull request body",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's pull-request acceptance-audit script is repository tooling and is not part of the Pants product surface."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_require_explicit_sqrzl_selection_without_silent_skip",
@@ -7847,9 +7874,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_require_explicit_sqrzl_selection_without_silent_skip",
       "observableBehavior": "require explicit sqrzl selection without silent skip",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust Sqrzl test-selection assertions are repository tooling; Pants provider qualification is owned by its native workflow."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_summarize_mutation_pilot_given_caught_and_surviving_mutants",
@@ -7857,9 +7885,10 @@
       "source": "tests/testing_governance.rs",
       "sourceSymbolOrTest": "should_summarize_mutation_pilot_given_caught_and_surviving_mutants",
       "observableBehavior": "summarize mutation pilot given caught and surviving mutants",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "rationale": "Midge's Rust mutation-report script is repository tooling and is not part of the Pants product surface."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_advanced.rs:should_handle_transaction_abort_idempotency_given_multiple_restart_cycles",
