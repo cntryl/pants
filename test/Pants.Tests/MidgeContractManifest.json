@@ -3266,9 +3266,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_get_value_given_existing_key_when_put",
       "observableBehavior": "get value given existing key when put",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldGetValueGivenExistingKeyWhenPut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_handle_binary_data_when_put",
@@ -3276,9 +3279,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_handle_binary_data_when_put",
       "observableBehavior": "handle binary data when put",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldHandleBinaryDataWhenPut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_handle_empty_value_when_put",
@@ -3286,9 +3292,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_handle_empty_value_when_put",
       "observableBehavior": "handle empty value when put",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldHandleEmptyValueWhenPut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_handle_many_operations_when_sequential",
@@ -3296,9 +3305,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_handle_many_operations_when_sequential",
       "observableBehavior": "handle many operations when sequential",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldHandleManyOperationsWhenSequential"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_overwrite_value_given_existing_key_when_put",
@@ -3306,9 +3318,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_overwrite_value_given_existing_key_when_put",
       "observableBehavior": "overwrite value given existing key when put",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldOverwriteValueGivenExistingKeyWhenPut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_retrieve_written_data_across_storage_modes",
@@ -3316,9 +3331,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_retrieve_written_data_across_storage_modes",
       "observableBehavior": "retrieve written data across storage modes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldRetrieveWrittenDataAcrossStorageModes"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_return_none_given_deleted_key_when_get",
@@ -3326,9 +3344,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_return_none_given_deleted_key_when_get",
       "observableBehavior": "return none given deleted key when get",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldReturnMissingGivenDeletedKeyWhenGet"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_return_none_given_nonexistent_key_when_get",
@@ -3336,9 +3357,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_return_none_given_nonexistent_key_when_get",
       "observableBehavior": "return none given nonexistent key when get",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldReturnMissingGivenNonexistentKeyWhenGet"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_basic.rs:should_succeed_given_nonexistent_key_when_delete",
@@ -3346,9 +3370,12 @@
       "source": "tests/engine_basic.rs",
       "sourceSymbolOrTest": "should_succeed_given_nonexistent_key_when_delete",
       "observableBehavior": "succeed given nonexistent key when delete",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldSucceedGivenNonexistentKeyWhenDelete"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_cloud.rs:should_apply_last_write_wins_given_cloud_mode_when_multiple_writes",
@@ -4002,9 +4029,12 @@
       "source": "tests/engine_init.rs",
       "sourceSymbolOrTest": "should_create_engine_in_all_modes",
       "observableBehavior": "create engine in all modes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageModeBehaviorTests.ShouldCreateEngineGivenSupportedStorageMode"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_apply_tombstones_given_streaming_scan_when_keys_deleted",
