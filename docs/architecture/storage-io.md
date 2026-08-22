@@ -7,9 +7,9 @@ over the target, and flushes the parent directory on Unix. Temporary cleanup
 is best-effort; uncertain targets are never deleted.
 
 Windows does not expose a supported directory-flush handle through
-`System.IO`. On Windows, Pants uses a write-through file handle, an explicit
-file flush, and a same-volume atomic move—the strongest portable BCL
-durability boundary. Unix additionally flushes the directory entry after the
+`System.IO`. Pants uses buffered file writes followed by one explicit disk
+flush and a same-volume atomic move—the strongest portable BCL durability
+boundary on Windows. Unix additionally flushes the directory entry after the
 move.
 
 The lease mutation-lock file is intentionally the one exception to staged
