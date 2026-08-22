@@ -1804,9 +1804,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_preserve_baseline_compressed_block_fixture",
       "observableBehavior": "preserve baseline compressed block fixture",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldPreserveBaselineCompressedBlockFixture"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_candidate_adaptive_sst_across_strict_reopen",
@@ -1814,9 +1817,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_preserve_candidate_adaptive_sst_across_strict_reopen",
       "observableBehavior": "preserve candidate adaptive sst across strict reopen",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldPreserveCandidateAdaptiveSstAcrossStrictReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_data_given_deliberate_compression_policy_change_when_reopening_populated_database",
@@ -1824,9 +1830,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_preserve_data_given_deliberate_compression_policy_change_when_reopening_populated_database",
       "observableBehavior": "preserve data given deliberate compression policy change when reopening populated database",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldPreserveDataGivenCompressionPolicyChangeWhenReopeningPopulatedDatabase"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_exact_sst_codec_codes",
@@ -1834,9 +1843,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_preserve_exact_sst_codec_codes",
       "observableBehavior": "preserve exact sst codec codes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldPreserveExactSstCodecCodes"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_five_byte_trailer_layout_with_crc_coverage",
@@ -1844,9 +1856,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_preserve_five_byte_trailer_layout_with_crc_coverage",
       "observableBehavior": "preserve five byte trailer layout with crc coverage",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldPreserveFiveByteTrailerLayoutWithCrcCoverage"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_produce_byte_identical_sst_files_from_identical_adaptive_input",
@@ -1854,9 +1869,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_produce_byte_identical_sst_files_from_identical_adaptive_input",
       "observableBehavior": "produce byte identical sst files from identical adaptive input",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldProduceByteIdenticalSstFilesGivenIdenticalAdaptiveInput"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_reject_corrupt_compressed_payload_for_every_shipping_codec",
@@ -1865,8 +1883,11 @@
       "sourceSymbolOrTest": "should_reject_corrupt_compressed_payload_for_every_shipping_codec",
       "observableBehavior": "reject corrupt compressed payload for every shipping codec",
       "expectedError": "Corruption",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldRejectCorruptCompressedPayloadForEveryShippingCodec"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_reject_invalid_sst_block_trailers",
@@ -1874,9 +1895,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_reject_invalid_sst_block_trailers",
       "observableBehavior": "reject invalid sst block trailers",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldRejectInvalidSstBlockTrailers"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_reject_nonshipping_codec_codes_without_fallback",
@@ -1885,8 +1909,11 @@
       "sourceSymbolOrTest": "should_reject_nonshipping_codec_codes_without_fallback",
       "observableBehavior": "reject nonshipping codec codes without fallback",
       "expectedError": "Corruption",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldRejectNonshippingCodecCodesWithoutFallback"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_report_meaningful_error_given_footer_corruption_when_running_explicit_verification",
@@ -1895,8 +1922,11 @@
       "sourceSymbolOrTest": "should_report_meaningful_error_given_footer_corruption_when_running_explicit_verification",
       "observableBehavior": "report meaningful error given footer corruption when running explicit verification",
       "expectedError": "Corruption",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldReportMeaningfulErrorGivenFooterCorruptionWhenRunningExplicitVerification"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_roundtrip_edge_case_values_when_written_through_full_sst_pipeline",
@@ -1904,9 +1934,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_roundtrip_edge_case_values_when_written_through_full_sst_pipeline",
       "observableBehavior": "roundtrip edge case values when written through full sst pipeline",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldRoundTripEdgeCaseValuesWhenWrittenThroughFullSstPipeline"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_roundtrip_every_emitted_sst_block_deterministically",
@@ -1914,9 +1947,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_roundtrip_every_emitted_sst_block_deterministically",
       "observableBehavior": "roundtrip every emitted sst block deterministically",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldRoundTripEveryEmittedSstBlockDeterministically"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_select_current_policy_for_new_blocks_while_preserving_prior_algorithm_when_compacting_after_goal_change",
@@ -1924,9 +1960,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_select_current_policy_for_new_blocks_while_preserving_prior_algorithm_when_compacting_after_goal_change",
       "observableBehavior": "select current policy for new blocks while preserving prior algorithm when compacting after goal change",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldSelectCurrentPolicyForNewBlocksWhenCompactingAfterGoalChange"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_strictly_reopen_completed_adaptive_compaction",
@@ -1934,9 +1973,12 @@
       "source": "tests/compression_compatibility.rs",
       "sourceSymbolOrTest": "should_strictly_reopen_completed_adaptive_compaction",
       "observableBehavior": "strictly reopen completed adaptive compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCompressionCompatibilityTests.ShouldStrictlyReopenCompletedAdaptiveCompaction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/concurrent_commit_durability.rs:should_apply_all_concurrent_commits_durably_when_many_threads_write_simultaneously",
