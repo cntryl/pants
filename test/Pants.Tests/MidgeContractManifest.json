@@ -456,7 +456,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldWaitForTerminationGivenCloudCrashChildScenario"
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldAbortGivenCloudCrashChildScenario"
       ]
     },
     {

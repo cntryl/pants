@@ -15,7 +15,7 @@ public sealed class PantsCloudCrashRecoveryTests
     const string ReadyFileName = "cloud-crash-child.ready";
 
     [Fact]
-    public async Task ShouldWaitForTerminationGivenCloudCrashChildScenario()
+    public async Task ShouldAbortGivenCloudCrashChildScenario()
     {
         var scenario = Environment.GetEnvironmentVariable(
             ChildScenarioEnvironmentVariable);
@@ -68,9 +68,17 @@ public sealed class PantsCloudCrashRecoveryTests
                 SearchOption.AllDirectories));
         }
 
-        await File.WriteAllTextAsync(Path.Combine(path, ReadyFileName), "ready");
+        await PublishSignalAsync(Path.Combine(path, ReadyFileName), "ready");
 
-        await Task.Delay(Timeout.InfiniteTimeSpan);
+        using var process = Process.GetCurrentProcess();
+        try
+        {
+            process.Kill();
+        }
+        finally
+        {
+            Environment.Exit(137);
+        }
     }
 
     [Fact]
@@ -244,15 +252,13 @@ public sealed class PantsCloudCrashRecoveryTests
                 Environment.ProcessPath ??
                 "dotnet",
             UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
+            CreateNoWindow = true
         };
         start.ArgumentList.Add("vstest");
         start.ArgumentList.Add(typeof(PantsCloudCrashRecoveryTests).Assembly.Location);
         start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
         start.ArgumentList.Add(
-            $"--Tests:{typeof(PantsCloudCrashRecoveryTests).FullName}.ShouldWaitForTerminationGivenCloudCrashChildScenario");
+            $"--Tests:{typeof(PantsCloudCrashRecoveryTests).FullName}.ShouldAbortGivenCloudCrashChildScenario");
         start.Environment[ChildScenarioEnvironmentVariable] = scenario;
         start.Environment[DatabasePathEnvironmentVariable] = databasePath;
         return Process.Start(start) ?? throw new InvalidOperationException("Could not start crash child.");
@@ -266,10 +272,8 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             if (child.HasExited)
             {
-                var standardOutput = await child.StandardOutput.ReadToEndAsync();
-                var standardError = await child.StandardError.ReadToEndAsync();
                 throw new Xunit.Sdk.XunitException(
-                    $"Crash child exited before readiness.{Environment.NewLine}{standardOutput}{Environment.NewLine}{standardError}");
+                    $"Crash child exited with code {child.ExitCode} before readiness.");
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
@@ -278,36 +282,38 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task TerminateCrashChildAsync(Process child, string databasePath)
     {
-        using var exitTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await WaitForCrashChildExitAsync(child);
+        await WaitForCrashChildLockReleaseAsync(databasePath);
+    }
+
+    static async Task WaitForCrashChildExitAsync(Process child)
+    {
+        using var exitTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         try
         {
-            try
-            {
-                if (!child.HasExited)
-                {
-                    child.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // The child exited after HasExited was observed.
-            }
-
             await child.WaitForExitAsync(exitTimeout.Token);
         }
         catch (OperationCanceledException exception) when (exitTimeout.IsCancellationRequested)
         {
-            var standardOutput = child.HasExited
-                ? await child.StandardOutput.ReadToEndAsync()
-                : "<child still running>";
-            var standardError = child.HasExited
-                ? await child.StandardError.ReadToEndAsync()
-                : "<child still running>";
+            TryKill(child);
+            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await child.WaitForExitAsync(cleanupTimeout.Token);
+            }
+            catch (OperationCanceledException) when (cleanupTimeout.IsCancellationRequested)
+            {
+                // The failure below reports the bounded cleanup failure.
+            }
+
             throw new Xunit.Sdk.XunitException(
-                $"Crash child did not exit within 30 seconds.{Environment.NewLine}{standardOutput}{Environment.NewLine}{standardError}",
+                "Crash child did not exit within 10 seconds after signaling readiness.",
                 exception);
         }
+    }
 
+    static async Task WaitForCrashChildLockReleaseAsync(string databasePath)
+    {
         var lockPath = Path.Combine(databasePath, "LOCK");
         if (!File.Exists(lockPath))
         {
@@ -331,6 +337,32 @@ public sealed class PantsCloudCrashRecoveryTests
                 await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
             }
         }
+    }
+
+    static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited after HasExited was observed.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The timeout remains the primary failure when cleanup cannot signal the process.
+        }
+    }
+
+    static async Task PublishSignalAsync(string path, string contents)
+    {
+        var temporaryPath = $"{path}.{Environment.ProcessId}.tmp";
+        await File.WriteAllTextAsync(temporaryPath, contents);
+        File.Move(temporaryPath, path);
     }
 
     static async Task ExpireCrashedProcessLeaseAsync(string databasePath)
