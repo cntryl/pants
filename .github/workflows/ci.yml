@@ -60,6 +60,28 @@ jobs:
           --configuration Release
           --no-build
           --filter "FullyQualifiedName!~PantsCloudCrashRecoveryTests"
-          --logger "console;verbosity=detailed"
+          --logger "trx;LogFileName=remaining.trx"
+          --results-directory TestResults
           --blame-hang-timeout 3m
           --blame-hang-dump-type none
+
+      - name: Report slowest tests
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $resultPath = Join-Path $PWD "TestResults/remaining.trx"
+          if (-not (Test-Path $resultPath)) {
+            Write-Warning "No remaining-suite TRX result was produced."
+            exit 0
+          }
+
+          $results = Select-Xml `
+            -Path $resultPath `
+            -XPath "//*[local-name()='UnitTestResult']" |
+            ForEach-Object { $_.Node }
+          $results |
+            Sort-Object { [TimeSpan]::Parse($_.duration) } -Descending |
+            Select-Object -First 25 |
+            ForEach-Object {
+              Write-Host ("{0,12}  {1,-10}  {2}" -f $_.duration, $_.outcome, $_.testName)
+            }
