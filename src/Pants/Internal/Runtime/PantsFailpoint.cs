@@ -8,6 +8,7 @@ internal enum PantsFailpoint
     BeforeWalFlush,
     AfterWalFlush,
     BeforeShutdownWalDurabilityBoundary,
+    BeforeVerificationBarrierResponse,
     BeforeWalRotation,
     AfterWalRotation,
     BeforeFlushBuild,

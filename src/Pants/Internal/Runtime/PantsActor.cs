@@ -15,6 +15,7 @@ sealed class PantsActor : IAsyncDisposable
     readonly RuntimeTelemetry _telemetry;
     readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
     readonly PantsStorageVerificationDelegate _storageVerifier;
+    readonly PantsVerificationBarrierResponseDelegate _verificationBarrierResponse;
     readonly IPantsFailpointHandler _failpoints;
     readonly Channel<IRuntimeCommand> _commands;
     readonly RuntimeWorker _walWorker;
@@ -46,7 +47,12 @@ sealed class PantsActor : IAsyncDisposable
     int _deferredCompactionScheduled;
     bool _shutdownRequested;
     bool _shutdownPreparationCompleted;
-    bool _verificationInProgress;
+    OnlineVerificationBarrier? _verificationBarrier;
+    TaskCompletionSource? _verificationMaintenanceCompletion;
+    long _nextVerificationBarrierToken;
+    bool _garbageCollectionPending;
+    bool _recoveredMemtableFlushPending;
+    bool _cloudWalSealPending;
     bool _backgroundCompactionEnabled;
     bool _backgroundCompactionPending;
     bool _readAmplificationCompactionPending;
@@ -65,6 +71,7 @@ sealed class PantsActor : IAsyncDisposable
         _backgroundCompactionEnabled = options.BackgroundCompaction;
         _telemetry = telemetry;
         _storageVerifier = dependencies.StorageVerifier;
+        _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
         _failpoints = dependencies.Failpoints;
         _state = new PantsRuntimeState(ttlClock);
         switch (options.Storage)
@@ -638,19 +645,8 @@ sealed class PantsActor : IAsyncDisposable
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
                     _telemetry.RecordSnapshotUnregister();
-                    if (_diskStore is not null)
-                    {
-                        var storageChanged = false;
-                        await _garbageCollectionWorker
-                            .ExecuteAsync(() =>
-                                storageChanged = _diskStore.CollectObsoleteFiles(state))
-                            .ConfigureAwait(false);
-                        if (_cloudPersistence is not null &&
-                            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
-                        {
-                            await MirrorCloudStorageAsync().ConfigureAwait(false);
-                        }
-                    }
+                    await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
+                        .ConfigureAwait(false);
                 }
 
                 return true;
@@ -725,19 +721,8 @@ sealed class PantsActor : IAsyncDisposable
                 {
                     _telemetry.RecordSnapshotUnregister();
                     PantsDiagnostics.TransactionsRolledBack.Add(1);
-                    if (_diskStore is not null)
-                    {
-                        var storageChanged = false;
-                        await _garbageCollectionWorker
-                            .ExecuteAsync(() =>
-                                storageChanged = _diskStore.CollectObsoleteFiles(state))
-                            .ConfigureAwait(false);
-                        if (_cloudPersistence is not null &&
-                            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
-                        {
-                            await MirrorCloudStorageAsync().ConfigureAwait(false);
-                        }
-                    }
+                    await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
+                        .ConfigureAwait(false);
                 }
 
                 return true;
@@ -894,6 +879,7 @@ sealed class PantsActor : IAsyncDisposable
             state =>
             {
                 ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
                 _backgroundCompactionEnabled = enabled;
                 return ValueTask.FromResult(true);
             },
@@ -1108,10 +1094,9 @@ sealed class PantsActor : IAsyncDisposable
             throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
         }
 
-        var path = await AcquireVerificationBarrierAsync(cancellationToken).ConfigureAwait(false);
-        if (path is null)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_diskStore is null)
         {
-            await ReleaseVerificationBarrierAsync().ConfigureAwait(false);
             throw PantsException.Create(
                 PantsErrorCode.NotSupported,
                 "In-memory storage has no persistent path to verify.");
@@ -1121,81 +1106,236 @@ sealed class PantsActor : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+        using var acquisitionCancellation = new CancellationTokenSource();
+        var acquisition = AcquireVerificationBarrierAsync(acquisitionCancellation.Token).AsTask();
+        OnlineVerificationBarrier barrier;
         try
         {
-            return await _storageVerifier(path, linked.Token).ConfigureAwait(false);
+            barrier = await acquisition.WaitAsync(linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw PantsException.Create(
-                PantsErrorCode.Timeout,
-                "Storage verification did not complete before its deadline.");
+            acquisitionCancellation.Cancel();
+            _ = ReleaseAbandonedVerificationBarrierAsync(acquisition);
+            throw CreateVerificationTimeoutException();
         }
-        finally
+        catch (OperationCanceledException)
         {
-            await ReleaseVerificationBarrierAsync().ConfigureAwait(false);
+            acquisitionCancellation.Cancel();
+            _ = ReleaseAbandonedVerificationBarrierAsync(acquisition);
+            throw;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        if (deadline.IsCancellationRequested)
+        {
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+            throw CreateVerificationTimeoutException();
+        }
+
+        var verification = Task.Factory.StartNew(
+                () => RunStorageVerificationAsync(barrier),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
+                TaskScheduler.Default)
+            .Unwrap();
+        try
+        {
+            return await verification.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _ = ObserveStorageVerificationAsync(verification);
+            throw CreateVerificationTimeoutException();
+        }
+        catch (OperationCanceledException)
+        {
+            _ = ObserveStorageVerificationAsync(verification);
+            throw;
         }
     }
 
-    async ValueTask<string?> AcquireVerificationBarrierAsync(
+    async ValueTask<OnlineVerificationBarrier> AcquireVerificationBarrierAsync(
         CancellationToken cancellationToken)
     {
         while (true)
         {
-            if (UsesBackgroundImmutableFlushes)
-            {
-                await DrainImmutableFlushesAsync(cancellationToken).ConfigureAwait(false);
-            }
-
+            cancellationToken.ThrowIfCancellationRequested();
             var admission = await SendAsync(
-                state =>
+                async state =>
                 {
-                    if (_verificationInProgress)
+                    ThrowIfShuttingDown(state);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (_verificationBarrier is not null)
                     {
-                        throw new PantsBusyException(
-                            "Storage verification is already in progress.");
+                        return (
+                            Barrier: (OnlineVerificationBarrier?)null,
+                            RetryAfter: (Task?)_verificationBarrier.Released,
+                            LayoutBusy: false);
+                    }
+
+                    if (_verificationMaintenanceCompletion is { } maintenanceCompletion)
+                    {
+                        return (
+                            Barrier: (OnlineVerificationBarrier?)null,
+                            RetryAfter: (Task?)maintenanceCompletion.Task,
+                            LayoutBusy: false);
                     }
 
                     if (HasLayoutMutationInFlight(state))
                     {
-                        return ValueTask.FromResult((Admitted: false, Path: (string?)null));
+                        return (
+                            Barrier: (OnlineVerificationBarrier?)null,
+                            RetryAfter: (Task?)null,
+                            LayoutBusy: true);
                     }
 
-                    _verificationInProgress = true;
-                    return ValueTask.FromResult((Admitted: true, Path: _diskStore?.RootPath));
+                    if (_hybridCache is not null && _diskStore is not null)
+                    {
+                        await EnsureHybridSstsLocalAsync(
+                                _diskStore.GetManifestSstNames(),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
+                    var token = checked(++_nextVerificationBarrierToken);
+                    var barrier = new OnlineVerificationBarrier(
+                        token,
+                        _diskStore?.RootPath,
+                        CaptureRuntimeHealth(state));
+                    _verificationBarrier = barrier;
+                    try
+                    {
+                        _failpoints.Hit(PantsFailpoint.BeforeVerificationBarrierResponse);
+                        await _verificationBarrierResponse().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        _verificationBarrier = null;
+                        barrier.Release();
+                        throw;
+                    }
+
+                    return (
+                        Barrier: (OnlineVerificationBarrier?)barrier,
+                        RetryAfter: (Task?)null,
+                        LayoutBusy: false);
                 },
-                cancellationToken).ConfigureAwait(false);
-            if (admission.Admitted)
+                CancellationToken.None).ConfigureAwait(false);
+            if (admission.Barrier is not null)
             {
-                return admission.Path;
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    await ReleaseVerificationBarrierAsync(admission.Barrier).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                return admission.Barrier;
             }
 
-            await Task.Yield();
+            if (admission.RetryAfter is not null)
+            {
+                await admission.RetryAfter.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            if (admission.LayoutBusy && UsesBackgroundImmutableFlushes)
+            {
+                await DrainImmutableFlushesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(1), cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
+    async Task<PantsStorageVerificationReport> RunStorageVerificationAsync(
+        OnlineVerificationBarrier barrier)
+    {
+        try
+        {
+            var report = await _storageVerifier(barrier.Path!, CancellationToken.None)
+                .ConfigureAwait(false);
+            return report with
+            {
+                Authoritative = !_cloudMode && report.Authoritative,
+                Health = barrier.RuntimeHealth == PantsEngineHealth.Healthy
+                    ? report.Health
+                    : barrier.RuntimeHealth
+            };
+        }
+        finally
+        {
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+        }
+    }
+
+    async Task ReleaseAbandonedVerificationBarrierAsync(
+        Task<OnlineVerificationBarrier> acquisition)
+    {
+        try
+        {
+            var barrier = await acquisition.ConfigureAwait(false);
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The caller no longer owns an acquisition response that arrives later.
+        }
+    }
+
+    static async Task ObserveStorageVerificationAsync(
+        Task<PantsStorageVerificationReport> verification)
+    {
+        try
+        {
+            _ = await verification.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The barrier-owning verifier outlived its caller and releases itself.
+        }
+    }
+
+    static PantsTimeoutException CreateVerificationTimeoutException() =>
+        new("Storage verification did not complete before its deadline.");
+
     bool HasLayoutMutationInFlight(PantsRuntimeState state) =>
         state.ImmutableMemtableFlushes.Count != 0 ||
-        _flushWorker.InFlight != 0 ||
-        _flushWorker.QueueDepth != 0 ||
-        _compactionWorker.InFlight != 0 ||
-        _compactionWorker.QueueDepth != 0;
+        _walWorker.Outstanding != 0 ||
+        _flushWorker.Outstanding != 0 ||
+        _compactionWorker.Outstanding != 0 ||
+        _manifestWorker.Outstanding != 0 ||
+        _garbageCollectionWorker.Outstanding != 0 ||
+        _cloudWorker.Outstanding != 0;
+
+    PantsEngineHealth CaptureRuntimeHealth(PantsRuntimeState state)
+    {
+        var storageHealth = _diskStore?.GetHealth(state) ?? state.Health;
+        var health = EngineHealthClassifier.Classify(
+            storageHealth,
+            MemtableWritePressure.IsStalled(_options, state));
+        return health == PantsEngineHealth.Healthy && !IsPrimaryLeaseHealthy
+            ? PantsEngineHealth.Degraded
+            : health;
+    }
 
     public async ValueTask ShutdownAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var preparation = SendAsync(
-            async state =>
+        var admission = SendAsync<Task>(
+            state =>
             {
-                if (_shutdownPreparationCompleted)
-                {
-                    return true;
-                }
-
                 if (!_shutdownRequested)
                 {
-                    ThrowIfVerificationInProgress();
-
                     if (state.ActiveSnapshotCount != 0)
                     {
                         throw PantsException.Create(
@@ -1213,6 +1353,31 @@ sealed class PantsActor : IAsyncDisposable
                     }
 
                     state.SignalWritePressureChanged();
+                }
+
+                return ValueTask.FromResult(
+                    _verificationBarrier?.Released ?? Task.CompletedTask);
+            },
+            CancellationToken.None).AsTask();
+        try
+        {
+            var verificationReleased = await admission
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await verificationReleased.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = ObserveShutdownPreparationAsync(admission);
+            throw;
+        }
+
+        var preparation = SendAsync(
+            async state =>
+            {
+                if (_shutdownPreparationCompleted)
+                {
+                    return true;
                 }
 
                 if (_diskStore is not null)
@@ -1828,6 +1993,12 @@ sealed class PantsActor : IAsyncDisposable
             _ = await SendAsync(
                 async state =>
                 {
+                    if (_verificationBarrier is not null)
+                    {
+                        _cloudWalSealPending = true;
+                        return true;
+                    }
+
                     if (_diskStore is not null &&
                         _cloudWalSealController?.PendingWrites > 0)
                     {
@@ -2148,19 +2319,20 @@ sealed class PantsActor : IAsyncDisposable
             _ = await SendAsync(
                 async state =>
                 {
-                    foreach (var family in state.ActiveMemtableBytes
-                                 .Where(pair =>
-                                     pair.Value >= _options.MemtableFlushThresholdBytes)
-                                 .Select(static pair => pair.Key)
-                                 .ToArray())
+                    if (state.IsShuttingDown)
                     {
-                        _ = await FreezeAndScheduleFlushAsync(
-                                state,
-                                family,
-                                rejectWhenQueueFull: false)
-                            .ConfigureAwait(false);
+                        _recoveredMemtableFlushPending = false;
+                        return true;
                     }
 
+                    if (_verificationBarrier is not null)
+                    {
+                        _recoveredMemtableFlushPending = true;
+                        return true;
+                    }
+
+                    _recoveredMemtableFlushPending = false;
+                    await FreezeRecoveredMemtablesAsync(state).ConfigureAwait(false);
                     return true;
                 },
                 CancellationToken.None).ConfigureAwait(false);
@@ -2171,6 +2343,21 @@ sealed class PantsActor : IAsyncDisposable
         catch (Exception)
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+    }
+
+    async ValueTask FreezeRecoveredMemtablesAsync(PantsRuntimeState state)
+    {
+        foreach (var family in state.ActiveMemtableBytes
+                     .Where(pair => pair.Value >= _options.MemtableFlushThresholdBytes)
+                     .Select(static pair => pair.Key)
+                     .ToArray())
+        {
+            _ = await FreezeAndScheduleFlushAsync(
+                    state,
+                    family,
+                    rejectWhenQueueFull: false)
+                .ConfigureAwait(false);
         }
     }
 
@@ -2462,7 +2649,7 @@ sealed class PantsActor : IAsyncDisposable
             _ = await SendAsync(
                 async state =>
                 {
-                    if (state.IsShuttingDown || _verificationInProgress ||
+                    if (state.IsShuttingDown || _verificationBarrier is not null ||
                         !state.ImmutableMemtableFlushes.TryGetValue(
                             expected.Frozen.Id,
                             out var current) ||
@@ -2636,7 +2823,7 @@ sealed class PantsActor : IAsyncDisposable
             return;
         }
 
-        if (_verificationInProgress)
+        if (_verificationBarrier is not null)
         {
             _backgroundCompactionPending = true;
             return;
@@ -2697,7 +2884,7 @@ sealed class PantsActor : IAsyncDisposable
             return;
         }
 
-        if (_verificationInProgress)
+        if (_verificationBarrier is not null)
         {
             _readAmplificationCompactionPending = true;
             return;
@@ -2774,7 +2961,7 @@ sealed class PantsActor : IAsyncDisposable
                         return true;
                     }
 
-                    if (_verificationInProgress)
+                    if (_verificationBarrier is not null)
                     {
                         return true;
                     }
@@ -2821,7 +3008,7 @@ sealed class PantsActor : IAsyncDisposable
             var shouldSchedule = await SendAsync(
                 state => ValueTask.FromResult(
                     !state.IsShuttingDown &&
-                    !_verificationInProgress &&
+                    _verificationBarrier is null &&
                     state.ImmutableMemtableFlushes.Count == 0 &&
                     (_backgroundCompactionPending ||
                      _readAmplificationCompactionPending)),
@@ -2849,6 +3036,12 @@ sealed class PantsActor : IAsyncDisposable
             async state =>
             {
                 ThrowIfShuttingDown(state);
+                if (_verificationBarrier is not null)
+                {
+                    throw new PantsTimeoutException(
+                        "Cloud flush retry is deferred by online verification.");
+                }
+
                 if (!IsActiveFamily(state, identity) || _diskStore is null)
                 {
                     return true;
@@ -2884,6 +3077,8 @@ sealed class PantsActor : IAsyncDisposable
             return;
         }
 
+        ThrowIfVerificationInProgress();
+
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordCloudUploadPending();
         try
@@ -2916,6 +3111,13 @@ sealed class PantsActor : IAsyncDisposable
         if (_hybridCache is null || _diskStore is null || _cloudPersistence is null)
         {
             return;
+        }
+
+        if (_verificationBarrier is not null &&
+            names.Any(name => !_diskStore.IsSstLocal(name)))
+        {
+            throw new PantsBusyException(
+                "Hybrid cache hydration is deferred by online verification.");
         }
 
         await HybridCacheManager.EnsureLocalSstsAsync(
@@ -3097,14 +3299,38 @@ sealed class PantsActor : IAsyncDisposable
 
     void ThrowIfVerificationInProgress()
     {
-        if (_verificationInProgress)
+        if (_verificationBarrier is not null)
         {
             throw new PantsBusyException(
                 "The storage layout is pinned by online verification.");
         }
     }
 
-    async ValueTask ReleaseVerificationBarrierAsync()
+    async ValueTask CollectObsoleteFilesAfterSnapshotReleaseAsync(PantsRuntimeState state)
+    {
+        if (_diskStore is null)
+        {
+            return;
+        }
+
+        if (_verificationBarrier is not null)
+        {
+            _garbageCollectionPending = true;
+            return;
+        }
+
+        var storageChanged = false;
+        await _garbageCollectionWorker
+            .ExecuteAsync(() => storageChanged = _diskStore.CollectObsoleteFiles(state))
+            .ConfigureAwait(false);
+        if (_cloudPersistence is not null &&
+            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
+        {
+            await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
+    }
+
+    async ValueTask ReleaseVerificationBarrierAsync(OnlineVerificationBarrier barrier)
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
@@ -3113,27 +3339,134 @@ sealed class PantsActor : IAsyncDisposable
 
         try
         {
-            var shouldSchedule = await SendAsync(
-                async state =>
+            var maintenance = await SendAsync<OnlineVerificationMaintenance?>(
+                _ =>
                 {
-                    _verificationInProgress = false;
-                    await ScheduleNextImmutableFlushAttemptAsync(
-                            state,
-                            retryFailure: true)
-                        .ConfigureAwait(false);
-                    return state.ImmutableMemtableFlushes.Count == 0 &&
-                        (_backgroundCompactionPending ||
-                         _readAmplificationCompactionPending);
+                    if (_verificationBarrier?.Token != barrier.Token)
+                    {
+                        return ValueTask.FromResult<OnlineVerificationMaintenance?>(null);
+                    }
+
+                    _verificationBarrier = null;
+                    var completion = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _verificationMaintenanceCompletion = completion;
+                    var pending = new OnlineVerificationMaintenance(
+                        _garbageCollectionPending,
+                        _recoveredMemtableFlushPending,
+                        _cloudWalSealPending,
+                        completion);
+                    _garbageCollectionPending = false;
+                    _recoveredMemtableFlushPending = false;
+                    _cloudWalSealPending = false;
+                    return ValueTask.FromResult<OnlineVerificationMaintenance?>(pending);
                 },
                 CancellationToken.None).ConfigureAwait(false);
-            if (shouldSchedule)
+            if (maintenance is { } pending)
             {
-                ScheduleDeferredCompaction();
+                _ = RunDeferredVerificationMaintenanceAsync(pending);
+                barrier.Release();
             }
         }
         catch (PantsAbortedException)
         {
             // Disposal owns the remaining lease and filesystem lifetime.
         }
+    }
+
+    async Task RunDeferredVerificationMaintenanceAsync(
+        OnlineVerificationMaintenance maintenance)
+    {
+        try
+        {
+            var schedule = await SendAsync(
+                async state =>
+                {
+                    try
+                    {
+                        if (state.IsShuttingDown)
+                        {
+                            return (Compaction: false, CloudWalSeal: false);
+                        }
+
+                        if (maintenance.CollectGarbage)
+                        {
+                            try
+                            {
+                                await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception)
+                            {
+                                Volatile.Write(ref _persistenceAnomaly, 1);
+                                MarkPersistenceAnomaly(state);
+                            }
+                        }
+
+                        if (maintenance.FlushRecoveredMemtables)
+                        {
+                            try
+                            {
+                                await FreezeRecoveredMemtablesAsync(state).ConfigureAwait(false);
+                            }
+                            catch (Exception)
+                            {
+                                Volatile.Write(ref _persistenceAnomaly, 1);
+                                MarkPersistenceAnomaly(state);
+                            }
+                        }
+
+                        try
+                        {
+                            await ScheduleNextImmutableFlushAttemptAsync(
+                                    state,
+                                    retryFailure: true)
+                                .ConfigureAwait(false);
+                        }
+                        catch (Exception)
+                        {
+                            Volatile.Write(ref _persistenceAnomaly, 1);
+                            MarkPersistenceAnomaly(state);
+                        }
+
+                        return (
+                            Compaction: state.ImmutableMemtableFlushes.Count == 0 &&
+                                (_backgroundCompactionPending ||
+                                 _readAmplificationCompactionPending),
+                            CloudWalSeal: maintenance.ScheduleCloudWalSeal);
+                    }
+                    finally
+                    {
+                        CompleteVerificationMaintenance(maintenance.Completion);
+                    }
+                },
+                CancellationToken.None).ConfigureAwait(false);
+            if (schedule.CloudWalSeal)
+            {
+                ScheduleCloudWalSealDeadline();
+            }
+
+            if (schedule.Compaction)
+            {
+                ScheduleDeferredCompaction();
+            }
+        }
+        catch (PantsAbortedException)
+        {
+        }
+        catch (Exception)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+    }
+
+    void CompleteVerificationMaintenance(TaskCompletionSource completion)
+    {
+        if (ReferenceEquals(_verificationMaintenanceCompletion, completion))
+        {
+            _verificationMaintenanceCompletion = null;
+        }
+
+        completion.TrySetResult();
     }
 }

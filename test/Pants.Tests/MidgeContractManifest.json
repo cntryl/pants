@@ -7054,7 +7054,7 @@
       "status": "mapped",
       "issue": 3,
       "pantsTests": [
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsEngineExclusivityParityTests.ShouldFenceConcurrentLocalOpensAndReleaseLeaseAfterShutdown"
       ]
     },
@@ -7773,8 +7773,11 @@
       "sourceSymbolOrTest": "should_release_verification_barrier_when_acquire_response_is_lost",
       "observableBehavior": "release verification barrier when acquire response is lost",
       "expectedError": "Busy",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldReleaseVerificationBarrierGivenAcquireResponseIsLost"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/storage_verification_hardening.rs:should_report_local_storage_as_authoritative_when_recovery_intents_remain",
@@ -7782,9 +7785,12 @@
       "source": "tests/storage_verification_hardening.rs",
       "sourceSymbolOrTest": "should_report_local_storage_as_authoritative_when_recovery_intents_remain",
       "observableBehavior": "report local storage as authoritative when recovery intents remain",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldReportLocalStorageAsAuthoritativeGivenRecoveryIntentsRemain"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/storage_verification_hardening.rs:should_retain_primary_lease_when_shutdown_overlaps_timed_out_verification",
@@ -7793,8 +7799,11 @@
       "sourceSymbolOrTest": "should_retain_primary_lease_when_shutdown_overlaps_timed_out_verification",
       "observableBehavior": "retain primary lease when shutdown overlaps timed out verification",
       "expectedError": "Timeout",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldRetainPrimaryLeaseGivenShutdownOverlapsTimedOutVerification"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/storage_verification_hardening.rs:should_retain_verification_barrier_when_online_verification_times_out",
@@ -7803,8 +7812,11 @@
       "sourceSymbolOrTest": "should_retain_verification_barrier_when_online_verification_times_out",
       "observableBehavior": "retain verification barrier when online verification times out",
       "expectedError": "Busy",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldRetainVerificationBarrierUntilTimedOutVerifierCompletes"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/storage_verification_hardening.rs:should_verify_online_layout_within_caller_timeout",
@@ -7812,9 +7824,12 @@
       "source": "tests/storage_verification_hardening.rs",
       "sourceSymbolOrTest": "should_verify_online_layout_within_caller_timeout",
       "observableBehavior": "verify online layout within caller timeout",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldVerifyOnlineLayoutWithinCallerTimeout"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_apply_range_tombstones_before_streaming_rows",
@@ -10441,7 +10456,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10457,7 +10472,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
@@ -10474,7 +10489,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10490,7 +10505,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10506,7 +10521,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10522,7 +10537,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
@@ -10539,7 +10554,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
@@ -10556,7 +10571,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10572,7 +10587,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10588,7 +10603,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10604,7 +10619,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction"
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction"
       ]
     },
     {
@@ -10620,7 +10635,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
@@ -10637,7 +10652,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },
@@ -10654,7 +10669,7 @@
         "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Pants.Tests.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
-        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction",
+        "Pants.Tests.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
         "Pants.Tests.PantsTransactionParityTests.ShouldTrackSnapshotsAcrossCommitRollbackAndRejectedBegin"
       ]
     },

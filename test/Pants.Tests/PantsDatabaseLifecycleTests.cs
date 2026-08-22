@@ -29,18 +29,22 @@ public sealed class PantsDatabaseLifecycleTests
     }
 
     [Fact]
-    public async Task ShouldKeepDatabaseOpenWhenShutdownIsBlockedByTransaction()
+    public async Task ShouldRemainClosingWhenShutdownIsBlockedByTransaction()
     {
         await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
         await using IPantsTransaction transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(() => database
+        var error = await Assert.ThrowsAsync<PantsBusyException>(() => database
             .ShutdownAsync(TimeSpan.FromSeconds(1))
             .AsTask());
 
         Assert.Equal(PantsErrorCode.Busy, error.Code);
-        Assert.Null(await transaction.GetAsync("missing"u8.ToArray()));
+        await Assert.ThrowsAsync<PantsBusyException>(
+            () => transaction.GetAsync("missing"u8.ToArray()).AsTask());
+
+        await transaction.RollbackAsync();
+        await database.ShutdownAsync(TimeSpan.FromSeconds(1));
     }
 }

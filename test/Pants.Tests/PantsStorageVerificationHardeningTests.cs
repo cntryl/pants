@@ -136,6 +136,108 @@ public sealed class PantsStorageVerificationHardeningTests
     }
 
     [Fact]
+    public async Task ShouldReportLocalStorageAsAuthoritativeGivenRecoveryIntentsRemain()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, "intent_log.json"),
+            """
+            [
+              {
+                "WalSynced": {
+                  "segment_id": 7,
+                  "seqno": 11
+                }
+              }
+            ]
+            """);
+
+        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
+
+        Assert.True(report.Authoritative);
+        Assert.Equal(1, report.IntentEntriesLoaded);
+    }
+
+    [Fact]
+    public async Task ShouldVerifyOnlineLayoutWithinCallerTimeout()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+
+        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(report.Authoritative);
+    }
+
+    [Fact]
+    public async Task ShouldHonorCallerTimeoutGivenVerifierBlocksBeforeReturning()
+    {
+        using var directory = new TemporaryDirectory();
+        using var release = new ManualResetEventSlim(initialState: false);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsStorageVerificationDelegate verifier = (_, _) =>
+        {
+            started.SetResult();
+            if (!release.Wait(TimeSpan.FromSeconds(2), CancellationToken.None))
+            {
+                throw new TimeoutException("Timed out waiting to release the verifier.");
+            }
+
+            return ValueTask.FromResult(HealthyReport());
+        };
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: verifier));
+        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(1)));
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        _ = await CreateColumnFamilyEventuallyAsync(database, "after-blocking-verifier");
+    }
+
+    [Fact]
+    public async Task ShouldReportCloudOnlineVerificationAsNonAuthoritative()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.SimulatedCloud(directory.Path, "verification", "cloud/"),
+            new PantsRuntimeDependencies(storageVerifier: (_, _) =>
+                ValueTask.FromResult(HealthyReport())));
+
+        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(report.Authoritative);
+    }
+
+    [Fact]
+    public async Task ShouldPreserveDegradedRuntimeHealthGivenOnlineFilesVerifyHealthy()
+    {
+        using var directory = new TemporaryDirectory();
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: (_, _) =>
+                ValueTask.FromResult(HealthyReport())));
+        var sstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
+        await File.WriteAllTextAsync(Path.Combine(sstDirectory.FullName, "orphan.sst"), "orphan");
+
+        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(PantsEngineHealth.Degraded, report.Health);
+    }
+
+    [Fact]
     public async Task ShouldFenceLayoutMutationsWhileOnlineVerificationOwnsBarrier()
     {
         using var directory = new TemporaryDirectory();
@@ -165,33 +267,326 @@ public sealed class PantsStorageVerificationHardeningTests
         var verification = database
             .VerifyStorageAsync(TimeSpan.FromSeconds(5))
             .AsTask();
-        await started.Task;
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.CreateColumnFamilyAsync("blocked").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.SetBackgroundCompactionAsync(false).AsTask());
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
 
-        await Assert.ThrowsAsync<PantsBusyException>(
-            () => database.CreateColumnFamilyAsync("blocked").AsTask());
-        release.SetResult();
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
         Assert.Equal("allowed", (await database.CreateColumnFamilyAsync("allowed")).Name);
     }
 
     [Fact]
-    public async Task ShouldReleaseVerificationBarrierGivenCallerDeadline()
+    public async Task ShouldRetainVerificationBarrierUntilTimedOutVerifierCompletes()
     {
         using var directory = new TemporaryDirectory();
-        PantsStorageVerificationDelegate verifier = async (_, cancellationToken) =>
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsStorageVerificationDelegate verifier = async (_, _) =>
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            throw new InvalidOperationException("Unreachable verifier continuation.");
+            started.SetResult();
+            await release.Task;
+            return HealthyReport();
         };
         await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: verifier));
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
+        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
-        await Assert.ThrowsAsync<PantsTimeoutException>(
-            () => database.VerifyStorageAsync(TimeSpan.FromMilliseconds(10)).AsTask());
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(1)));
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        }
+        finally
+        {
+            release.TrySetResult();
+            _ = await CreateColumnFamilyEventuallyAsync(database, "after-verification");
+        }
 
-        Assert.Equal("after-timeout", (await database.CreateColumnFamilyAsync("after-timeout")).Name);
+        var created = await database.GetColumnFamilyAsync("after-verification");
+
+        Assert.Equal("after-verification", Assert.IsAssignableFrom<IPantsColumnFamily>(created).Name);
     }
+
+    [Fact]
+    public async Task ShouldRetainVerificationBarrierUntilCancelledVerifierCompletes()
+    {
+        using var directory = new TemporaryDirectory();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        {
+            started.SetResult();
+            await release.Task;
+            return HealthyReport();
+        };
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: verifier));
+        using var cancellation = new CancellationTokenSource();
+        var verification = database
+            .VerifyStorageAsync(TimeSpan.FromSeconds(5), cancellation.Token)
+            .AsTask();
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verification);
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
+        }
+        finally
+        {
+            release.TrySetResult();
+            _ = await CreateColumnFamilyEventuallyAsync(database, "after-cancellation");
+        }
+    }
+
+    [Fact]
+    public async Task ShouldTimeOutWaitingForVerificationBarrierWithoutStartingVerifier()
+    {
+        using var directory = new TemporaryDirectory();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invocations = 0;
+        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            started.SetResult();
+            await release.Task;
+            return HealthyReport();
+        };
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: verifier));
+        var firstVerification = database
+            .VerifyStorageAsync(TimeSpan.FromSeconds(5))
+            .AsTask();
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => database
+                    .VerifyStorageAsync(TimeSpan.FromMilliseconds(25))
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.Equal(1, Volatile.Read(ref invocations));
+        }
+        finally
+        {
+            release.TrySetResult();
+            _ = await firstVerification;
+        }
+
+        _ = await CreateColumnFamilyEventuallyAsync(database, "barrier-reaped");
+        Assert.Equal(1, Volatile.Read(ref invocations));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseVerificationBarrierGivenAcquireResponseIsLost()
+    {
+        using var directory = new TemporaryDirectory();
+        var responseStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponse = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsVerificationBarrierResponseDelegate barrierResponse = async () =>
+        {
+            responseStarted.SetResult();
+            await releaseResponse.Task;
+        };
+        var invocations = 0;
+        PantsStorageVerificationDelegate verifier = (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            return ValueTask.FromResult(HealthyReport());
+        };
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(
+                storageVerifier: verifier,
+                verificationBarrierResponse: barrierResponse));
+        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+
+        try
+        {
+            await responseStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.Equal(0, Volatile.Read(ref invocations));
+        }
+        finally
+        {
+            releaseResponse.TrySetResult();
+        }
+
+        _ = await CreateColumnFamilyEventuallyAsync(database, "barrier-reaped");
+        Assert.Equal(0, Volatile.Read(ref invocations));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseVerificationBarrierGivenAcquireResponseFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoint = new ArmableFailpointHandler();
+        failpoint.Arm(PantsFailpoint.BeforeVerificationBarrierResponse);
+        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(failpoint));
+
+        await Assert.ThrowsAsync<PantsIOException>(
+            () => database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask());
+
+        Assert.Equal("barrier-released", (await database
+            .CreateColumnFamilyAsync("barrier-released")).Name);
+    }
+
+    [Fact]
+    public async Task ShouldRetainPrimaryLeaseGivenShutdownOverlapsTimedOutVerification()
+    {
+        using var directory = new TemporaryDirectory();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        {
+            started.SetResult();
+            await release.Task;
+            return HealthyReport();
+        };
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: verifier));
+        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(1)));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(
+                () => database.CreateColumnFamilyAsync("closing").AsTask());
+            await Assert.ThrowsAsync<PantsLeaseHeldException>(
+                () => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await using var reopened = await OpenEventuallyAsync(directory.Path);
+
+        Assert.True(reopened.IsPrimaryLeaseHealthy);
+    }
+
+    [Fact]
+    public async Task ShouldGiveConcurrentShutdownCallersIndependentDeadlines()
+    {
+        using var directory = new TemporaryDirectory();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        {
+            started.SetResult();
+            await release.Task;
+            return HealthyReport();
+        };
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path),
+            new PantsRuntimeDependencies(storageVerifier: verifier));
+        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+
+        var longShutdown = Task.CompletedTask;
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(1)));
+            var shortShutdown = database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+            longShutdown = database.ShutdownAsync(TimeSpan.FromSeconds(2)).AsTask();
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => shortShutdown);
+            Assert.False(longShutdown.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await longShutdown;
+    }
+
+    static async Task<IPantsColumnFamily> CreateColumnFamilyEventuallyAsync(
+        IPantsDatabase database,
+        string name)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            try
+            {
+                return await database.CreateColumnFamilyAsync(name, timeout.Token);
+            }
+            catch (PantsBusyException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
+            }
+        }
+    }
+
+    static async Task<IPantsDatabase> OpenEventuallyAsync(string path)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            try
+            {
+                return await PantsDatabase.OpenAsync(
+                    PantsOpenOptions.Local(path),
+                    timeout.Token);
+            }
+            catch (PantsLeaseHeldException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
+            }
+        }
+    }
+
+    static PantsStorageVerificationReport HealthyReport() => new(
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        0,
+        0,
+        0,
+        true,
+        PantsEngineHealth.Healthy,
+        []);
 
     static async Task WriteEmptyFixtureAsync(string path)
     {

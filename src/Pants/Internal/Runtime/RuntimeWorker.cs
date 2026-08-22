@@ -9,6 +9,7 @@ internal sealed class RuntimeWorker : IAsyncDisposable
     private readonly Task _loopTask;
     private int _queueDepth;
     private int _inFlight;
+    int _outstanding;
     private int _disposed;
     private long _enqueued;
     private long _completed;
@@ -29,6 +30,8 @@ internal sealed class RuntimeWorker : IAsyncDisposable
     public int QueueDepth => Volatile.Read(ref _queueDepth);
 
     public int InFlight => Volatile.Read(ref _inFlight);
+
+    public int Outstanding => Volatile.Read(ref _outstanding);
 
     public long Enqueued => Volatile.Read(ref _enqueued);
 
@@ -79,6 +82,7 @@ internal sealed class RuntimeWorker : IAsyncDisposable
 
         var command = new RuntimeWorkerCommand(operation);
         bool admitted = false;
+        Interlocked.Increment(ref _outstanding);
         Interlocked.Increment(ref _queueDepth);
         try
         {
@@ -96,6 +100,7 @@ internal sealed class RuntimeWorker : IAsyncDisposable
             if (!admitted)
             {
                 Interlocked.Decrement(ref _queueDepth);
+                Interlocked.Decrement(ref _outstanding);
             }
         }
     }
@@ -145,6 +150,7 @@ internal sealed class RuntimeWorker : IAsyncDisposable
             finally
             {
                 Interlocked.Decrement(ref _inFlight);
+                Interlocked.Decrement(ref _outstanding);
             }
         }
     }

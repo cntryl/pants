@@ -9,6 +9,8 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
     private readonly TransactionMemoryPool _transactionMemoryPool;
     private readonly IPantsClock _ttlClock;
     private readonly RuntimeTelemetry _telemetry;
+    readonly Lock _shutdownGate = new();
+    Task? _shutdownTask;
     private int _lifecycleState;
 
     internal PantsDatabaseInstance(PantsOpenOptions options, PantsRuntimeDependencies dependencies)
@@ -191,39 +193,88 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        if (Interlocked.CompareExchange(ref _lifecycleState, 1, 0) != 0)
-        {
-            return;
-        }
-
         if (timeout <= TimeSpan.Zero)
         {
-            Interlocked.Exchange(ref _lifecycleState, 0);
             throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
         }
 
-        using Activity? activity = PantsDiagnostics.ActivitySource.StartActivity("PantsDatabase.Shutdown");
-        using CancellationTokenSource deadline = new(timeout);
-        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+        cancellationToken.ThrowIfCancellationRequested();
+        TaskCompletionSource? attempt = null;
+        Task shutdown;
+        lock (_shutdownGate)
+        {
+            if (Volatile.Read(ref _lifecycleState) == 2)
+            {
+                return;
+            }
+
+            if (_shutdownTask is null)
+            {
+                attempt = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _shutdownTask = attempt.Task;
+                Volatile.Write(ref _lifecycleState, 1);
+            }
+
+            shutdown = _shutdownTask;
+        }
+
+        if (attempt is not null)
+        {
+            _ = RunShutdownAttemptAsync(attempt);
+            _ = ObserveShutdownAttemptAsync(shutdown);
+        }
+
+        using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsDatabase.Shutdown");
+        using var deadline = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
         try
         {
-            await _actor.ShutdownAsync(linked.Token).ConfigureAwait(false);
-            await _actor.DisposeAsync().ConfigureAwait(false);
-            Interlocked.Exchange(ref _lifecycleState, 2);
+            await shutdown.WaitAsync(linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            Interlocked.Exchange(ref _lifecycleState, 0);
             throw PantsException.Create(
                 PantsErrorCode.Timeout,
                 "Database shutdown did not complete before its deadline.");
         }
-        catch
+    }
+
+    async Task RunShutdownAttemptAsync(TaskCompletionSource completion)
+    {
+        try
         {
-            Interlocked.Exchange(ref _lifecycleState, 0);
-            throw;
+            await _actor.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            await _actor.DisposeAsync().ConfigureAwait(false);
+            Volatile.Write(ref _lifecycleState, 2);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            lock (_shutdownGate)
+            {
+                if (ReferenceEquals(_shutdownTask, completion.Task))
+                {
+                    _shutdownTask = null;
+                }
+            }
+
+            completion.TrySetException(exception);
+        }
+    }
+
+    static async Task ObserveShutdownAttemptAsync(Task shutdown)
+    {
+        try
+        {
+            await shutdown.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Callers may leave before the shared shutdown attempt terminates.
         }
     }
 
@@ -245,12 +296,12 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
 
     internal void EnsureOpen()
     {
-        int state = Volatile.Read(ref _lifecycleState);
+        var state = Volatile.Read(ref _lifecycleState);
         if (state != 0)
         {
-            throw PantsException.Create(
-                PantsErrorCode.Aborted,
-                state == 1 ? "Pants database is shutting down." : "Pants database is disposed.");
+            throw state == 1
+                ? new PantsBusyException("Pants database is shutting down.")
+                : new PantsAbortedException("Pants database is disposed.");
         }
     }
 
@@ -265,7 +316,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
 
     internal ValueTask RollbackTransactionAsync(long transactionId, CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _lifecycleState) != 0)
+        if (Volatile.Read(ref _lifecycleState) == 2)
         {
             return ValueTask.CompletedTask;
         }

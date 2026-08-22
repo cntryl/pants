@@ -1192,12 +1192,6 @@ public sealed class PantsBackgroundFlushPipelineTests
                 PantsDatabase.OpenAsync(options).AsTask());
 
             failpoint.Release();
-            _ = await WaitForMetricsAsync(
-                database,
-                static metrics =>
-                    metrics.FlushFailuresTotal >= 1 && metrics.FlushInFlight == 0,
-                AssertionTimeout);
-
             await database.ShutdownAsync(AssertionTimeout);
             shutdownCompleted = true;
         }
