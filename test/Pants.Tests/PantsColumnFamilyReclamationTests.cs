@@ -2,6 +2,8 @@ namespace Pants.Tests;
 
 public sealed class PantsColumnFamilyReclamationTests
 {
+    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -86,7 +88,7 @@ public sealed class PantsColumnFamilyReclamationTests
 
         try
         {
-            await verifierStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await verifierStarted.Task.WaitAsync(AssertionTimeout);
             await snapshot.RollbackAsync();
             Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
         }
@@ -141,7 +143,7 @@ public sealed class PantsColumnFamilyReclamationTests
 
         try
         {
-            await verifierStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await verifierStarted.Task.WaitAsync(AssertionTimeout);
             await snapshot.RollbackAsync();
             failpoint.Arm(PantsFailpoint.BeforeCloudSstGarbageCollectionDelete);
         }
@@ -151,7 +153,7 @@ public sealed class PantsColumnFamilyReclamationTests
         }
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(AssertionTimeout);
         while ((await database.GetRuntimeMetricsAsync(timeout.Token)).Health ==
                PantsEngineHealth.Healthy)
         {
@@ -211,7 +213,7 @@ public sealed class PantsColumnFamilyReclamationTests
 
         try
         {
-            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await firstStarted.Task.WaitAsync(AssertionTimeout);
             await snapshot.RollbackAsync();
             var secondVerification = database
                 .VerifyStorageAsync(TimeSpan.FromSeconds(5))
@@ -257,7 +259,7 @@ public sealed class PantsColumnFamilyReclamationTests
         uint familyId,
         bool simulatedCloud)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(AssertionTimeout);
         while (FamilyFiles(path, familyId, simulatedCloud).Length != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);

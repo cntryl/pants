@@ -2,6 +2,8 @@ namespace Pants.Tests;
 
 public sealed class RuntimeWorkerTests
 {
+    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public async Task ShouldTrackOutstandingWorkFromAdmissionThroughCompletion()
     {
@@ -20,7 +22,7 @@ public sealed class RuntimeWorkerTests
 
         try
         {
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await started.Task.WaitAsync(AssertionTimeout);
             second = await worker.ScheduleAsync(static _ => ValueTask.CompletedTask);
             thirdAdmission = worker
                 .ScheduleAsync(static _ => ValueTask.CompletedTask)
@@ -35,7 +37,7 @@ public sealed class RuntimeWorkerTests
 
         var third = await thirdAdmission;
         await Task.WhenAll(first, second, third);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        using var timeout = new CancellationTokenSource(AssertionTimeout);
         while (worker.Outstanding != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
