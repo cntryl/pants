@@ -6,6 +6,7 @@ namespace Pants.Tests;
 public sealed class PantsBackgroundFlushPipelineTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan BackgroundWorkTimeout = TimeSpan.FromSeconds(10);
 
     [Fact]
     public async Task ShouldKeepForegroundResponsiveWhileSstBuildIsBlocked()
@@ -237,16 +238,19 @@ public sealed class PantsBackgroundFlushPipelineTests
         }
 
         Assert.Empty(Directory.GetFiles(Path.Combine(recoveryDirectory.Path, "sst"), "*.sst"));
-        Assert.Single(Directory.GetFiles(
+        var staleStagingPath = Assert.Single(Directory.GetFiles(
             Path.Combine(recoveryDirectory.Path, "sst", ".flush-staging"),
             "*.tmp"));
 
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(recoveryDirectory.Path));
+        var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
+            await reopened.GetColumnFamilyAsync("staged-publication"));
         await using var read = await reopened.BeginTransactionAsync(
-            Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await reopened.GetColumnFamilyAsync("staged-publication")),
+            reopenedFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await read.GetAsync("staged-key"u8.ToArray()));
+        Assert.False(File.Exists(staleStagingPath));
+        await reopened.FlushAsync(reopenedFamily).AsTask().WaitAsync(AssertionTimeout);
         Assert.Empty(Directory.GetFiles(
             Path.Combine(recoveryDirectory.Path, "sst", ".flush-staging"),
             "*.tmp"));
@@ -524,35 +528,29 @@ public sealed class PantsBackgroundFlushPipelineTests
     public async Task ShouldRetainSuccessfulFlushBuildAcrossPublicationRetry()
     {
         using var directory = new TemporaryDirectory();
-        using var failpoint = new BlockingThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+        using var failpoint = new FlushPipelineFailpointHandler(
+            PantsFailpoint.BeforeFlushManifestPublish,
+            throwOnHit: true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("retained-flush-build");
-        try
-        {
-            await CommitAsync(
-                database,
-                family,
-                "retained-build"u8.ToArray(),
-                new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
-            Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).FlushBuildCount);
+        await CommitAsync(
+            database,
+            family,
+            "retained-build"u8.ToArray(),
+            new byte[160 * 1024]);
 
-            failpoint.Release();
-            var recovered = await WaitForMetricsAsync(
-                database,
-                static metrics => metrics.ImmutableMemtables == 0,
-                AssertionTimeout);
+        var recovered = await WaitForMetricsAsync(
+            database,
+            static metrics =>
+                metrics.FlushFailuresTotal >= 1 &&
+                metrics.FlushRetriesTotal >= 1 &&
+                metrics.ImmutableMemtables == 0,
+            BackgroundWorkTimeout);
 
-            Assert.Equal(1, recovered.FlushEnqueuedTotal);
-            Assert.Equal(1, recovered.FlushBuildCount);
-            Assert.Equal(2, recovered.FlushPublishCount);
-            Assert.True(recovered.FlushRetriesTotal >= 1);
-        }
-        finally
-        {
-            failpoint.Release();
-        }
+        Assert.Equal(1, recovered.FlushEnqueuedTotal);
+        Assert.Equal(1, recovered.FlushBuildCount);
+        Assert.Equal(2, recovered.FlushPublishCount);
+        Assert.True(recovered.FlushRetriesTotal >= 1);
     }
 
     [Fact]
