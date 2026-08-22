@@ -48,7 +48,15 @@ internal sealed class RuntimeWorker : IAsyncDisposable
     public async ValueTask EnqueueAsync(
         Func<CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken = default) =>
-        _ = await EnqueueCoreAsync(operation, cancellationToken).ConfigureAwait(false);
+        _ = await ScheduleAsync(operation, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<Task> ScheduleAsync(
+        Func<CancellationToken, ValueTask> operation,
+        CancellationToken cancellationToken = default)
+    {
+        var command = await EnqueueCoreAsync(operation, cancellationToken).ConfigureAwait(false);
+        return command.Task;
+    }
 
     public ValueTask EnqueueAsync(Action operation, CancellationToken cancellationToken = default)
     {

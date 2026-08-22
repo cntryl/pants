@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace Pants;
 
@@ -68,13 +69,17 @@ internal static class AtomicStagedFile
         FlushParentDirectory(directory);
     }
 
+    public static void FlushDirectory(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        FlushParentDirectory(Path.GetFullPath(directory));
+    }
+
     private static void FlushParentDirectory(string directory)
     {
         if (OperatingSystem.IsWindows())
         {
-            // Windows does not expose a supported directory-flush handle through
-            // System.IO. The durable file handle and same-volume atomic move are
-            // the strongest portable BCL boundary on that platform.
+            FlushWindowsDirectory(directory);
             return;
         }
 
@@ -110,10 +115,68 @@ internal static class AtomicStagedFile
         }
     }
 
+    static void FlushWindowsDirectory(string directory)
+    {
+        const uint genericRead = 0x80000000;
+        const uint genericWrite = 0x40000000;
+        const uint shareRead = 0x00000001;
+        const uint shareWrite = 0x00000002;
+        const uint shareDelete = 0x00000004;
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000;
+
+        using var handle = CreateWindowsDirectoryHandle(
+            directory,
+            genericRead | genericWrite,
+            shareRead | shareWrite | shareDelete,
+            0,
+            openExisting,
+            backupSemantics,
+            0);
+        if (handle.IsInvalid)
+        {
+            throw CreateWindowsIOException(
+                "open",
+                directory,
+                Marshal.GetLastPInvokeError());
+        }
+
+        if (!FlushWindowsFileBuffers(handle))
+        {
+            throw CreateWindowsIOException(
+                "flush",
+                directory,
+                Marshal.GetLastPInvokeError());
+        }
+    }
+
     private static IOException CreateUnixIOException(string operation, string path, int error) =>
         new(
             $"Could not {operation} directory '{path}': {new Win32Exception(error).Message}",
             error);
+
+    static IOException CreateWindowsIOException(string operation, string path, int error) =>
+        new(
+            $"Could not {operation} directory '{path}': {new Win32Exception(error).Message}",
+            error);
+
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "CreateFileW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true)]
+    static extern SafeFileHandle CreateWindowsDirectoryHandle(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        nint securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        nint templateFile);
+
+    [DllImport("kernel32.dll", EntryPoint = "FlushFileBuffers", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool FlushWindowsFileBuffers(SafeFileHandle fileHandle);
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int Open(nint path, int flags);

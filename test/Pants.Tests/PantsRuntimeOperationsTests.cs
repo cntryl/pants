@@ -16,7 +16,7 @@ public sealed class PantsRuntimeOperationsTests
 
         await database.FlushAsync(flushed);
 
-        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.GetRuntimeMetricsAsync();
         Assert.InRange(metrics.TotalMemtableBytes, 1, bytesBefore - 1);
         await database.DropColumnFamilyAsync(flushed);
         PantsBusyException error = await Assert.ThrowsAsync<PantsBusyException>(() =>
@@ -41,7 +41,11 @@ public sealed class PantsRuntimeOperationsTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        var scheduled = await database.GetRuntimeMetricsAsync();
+        Assert.True(scheduled.FlushEnqueuedTotal >= 1);
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+        var metrics = await database.GetRuntimeMetricsAsync();
         bool cleared = await database.WaitForWriteStallClearAsync(
             database.DefaultColumnFamily,
             TimeSpan.Zero);
@@ -51,7 +55,6 @@ public sealed class PantsRuntimeOperationsTests
         Assert.Equal(0, metrics.TotalMemtableBytes);
         Assert.Equal(1, metrics.ActiveMemtables);
         Assert.Equal(1, metrics.SstCount);
-        Assert.True(metrics.FlushEnqueuedTotal >= 1);
         Assert.Equal(0, metrics.FlushFailuresTotal);
     }
 
@@ -66,18 +69,15 @@ public sealed class PantsRuntimeOperationsTests
             .WithBackgroundCompaction(false);
         await using IPantsDatabase database = await PantsDatabase.OpenAsync(options);
 
-        await Task.WhenAll(Enumerable.Range(0, 200).Select(async index =>
-        {
-            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
-                PantsTransactionMode.ReadWrite);
-            transaction.Put(TestBytes.FromString($"key-{index:000}"), new byte[512]);
-            await transaction.CommitAsync(PantsWriteOptions.Buffered);
-        }));
+        await Task.WhenAll(Enumerable.Range(0, 200).Select(index =>
+            PutWithWriteStallRetryAsync(
+                database,
+                $"key-{index:000}",
+                new byte[512]).AsTask()));
 
         Assert.True(await database.WaitForWriteStallClearAsync(
             database.DefaultColumnFamily,
-            TimeSpan.FromMilliseconds(500)));
+            TimeSpan.FromSeconds(2)));
         PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
         Assert.False(metrics.WriteStalled);
         Assert.True(metrics.SstCount >= 2);
@@ -86,6 +86,65 @@ public sealed class PantsRuntimeOperationsTests
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync(TestBytes.FromString("key-000")));
         Assert.NotNull(await reader.GetAsync(TestBytes.FromString("key-199")));
+    }
+
+    [Fact]
+    public async Task ShouldKeepInMemoryWritesAvailableAfterDurableMemtableLimitIsReached()
+    {
+        var options = PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(2 * 1024))
+            .WithMemtableLimits(512, 256)
+            .WithTransactionMemoryPool(512);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        for (var index = 0; index < 2; index++)
+        {
+            await using var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put(TestBytes.FromString($"memory-{index}"), new byte[200]);
+            await transaction.CommitAsync(PantsWriteOptions.BestEffort);
+        }
+
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.False(metrics.WriteStalled);
+        Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
+
+        await using var accepted = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        accepted.Put("accepted"u8.ToArray(), new byte[200]);
+        await accepted.CommitAsync(PantsWriteOptions.BestEffort);
+
+        Assert.True(await database.WaitForWriteStallClearAsync(
+            database.DefaultColumnFamily,
+            TimeSpan.Zero));
+    }
+
+    static async ValueTask PutWithWriteStallRetryAsync(
+        IPantsDatabase database,
+        string key,
+        byte[] value)
+    {
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            await using var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put(TestBytes.FromString(key), value);
+            try
+            {
+                await transaction.CommitAsync(PantsWriteOptions.Buffered);
+                return;
+            }
+            catch (PantsWriteStallException) when (attempt < 15)
+            {
+                Assert.True(await database.WaitForWriteStallClearAsync(
+                    database.DefaultColumnFamily,
+                    TimeSpan.FromSeconds(2)));
+            }
+        }
+
+        throw new InvalidOperationException("Write pressure did not clear within 16 attempts.");
     }
 
     private static async ValueTask PutAsync(

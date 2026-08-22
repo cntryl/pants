@@ -47,8 +47,13 @@ internal sealed class RuntimeTelemetry
     private long _flushPublishCount;
     private long _flushPublishNanosecondsTotal;
     private long _flushPublishNanosecondsMaximum;
+    long _flushEnqueued;
+    long _flushFailures;
+    long _flushRetries;
+    int _pendingCloudUploads;
     readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
     long _walLastSyncedSequence;
+    long _writeStallsMemory;
     long _writeStallsNoSpace;
     long _cloudAsyncWalSegmentsSealed;
     long _cloudAsyncWalBytesSealed;
@@ -94,6 +99,16 @@ internal sealed class RuntimeTelemetry
     public long FlushPublishNanosecondsTotal => Volatile.Read(ref _flushPublishNanosecondsTotal);
 
     public long FlushPublishNanosecondsMaximum => Volatile.Read(ref _flushPublishNanosecondsMaximum);
+
+    public long FlushEnqueuedTotal => Volatile.Read(ref _flushEnqueued);
+
+    public long FlushFailuresTotal => Volatile.Read(ref _flushFailures);
+
+    public long FlushRetriesTotal => Volatile.Read(ref _flushRetries);
+
+    public int PendingCloudUploads => Volatile.Read(ref _pendingCloudUploads);
+
+    public long WriteStallsMemoryTotal => Volatile.Read(ref _writeStallsMemory);
 
     public long WriteStallsNoSpaceTotal => Volatile.Read(ref _writeStallsNoSpace);
 
@@ -269,6 +284,8 @@ internal sealed class RuntimeTelemetry
         Interlocked.Increment(ref _writeStallsNoSpace);
     }
 
+    public void RecordWriteStallMemory() => Interlocked.Increment(ref _writeStallsMemory);
+
     public void RecordCloudAsyncWalSegmentSealed(
         ulong segmentId,
         long bytes,
@@ -308,14 +325,35 @@ internal sealed class RuntimeTelemetry
 
     public void RecordFlush(TimeSpan elapsed)
     {
-        long nanoseconds = ToNanoseconds(elapsed);
+        RecordFlushBuild(elapsed);
+        RecordFlushPublication(elapsed);
+    }
+
+    public void RecordFlushBuild(TimeSpan elapsed)
+    {
+        var nanoseconds = ToNanoseconds(elapsed);
         Interlocked.Increment(ref _flushBuildCount);
         Interlocked.Add(ref _flushBuildNanosecondsTotal, nanoseconds);
         SetMaximum(ref _flushBuildNanosecondsMaximum, nanoseconds);
+    }
+
+    public void RecordFlushPublication(TimeSpan elapsed)
+    {
+        var nanoseconds = ToNanoseconds(elapsed);
         Interlocked.Increment(ref _flushPublishCount);
         Interlocked.Add(ref _flushPublishNanosecondsTotal, nanoseconds);
         SetMaximum(ref _flushPublishNanosecondsMaximum, nanoseconds);
     }
+
+    public void RecordFlushEnqueued() => Interlocked.Increment(ref _flushEnqueued);
+
+    public void RecordFlushRetry() => Interlocked.Increment(ref _flushRetries);
+
+    public void RecordFlushFailure() => Interlocked.Increment(ref _flushFailures);
+
+    public void RecordCloudUploadPending() => Interlocked.Increment(ref _pendingCloudUploads);
+
+    public void RecordCloudUploadCompleted() => Interlocked.Decrement(ref _pendingCloudUploads);
 
     public PantsReadPathDiagnostics GetReadPathDiagnostics() => new()
     {

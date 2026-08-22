@@ -2,6 +2,8 @@ namespace Pants;
 
 internal sealed class PantsRuntimeState
 {
+    TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
+
     public PantsRuntimeState(IPantsClock clock)
     {
         Clock = clock;
@@ -15,6 +17,7 @@ internal sealed class PantsRuntimeState
             ColumnFamilyIdentityComparer.Instance);
         ActiveTransactions = [];
         ActiveScanSnapshots = [];
+        ImmutableMemtableFlushes = [];
         ActiveFamilyVersions["default"] = DefaultFamilyVersion;
         FamilyGeneration["default"] = DefaultFamilyVersion;
         var defaultFamily = new ColumnFamilyIdentity(0, "default", DefaultFamilyVersion);
@@ -47,10 +50,14 @@ internal sealed class PantsRuntimeState
 
     public Dictionary<long, ScanSnapshotPin> ActiveScanSnapshots { get; }
 
+    public Dictionary<long, ImmutableMemtableFlush> ImmutableMemtableFlushes { get; }
+
     public int ActiveSnapshotCount => ActiveTransactions.Count + ActiveScanSnapshots.Count;
 
     public IEnumerable<ISnapshotPin> ActiveSnapshots =>
         ActiveTransactions.Values.Cast<ISnapshotPin>().Concat(ActiveScanSnapshots.Values);
+
+    public Task WritePressureChanged => _writePressureChanged.Task;
 
     public HashSet<ColumnFamilyIdentity> UnflushedFamilies { get; } =
         new(ColumnFamilyIdentityComparer.Instance);
@@ -66,6 +73,13 @@ internal sealed class PantsRuntimeState
     public long NoSpaceEvents { get; set; }
 
     public bool IsShuttingDown { get; set; }
+
+    public void SignalWritePressureChanged()
+    {
+        var completed = _writePressureChanged;
+        _writePressureChanged = CreateWritePressureCompletion();
+        completed.TrySetResult();
+    }
 
     public void MarkSalvageMode()
     {
@@ -94,4 +108,7 @@ internal sealed class PantsRuntimeState
             StringComparer.Ordinal);
         return new DatabaseSnapshot(Sequence, familyDataSnapshot, familyVersionsSnapshot);
     }
+
+    static TaskCompletionSource CreateWritePressureCompletion() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

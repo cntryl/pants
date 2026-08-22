@@ -1,0 +1,60 @@
+namespace Pants.Tests;
+
+sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposable
+{
+    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+
+    readonly TaskCompletionSource _dropAdmissionEntered = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource _flushPublicationEntered = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly ManualResetEventSlim _dropAdmissionRelease = new(initialState: false);
+    readonly ManualResetEventSlim _flushPublicationRelease = new(initialState: false);
+    int _dropAdmissionHit;
+    int _flushPublicationHit;
+
+    public async Task WaitForDropAdmissionAsync(TimeSpan timeout) =>
+        await _dropAdmissionEntered.Task.WaitAsync(timeout);
+
+    public async Task WaitForFlushPublicationAsync(TimeSpan timeout) =>
+        await _flushPublicationEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseDropAdmission() => _dropAdmissionRelease.Set();
+
+    public void ReleaseFlushPublication() => _flushPublicationRelease.Set();
+
+    public void Hit(PantsFailpoint failpoint)
+    {
+        switch (failpoint)
+        {
+            case PantsFailpoint.BeforeDropAdmission
+                when Interlocked.CompareExchange(ref _dropAdmissionHit, 1, 0) == 0:
+                Block(_dropAdmissionEntered, _dropAdmissionRelease, failpoint);
+                break;
+            case PantsFailpoint.BeforeFlushPublication
+                when Interlocked.CompareExchange(ref _flushPublicationHit, 1, 0) == 0:
+                Block(_flushPublicationEntered, _flushPublicationRelease, failpoint);
+                break;
+        }
+    }
+
+    public void Dispose()
+    {
+        _dropAdmissionRelease.Set();
+        _flushPublicationRelease.Set();
+        _dropAdmissionRelease.Dispose();
+        _flushPublicationRelease.Dispose();
+    }
+
+    static void Block(
+        TaskCompletionSource entered,
+        ManualResetEventSlim release,
+        PantsFailpoint failpoint)
+    {
+        entered.TrySetResult();
+        if (!release.Wait(MaximumBlockTime))
+        {
+            throw new TimeoutException($"Timed out waiting to release {failpoint}.");
+        }
+    }
+}

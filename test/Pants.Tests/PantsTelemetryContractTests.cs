@@ -112,7 +112,26 @@ public sealed class PantsTelemetryContractTests
             .Any());
         var metrics = await database.GetRuntimeMetricsAsync();
 
+        Assert.True(metrics.FlushFailuresTotal >= 1);
         Assert.True(metrics.FlushRetriesTotal >= 1);
+    }
+
+    [Fact]
+    public async Task ShouldNotAttributeDdlWorkerFailureToFlushMetrics()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new DdlFailpointHandler("BeforeDdlRemoteCas");
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "telemetry-ddl-failure/")
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new PantsRuntimeDependencies(failpoints));
+
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            database.CreateColumnFamilyAsync("failed-ddl").AsTask());
+
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).FlushFailuresTotal);
     }
 
     [Fact]

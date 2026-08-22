@@ -30,4 +30,19 @@ internal sealed class MidgeFileMeta
     public ulong? LargestSequence { get; set; }
 
     public uint Sublevel { get; set; }
+
+    public MidgeFileMeta Clone() => new()
+    {
+        Name = Name,
+        Level = Level,
+        SizeBytes = SizeBytes,
+        ContentCrc32C = ContentCrc32C,
+        ColumnFamilyId = ColumnFamilyId,
+        SstSequence = SstSequence,
+        SmallestKey = SmallestKey?.ToArray(),
+        LargestKey = LargestKey?.ToArray(),
+        SmallestSequence = SmallestSequence,
+        LargestSequence = LargestSequence,
+        Sublevel = Sublevel
+    };
 }

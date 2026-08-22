@@ -443,17 +443,18 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 "Simulated-cloud WAL pruning sequence differs from the committed manifest.");
         }
 
-        var retired = _catalog.Segments.Values
+        var candidates = _catalog.Segments.Values
             .Where(segment => segment.MaximumSequence <= coveredSequence)
             .ToArray();
-        if (retired.Length == 0)
+        if (candidates.Length == 0)
         {
             return;
         }
 
-        var dependencyGuards = ValidateManifestDependencies(manifest);
+        var retired = new List<PublishedWalSegment>(candidates.Length);
+        var walBytes = new Dictionary<ulong, byte[]>();
         var walGuards = new Dictionary<ulong, SimulatedCloudObjectGuard>();
-        foreach (var segment in retired)
+        foreach (var segment in candidates)
         {
             var path = ResolveObjectPath(_cloudRoot, segment.ObjectKey);
             if (!File.Exists(path))
@@ -470,17 +471,37 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Published simulated-cloud WAL '{segment.ObjectKey}' differs from its catalog proof.");
             }
 
-            CloudWalCoverageValidator.ValidateAndEnsureCovered(
-                bytes,
-                segment.MaximumSequence,
-                segment.WriterEpoch,
-                manifest);
+            if (!CloudWalCoverageValidator.ValidateAndIsCovered(
+                    bytes,
+                    segment.MaximumSequence,
+                    segment.WriterEpoch,
+                    manifest))
+            {
+                continue;
+            }
+
+            retired.Add(segment);
+            walBytes.Add(segment.SegmentId, bytes);
             walGuards.Add(
                 segment.SegmentId,
                 new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
         }
 
+        if (retired.Count == 0)
+        {
+            return;
+        }
+
+        var dependencyGuards = ValidateManifestDependencies(manifest);
         VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
+        foreach (var segment in retired)
+        {
+            CloudWalCoverageValidator.ValidateAndEnsureCovered(
+                walBytes[segment.SegmentId],
+                segment.MaximumSequence,
+                segment.WriterEpoch,
+                manifest);
+        }
 
         foreach (var segment in retired)
         {

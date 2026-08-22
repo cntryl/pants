@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Channels;
 
@@ -5,6 +6,8 @@ namespace Pants;
 
 sealed class PantsActor : IAsyncDisposable
 {
+    static readonly TimeSpan InitialFlushRetryBackoff = TimeSpan.FromMilliseconds(10);
+    static readonly TimeSpan MaximumFlushRetryBackoff = TimeSpan.FromSeconds(1);
     static readonly TimeSpan ProviderStartupCleanupTimeout = TimeSpan.FromSeconds(1);
 
     readonly PantsRuntimeState _state;
@@ -29,6 +32,8 @@ sealed class PantsActor : IAsyncDisposable
     readonly CloudWalSealController? _cloudWalSealController;
     readonly CloudMemtableSegmentTracker? _cloudMemtableSegments;
     readonly CloudFlushRetryScheduler _cloudFlushRetries = new();
+    readonly ConcurrentDictionary<ColumnFamilyIdentity, byte> _writeStallHints =
+        new(ColumnFamilyIdentityComparer.Instance);
     readonly HybridCacheManager? _hybridCache;
     readonly CloudLeaseCoordinator? _cloudLease;
     readonly CancellationTokenSource? _cloudLeaseCancellation;
@@ -38,9 +43,13 @@ sealed class PantsActor : IAsyncDisposable
     int _queuedCommands;
     int _disposed;
     int _persistenceAnomaly;
+    int _deferredCompactionScheduled;
     bool _shutdownRequested;
+    bool _shutdownPreparationCompleted;
     bool _verificationInProgress;
     bool _backgroundCompactionEnabled;
+    bool _backgroundCompactionPending;
+    bool _readAmplificationCompactionPending;
     readonly bool _workersStarted;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
     Task? _cloudWalSealDeadlineTask;
@@ -270,9 +279,7 @@ sealed class PantsActor : IAsyncDisposable
                 options,
                 telemetry,
                 _diskStore,
-                _flushWorker,
                 _compactionWorker,
-                _cloudWorker,
                 _cloudFlushRetries,
                 _cloudWalSealController,
                 _cloudMemtableSegments,
@@ -288,6 +295,10 @@ sealed class PantsActor : IAsyncDisposable
             });
             _currentSnapshot = _state.CreateSnapshot();
             _loopTask = Task.Run(RunLoopAsync);
+            if (UsesBackgroundImmutableFlushes)
+            {
+                _ = ScheduleRecoveredMemtableFlushesAsync();
+            }
         }
         catch
         {
@@ -444,81 +455,82 @@ sealed class PantsActor : IAsyncDisposable
         bool discardUnflushed,
         CancellationToken cancellationToken)
     {
-        await SendAsync(
-            async state =>
+        while (true)
+        {
+            if (UsesBackgroundImmutableFlushes)
             {
-                ThrowIfShuttingDown(state);
-                ThrowIfVerificationInProgress();
-                EnsureCloudLeaseValid();
-                ValidateActiveFamily(state, identity);
-                if (_cloudDdlCoordinator is not null)
+                await WaitForColumnFamilyFlushAsync(
+                        identity,
+                        retryFailures: false,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                _failpoints.Hit(PantsFailpoint.BeforeDropAdmission);
+            }
+
+            var dropped = await SendAsync(
+                async state =>
                 {
-                    await _cloudWorker.ExecuteAsync(workerCancellationToken =>
-                            _cloudDdlCoordinator.ReconcilePendingAsync(
-                                state,
-                                workerCancellationToken))
-                        .ConfigureAwait(false);
-                    if (!IsActiveFamily(state, identity))
+                    ThrowIfShuttingDown(state);
+                    ThrowIfVerificationInProgress();
+                    EnsureCloudLeaseValid();
+                    ValidateActiveFamily(state, identity);
+                    if (UsesBackgroundImmutableFlushes &&
+                        state.ImmutableMemtableFlushes.Values.Any(flush =>
+                            flush.Frozen.ColumnFamily == identity))
                     {
-                        PublishSnapshot(state);
-                        return true;
+                        return false;
                     }
-                }
 
-                if (!discardUnflushed && state.UnflushedFamilies.Contains(identity))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.Busy,
-                        $"Column family '{identity.Name}' has committed data that has not been flushed.");
-                }
-
-                if (_diskStore is not null && _cloudDdlCoordinator is not null)
-                {
-                    var edit = _diskStore.CreateDropColumnFamilyEdit(state, identity);
-                    await _cloudWorker.ExecuteAsync(workerCancellationToken =>
-                            _cloudDdlCoordinator.ExecuteAsync(
-                                state,
-                                edit,
-                                workerCancellationToken))
-                        .ConfigureAwait(false);
-                }
-                else
-                {
-                    if (_diskStore is not null)
+                    if (_cloudDdlCoordinator is not null)
                     {
-                        await _manifestWorker
-                            .ExecuteAsync(() => _diskStore.DropColumnFamily(state, identity))
+                        await _cloudWorker.ExecuteAsync(workerCancellationToken =>
+                                _cloudDdlCoordinator.ReconcilePendingAsync(
+                                    state,
+                                    workerCancellationToken))
+                            .ConfigureAwait(false);
+                        if (!IsActiveFamily(state, identity))
+                        {
+                            PublishSnapshot(state);
+                            return true;
+                        }
+                    }
+
+                    if (!discardUnflushed && state.UnflushedFamilies.Contains(identity))
+                    {
+                        throw PantsException.Create(
+                            PantsErrorCode.Busy,
+                            $"Column family '{identity.Name}' has committed data that has not been flushed.");
+                    }
+
+                    if (_diskStore is not null && _cloudDdlCoordinator is not null)
+                    {
+                        var edit = _diskStore.CreateDropColumnFamilyEdit(state, identity);
+                        await _cloudWorker.ExecuteAsync(workerCancellationToken =>
+                                _cloudDdlCoordinator.ExecuteAsync(
+                                    state,
+                                    edit,
+                                    workerCancellationToken))
                             .ConfigureAwait(false);
                     }
-
-                    state.ActiveFamilyVersions.Remove(identity.Name);
-                    state.FamilyData.Remove(identity);
-                    state.RangeTombstones.Remove(identity);
-                    state.ActiveMemtableBytes.Remove(identity);
-                    state.UnflushedFamilies.Remove(identity);
-                }
-
-                _cloudMemtableSegments?.RecordFlush(identity);
-
-                if (_cloudPersistence is not null)
-                {
-                    try
+                    else
                     {
-                        await _cloudWorker.ExecuteAsync(
-                                _cloudPersistence.MirrorMetadataAndSstsAsync)
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                        MarkPersistenceAnomaly(state);
-                    }
-                }
+                        if (_diskStore is not null)
+                        {
+                            await _manifestWorker
+                                .ExecuteAsync(() => _diskStore.DropColumnFamily(state, identity))
+                                .ConfigureAwait(false);
+                        }
 
-                if (_diskStore is not null)
-                {
-                    await _garbageCollectionWorker
-                        .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
-                        .ConfigureAwait(false);
+                        state.ActiveFamilyVersions.Remove(identity.Name);
+                        state.FamilyData.Remove(identity);
+                        state.RangeTombstones.Remove(identity);
+                        state.ActiveMemtableBytes.Remove(identity);
+                        state.UnflushedFamilies.Remove(identity);
+                        state.SignalWritePressureChanged();
+                    }
+
+                    _cloudMemtableSegments?.RecordFlush(identity);
+
                     if (_cloudPersistence is not null)
                     {
                         try
@@ -532,12 +544,37 @@ sealed class PantsActor : IAsyncDisposable
                             MarkPersistenceAnomaly(state);
                         }
                     }
-                }
 
-                PublishSnapshot(state);
-                return true;
-            },
-            cancellationToken).ConfigureAwait(false);
+                    if (_diskStore is not null)
+                    {
+                        await _garbageCollectionWorker
+                            .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                            .ConfigureAwait(false);
+                        if (_cloudPersistence is not null)
+                        {
+                            try
+                            {
+                                await _cloudWorker.ExecuteAsync(
+                                        _cloudPersistence.MirrorMetadataAndSstsAsync)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception)
+                            {
+                                MarkPersistenceAnomaly(state);
+                            }
+                        }
+                    }
+
+                    PublishSnapshot(state);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (dropped)
+            {
+                _writeStallHints.TryRemove(identity, out _);
+                return;
+            }
+        }
     }
 
     public ValueTask<ColumnFamilyIdentity?> GetActiveColumnFamilyIdentityAsync(
@@ -661,6 +698,12 @@ sealed class PantsActor : IAsyncDisposable
                 $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
         }
 
+        var families = GetCommitFamilies(payload);
+        if (families.Any(_writeStallHints.ContainsKey))
+        {
+            await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
+        }
+
         await SendCommitAsync(
             writeOptions,
             payload,
@@ -697,6 +740,21 @@ sealed class PantsActor : IAsyncDisposable
         ColumnFamilyIdentity identity,
         CancellationToken cancellationToken)
     {
+        if (UsesBackgroundImmutableFlushes)
+        {
+            await FlushImmutableMemtableAsync(identity, cancellationToken).ConfigureAwait(false);
+            _failpoints.Hit(PantsFailpoint.BeforeFlushCompactionAdmission);
+            _ = await SendAsync(
+                async state =>
+                {
+                    await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                    PublishSnapshot(state);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         await SendAsync(
             async state =>
             {
@@ -721,6 +779,7 @@ sealed class PantsActor : IAsyncDisposable
                     _cloudPersistence is not null &&
                     exception is not OperationCanceledException)
                 {
+                    _telemetry.RecordFlushFailure();
                     MarkPersistenceAnomaly(state);
                     if (exception is IOException or PantsIOException or PantsTimeoutException)
                     {
@@ -740,44 +799,84 @@ sealed class PantsActor : IAsyncDisposable
 
     public async ValueTask CompactAsync(CancellationToken cancellationToken)
     {
-        await SendAsync(
-            async state =>
+        while (true)
+        {
+            if (UsesBackgroundImmutableFlushes)
             {
-                ThrowIfShuttingDown(state);
-                ThrowIfVerificationInProgress();
-                EnsureCloudWriteAuthorityValid();
-                if (_diskStore is not null)
-                {
-                    await EnsureHybridSstsLocalAsync(
-                            _diskStore.GetManifestSstNames(),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    long bytesRewritten = 0;
-                    await _compactionWorker
-                        .ExecuteAsync(async workerCancellationToken =>
-                            bytesRewritten = await _diskStore.CompactAsync(
-                                    state,
-                                    force: true,
-                                    _cloudCompactionOutputPublisher,
-                                    workerCancellationToken)
-                                .ConfigureAwait(false))
-                        .ConfigureAwait(false);
-                    if (bytesRewritten > 0)
-                    {
-                        _telemetry.RecordCompaction(bytesRewritten);
-                    }
-                }
+                await FlushActiveAndImmutableMemtablesAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                _failpoints.Hit(PantsFailpoint.BeforeCompactionAdmission);
+            }
 
-                await MirrorCloudStorageAsync().ConfigureAwait(false);
-                state.UnflushedFamilies.Clear();
-                ClearMemtableAccounting(state);
-                _cloudMemtableSegments?.Reinitialize(
-                    [],
-                    _diskStore?.CurrentWalSegmentId ?? 0);
-                PublishSnapshot(state);
-                return true;
-            },
-            cancellationToken).ConfigureAwait(false);
+            var compacted = await SendAsync(
+                async state =>
+                {
+                    ThrowIfShuttingDown(state);
+                    ThrowIfVerificationInProgress();
+                    EnsureCloudWriteAuthorityValid();
+                    if (UsesBackgroundImmutableFlushes)
+                    {
+                        foreach (var family in state.ActiveMemtableBytes
+                                     .Where(static pair => pair.Value > 0)
+                                     .Select(static pair => pair.Key)
+                                     .ToArray())
+                        {
+                            _ = await FreezeAndScheduleFlushAsync(state, family)
+                                .ConfigureAwait(false);
+                        }
+
+                        if (state.ImmutableMemtableFlushes.Count != 0 ||
+                            state.UnflushedFamilies.Count != 0)
+                        {
+                            return false;
+                        }
+                    }
+
+                    if (_diskStore is not null)
+                    {
+                        await EnsureHybridSstsLocalAsync(
+                                _diskStore.GetManifestSstNames(),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        var result = default(CompactionResult);
+                        await _compactionWorker
+                            .ExecuteAsync(async workerCancellationToken =>
+                                result = await _diskStore.CompactAsync(
+                                        state,
+                                        force: true,
+                                        _cloudCompactionOutputPublisher,
+                                        workerCancellationToken)
+                                    .ConfigureAwait(false))
+                            .ConfigureAwait(false);
+                        if (result.PersistenceAnomaly)
+                        {
+                            Volatile.Write(ref _persistenceAnomaly, 1);
+                            MarkPersistenceAnomaly(state);
+                        }
+
+                        if (result.BytesRewritten > 0)
+                        {
+                            _telemetry.RecordCompaction(result.BytesRewritten);
+                        }
+                    }
+
+                    await MirrorCloudStorageAsync().ConfigureAwait(false);
+                    _backgroundCompactionPending = false;
+                    _readAmplificationCompactionPending = false;
+                    state.UnflushedFamilies.Clear();
+                    ClearMemtableAccounting(state);
+                    _cloudMemtableSegments?.Reinitialize(
+                        [],
+                        _diskStore?.CurrentWalSegmentId ?? 0);
+                    PublishSnapshot(state);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (compacted)
+            {
+                return;
+            }
+        }
     }
 
     public async ValueTask SetBackgroundCompactionAsync(bool enabled, CancellationToken cancellationToken)
@@ -792,22 +891,56 @@ sealed class PantsActor : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask<bool> WaitForWriteStallClearAsync(
+    public async ValueTask<bool> WaitForWriteStallClearAsync(
         ColumnFamilyIdentity identity,
         TimeSpan timeout,
-        CancellationToken cancellationToken) =>
-        SendAsync(
-            state =>
-            {
-                ValidateActiveFamily(state, identity);
-                if (timeout < TimeSpan.Zero)
-                {
-                    throw PantsException.InvalidArgument("Write-stall timeout must not be negative.");
-                }
+        CancellationToken cancellationToken)
+    {
+        if (timeout < TimeSpan.Zero)
+        {
+            throw PantsException.InvalidArgument("Write-stall timeout must not be negative.");
+        }
 
-                return ValueTask.FromResult(true);
-            },
-            cancellationToken);
+        var started = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            if (Volatile.Read(ref _shutdownRequested))
+            {
+                throw new PantsBusyException("The runtime is shutting down.");
+            }
+
+            var status = await SendAsync(
+                state =>
+                {
+                    ThrowIfShuttingDown(state);
+                    ValidateActiveFamily(state, identity);
+                    return ValueTask.FromResult(new WritePressureWaitStatus(
+                        MemtableWritePressure.IsStalled(_options, state, [identity]),
+                        state.WritePressureChanged));
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (!status.IsStalled)
+            {
+                return true;
+            }
+
+            var remaining = timeout - Stopwatch.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero)
+            {
+                return false;
+            }
+
+            try
+            {
+                await status.StateChanged.WaitAsync(remaining, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+        }
+    }
 
     async ValueTask RelieveWritePressureAsync(
         PantsRuntimeState state,
@@ -818,14 +951,30 @@ sealed class PantsActor : IAsyncDisposable
             return;
         }
 
-        var wouldExceedLimit = payload.OrderedOperations
+        var familiesOverLimit = payload.OrderedOperations
             .GroupBy(static operation => operation.Family, ColumnFamilyIdentityComparer.Instance)
-            .Any(group =>
+            .Where(group =>
                 state.ActiveMemtableBytes.GetValueOrDefault(group.Key) > 0 &&
                 state.ActiveMemtableBytes.GetValueOrDefault(group.Key) +
-                group.Sum(EstimateOperationBytes) > _options.MemtableSizeLimitBytes);
-        if (!wouldExceedLimit)
+                group.Sum(EstimateOperationBytes) > _options.MemtableSizeLimitBytes)
+            .Select(static group => group.Key)
+            .ToArray();
+        if (familiesOverLimit.Length == 0)
         {
+            return;
+        }
+
+        if (UsesBackgroundImmutableFlushes)
+        {
+            foreach (var family in familiesOverLimit)
+            {
+                await FreezeAndScheduleFlushAsync(
+                        state,
+                        family,
+                        rejectWhenQueueFull: false)
+                    .ConfigureAwait(false);
+            }
+
             return;
         }
 
@@ -929,8 +1078,16 @@ sealed class PantsActor : IAsyncDisposable
 
     public ValueTask<PantsStorageLayout> GetStorageLayoutAsync(CancellationToken cancellationToken) =>
         SendAsync(
-            state => ValueTask.FromResult(
-                _diskStore?.GetStorageLayout(state) ?? EmptyStorageLayout(state)),
+            state =>
+            {
+                var layout = _diskStore?.GetStorageLayout(state) ?? EmptyStorageLayout(state);
+                return ValueTask.FromResult(layout with
+                {
+                    Health = EngineHealthClassifier.Classify(
+                        layout.Health,
+                        MemtableWritePressure.IsStalled(_options, state))
+                });
+            },
             cancellationToken);
 
     public async ValueTask<PantsStorageVerificationReport> VerifyStorageAsync(
@@ -942,18 +1099,7 @@ sealed class PantsActor : IAsyncDisposable
             throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
         }
 
-        var path = await SendAsync(
-            _ =>
-            {
-                if (_verificationInProgress)
-                {
-                    throw new PantsBusyException("Storage verification is already in progress.");
-                }
-
-                _verificationInProgress = true;
-                return ValueTask.FromResult(_diskStore?.RootPath);
-            },
-            cancellationToken).ConfigureAwait(false);
+        var path = await AcquireVerificationBarrierAsync(cancellationToken).ConfigureAwait(false);
         if (path is null)
         {
             await ReleaseVerificationBarrierAsync().ConfigureAwait(false);
@@ -962,8 +1108,8 @@ sealed class PantsActor : IAsyncDisposable
                 "In-memory storage has no persistent path to verify.");
         }
 
-        using CancellationTokenSource deadline = new(timeout);
-        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+        using var deadline = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
         try
@@ -982,32 +1128,91 @@ sealed class PantsActor : IAsyncDisposable
         }
     }
 
+    async ValueTask<string?> AcquireVerificationBarrierAsync(
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            if (UsesBackgroundImmutableFlushes)
+            {
+                await DrainImmutableFlushesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            var admission = await SendAsync(
+                state =>
+                {
+                    if (_verificationInProgress)
+                    {
+                        throw new PantsBusyException(
+                            "Storage verification is already in progress.");
+                    }
+
+                    if (HasLayoutMutationInFlight(state))
+                    {
+                        return ValueTask.FromResult((Admitted: false, Path: (string?)null));
+                    }
+
+                    _verificationInProgress = true;
+                    return ValueTask.FromResult((Admitted: true, Path: _diskStore?.RootPath));
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (admission.Admitted)
+            {
+                return admission.Path;
+            }
+
+            await Task.Yield();
+        }
+    }
+
+    bool HasLayoutMutationInFlight(PantsRuntimeState state) =>
+        state.ImmutableMemtableFlushes.Count != 0 ||
+        _flushWorker.InFlight != 0 ||
+        _flushWorker.QueueDepth != 0 ||
+        _compactionWorker.InFlight != 0 ||
+        _compactionWorker.QueueDepth != 0;
+
     public async ValueTask ShutdownAsync(CancellationToken cancellationToken)
     {
-        await SendAsync(
+        cancellationToken.ThrowIfCancellationRequested();
+        var preparation = SendAsync(
             async state =>
             {
-                if (_shutdownRequested)
+                if (_shutdownPreparationCompleted)
                 {
                     return true;
                 }
 
-                ThrowIfVerificationInProgress();
-
-                if (state.ActiveSnapshotCount != 0)
+                if (!_shutdownRequested)
                 {
-                    throw PantsException.Create(
-                        PantsErrorCode.Busy,
-                        "Database shutdown is blocked by active transactions or scans.");
+                    ThrowIfVerificationInProgress();
+
+                    if (state.ActiveSnapshotCount != 0)
+                    {
+                        throw PantsException.Create(
+                            PantsErrorCode.Busy,
+                            "Database shutdown is blocked by active transactions or scans.");
+                    }
+
+                    Volatile.Write(ref _shutdownRequested, true);
+                    state.IsShuttingDown = true;
+                    state.ActiveTransactions.Clear();
+                    state.ActiveScanSnapshots.Clear();
+                    foreach (var flush in state.ImmutableMemtableFlushes.Values)
+                    {
+                        flush.FailWaiterForShutdown();
+                    }
+
+                    state.SignalWritePressureChanged();
                 }
 
-                _shutdownRequested = true;
-                state.IsShuttingDown = true;
-                state.ActiveTransactions.Clear();
-                state.ActiveScanSnapshots.Clear();
                 if (_diskStore is not null)
                 {
-                    await _walWorker.ExecuteAsync(_diskStore.FlushDurabilityBoundary)
+                    await _walWorker.ExecuteAsync(() =>
+                        {
+                            _failpoints.Hit(PantsFailpoint.BeforeShutdownWalDurabilityBoundary);
+                            _diskStore.FlushDurabilityBoundary();
+                        })
                         .ConfigureAwait(false);
                     if (_cloudPersistence is not null && (_cloudLease?.IsHealthy ?? true))
                     {
@@ -1028,9 +1233,37 @@ sealed class PantsActor : IAsyncDisposable
                 {
                     await TryMirrorCloudStorageOnShutdownAsync(state).ConfigureAwait(false);
                 }
+
+                _shutdownPreparationCompleted = true;
                 return true;
             },
-            cancellationToken).ConfigureAwait(false);
+            CancellationToken.None).AsTask();
+        try
+        {
+            await preparation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = ObserveShutdownPreparationAsync(preparation);
+            throw;
+        }
+
+        if (UsesBackgroundImmutableFlushes)
+        {
+            await WaitForImmutableFlushWorkersAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    static async Task ObserveShutdownPreparationAsync(Task preparation)
+    {
+        try
+        {
+            await preparation.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A timed-out caller no longer owns this admitted durability work.
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -1173,7 +1406,14 @@ sealed class PantsActor : IAsyncDisposable
         try
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
-            _ = await command.Task.ConfigureAwait(false);
+            var writeStalled = await command.Task.ConfigureAwait(false);
+            if (writeStalled)
+            {
+                foreach (var family in GetCommitFamilies(payload))
+                {
+                    _writeStallHints.TryAdd(family, 0);
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -1318,11 +1558,11 @@ sealed class PantsActor : IAsyncDisposable
                 PantsDiagnostics.TransactionsCommitted.Add(1);
             }
 
-            await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
+            await RotateLocalWalAtConfiguredThresholdAsync(state, diskStore).ConfigureAwait(false);
             PublishSnapshot(state);
             foreach (var command in accepted)
             {
-                command.Complete(true);
+                command.Complete(IsCommitWriteStalled(state, command.Payload));
             }
         }
         catch (Exception exception)
@@ -1361,6 +1601,7 @@ sealed class PantsActor : IAsyncDisposable
                 TrackCloudMemtableWrites(payload, writtenWalSegmentId.Value);
             }
 
+            await FlushAtWalRecordThresholdAsync(state).ConfigureAwait(false);
             await FlushAtConfiguredThresholdAsync(state, payload).ConfigureAwait(false);
         }
         else if (payload.Mode == PantsTransactionMode.ReadWrite &&
@@ -1374,7 +1615,7 @@ sealed class PantsActor : IAsyncDisposable
 
         PublishSnapshot(state);
         PantsDiagnostics.TransactionsCommitted.Add(1);
-        return true;
+        return IsCommitWriteStalled(state, payload);
     }
 
     async ValueTask PrepareCommitAsync(PantsRuntimeState state, CommitPayload payload)
@@ -1454,7 +1695,9 @@ sealed class PantsActor : IAsyncDisposable
                 durability,
                 state.Sequence);
         }
-        if (_options.FlushAfterWalRecords > 0 && diskStore.WalRecords >= _options.FlushAfterWalRecords)
+        if (!UsesBackgroundImmutableFlushes &&
+            _options.FlushAfterWalRecords > 0 &&
+            diskStore.WalRecords >= _options.FlushAfterWalRecords)
         {
             await _flushWorker.ExecuteAsync(() => diskStore.Flush(state)).ConfigureAwait(false);
             await MirrorCloudStorageAsync().ConfigureAwait(false);
@@ -1462,7 +1705,7 @@ sealed class PantsActor : IAsyncDisposable
             await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
         }
 
-        await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
+        await RotateLocalWalAtConfiguredThresholdAsync(state, diskStore).ConfigureAwait(false);
 
         if (_cloudPersistence is not null && durability == PantsDurability.CloudAsync)
         {
@@ -1609,6 +1852,7 @@ sealed class PantsActor : IAsyncDisposable
         var persistence = _cloudPersistence ??
             throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
         var started = Stopwatch.GetTimestamp();
+        _telemetry.RecordCloudUploadPending();
         _telemetry.RecordCloudAsyncWalUploadStarted();
         try
         {
@@ -1624,6 +1868,10 @@ sealed class PantsActor : IAsyncDisposable
         {
             _telemetry.RecordCloudAsyncWalUploadFailed();
             throw;
+        }
+        finally
+        {
+            _telemetry.RecordCloudUploadCompleted();
         }
 
         _telemetry.RecordCloudAsyncWalUploadCompleted(Stopwatch.GetElapsedTime(started));
@@ -1722,9 +1970,12 @@ sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    async ValueTask RotateLocalWalAtConfiguredThresholdAsync(LocalDiskStore diskStore)
+    async ValueTask RotateLocalWalAtConfiguredThresholdAsync(
+        PantsRuntimeState state,
+        LocalDiskStore diskStore)
     {
         if (_options.Storage is not PantsStorageConfiguration.Local ||
+            UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0 ||
             diskStore.ActiveWalBytes < _options.WalBufferSizeBytes)
         {
             return;
@@ -1817,6 +2068,26 @@ sealed class PantsActor : IAsyncDisposable
                 state.ActiveMemtableBytes.GetValueOrDefault(operation.Family) >=
                 _options.MemtableFlushThresholdBytes))
         {
+            if (UsesBackgroundImmutableFlushes)
+            {
+                foreach (var family in payload.OrderedOperations
+                             .Select(static operation => operation.Family)
+                             .Distinct(ColumnFamilyIdentityComparer.Instance))
+                {
+                    if (state.ActiveMemtableBytes.GetValueOrDefault(family) >=
+                        _options.MemtableFlushThresholdBytes)
+                    {
+                        await FreezeAndScheduleFlushAsync(
+                                state,
+                                family,
+                                rejectWhenQueueFull: false)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                return;
+            }
+
             var started = Stopwatch.GetTimestamp();
             await _flushWorker.ExecuteAsync(() => _diskStore.Flush(state)).ConfigureAwait(false);
             _telemetry.RecordFlush(Stopwatch.GetElapsedTime(started));
@@ -1829,6 +2100,472 @@ sealed class PantsActor : IAsyncDisposable
         }
 
         await FlushCloudSegmentGapAsync(state).ConfigureAwait(false);
+    }
+
+    async ValueTask FlushAtWalRecordThresholdAsync(PantsRuntimeState state)
+    {
+        if (!UsesBackgroundImmutableFlushes ||
+            _options.FlushAfterWalRecords <= 0 ||
+            _diskStore!.WalRecords < _options.FlushAfterWalRecords)
+        {
+            return;
+        }
+
+        foreach (var family in state.ActiveMemtableBytes
+                     .Where(static pair => pair.Value > 0)
+                     .Select(static pair => pair.Key)
+                     .ToArray())
+        {
+            _ = await FreezeAndScheduleFlushAsync(
+                    state,
+                    family,
+                    rejectWhenQueueFull: false)
+                .ConfigureAwait(false);
+        }
+    }
+
+    async Task ScheduleRecoveredMemtableFlushesAsync()
+    {
+        try
+        {
+            _ = await SendAsync(
+                async state =>
+                {
+                    foreach (var family in state.ActiveMemtableBytes
+                                 .Where(pair =>
+                                     pair.Value >= _options.MemtableFlushThresholdBytes)
+                                 .Select(static pair => pair.Key)
+                                 .ToArray())
+                    {
+                        _ = await FreezeAndScheduleFlushAsync(
+                                state,
+                                family,
+                                rejectWhenQueueFull: false)
+                            .ConfigureAwait(false);
+                    }
+
+                    return true;
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+        }
+        catch (Exception)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+    }
+
+    bool UsesBackgroundImmutableFlushes =>
+        _diskStore is not null && _options.Storage is PantsStorageConfiguration.Local;
+
+    async ValueTask FlushImmutableMemtableAsync(
+        ColumnFamilyIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        var attempts = await SendAsync<IReadOnlyList<Task<Exception?>>>(
+            async state =>
+            {
+                ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
+                EnsureCloudWriteAuthorityValid();
+                ValidateActiveFamily(state, identity);
+                _ = await FreezeAndScheduleFlushAsync(state, identity).ConfigureAwait(false);
+                await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                    .ConfigureAwait(false);
+                return state.ImmutableMemtableFlushes.Values
+                    .Where(flush => flush.Frozen.ColumnFamily == identity)
+                    .Select(static flush => flush.AttemptTask)
+                    .ToArray();
+            },
+            cancellationToken).ConfigureAwait(false);
+        await AwaitFlushAttemptsAsync(attempts, cancellationToken).ConfigureAwait(false);
+    }
+
+    async ValueTask WaitForColumnFamilyFlushAsync(
+        ColumnFamilyIdentity identity,
+        bool retryFailures,
+        CancellationToken cancellationToken)
+    {
+        var attempts = await SendAsync<IReadOnlyList<Task<Exception?>>>(
+            async state =>
+            {
+                ValidateActiveFamily(state, identity);
+                var flushes = state.ImmutableMemtableFlushes.Values
+                    .Where(flush => flush.Frozen.ColumnFamily == identity)
+                    .ToArray();
+                if (retryFailures)
+                {
+                    await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                        .ConfigureAwait(false);
+                }
+
+                return flushes.Select(static flush => flush.AttemptTask).ToArray();
+            },
+            cancellationToken).ConfigureAwait(false);
+        await AwaitFlushAttemptsAsync(attempts, cancellationToken).ConfigureAwait(false);
+    }
+
+    async ValueTask<ImmutableMemtableFlush?> FreezeAndScheduleFlushAsync(
+        PantsRuntimeState state,
+        ColumnFamilyIdentity identity,
+        bool rejectWhenQueueFull = true)
+    {
+        if (state.IsShuttingDown)
+        {
+            return null;
+        }
+
+        var diskStore = _diskStore ??
+            throw new PantsInternalException("An immutable flush requires local storage.");
+        var sizeBytes = state.ActiveMemtableBytes.GetValueOrDefault(identity);
+        if (sizeBytes == 0)
+        {
+            return null;
+        }
+
+        if (MemtableWritePressure.IsQueueFull(state, identity))
+        {
+            _telemetry.RecordWriteStallMemory();
+            if (!rejectWhenQueueFull)
+            {
+                return null;
+            }
+
+            throw new PantsWriteStallException(
+                $"The immutable memtable queue is full for column family '{identity.Name}'.");
+        }
+
+        var frozen = diskStore.FreezeMemtable(
+            identity,
+            sizeBytes,
+            checked((ulong)state.Sequence));
+        if (frozen is null)
+        {
+            return null;
+        }
+
+        state.ActiveMemtableBytes[identity] = 0;
+        var flush = new ImmutableMemtableFlush(frozen);
+        state.ImmutableMemtableFlushes.Add(frozen.Id, flush);
+        _telemetry.RecordFlushEnqueued();
+        state.SignalWritePressureChanged();
+        _backgroundCompactionPending |= _backgroundCompactionEnabled;
+        await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: false)
+            .ConfigureAwait(false);
+        PublishSnapshot(state);
+        return flush;
+    }
+
+    async ValueTask ScheduleNextImmutableFlushAttemptAsync(
+        PantsRuntimeState state,
+        bool retryFailure)
+    {
+        if (state.IsShuttingDown)
+        {
+            return;
+        }
+
+        var next = state.ImmutableMemtableFlushes.Values
+            .OrderBy(static flush => flush.Frozen.FrontierSequence)
+            .ThenBy(static flush => flush.Frozen.Id)
+            .ThenBy(static flush => flush.Frozen.ColumnFamilyId)
+            .FirstOrDefault();
+        if (next is null || next.IsRunning || next.HasFailed && !retryFailure)
+        {
+            return;
+        }
+
+        await ScheduleImmutableFlushAttemptAsync(next).ConfigureAwait(false);
+    }
+
+    async ValueTask ScheduleImmutableFlushAttemptAsync(ImmutableMemtableFlush flush)
+    {
+        var diskStore = _diskStore ??
+            throw new PantsInternalException("An immutable flush requires local storage.");
+        if (flush.Attempts > 0)
+        {
+            _telemetry.RecordFlushRetry();
+        }
+
+        flush.BeginAttempt();
+        var workerTask = await _flushWorker.ScheduleAsync(_ =>
+            {
+                if (flush.PublicationPlan is null)
+                {
+                    var started = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        flush.PublicationPlan = diskStore.BuildFrozenFlushPlan(flush.Frozen);
+                    }
+                    finally
+                    {
+                        _telemetry.RecordFlushBuild(Stopwatch.GetElapsedTime(started));
+                    }
+                }
+
+                var publicationStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    var result = diskStore.PublishFrozenFlushPlan(
+                        flush.Frozen,
+                        flush.PublicationPlan);
+                    flush.PersistenceAnomaly |= result.PersistenceAnomaly;
+                }
+                finally
+                {
+                    _telemetry.RecordFlushPublication(
+                        Stopwatch.GetElapsedTime(publicationStarted));
+                }
+                return ValueTask.CompletedTask;
+            })
+            .ConfigureAwait(false);
+        flush.AttachRunningTask(workerTask);
+        _ = ObserveImmutableFlushAttemptAsync(flush, workerTask);
+    }
+
+    async Task ObserveImmutableFlushAttemptAsync(
+        ImmutableMemtableFlush expected,
+        Task workerTask)
+    {
+        var failure = (Exception?)null;
+        try
+        {
+            await workerTask.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failure = RuntimeExceptionMapper.ToPublicException(exception);
+        }
+
+        try
+        {
+            var shouldRunDeferredCompaction = await SendAsync(
+                async state =>
+                {
+                    if (!state.ImmutableMemtableFlushes.TryGetValue(
+                            expected.Frozen.Id,
+                            out var current) ||
+                        !ReferenceEquals(current, expected))
+                    {
+                        return false;
+                    }
+
+                    if (failure is not null)
+                    {
+                        if (failure is PantsNoSpaceException)
+                        {
+                            state.NoSpaceEvents = checked(state.NoSpaceEvents + 1);
+                            _telemetry.RecordWriteStallNoSpace();
+                        }
+
+                        _telemetry.RecordFlushFailure();
+                        current.CompleteAttempt(failure);
+                        if (!state.IsShuttingDown)
+                        {
+                            _ = RetryImmutableFlushAfterDelayAsync(
+                                current,
+                                current.Attempts,
+                                GetFlushRetryBackoff(current.Attempts));
+                        }
+
+                        state.SignalWritePressureChanged();
+                        PublishSnapshot(state);
+                        return false;
+                    }
+
+                    if (current.PersistenceAnomaly)
+                    {
+                        Volatile.Write(ref _persistenceAnomaly, 1);
+                        MarkPersistenceAnomaly(state);
+                    }
+
+                    state.ImmutableMemtableFlushes.Remove(current.Frozen.Id);
+                    state.SignalWritePressureChanged();
+                    var identity = current.Frozen.ColumnFamily;
+                    if (!state.IsShuttingDown &&
+                        state.ActiveMemtableBytes.GetValueOrDefault(identity) >=
+                        _options.MemtableFlushThresholdBytes)
+                    {
+                        _ = await FreezeAndScheduleFlushAsync(
+                                state,
+                                identity,
+                                rejectWhenQueueFull: false)
+                            .ConfigureAwait(false);
+                    }
+
+                    if (state.ActiveMemtableBytes.GetValueOrDefault(identity) == 0 &&
+                        !state.ImmutableMemtableFlushes.Values.Any(flush =>
+                            flush.Frozen.ColumnFamily == identity))
+                    {
+                        state.UnflushedFamilies.Remove(identity);
+                    }
+
+                    PublishSnapshot(state);
+                    current.CompleteAttempt(failure: null);
+                    if (!state.IsShuttingDown)
+                    {
+                        await ScheduleNextImmutableFlushAttemptAsync(
+                                state,
+                                retryFailure: false)
+                            .ConfigureAwait(false);
+                    }
+
+                    return !state.IsShuttingDown &&
+                        state.ImmutableMemtableFlushes.Count == 0 &&
+                        (_backgroundCompactionPending ||
+                         _readAmplificationCompactionPending);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+            if (shouldRunDeferredCompaction)
+            {
+                ScheduleDeferredCompaction();
+            }
+        }
+        catch (Exception exception)
+        {
+            expected.CompleteAttempt(RuntimeExceptionMapper.ToPublicException(exception));
+        }
+    }
+
+    async Task RetryImmutableFlushAfterDelayAsync(
+        ImmutableMemtableFlush expected,
+        int failedAttempt,
+        TimeSpan delay)
+    {
+        await Task.Delay(delay).ConfigureAwait(false);
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = await SendAsync(
+                async state =>
+                {
+                    if (state.IsShuttingDown || _verificationInProgress ||
+                        !state.ImmutableMemtableFlushes.TryGetValue(
+                            expected.Frozen.Id,
+                            out var current) ||
+                        !ReferenceEquals(current, expected) ||
+                        current.Attempts != failedAttempt ||
+                        !current.HasFailed ||
+                        current.IsRunning)
+                    {
+                        return true;
+                    }
+
+                    await ScheduleNextImmutableFlushAttemptAsync(
+                            state,
+                            retryFailure: true)
+                        .ConfigureAwait(false);
+                    return true;
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+        }
+    }
+
+    static TimeSpan GetFlushRetryBackoff(int attempts)
+    {
+        var exponent = Math.Min(Math.Max(attempts - 1, 0), 7);
+        var milliseconds = Math.Min(
+            checked((long)InitialFlushRetryBackoff.TotalMilliseconds << exponent),
+            checked((long)MaximumFlushRetryBackoff.TotalMilliseconds));
+        return TimeSpan.FromMilliseconds(milliseconds);
+    }
+
+    static async ValueTask AwaitFlushAttemptsAsync(
+        IReadOnlyList<Task<Exception?>> attempts,
+        CancellationToken cancellationToken)
+    {
+        foreach (var attempt in attempts)
+        {
+            var failure = await attempt.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (failure is not null)
+            {
+                throw failure;
+            }
+        }
+    }
+
+    async ValueTask DrainImmutableFlushesAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var attempts = await SendAsync<IReadOnlyList<Task<Exception?>>>(
+                async state =>
+                {
+                    await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                        .ConfigureAwait(false);
+                    var flushes = state.ImmutableMemtableFlushes.Values.ToArray();
+
+                    return flushes.Select(static flush => flush.AttemptTask).ToArray();
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (attempts.Count == 0)
+            {
+                return;
+            }
+
+            await AwaitFlushAttemptsAsync(attempts, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    async ValueTask WaitForImmutableFlushWorkersAsync(CancellationToken cancellationToken)
+    {
+        var workers = await SendAsync<IReadOnlyList<Task>>(
+            state => ValueTask.FromResult<IReadOnlyList<Task>>(
+                state.ImmutableMemtableFlushes.Values
+                    .Select(static flush => flush.RunningTask)
+                    .Where(static task => task is not null)
+                    .Cast<Task>()
+                    .ToArray()),
+            cancellationToken).ConfigureAwait(false);
+        foreach (var worker in workers)
+        {
+            try
+            {
+                await worker.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The public waiter was already failed at shutdown admission.
+                // Worker quiescence, not its operation result, gates lease release.
+            }
+        }
+    }
+
+    async ValueTask FlushActiveAndImmutableMemtablesAsync(
+        CancellationToken cancellationToken)
+    {
+        var attempts = await SendAsync<IReadOnlyList<Task<Exception?>>>(
+            async state =>
+            {
+                ThrowIfShuttingDown(state);
+                ThrowIfVerificationInProgress();
+                EnsureCloudWriteAuthorityValid();
+                foreach (var family in state.ActiveMemtableBytes
+                             .Where(static pair => pair.Value > 0)
+                             .Select(static pair => pair.Key)
+                             .ToArray())
+                {
+                    _ = await FreezeAndScheduleFlushAsync(state, family).ConfigureAwait(false);
+                }
+
+                await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                    .ConfigureAwait(false);
+
+                return state.ImmutableMemtableFlushes.Values
+                    .Select(static flush => flush.AttemptTask)
+                    .ToArray();
+            },
+            cancellationToken).ConfigureAwait(false);
+        await AwaitFlushAttemptsAsync(attempts, cancellationToken).ConfigureAwait(false);
     }
 
     async ValueTask FlushCloudSegmentGapAsync(PantsRuntimeState state)
@@ -1872,30 +2609,58 @@ sealed class PantsActor : IAsyncDisposable
     {
         if (!_backgroundCompactionEnabled || _diskStore is null)
         {
+            _backgroundCompactionPending = false;
             return;
         }
 
+        if (state.IsShuttingDown)
+        {
+            _backgroundCompactionPending = false;
+            return;
+        }
+
+        if (_verificationInProgress)
+        {
+            _backgroundCompactionPending = true;
+            return;
+        }
+
+        if (UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0)
+        {
+            _backgroundCompactionPending = true;
+            return;
+        }
+
+        _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         await EnsureHybridSstsLocalAsync(
                 _diskStore.GetManifestSstNames(),
                 CancellationToken.None)
             .ConfigureAwait(false);
-        long bytesRewritten = 0;
+        var result = default(CompactionResult);
         await _compactionWorker
             .ExecuteAsync(async workerCancellationToken =>
-                bytesRewritten = await _diskStore.CompactAsync(
+                result = await _diskStore.CompactAsync(
                         state,
                         force: false,
                         _cloudCompactionOutputPublisher,
+                        flushMutableOperations: !UsesBackgroundImmutableFlushes,
                         workerCancellationToken)
                     .ConfigureAwait(false))
             .ConfigureAwait(false);
-        if (bytesRewritten > 0)
+
+        if (result.PersistenceAnomaly)
         {
-            _telemetry.RecordCompaction(bytesRewritten);
+            Volatile.Write(ref _persistenceAnomaly, 1);
+            MarkPersistenceAnomaly(state);
         }
 
-        if (bytesRewritten > 0 || _hybridCache is not null)
+        if (result.BytesRewritten > 0)
+        {
+            _telemetry.RecordCompaction(result.BytesRewritten);
+        }
+
+        if (result.BytesRewritten > 0 || _hybridCache is not null)
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
         }
@@ -1903,32 +2668,154 @@ sealed class PantsActor : IAsyncDisposable
 
     async ValueTask RunReadAmplificationCompactionAsync(PantsRuntimeState state)
     {
+        if (!_backgroundCompactionEnabled || _diskStore is null)
+        {
+            _readAmplificationCompactionPending = false;
+            return;
+        }
+
+        if (state.IsShuttingDown)
+        {
+            _readAmplificationCompactionPending = false;
+            return;
+        }
+
+        if (_verificationInProgress)
+        {
+            _readAmplificationCompactionPending = true;
+            return;
+        }
+
+        if (UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0)
+        {
+            _readAmplificationCompactionPending = true;
+            return;
+        }
+
+        _readAmplificationCompactionPending = false;
+        _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordReadAmplificationCompactionTrigger();
         await EnsureHybridSstsLocalAsync(
                 _diskStore!.GetManifestSstNames(),
                 CancellationToken.None)
             .ConfigureAwait(false);
-        long bytesRewritten = 0;
+        var result = default(CompactionResult);
         await _compactionWorker
             .ExecuteAsync(async workerCancellationToken =>
-                bytesRewritten = await _diskStore!.CompactAsync(
+                result = await _diskStore!.CompactAsync(
                         state,
                         force: true,
                         _cloudCompactionOutputPublisher,
+                        flushMutableOperations: !UsesBackgroundImmutableFlushes,
                         workerCancellationToken)
                     .ConfigureAwait(false))
             .ConfigureAwait(false);
-        state.UnflushedFamilies.Clear();
-        ClearMemtableAccounting(state);
-        if (bytesRewritten > 0)
+        if (!UsesBackgroundImmutableFlushes)
         {
-            _telemetry.RecordCompaction(bytesRewritten);
+            state.UnflushedFamilies.Clear();
+            ClearMemtableAccounting(state);
         }
 
-        if (bytesRewritten > 0 || _hybridCache is not null)
+        if (result.PersistenceAnomaly)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+            MarkPersistenceAnomaly(state);
+        }
+
+        if (result.BytesRewritten > 0)
+        {
+            _telemetry.RecordCompaction(result.BytesRewritten);
+        }
+
+        if (result.BytesRewritten > 0 || _hybridCache is not null)
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
+    }
+
+    void ScheduleDeferredCompaction()
+    {
+        if (Interlocked.CompareExchange(ref _deferredCompactionScheduled, 1, 0) == 0)
+        {
+            _ = RunDeferredCompactionAsync();
+        }
+    }
+
+    async Task RunDeferredCompactionAsync()
+    {
+        try
+        {
+            _failpoints.Hit(PantsFailpoint.BeforeCompactionAdmission);
+            _ = await SendAsync(
+                async state =>
+                {
+                    if (state.IsShuttingDown ||
+                        !_backgroundCompactionPending &&
+                        !_readAmplificationCompactionPending)
+                    {
+                        return true;
+                    }
+
+                    if (_verificationInProgress)
+                    {
+                        return true;
+                    }
+
+                    if (_readAmplificationCompactionPending)
+                    {
+                        await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                    }
+
+                    PublishSnapshot(state);
+                    return true;
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+        }
+        catch (Exception)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+        finally
+        {
+            try
+            {
+                _failpoints.Hit(PantsFailpoint.BeforeDeferredCompactionSignalReset);
+            }
+            finally
+            {
+                Volatile.Write(ref _deferredCompactionScheduled, 0);
+                await RearmDeferredCompactionAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    async ValueTask RearmDeferredCompactionAsync()
+    {
+        try
+        {
+            var shouldSchedule = await SendAsync(
+                state => ValueTask.FromResult(
+                    !state.IsShuttingDown &&
+                    !_verificationInProgress &&
+                    state.ImmutableMemtableFlushes.Count == 0 &&
+                    (_backgroundCompactionPending ||
+                     _readAmplificationCompactionPending)),
+                CancellationToken.None).ConfigureAwait(false);
+            if (shouldSchedule)
+            {
+                ScheduleDeferredCompaction();
+            }
+        }
+        catch (PantsAbortedException)
+        {
         }
     }
 
@@ -1981,8 +2868,16 @@ sealed class PantsActor : IAsyncDisposable
         }
 
         EnsureCloudWriteAuthorityValid();
-        await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
-            .ConfigureAwait(false);
+        _telemetry.RecordCloudUploadPending();
+        try
+        {
+            await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _telemetry.RecordCloudUploadCompleted();
+        }
         if (_cloudPersistence.HasPersistenceAnomaly)
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
@@ -2066,6 +2961,51 @@ sealed class PantsActor : IAsyncDisposable
         (operation.Value?.Length ?? 0) +
         64);
 
+    async ValueTask EnsureWriteAdmissionAsync(
+        ColumnFamilyIdentity[] families,
+        CancellationToken cancellationToken)
+    {
+        var stalled = await SendAsync(
+            state =>
+            {
+                foreach (var family in families)
+                {
+                    ValidateActiveFamily(state, family);
+                }
+
+                return ValueTask.FromResult(
+                    MemtableWritePressure.IsStalled(_options, state, families));
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (!stalled)
+        {
+            foreach (var family in families)
+            {
+                _writeStallHints.TryRemove(family, out _);
+            }
+
+            return;
+        }
+
+        _telemetry.RecordWriteStallMemory();
+        throw new PantsWriteStallException(
+            "Writes are stalled until the bounded immutable memtable pipeline makes progress.");
+    }
+
+    bool IsCommitWriteStalled(PantsRuntimeState state, CommitPayload payload)
+    {
+        var families = GetCommitFamilies(payload);
+        return families.Length != 0 &&
+            MemtableWritePressure.IsStalled(_options, state, families);
+    }
+
+    static ColumnFamilyIdentity[] GetCommitFamilies(CommitPayload payload) =>
+        payload.OrderedOperations
+            .Select(static operation => operation.Family)
+            .Concat(payload.Asserts.Keys)
+            .Distinct(ColumnFamilyIdentityComparer.Instance)
+            .ToArray();
+
     static void ClearMemtableAccounting(PantsRuntimeState state)
     {
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
@@ -2134,7 +3074,7 @@ sealed class PantsActor : IAsyncDisposable
     {
         if (state.IsShuttingDown)
         {
-            throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is shutting down.");
+            throw new PantsBusyException("The runtime is shutting down.");
         }
     }
 
@@ -2156,13 +3096,23 @@ sealed class PantsActor : IAsyncDisposable
 
         try
         {
-            _ = await SendAsync(
-                _ =>
+            var shouldSchedule = await SendAsync(
+                async state =>
                 {
                     _verificationInProgress = false;
-                    return ValueTask.FromResult(true);
+                    await ScheduleNextImmutableFlushAttemptAsync(
+                            state,
+                            retryFailure: true)
+                        .ConfigureAwait(false);
+                    return state.ImmutableMemtableFlushes.Count == 0 &&
+                        (_backgroundCompactionPending ||
+                         _readAmplificationCompactionPending);
                 },
                 CancellationToken.None).ConfigureAwait(false);
+            if (shouldSchedule)
+            {
+                ScheduleDeferredCompaction();
+            }
         }
         catch (PantsAbortedException)
         {

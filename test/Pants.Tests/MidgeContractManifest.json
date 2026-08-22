@@ -86,9 +86,12 @@
       "source": "tests/background_flush_pipeline.rs",
       "sourceSymbolOrTest": "should_defer_drop_until_flush_pipeline_completes_given_immutable_flush_inflight",
       "observableBehavior": "defer drop until flush pipeline completes given immutable flush inflight",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldDeferDropUntilImmutableFlushPipelineCompletes"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/background_flush_pipeline.rs:should_keep_foreground_responsive_while_publication_is_blocked",
@@ -96,9 +99,12 @@
       "source": "tests/background_flush_pipeline.rs",
       "sourceSymbolOrTest": "should_keep_foreground_responsive_while_publication_is_blocked",
       "observableBehavior": "keep foreground responsive while publication is blocked",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldKeepForegroundResponsiveWhilePublicationIsBlocked"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/background_flush_pipeline.rs:should_keep_foreground_responsive_while_sst_build_is_blocked",
@@ -106,9 +112,12 @@
       "source": "tests/background_flush_pipeline.rs",
       "sourceSymbolOrTest": "should_keep_foreground_responsive_while_sst_build_is_blocked",
       "observableBehavior": "keep foreground responsive while sst build is blocked",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldKeepForegroundResponsiveWhileSstBuildIsBlocked"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/background_flush_pipeline.rs:should_retain_writer_lease_until_blocked_flush_worker_exits",
@@ -117,8 +126,11 @@
       "sourceSymbolOrTest": "should_retain_writer_lease_until_blocked_flush_worker_exits",
       "observableBehavior": "retain writer lease until blocked flush worker exits",
       "expectedError": "Timeout",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRetainWriterLeaseUntilBlockedFlushWorkerExits"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/background_flush_pipeline.rs:should_retry_retained_immutable_after_flush_worker_panics",
@@ -126,9 +138,12 @@
       "source": "tests/background_flush_pipeline.rs",
       "sourceSymbolOrTest": "should_retry_retained_immutable_after_flush_worker_panics",
       "observableBehavior": "retry retained immutable after flush worker panics",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRetryRetainedImmutableAfterFlushWorkerFailure"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_auto_flush_explicit_small_memtable_without_permanent_write_stall",
@@ -5260,13 +5275,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-        "Pants.Tests.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
-        "Pants.Tests.PantsFailureInjectionTests.ShouldRetryIdenticalFlushAfterOutputBecomesDurableBeforePublication",
-        "Pants.Tests.PantsDurabilityParityTests.ShouldSurfaceNoSpaceWithoutPublishingAndRemainUsable",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldKeepDdlStateAbsentWhenManifestAppendFails",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldKeepColumnFamilyUsableWhenDropManifestAppendFails",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverWhenManifestCheckpointPublicationFails"
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRetryOldestImmutableBeforePublishingYoungerGeneration"
       ]
     },
     {
@@ -5502,13 +5511,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-        "Pants.Tests.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
-        "Pants.Tests.PantsFailureInjectionTests.ShouldRetryIdenticalFlushAfterOutputBecomesDurableBeforePublication",
-        "Pants.Tests.PantsDurabilityParityTests.ShouldSurfaceNoSpaceWithoutPublishingAndRemainUsable",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldKeepDdlStateAbsentWhenManifestAppendFails",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldKeepColumnFamilyUsableWhenDropManifestAppendFails",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary",
-        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverWhenManifestCheckpointPublicationFails"
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRetryRetainedImmutableAutomaticallyAfterTransientFlushFailure"
       ]
     },
     {
@@ -5917,9 +5920,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_delete_orphan_sst_residue_during_startup_cleanup",
       "observableBehavior": "delete orphan sst residue during startup cleanup",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRemoveUnownedFinalizedFlushOutputWhenRecoveringCrashImage"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_emit_json_error_object_given_verify_failure_when_json_flag_requested",
@@ -5984,9 +5990,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_ignore_stale_metadata_temp_files_on_reopen",
       "observableBehavior": "ignore stale metadata temp files on reopen",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRemoveStaleMetadataTemporaryFilesWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_ignore_stale_sst_temp_files_on_reopen",
@@ -5994,9 +6003,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_ignore_stale_sst_temp_files_on_reopen",
       "observableBehavior": "ignore stale sst temp files on reopen",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRemoveStaleSstTemporaryFilesWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_install_explicit_memtable_limits_in_runtime_metrics_when_both_are_set",
@@ -6093,9 +6105,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_report_degraded_health_when_orphan_sst_cleanup_is_blocked",
       "observableBehavior": "report degraded health when orphan sst cleanup is blocked",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsBackgroundFlushPipelineTests.ShouldRetainUnownedStartupSstAndReportDegradedWhenCleanupFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_report_usage_error_given_missing_db_path_when_verify_invoked",

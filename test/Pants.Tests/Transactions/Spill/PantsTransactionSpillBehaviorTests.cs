@@ -334,9 +334,10 @@ public sealed class PantsTransactionSpillBehaviorTests
         SpillStorageMode mode)
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await TransactionSpillTestHarness.OpenAsync(
-            mode,
-            directory.Path);
+        await using var database = await PantsDatabase.OpenAsync(
+            TransactionSpillTestHarness.CreateOptions(mode, directory.Path)
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(256 * 1_024))
+                .WithMemtableLimits(64 * 1_024));
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var staged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

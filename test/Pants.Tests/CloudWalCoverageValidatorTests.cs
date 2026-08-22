@@ -32,6 +32,21 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     [Fact]
+    public void ShouldReportValidWalAsUncoveredGivenKeyOutsideManifestFileRange()
+    {
+        var bytes = CreateWalBytes(MidgeWalOperation.Put, "zulu-plus"u8.ToArray());
+        var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
+
+        var covered = CloudWalCoverageValidator.ValidateAndIsCovered(
+            bytes,
+            expectedMaximumSequence: 3,
+            expectedWriterEpoch: 7,
+            manifest);
+
+        Assert.False(covered);
+    }
+
+    [Fact]
     public void ShouldRejectWalRangeTombstoneGivenEndOutsideManifestFileRange()
     {
         var bytes = CreateWalBytes(

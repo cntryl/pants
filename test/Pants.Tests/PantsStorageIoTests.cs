@@ -3,6 +3,19 @@ namespace Pants.Tests;
 public sealed class PantsStorageIoTests
 {
     [Fact]
+    public void ShouldFlushWindowsDirectoryWithWritableBackupHandle()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = new TemporaryDirectory();
+
+        AtomicStagedFile.FlushDirectory(directory.Path);
+    }
+
+    [Fact]
     public void ShouldLeavePreviousFileIntactWhenStagedWriteFailsBeforePublish()
     {
         using var directory = new TemporaryDirectory();

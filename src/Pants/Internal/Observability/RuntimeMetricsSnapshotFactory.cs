@@ -4,9 +4,7 @@ sealed class RuntimeMetricsSnapshotFactory(
     PantsOpenOptions options,
     RuntimeTelemetry telemetry,
     LocalDiskStore? diskStore,
-    RuntimeWorker flushWorker,
     RuntimeWorker compactionWorker,
-    RuntimeWorker cloudWorker,
     CloudFlushRetryScheduler cloudFlushRetries,
     CloudWalSealController? cloudWalSealController,
     CloudMemtableSegmentTracker? cloudMemtableSegments,
@@ -20,21 +18,23 @@ sealed class RuntimeMetricsSnapshotFactory(
         var hybridMetrics = hybridCache is not null && diskStore is not null
             ? hybridCache.GetMetrics(diskStore)
             : null;
+        var writeStalled = MemtableWritePressure.IsStalled(options, state);
+        var health = diskStore?.GetHealth(state) ?? state.Health;
         return new PantsRuntimeMetrics
         {
-            Health = diskStore?.GetHealth(state) ?? state.Health,
+            Health = EngineHealthClassifier.Classify(health, writeStalled),
             CurrentSequence = state.Sequence,
             ManifestLastPersistedSequence = diskStore?.LastPersistedSequence ?? 0,
             ManifestNextWalSequence = diskStore?.NextWalSequence ?? 1,
             ActiveMemtables = state.FamilyData.Count,
-            ImmutableMemtables = 0,
-            TotalMemtableBytes = state.ActiveMemtableBytes.Values.Sum(),
+            ImmutableMemtables = state.ImmutableMemtableFlushes.Count,
+            TotalMemtableBytes = MemtableWritePressure.GetTotalBytes(state),
             MemtableSizeLimitBytes = options.MemtableSizeLimitBytes,
             MemtableFlushThresholdBytes = options.MemtableFlushThresholdBytes,
             MaximumMemtableWalSegmentGap = checked((long)(
                 cloudMemtableSegments?.MaximumGap(
                     diskStore?.CurrentWalSegmentId ?? 0) ?? 0)),
-            WriteStalled = false,
+            WriteStalled = writeStalled,
             WalCurrentSegmentId = diskStore?.NextWalSequence ?? 0,
             WalPendingWrites = cloudWalSealController?.PendingWrites ?? diskStore?.WalRecords ?? 0,
             WalLastSyncedSequence = telemetry.WalLastSyncedSequence,
@@ -43,7 +43,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             PendingCompactions = compactionWorker.QueueDepth,
             CompactingSsts = 0,
             ActiveCompactions = compactionWorker.InFlight,
-            PendingCloudUploads = cloudWorker.QueueDepth + cloudWorker.InFlight,
+            PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshots,
             PinnedSsts = activeSnapshots == 0 ? 0 : diskStore?.SstCount ?? 0,
             OldestSnapshotAgeSeconds = GetOldestSnapshotAgeSeconds(state),
@@ -55,8 +55,9 @@ sealed class RuntimeMetricsSnapshotFactory(
             CompactionBytesRewritten = telemetry.CompactionBytesRewritten,
             CompactionFailures = compactionWorker.Failures,
             ObsoleteFileBacklog = diskStore?.GetObsoleteFiles().Count ?? 0,
-            WriteStallsTotal = telemetry.WriteStallsNoSpaceTotal,
-            WriteStallsMemoryTotal = 0,
+            WriteStallsTotal = checked(
+                telemetry.WriteStallsMemoryTotal + telemetry.WriteStallsNoSpaceTotal),
+            WriteStallsMemoryTotal = telemetry.WriteStallsMemoryTotal,
             WriteStallsCompactionTotal = 0,
             WriteStallsCloudTotal = 0,
             WriteStallsNoSpaceTotal = telemetry.WriteStallsNoSpaceTotal,
@@ -81,17 +82,20 @@ sealed class RuntimeMetricsSnapshotFactory(
             SstDataBlocksReadTotal = telemetry.SstDataBlocksRead,
             ReadAmplificationCompactionTriggersTotal =
                 telemetry.ReadAmplificationCompactionTriggers,
-            FlushQueueDepth = flushWorker.QueueDepth,
-            FlushInFlight = flushWorker.InFlight,
-            FlushEnqueuedTotal = flushWorker.Enqueued,
+            FlushQueueDepth = state.ImmutableMemtableFlushes.Values.Count(
+                static flush => !flush.IsRunning),
+            FlushInFlight = state.ImmutableMemtableFlushes.Values.Count(
+                static flush => flush.IsRunning),
+            FlushEnqueuedTotal = telemetry.FlushEnqueuedTotal,
             FlushBuildCount = telemetry.FlushBuildCount,
             FlushBuildNanosecondsTotal = telemetry.FlushBuildNanosecondsTotal,
             FlushBuildNanosecondsMaximum = telemetry.FlushBuildNanosecondsMaximum,
             FlushPublishCount = telemetry.FlushPublishCount,
             FlushPublishNanosecondsTotal = telemetry.FlushPublishNanosecondsTotal,
             FlushPublishNanosecondsMaximum = telemetry.FlushPublishNanosecondsMaximum,
-            FlushFailuresTotal = flushWorker.Failures,
-            FlushRetriesTotal = cloudFlushRetries.RetryAttempts,
+            FlushFailuresTotal = telemetry.FlushFailuresTotal,
+            FlushRetriesTotal = checked(
+                telemetry.FlushRetriesTotal + cloudFlushRetries.RetryAttempts),
             WriteStallNanosecondsTotal = 0,
             WriteStallNanosecondsMaximum = 0,
             WriteStallActiveNanoseconds = 0,

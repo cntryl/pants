@@ -699,21 +699,33 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     "The cloud WAL catalog is not fenced to this writer during pruning.");
             }
 
-            var retired = catalog.Segments.Values
+            var candidates = catalog.Segments.Values
                 .Where(segment => segment.MaximumSequence <= coveredSequence)
                 .ToArray();
-            if (retired.Length == 0)
+            if (candidates.Length == 0)
             {
                 return;
             }
 
+            var retired = new List<ProviderPublishedWalSegment>(candidates.Length);
+            var walObjects = new Dictionary<ulong, CloudObject>();
             var walGuards = new Dictionary<ulong, CloudObjectIdentityGuard>();
-            foreach (var segment in retired)
+            foreach (var segment in candidates)
             {
-                var remote = await ReadAndValidateWalForPruningAsync(
+                var remote = await ReadWalCandidateForPruningAsync(
                     segment,
-                    manifest,
                     cancellationToken).ConfigureAwait(false);
+                if (!CloudWalCoverageValidator.ValidateAndIsCovered(
+                        remote.Data.Span,
+                        segment.MaximumSequence,
+                        segment.WriterEpoch,
+                        manifest))
+                {
+                    continue;
+                }
+
+                retired.Add(segment);
+                walObjects.Add(segment.SegmentId, remote);
                 walGuards.Add(
                     segment.SegmentId,
                     new CloudObjectIdentityGuard(
@@ -722,14 +734,30 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                         remote.Version));
             }
 
+            if (retired.Count == 0)
+            {
+                return;
+            }
+
             await VerifyIdentityGuardsAsync(
                 dependencyGuards.Concat(walGuards.Values),
                 cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
+            foreach (var segment in retired)
+            {
+                CloudWalCoverageValidator.ValidateAndEnsureCovered(
+                    walObjects[segment.SegmentId].Data.Span,
+                    segment.MaximumSequence,
+                    segment.WriterEpoch,
+                    manifest);
+            }
 
+            var retiredIds = retired
+                .Select(static segment => segment.SegmentId)
+                .ToHashSet();
             var retained = new SortedDictionary<ulong, ProviderPublishedWalSegment>(
                 catalog.Segments
-                    .Where(entry => entry.Value.MaximumSequence > coveredSequence)
+                    .Where(entry => !retiredIds.Contains(entry.Key))
                     .ToDictionary());
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
                 catalog with { Segments = retained },
@@ -794,9 +822,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
-    async ValueTask<CloudObject> ReadAndValidateWalForPruningAsync(
+    async ValueTask<CloudObject> ReadWalCandidateForPruningAsync(
         ProviderPublishedWalSegment segment,
-        MidgeManifest manifest,
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
@@ -811,11 +838,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
         }
 
-        CloudWalCoverageValidator.ValidateAndEnsureCovered(
-            remote.Data.Span,
-            segment.MaximumSequence,
-            segment.WriterEpoch,
-            manifest);
         return remote;
     }
 

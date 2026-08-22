@@ -10,6 +10,23 @@ static class CloudWalCoverageValidator
         ulong expectedWriterEpoch,
         MidgeManifest manifest)
     {
+        if (!ValidateAndIsCovered(
+                bytes,
+                expectedMaximumSequence,
+                expectedWriterEpoch,
+                manifest))
+        {
+            throw new PantsCorruptionException(
+                "A published cloud WAL segment contains data not covered by the committed manifest.");
+        }
+    }
+
+    internal static bool ValidateAndIsCovered(
+        ReadOnlySpan<byte> bytes,
+        ulong expectedMaximumSequence,
+        ulong expectedWriterEpoch,
+        MidgeManifest manifest)
+    {
         ArgumentNullException.ThrowIfNull(manifest);
         if (bytes.IsEmpty)
         {
@@ -88,14 +105,7 @@ static class CloudWalCoverageValidator
                 "A published cloud WAL segment writer epoch differs from its catalog entry.");
         }
 
-        foreach (var mutation in mutations)
-        {
-            if (!manifest.Files.Any(file => Covers(file, mutation)))
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment contains data not covered by the committed manifest.");
-            }
-        }
+        return mutations.All(mutation => manifest.Files.Any(file => Covers(file, mutation)));
     }
 
     static bool Covers(MidgeFileMeta file, MidgeWalMutation mutation)
