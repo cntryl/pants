@@ -6079,9 +6079,13 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_report_degraded_health_given_obsolete_sst_files_and_json_verification",
       "observableBehavior": "report degraded health given obsolete sst files and json verification",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldReportConservativelyRetainedOrphanSstAsDegraded",
+        "Pants.Tests.PantsStorageVerificationHardeningTests.ShouldReportDegradedHealthGivenOfflineVerificationFindsOrphanSst"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_report_degraded_health_when_orphan_sst_cleanup_is_blocked",
