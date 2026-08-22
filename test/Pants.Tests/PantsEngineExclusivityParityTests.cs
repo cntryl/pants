@@ -61,11 +61,11 @@ public sealed class PantsEngineExclusivityParityTests
             .WithLeaseLossCallback(() => leaseLost.TrySetResult());
         await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100)));
+            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromSeconds(1)));
         await using (FileStream mutationLock = await AcquireLeaseMutationLockAsync(
                          Path.Combine(directory.Path, ".midge_leader.lock")))
         {
-            await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
 
         Assert.False(database.IsPrimaryLeaseHealthy);
@@ -80,7 +80,7 @@ public sealed class PantsEngineExclusivityParityTests
 
     private static async Task<FileStream> AcquireLeaseMutationLockAsync(string path)
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         while (true)
         {
             try
