@@ -152,7 +152,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 FileAccess.ReadWrite,
                 FileShare.None,
                 bufferSize: 16 * 1024,
-                FileOptions.WriteThrough);
+                FileOptions.None);
         }
     }
 
@@ -390,7 +390,7 @@ internal sealed class TransactionSpillStore : IDisposable
             FileAccess.ReadWrite,
             FileShare.None,
             bufferSize: 16 * 1024,
-            FileOptions.WriteThrough);
+            FileOptions.None);
         stream.Write(new byte[RangeHeaderLength + checked(nodes.Length * RangeTableEntryLength)]);
         ulong nodeSectionOffset = checked((ulong)stream.Position);
         var offsets = new ulong[nodes.Length];

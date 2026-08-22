@@ -26,8 +26,7 @@ internal static class AtomicStagedFile
                        temporary,
                        FileMode.CreateNew,
                        FileAccess.Write,
-                       FileShare.None,
-                       FileOptions.WriteThrough))
+                       FileShare.None))
             {
                 RandomAccess.Write(handle, bytes, 0);
                 RandomAccess.FlushToDisk(handle);
