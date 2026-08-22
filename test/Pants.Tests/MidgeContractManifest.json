@@ -6121,9 +6121,12 @@
       "source": "tests/read_path_diagnostics.rs",
       "sourceSymbolOrTest": "should_count_flushed_range_scan_work_in_its_own_window",
       "observableBehavior": "count flushed range scan work in its own window",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryContractTests.ShouldReportPhysicalSstWorkGivenFlushedRangeScan"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_path_diagnostics.rs:should_isolate_read_path_diagnostics_between_engines",
@@ -6131,9 +6134,12 @@
       "source": "tests/read_path_diagnostics.rs",
       "sourceSymbolOrTest": "should_isolate_read_path_diagnostics_between_engines",
       "observableBehavior": "isolate read path diagnostics between engines",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryContractTests.ShouldReportPerDatabaseReadPathActivity"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_path_diagnostics.rs:should_reject_absent_key_with_bloom_without_reading_data_block",
@@ -6141,9 +6147,12 @@
       "source": "tests/read_path_diagnostics.rs",
       "sourceSymbolOrTest": "should_reject_absent_key_with_bloom_without_reading_data_block",
       "observableBehavior": "reject absent key with bloom without reading data block",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsReadPathDiagnosticsContractTests.ShouldAvoidDataBlockReadGivenPersistedBloomRejectsMissingKey"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_path_diagnostics.rs:should_report_flushed_sst_read_deltas_without_setup_leakage",
@@ -6151,9 +6160,12 @@
       "source": "tests/read_path_diagnostics.rs",
       "sourceSymbolOrTest": "should_report_flushed_sst_read_deltas_without_setup_leakage",
       "observableBehavior": "report flushed sst read deltas without setup leakage",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryContractTests.ShouldReportBloomRejectionsAndDataBlockReads"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_path_diagnostics.rs:should_report_zero_delta_for_an_idle_engine_window",
@@ -6161,9 +6173,12 @@
       "source": "tests/read_path_diagnostics.rs",
       "sourceSymbolOrTest": "should_report_zero_delta_for_an_idle_engine_window",
       "observableBehavior": "report zero delta for an idle engine window",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsReadPathDiagnosticsContractTests.ShouldKeepReadPathDiagnosticsUnchangedGivenIdleWindow"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/recovery_metrics_api.rs:should_expose_zero_recovery_metrics_on_fresh_engine_when_no_replay_needed",
@@ -6171,9 +6186,12 @@
       "source": "tests/recovery_metrics_api.rs",
       "sourceSymbolOrTest": "should_expose_zero_recovery_metrics_on_fresh_engine_when_no_replay_needed",
       "observableBehavior": "expose zero recovery metrics on fresh engine when no replay needed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRecoveryMetricsContractTests.ShouldExposeZeroRecoveryMetricsGivenFreshEngine"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/recovery_metrics_api.rs:should_report_intent_log_replay_metrics_after_reopen_when_manifest_intents_persisted",
@@ -6181,9 +6199,12 @@
       "source": "tests/recovery_metrics_api.rs",
       "sourceSymbolOrTest": "should_report_intent_log_replay_metrics_after_reopen_when_manifest_intents_persisted",
       "observableBehavior": "report intent log replay metrics after reopen when manifest intents persisted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldClearRecoveredFlushIntentWhenManifestAlreadyOwnsOutput"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/recovery_metrics_api.rs:should_report_wal_recovery_metrics_after_reopen_when_wal_replay_occurs",
@@ -6191,9 +6212,12 @@
       "source": "tests/recovery_metrics_api.rs",
       "sourceSymbolOrTest": "should_report_wal_recovery_metrics_after_reopen_when_wal_replay_occurs",
       "observableBehavior": "report wal recovery metrics after reopen when wal replay occurs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRecoveryMetricsContractTests.ShouldReportWalRecoveryWorkGivenBufferedCommitsBeforeReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/recovery_policy_api.rs:should_fail_open_given_persisted_manifest_without_format_marker",
