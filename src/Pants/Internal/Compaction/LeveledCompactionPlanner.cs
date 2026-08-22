@@ -20,7 +20,8 @@ internal static class LeveledCompactionPlanner
         MidgeFileMeta[] l0Files = FilesAtLevel(familyFiles, 0);
         ulong l0Size = l0Files.Aggregate(0UL, static (total, file) => checked(total + file.SizeBytes));
         if (l0Size > checked((ulong)configuration.L0SizeTriggerBytes) ||
-            l0Files.Length >= configuration.L0FileCountTrigger)
+            l0Files.Length >= configuration.L0FileCountTrigger ||
+            force && l0Files.Length > 1)
         {
             MidgeFileMeta[] source = l0Files
                 .OrderBy(static file => file.SstSequence)
@@ -36,7 +37,7 @@ internal static class LeveledCompactionPlanner
             MidgeFileMeta[] sourceLevelFiles = FilesAtLevel(familyFiles, level);
             ulong levelSize = sourceLevelFiles.Aggregate(0UL, static (total, file) =>
                 checked(total + file.SizeBytes));
-            if (levelSize > targetSize)
+            if (levelSize > targetSize || force && sourceLevelFiles.Length > 1)
             {
                 MidgeFileMeta[] source = sourceLevelFiles
                     .OrderBy(GetSmallestKey, ByteArrayComparer.Instance)

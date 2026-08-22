@@ -71,6 +71,7 @@ public sealed class PantsOpenOptions
         };
         Compaction = configuration.Compaction ?? new PantsCompactionConfiguration(
             L0FileCountTrigger: L0CompactionTrigger);
+        TargetSstSizeBytes = Compaction.TargetSstSizeBytes ?? TargetSstSizeBytes;
 
         Validate();
     }
@@ -322,7 +323,8 @@ public sealed class PantsOpenOptions
 
         if (Compaction.L0SizeTriggerBytes <= 0 || Compaction.L0FileCountTrigger <= 0 ||
             Compaction.MaximumInputFiles <= 0 || Compaction.LevelMultiplier <= 1 ||
-            Compaction.L1TargetSizeBytes <= 0 || Compaction.MaximumLevels < 2)
+            Compaction.L1TargetSizeBytes <= 0 || Compaction.MaximumLevels < 2 ||
+            Compaction.TargetSstSizeBytes is <= 0)
         {
             throw PantsException.InvalidArgument("Compaction limits are invalid.");
         }

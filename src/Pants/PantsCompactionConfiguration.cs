@@ -7,4 +7,5 @@ public sealed record PantsCompactionConfiguration(
     int MaximumInputFiles = 64,
     int LevelMultiplier = 10,
     long L1TargetSizeBytes = 40L * 1024 * 1024,
-    int MaximumLevels = 7);
+    int MaximumLevels = 7,
+    long? TargetSstSizeBytes = null);

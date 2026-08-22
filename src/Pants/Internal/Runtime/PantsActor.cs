@@ -54,6 +54,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     leaseLossCallback: options.LeaseLossCallback,
                     failpoints: dependencies.Failpoints,
                     compaction: options.Compaction,
+                    targetSstSizeBytes: options.TargetSstSizeBytes,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
                     leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
@@ -72,6 +73,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     options.LeaseLossCallback,
                     dependencies.Failpoints,
                     options.Compaction,
+                    options.TargetSstSizeBytes,
                     options.BlockCachePolicy,
                     options.BlockCacheBytes,
                     dependencies.LeaseHeartbeatInterval);
