@@ -6996,9 +6996,12 @@
       "source": "tests/runtime_transaction_coalescing.rs",
       "sourceSymbolOrTest": "should_handle_concurrent_writes_correctly_with_runtime_coalescing",
       "observableBehavior": "handle concurrent writes correctly with runtime coalescing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/runtime_transaction_coalescing.rs:should_maintain_ordering_with_runtime_coalescing",
@@ -7006,9 +7009,12 @@
       "source": "tests/runtime_transaction_coalescing.rs",
       "sourceSymbolOrTest": "should_maintain_ordering_with_runtime_coalescing",
       "observableBehavior": "maintain ordering with runtime coalescing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeTransactionCoalescingBehaviorTests.ShouldMaintainOrderingAcrossSequentialRuntimeCommits"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/runtime_transaction_coalescing.rs:should_preserve_runtime_coalescing_when_threads_write_concurrently",
@@ -7016,9 +7022,12 @@
       "source": "tests/runtime_transaction_coalescing.rs",
       "sourceSymbolOrTest": "should_preserve_runtime_coalescing_when_threads_write_concurrently",
       "observableBehavior": "preserve runtime coalescing when threads write concurrently",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeTransactionCoalescingBehaviorTests.ShouldPreserveEveryConcurrentWriteWhileRuntimeCoalesces"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/shutdown_orchestration.rs:should_release_primary_lease_given_shutdown_timeout_when_shutdown_completes",
