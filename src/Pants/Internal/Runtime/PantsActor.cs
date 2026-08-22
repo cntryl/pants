@@ -3,30 +3,33 @@ using System.Threading.Channels;
 
 namespace Pants;
 
-internal sealed class PantsActor : IAsyncDisposable
+sealed class PantsActor : IAsyncDisposable
 {
-    private readonly PantsRuntimeState _state;
-    private readonly PantsOpenOptions _options;
-    private readonly RuntimeTelemetry _telemetry;
-    private readonly PantsStorageVerificationDelegate _storageVerifier;
-    private readonly Channel<IRuntimeCommand> _commands;
-    private readonly RuntimeWorker _walWorker;
-    private readonly RuntimeWorker _flushWorker;
-    private readonly RuntimeWorker _compactionWorker;
-    private readonly RuntimeWorker _manifestWorker;
-    private readonly RuntimeWorker _garbageCollectionWorker;
-    private readonly RuntimeWorker _cloudWorker;
-    private readonly CancellationTokenSource _loopCancellation = new();
-    private readonly Task _loopTask;
-    private readonly LocalDiskStore? _diskStore;
-    private readonly SimulatedCloudPersistence? _simulatedCloud;
-    private readonly bool _cloudMode;
-    private DatabaseSnapshot _currentSnapshot;
-    private int _queuedCommands;
-    private int _disposed;
-    private bool _shutdownRequested;
-    private bool _verificationInProgress;
-    private bool _backgroundCompactionEnabled;
+    readonly PantsRuntimeState _state;
+    readonly PantsOpenOptions _options;
+    readonly RuntimeTelemetry _telemetry;
+    readonly PantsStorageVerificationDelegate _storageVerifier;
+    readonly Channel<IRuntimeCommand> _commands;
+    readonly RuntimeWorker _walWorker;
+    readonly RuntimeWorker _flushWorker;
+    readonly RuntimeWorker _compactionWorker;
+    readonly RuntimeWorker _manifestWorker;
+    readonly RuntimeWorker _garbageCollectionWorker;
+    readonly RuntimeWorker _cloudWorker;
+    readonly CancellationTokenSource _loopCancellation = new();
+    readonly Task _loopTask;
+    readonly LocalDiskStore? _diskStore;
+    readonly ICloudPersistence? _cloudPersistence;
+    readonly CloudLeaseCoordinator? _cloudLease;
+    readonly CancellationTokenSource? _cloudLeaseCancellation;
+    readonly Task? _cloudLeaseHeartbeat;
+    readonly bool _cloudMode;
+    DatabaseSnapshot _currentSnapshot;
+    int _queuedCommands;
+    int _disposed;
+    bool _shutdownRequested;
+    bool _verificationInProgress;
+    bool _backgroundCompactionEnabled;
 
     public PantsActor(
         PantsOpenOptions options,
@@ -61,7 +64,7 @@ internal sealed class PantsActor : IAsyncDisposable
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
-                ulong minimumEpoch = SimulatedCloudPersistence.PrepareLocalCache(
+                var minimumEpoch = SimulatedCloudPersistence.PrepareLocalCache(
                     simulated.LocalCachePath);
                 _diskStore = LocalDiskStore.Open(
                     simulated.LocalCachePath,
@@ -77,15 +80,66 @@ internal sealed class PantsActor : IAsyncDisposable
                     options.BlockCachePolicy,
                     options.BlockCacheBytes,
                     dependencies.LeaseHeartbeatInterval);
-                _simulatedCloud = new SimulatedCloudPersistence(
+                _cloudPersistence = new SimulatedCloudPersistence(
                     simulated.LocalCachePath,
                     _diskStore.WriterEpoch);
                 _cloudMode = true;
                 break;
-            case PantsStorageConfiguration.Cloud:
-                throw PantsException.Create(
-                    PantsErrorCode.NotSupported,
-                    "Provider-backed cloud storage is not available until its configured direct-HTTP client is qualified.");
+            case PantsStorageConfiguration.Cloud cloud:
+                var walStore = CloudObjectStoreFactory.Create(
+                    cloud.Topology.Wal,
+                    options.StorageTimeout,
+                    dependencies.CloudHttpClient);
+                var sstStore = CloudObjectStoreFactory.Create(
+                    cloud.Topology.Sst,
+                    options.StorageTimeout,
+                    dependencies.CloudHttpClient);
+                var controlStore = CloudObjectStoreFactory.Create(
+                    cloud.Topology.Control,
+                    options.StorageTimeout,
+                    dependencies.CloudHttpClient);
+                _cloudLease = new CloudLeaseCoordinator(
+                    new CloudObjectLeaseStore(controlStore, PantsCloudObjectLayout.LeaseObjectKey),
+                    ttlClock,
+                    $"pants-{Environment.ProcessId}-{Guid.NewGuid():N}",
+                    TimeSpan.FromSeconds(30),
+                    options.LeaseClockSkewTolerance,
+                    options.LeaseLossCallback);
+                var cloudEpoch = _cloudLease.AcquireAsync(CancellationToken.None)
+                    .AsTask().GetAwaiter().GetResult();
+                ProviderCloudPersistence.HydrateLocalCacheAsync(
+                    cloud.LocalCachePath,
+                    walStore,
+                    sstStore,
+                    controlStore,
+                    CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                _diskStore = LocalDiskStore.Open(
+                    cloud.LocalCachePath,
+                    _state,
+                    cloudEpoch - 1,
+                    options.RecoveryPolicy,
+                    options.PerformanceGoal,
+                    options.LeaseClockSkewTolerance,
+                    options.LeaseLossCallback,
+                    dependencies.Failpoints,
+                    options.Compaction,
+                    options.TargetSstSizeBytes,
+                    options.BlockCachePolicy,
+                    options.BlockCacheBytes,
+                    dependencies.LeaseHeartbeatInterval);
+                _cloudPersistence = new ProviderCloudPersistence(
+                    cloud.LocalCachePath,
+                    walStore,
+                    sstStore,
+                    controlStore,
+                    _cloudLease);
+                _cloudLeaseCancellation = new CancellationTokenSource();
+                _cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
+                    _cloudLease,
+                    dependencies.LeaseHeartbeatInterval,
+                    _cloudLeaseCancellation.Token);
+                _cloudMode = true;
+                break;
             default:
                 throw PantsException.Create(PantsErrorCode.NotSupported, "Unknown storage backend.");
         }
@@ -108,7 +162,8 @@ internal sealed class PantsActor : IAsyncDisposable
         _loopTask = Task.Run(RunLoopAsync);
     }
 
-    public bool IsPrimaryLeaseHealthy => _diskStore?.IsLeaseHealthy ?? true;
+    public bool IsPrimaryLeaseHealthy =>
+        (_diskStore?.IsLeaseHealthy ?? true) && (_cloudLease?.IsHealthy ?? true);
 
     public bool IsSupported(PantsDurability durability) => _cloudMode
         ? durability is PantsDurability.BestEffort or PantsDurability.CloudAsync or PantsDurability.CloudStrict
@@ -122,16 +177,16 @@ internal sealed class PantsActor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
-                if (state.ActiveFamilyVersions.TryGetValue(name, out int activeGeneration))
+                if (state.ActiveFamilyVersions.TryGetValue(name, out var activeGeneration))
                 {
                     return state.FamilyData.Keys.Single(identity =>
                         identity.Name == name && identity.Generation == activeGeneration);
                 }
 
-                int generation = state.FamilyGeneration.TryGetValue(name, out int currentGeneration)
+                var generation = state.FamilyGeneration.TryGetValue(name, out var currentGeneration)
                     ? checked(currentGeneration + 1)
                     : 0;
-                uint id = state.NextColumnFamilyId;
+                var id = state.NextColumnFamilyId;
                 var created = new ColumnFamilyIdentity(id, name, generation);
                 if (_diskStore is not null)
                 {
@@ -146,13 +201,15 @@ internal sealed class PantsActor : IAsyncDisposable
                 state.FamilyData[created] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
                 state.RangeTombstones[created] = [];
                 state.ActiveMemtableBytes[created] = 0;
-                if (_simulatedCloud is not null && _diskStore is not null)
+                if (_cloudPersistence is not null && _diskStore is not null)
                 {
-                    await _cloudWorker.ExecuteAsync(() =>
+                    await _cloudWorker.ExecuteAsync(async workerCancellationToken =>
                     {
-                        _simulatedCloud.PublishColumnFamilyCreate(
-                            _diskStore.GetColumnFamilyMetadata(created));
-                        _simulatedCloud.MirrorMetadataAndSsts();
+                        await _cloudPersistence.PublishColumnFamilyCreateAsync(
+                            _diskStore.GetColumnFamilyMetadata(created),
+                            workerCancellationToken).ConfigureAwait(false);
+                        await _cloudPersistence.MirrorMetadataAndSstsAsync(workerCancellationToken)
+                            .ConfigureAwait(false);
                     }).ConfigureAwait(false);
                 }
 
@@ -184,13 +241,15 @@ internal sealed class PantsActor : IAsyncDisposable
                     await _manifestWorker
                         .ExecuteAsync(() => _diskStore.DropColumnFamily(state, identity))
                         .ConfigureAwait(false);
-                    if (_simulatedCloud is not null)
+                    if (_cloudPersistence is not null)
                     {
-                        await _cloudWorker.ExecuteAsync(() =>
+                        await _cloudWorker.ExecuteAsync(async workerCancellationToken =>
                         {
-                            _simulatedCloud.PublishColumnFamilyDrop(
-                                _diskStore.GetColumnFamilyMetadata(identity));
-                            _simulatedCloud.MirrorMetadataAndSsts();
+                            await _cloudPersistence.PublishColumnFamilyDropAsync(
+                                _diskStore.GetColumnFamilyMetadata(identity),
+                                workerCancellationToken).ConfigureAwait(false);
+                            await _cloudPersistence.MirrorMetadataAndSstsAsync(workerCancellationToken)
+                                .ConfigureAwait(false);
                         }).ConfigureAwait(false);
                     }
                 }
@@ -205,9 +264,9 @@ internal sealed class PantsActor : IAsyncDisposable
                     await _garbageCollectionWorker
                         .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                         .ConfigureAwait(false);
-                    if (_simulatedCloud is not null)
+                    if (_cloudPersistence is not null)
                     {
-                        await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                        await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
                             .ConfigureAwait(false);
                     }
                 }
@@ -224,10 +283,10 @@ internal sealed class PantsActor : IAsyncDisposable
         SendAsync(
             state =>
             {
-                ColumnFamilyIdentity[] matches = state.FamilyData.Keys
+                var matches = state.FamilyData.Keys
                     .Where(candidate =>
                         candidate.Name == name &&
-                        state.ActiveFamilyVersions.TryGetValue(name, out int generation) &&
+                        state.ActiveFamilyVersions.TryGetValue(name, out var generation) &&
                         candidate.Generation == generation)
                     .ToArray();
                 return ValueTask.FromResult<ColumnFamilyIdentity?>(matches.Length switch
@@ -255,7 +314,7 @@ internal sealed class PantsActor : IAsyncDisposable
             state =>
             {
                 ThrowIfShuttingDown(state);
-                long snapshotId = checked(++state.TransactionCounter);
+                var snapshotId = checked(++state.TransactionCounter);
                 state.ActiveScanSnapshots[snapshotId] = new ScanSnapshotPin(
                     snapshotId,
                     snapshot.Sequence,
@@ -281,9 +340,9 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
-                        if (_simulatedCloud is not null)
+                        if (_cloudPersistence is not null)
                         {
-                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                            await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
                                 .ConfigureAwait(false);
                         }
                     }
@@ -303,10 +362,10 @@ internal sealed class PantsActor : IAsyncDisposable
             state =>
             {
                 ThrowIfShuttingDown(state);
-                ColumnFamilyIdentity identity = columnFamily.Identity;
+                var identity = columnFamily.Identity;
                 ValidateActiveFamily(state, identity);
-                long transactionId = checked(++state.TransactionCounter);
-                DatabaseSnapshot snapshot = state.CreateSnapshot();
+                var transactionId = checked(++state.TransactionCounter);
+                var snapshot = state.CreateSnapshot();
                 var transaction = new PantsTransactionInstance(
                     database,
                     transactionId,
@@ -360,9 +419,9 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
-                        if (_simulatedCloud is not null)
+                        if (_cloudPersistence is not null)
                         {
-                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                            await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
                                 .ConfigureAwait(false);
                         }
                     }
@@ -385,7 +444,7 @@ internal sealed class PantsActor : IAsyncDisposable
                 ValidateActiveFamily(state, identity);
                 if (_diskStore is not null)
                 {
-                    long started = Stopwatch.GetTimestamp();
+                    var started = Stopwatch.GetTimestamp();
                     await _flushWorker
                         .ExecuteAsync(() => _diskStore.Flush(state, identity))
                         .ConfigureAwait(false);
@@ -459,7 +518,7 @@ internal sealed class PantsActor : IAsyncDisposable
             },
             cancellationToken);
 
-    private async ValueTask RelieveWritePressureAsync(
+    async ValueTask RelieveWritePressureAsync(
         PantsRuntimeState state,
         CommitPayload payload)
     {
@@ -468,7 +527,7 @@ internal sealed class PantsActor : IAsyncDisposable
             return;
         }
 
-        bool wouldExceedLimit = payload.OrderedOperations
+        var wouldExceedLimit = payload.OrderedOperations
             .GroupBy(static operation => operation.Family, ColumnFamilyIdentityComparer.Instance)
             .Any(group =>
                 state.ActiveMemtableBytes.GetValueOrDefault(group.Key) > 0 &&
@@ -603,7 +662,7 @@ internal sealed class PantsActor : IAsyncDisposable
         => SendAsync(
             _ =>
             {
-                IScanReadValidator? validator = _diskStore?.CreateScanReadValidator(
+                var validator = _diskStore?.CreateScanReadValidator(
                     _telemetry,
                     columnFamily,
                     bounds);
@@ -636,7 +695,7 @@ internal sealed class PantsActor : IAsyncDisposable
             throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
         }
 
-        string? path = await SendAsync(
+        var path = await SendAsync(
             _ =>
             {
                 if (_verificationInProgress)
@@ -703,14 +762,15 @@ internal sealed class PantsActor : IAsyncDisposable
                 {
                     await _walWorker.ExecuteAsync(_diskStore.FlushDurabilityBoundary)
                         .ConfigureAwait(false);
-                    if (_simulatedCloud is not null)
+                    if (_cloudPersistence is not null)
                     {
                         SealedWalSegment? segment = null;
                         await _walWorker.ExecuteAsync(() => segment = _diskStore.SealActiveWal())
                             .ConfigureAwait(false);
                         if (segment is not null)
                         {
-                            await _cloudWorker.ExecuteAsync(() => _simulatedCloud.PublishWal(segment))
+                            await _cloudWorker.ExecuteAsync(cancellation =>
+                                    _cloudPersistence.PublishWalAsync(segment, cancellation))
                                 .ConfigureAwait(false);
                         }
                     }
@@ -737,11 +797,57 @@ internal sealed class PantsActor : IAsyncDisposable
         await _manifestWorker.DisposeAsync().ConfigureAwait(false);
         await _garbageCollectionWorker.DisposeAsync().ConfigureAwait(false);
         await _cloudWorker.DisposeAsync().ConfigureAwait(false);
+        if (_cloudLeaseCancellation is not null)
+        {
+            await _cloudLeaseCancellation.CancelAsync().ConfigureAwait(false);
+        }
+
+        if (_cloudLeaseHeartbeat is not null)
+        {
+            await _cloudLeaseHeartbeat.ConfigureAwait(false);
+        }
+
+        if (_cloudLease is not null)
+        {
+            try
+            {
+                await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (PantsException)
+            {
+                // A failed release leaves the bounded lease to expire naturally.
+            }
+        }
+
+        _cloudLeaseCancellation?.Dispose();
+        _cloudLease?.Dispose();
         _diskStore?.Dispose();
         _loopCancellation.Dispose();
     }
 
-    private async ValueTask<T> SendAsync<T>(
+    static async Task RunCloudLeaseHeartbeatAsync(
+        CloudLeaseCoordinator lease,
+        TimeSpan interval,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(interval);
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await lease.RenewAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (PantsException)
+        {
+            // The coordinator marks the lease unhealthy and invokes the configured callback.
+        }
+    }
+
+    async ValueTask<T> SendAsync<T>(
         Func<PantsRuntimeState, ValueTask<T>> operation,
         CancellationToken cancellationToken)
     {
@@ -752,7 +858,7 @@ internal sealed class PantsActor : IAsyncDisposable
 
         var command = new RuntimeCommand<T>(operation);
         Interlocked.Increment(ref _queuedCommands);
-        long started = Stopwatch.GetTimestamp();
+        var started = Stopwatch.GetTimestamp();
         try
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -778,7 +884,7 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private async ValueTask SendCommitAsync(
+    async ValueTask SendCommitAsync(
         PantsWriteOptions writeOptions,
         CommitPayload payload,
         CancellationToken cancellationToken)
@@ -793,7 +899,7 @@ internal sealed class PantsActor : IAsyncDisposable
             payload,
             state => ExecuteCommitAsync(state, writeOptions, payload));
         Interlocked.Increment(ref _queuedCommands);
-        long started = Stopwatch.GetTimestamp();
+        var started = Stopwatch.GetTimestamp();
         try
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -819,11 +925,11 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private async Task RunLoopAsync()
+    async Task RunLoopAsync()
     {
         try
         {
-            await foreach (IRuntimeCommand command in _commands.Reader
+            await foreach (var command in _commands.Reader
                                .ReadAllAsync(_loopCancellation.Token)
                                .ConfigureAwait(false))
             {
@@ -836,9 +942,9 @@ internal sealed class PantsActor : IAsyncDisposable
                 var commits = new List<CommitRuntimeCommand> { firstCommit };
                 await Task.Yield();
                 while (commits.Count < 64 &&
-                       _commands.Reader.TryPeek(out IRuntimeCommand? next) &&
+                       _commands.Reader.TryPeek(out var next) &&
                        next is CommitRuntimeCommand &&
-                       _commands.Reader.TryRead(out IRuntimeCommand? admitted))
+                       _commands.Reader.TryRead(out var admitted))
                 {
                     commits.Add((CommitRuntimeCommand)admitted);
                 }
@@ -849,7 +955,7 @@ internal sealed class PantsActor : IAsyncDisposable
                 }
                 else
                 {
-                    foreach (CommitRuntimeCommand commit in commits)
+                    foreach (var commit in commits)
                     {
                         await commit.ExecuteAsync(_state).ConfigureAwait(false);
                     }
@@ -861,29 +967,29 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private bool CanCoalesceSyncCommits(List<CommitRuntimeCommand> commits) =>
+    bool CanCoalesceSyncCommits(List<CommitRuntimeCommand> commits) =>
         commits.Count > 1 &&
         _diskStore is not null &&
-        _simulatedCloud is null &&
+        _cloudPersistence is null &&
         _options.FlushAfterWalRecords == 0 &&
         commits.All(static command =>
             command.WriteOptions.Durability == PantsDurability.Sync &&
             command.Payload.OrderedOperations.Count != 0);
 
-    private async ValueTask ExecuteCoalescedSyncCommitsAsync(
+    async ValueTask ExecuteCoalescedSyncCommitsAsync(
         PantsRuntimeState state,
         List<CommitRuntimeCommand> commits)
     {
-        LocalDiskStore diskStore = _diskStore ??
+        var diskStore = _diskStore ??
             throw new PantsInternalException("A coalesced commit requires persistent storage.");
         var accepted = new List<CommitRuntimeCommand>(commits.Count);
-        for (int index = 0; index < commits.Count; index++)
+        for (var index = 0; index < commits.Count; index++)
         {
-            CommitRuntimeCommand command = commits[index];
+            var command = commits[index];
             try
             {
                 await PrepareCommitAsync(state, command.Payload).ConfigureAwait(false);
-                long started = Stopwatch.GetTimestamp();
+                var started = Stopwatch.GetTimestamp();
                 await _walWorker.ExecuteAsync(() => diskStore.AppendCommit(
                         command.Payload,
                         state,
@@ -903,7 +1009,7 @@ internal sealed class PantsActor : IAsyncDisposable
                     continue;
                 }
 
-                for (int remaining = index + 1; remaining < commits.Count; remaining++)
+                for (var remaining = index + 1; remaining < commits.Count; remaining++)
                 {
                     commits[remaining].Fail(
                         state,
@@ -923,12 +1029,12 @@ internal sealed class PantsActor : IAsyncDisposable
 
         try
         {
-            long started = Stopwatch.GetTimestamp();
+            var started = Stopwatch.GetTimestamp();
             await _walWorker.ExecuteAsync(diskStore.FlushDurabilityBoundary).ConfigureAwait(false);
             _telemetry.RecordCoalescedWalFsync(
                 Stopwatch.GetElapsedTime(started),
                 accepted.Count);
-            foreach (CommitRuntimeCommand command in accepted)
+            foreach (var command in accepted)
             {
                 await FlushAtConfiguredThresholdAsync(state, command.Payload).ConfigureAwait(false);
                 PantsDiagnostics.TransactionsCommitted.Add(1);
@@ -936,21 +1042,21 @@ internal sealed class PantsActor : IAsyncDisposable
 
             await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
             PublishSnapshot(state);
-            foreach (CommitRuntimeCommand command in accepted)
+            foreach (var command in accepted)
             {
                 command.Complete(true);
             }
         }
         catch (Exception exception)
         {
-            foreach (CommitRuntimeCommand command in accepted)
+            foreach (var command in accepted)
             {
                 command.Fail(state, exception);
             }
         }
     }
 
-    private async ValueTask<bool> ExecuteCommitAsync(
+    async ValueTask<bool> ExecuteCommitAsync(
         PantsRuntimeState state,
         PantsWriteOptions writeOptions,
         CommitPayload payload)
@@ -977,7 +1083,7 @@ internal sealed class PantsActor : IAsyncDisposable
         return true;
     }
 
-    private async ValueTask PrepareCommitAsync(PantsRuntimeState state, CommitPayload payload)
+    async ValueTask PrepareCommitAsync(PantsRuntimeState state, CommitPayload payload)
     {
         ThrowIfShuttingDown(state);
         ThrowIfVerificationInProgress();
@@ -994,9 +1100,9 @@ internal sealed class PantsActor : IAsyncDisposable
             await _garbageCollectionWorker
                 .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
-            if (_simulatedCloud is not null)
+            if (_cloudPersistence is not null)
             {
-                await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                await _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync)
                     .ConfigureAwait(false);
             }
         }
@@ -1018,24 +1124,24 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private static void ApplyCommittedOperations(PantsRuntimeState state, CommitPayload payload)
+    static void ApplyCommittedOperations(PantsRuntimeState state, CommitPayload payload)
     {
         ApplyOperations(state, payload, state.Sequence);
         RecordMemtableBytes(state, payload);
-        foreach (ColumnFamilyIdentity family in payload.Writes.Keys.Concat(payload.DeleteRanges.Keys))
+        foreach (var family in payload.Writes.Keys.Concat(payload.DeleteRanges.Keys))
         {
             state.UnflushedFamilies.Add(family);
         }
     }
 
-    private async ValueTask PersistCommitAsync(
+    async ValueTask PersistCommitAsync(
         PantsRuntimeState state,
         CommitPayload payload,
         PantsDurability durability)
     {
-        LocalDiskStore diskStore = _diskStore ??
+        var diskStore = _diskStore ??
             throw new PantsInternalException("Persistent commit has no disk store.");
-        long started = Stopwatch.GetTimestamp();
+        var started = Stopwatch.GetTimestamp();
         await _walWorker.ExecuteAsync(() => diskStore.AppendCommit(
                 payload,
                 state,
@@ -1057,7 +1163,7 @@ internal sealed class PantsActor : IAsyncDisposable
 
         await RotateLocalWalAtConfiguredThresholdAsync(diskStore).ConfigureAwait(false);
 
-        if (_simulatedCloud is not null && durability == PantsDurability.CloudAsync)
+        if (_cloudPersistence is not null && durability == PantsDurability.CloudAsync)
         {
             SealedWalSegment? asynchronousSegment = null;
             await _walWorker
@@ -1066,25 +1172,27 @@ internal sealed class PantsActor : IAsyncDisposable
             if (asynchronousSegment is not null)
             {
                 await _cloudWorker
-                    .EnqueueAsync(() => _simulatedCloud.PublishWal(asynchronousSegment))
+                    .EnqueueAsync(cancellation =>
+                        _cloudPersistence.PublishWalAsync(asynchronousSegment, cancellation))
                     .ConfigureAwait(false);
             }
         }
-        else if (_simulatedCloud is not null && durability == PantsDurability.CloudStrict)
+        else if (_cloudPersistence is not null && durability == PantsDurability.CloudStrict)
         {
             SealedWalSegment? segment = null;
             await _walWorker.ExecuteAsync(() => segment = diskStore.SealActiveWal())
                 .ConfigureAwait(false);
             if (segment is not null)
             {
-                await _cloudWorker.ExecuteAsync(() => _simulatedCloud.PublishWal(segment))
+                await _cloudWorker.ExecuteAsync(cancellation =>
+                        _cloudPersistence.PublishWalAsync(segment, cancellation))
                     .ConfigureAwait(false);
             }
         }
 
     }
 
-    private async ValueTask RotateLocalWalAtConfiguredThresholdAsync(LocalDiskStore diskStore)
+    async ValueTask RotateLocalWalAtConfiguredThresholdAsync(LocalDiskStore diskStore)
     {
         if (_options.Storage is not PantsStorageConfiguration.Local ||
             diskStore.ActiveWalBytes < _options.WalBufferSizeBytes)
@@ -1098,11 +1206,11 @@ internal sealed class PantsActor : IAsyncDisposable
         }).ConfigureAwait(false);
     }
 
-    private static void ApplyOperations(PantsRuntimeState state, CommitPayload payload, long sequence)
+    static void ApplyOperations(PantsRuntimeState state, CommitPayload payload, long sequence)
     {
-        foreach (TransactionIntentOperation operation in payload.OrderedOperations)
+        foreach (var operation in payload.OrderedOperations)
         {
-            SortedDictionary<byte[], CellState> family = GetFamily(state, operation.Family);
+            var family = GetFamily(state, operation.Family);
             switch (operation.Kind)
             {
                 case CommitOperationKind.Put:
@@ -1119,7 +1227,7 @@ internal sealed class PantsActor : IAsyncDisposable
                         operation.Key.ToArray(),
                         operation.EndExclusive.ToArray(),
                         sequence));
-                    foreach (byte[] key in family.Keys
+                    foreach (var key in family.Keys
                                  .Where(key => IsInRange(key, operation.Key, operation.EndExclusive))
                                  .ToArray())
                     {
@@ -1135,9 +1243,9 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private static void ValidateActiveFamily(PantsRuntimeState state, ColumnFamilyIdentity identity)
+    static void ValidateActiveFamily(PantsRuntimeState state, ColumnFamilyIdentity identity)
     {
-        if (!state.ActiveFamilyVersions.TryGetValue(identity.Name, out int activeGeneration) ||
+        if (!state.ActiveFamilyVersions.TryGetValue(identity.Name, out var activeGeneration) ||
             activeGeneration != identity.Generation ||
             !state.FamilyData.ContainsKey(identity))
         {
@@ -1147,20 +1255,20 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private static SortedDictionary<byte[], CellState> GetFamily(
+    static SortedDictionary<byte[], CellState> GetFamily(
         PantsRuntimeState state,
         ColumnFamilyIdentity identity) =>
-        state.FamilyData.TryGetValue(identity, out SortedDictionary<byte[], CellState>? family)
+        state.FamilyData.TryGetValue(identity, out var family)
             ? family
             : throw PantsException.Create(
                 PantsErrorCode.InvalidArgument,
                 $"Column family '{identity.Name}' is unavailable.");
 
-    private static bool IsInRange(byte[] key, byte[] start, byte[] end) =>
+    static bool IsInRange(byte[] key, byte[] start, byte[] end) =>
         ByteArrayComparer.Instance.Compare(key, start) >= 0 &&
         ByteArrayComparer.Instance.Compare(key, end) < 0;
 
-    private async ValueTask FlushAtConfiguredThresholdAsync(
+    async ValueTask FlushAtConfiguredThresholdAsync(
         PantsRuntimeState state,
         CommitPayload payload)
     {
@@ -1179,7 +1287,7 @@ internal sealed class PantsActor : IAsyncDisposable
         await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
     }
 
-    private async ValueTask RunBackgroundCompactionAsync(PantsRuntimeState state)
+    async ValueTask RunBackgroundCompactionAsync(PantsRuntimeState state)
     {
         if (!_backgroundCompactionEnabled || _diskStore is null)
         {
@@ -1197,7 +1305,7 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private async ValueTask RunReadAmplificationCompactionAsync(PantsRuntimeState state)
+    async ValueTask RunReadAmplificationCompactionAsync(PantsRuntimeState state)
     {
         _telemetry.RecordReadAmplificationCompactionTrigger();
         long bytesRewritten = 0;
@@ -1213,14 +1321,14 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private ValueTask MirrorCloudStorageAsync() =>
-        _simulatedCloud is null
+    ValueTask MirrorCloudStorageAsync() =>
+        _cloudPersistence is null
             ? ValueTask.CompletedTask
-            : _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts);
+            : _cloudWorker.ExecuteAsync(_cloudPersistence.MirrorMetadataAndSstsAsync);
 
-    private static void RecordMemtableBytes(PantsRuntimeState state, CommitPayload payload)
+    static void RecordMemtableBytes(PantsRuntimeState state, CommitPayload payload)
     {
-        foreach (IGrouping<ColumnFamilyIdentity, TransactionIntentOperation> operations in
+        foreach (var operations in
                  payload.OrderedOperations.GroupBy(
                      static operation => operation.Family,
                      ColumnFamilyIdentityComparer.Instance))
@@ -1231,26 +1339,26 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private static long EstimateOperationBytes(TransactionIntentOperation operation) => checked(
+    static long EstimateOperationBytes(TransactionIntentOperation operation) => checked(
         (long)operation.Key.Length +
         (operation.EndExclusive?.Length ?? 0) +
         (operation.Value?.Length ?? 0) +
         64);
 
-    private static void ClearMemtableAccounting(PantsRuntimeState state)
+    static void ClearMemtableAccounting(PantsRuntimeState state)
     {
-        foreach (ColumnFamilyIdentity identity in state.ActiveMemtableBytes.Keys.ToArray())
+        foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
         {
             state.ActiveMemtableBytes[identity] = 0;
         }
     }
 
-    private static void ClearMemtableAccounting(
+    static void ClearMemtableAccounting(
         PantsRuntimeState state,
         ColumnFamilyIdentity identity) =>
         state.ActiveMemtableBytes[identity] = 0;
 
-    private static PantsStorageLayout EmptyStorageLayout(PantsRuntimeState state) => new(
+    static PantsStorageLayout EmptyStorageLayout(PantsRuntimeState state) => new(
         state.Health,
         0,
         1,
@@ -1266,7 +1374,7 @@ internal sealed class PantsActor : IAsyncDisposable
         [],
         []);
 
-    private static long GetOldestSnapshotAgeSeconds(PantsRuntimeState state) =>
+    static long GetOldestSnapshotAgeSeconds(PantsRuntimeState state) =>
         state.ActiveSnapshotCount == 0
             ? 0
             : checked((long)state.ActiveSnapshots
@@ -1274,13 +1382,13 @@ internal sealed class PantsActor : IAsyncDisposable
                     state.Clock.UtcNow,
                     snapshot.StartedAtUtc).TotalSeconds));
 
-    private static TimeSpan GetSnapshotAge(DateTimeOffset now, DateTimeOffset startedAtUtc) =>
+    static TimeSpan GetSnapshotAge(DateTimeOffset now, DateTimeOffset startedAtUtc) =>
         now <= startedAtUtc ? TimeSpan.Zero : now - startedAtUtc;
 
-    private void PublishSnapshot(PantsRuntimeState state) =>
+    void PublishSnapshot(PantsRuntimeState state) =>
         Volatile.Write(ref _currentSnapshot, state.CreateSnapshot());
 
-    private static void ThrowIfShuttingDown(PantsRuntimeState state)
+    static void ThrowIfShuttingDown(PantsRuntimeState state)
     {
         if (state.IsShuttingDown)
         {
@@ -1288,7 +1396,7 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private void ThrowIfVerificationInProgress()
+    void ThrowIfVerificationInProgress()
     {
         if (_verificationInProgress)
         {
@@ -1297,7 +1405,7 @@ internal sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    private async ValueTask ReleaseVerificationBarrierAsync()
+    async ValueTask ReleaseVerificationBarrierAsync()
     {
         if (Volatile.Read(ref _disposed) != 0)
         {

@@ -170,6 +170,42 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    public async ValueTask ReleaseAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (Volatile.Read(ref _lost) != 0 || Epoch == 0)
+            {
+                return;
+            }
+
+            var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (current is null ||
+                current.Lease.Epoch != Epoch ||
+                !StringComparer.Ordinal.Equals(current.Lease.HolderId, _holderId) ||
+                !StringComparer.Ordinal.Equals(current.Lease.OwnerToken, _ownerToken))
+            {
+                LoseLease();
+                return;
+            }
+
+            var released = await _store.TryReplaceAsync(
+                current.Version,
+                current.Lease with { ExpiresAtUtc = _clock.UtcNow - _clockSkewTolerance },
+                cancellationToken).ConfigureAwait(false);
+            if (!released)
+            {
+                LoseLease();
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
