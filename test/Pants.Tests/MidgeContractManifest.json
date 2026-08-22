@@ -5725,10 +5725,12 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_expose_provider_configuration_without_implementation_features",
       "observableBehavior": "expose provider configuration without implementation features",
-      "status": "n/a",
+      "status": "mapped",
       "expectedError": null,
       "issue": 7,
-      "rationale": "Pants does not expose Cargo-style implementation feature flags; provider configuration is always available."
+      "pantsTests": [
+        "Pants.Tests.CloudArchitectureTests.ShouldExposeProviderConfigurationWithoutImplementationFeatures"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_keep_common_cloud_transport_provider_neutral_when_features_are_split",
@@ -5736,10 +5738,12 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_keep_common_cloud_transport_provider_neutral_when_features_are_split",
       "observableBehavior": "keep common cloud transport provider neutral when features are split",
-      "status": "n/a",
+      "status": "mapped",
       "expectedError": null,
       "issue": 7,
-      "rationale": "Rust feature-split transport compilation has no equivalent in the single Pants .NET assembly."
+      "pantsTests": [
+        "Pants.Tests.CloudArchitectureTests.ShouldKeepCommonCloudTransportProviderNeutralWhenFeaturesAreSplit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_keep_provider_dtos_in_configuration_layer",
@@ -5747,10 +5751,12 @@
       "source": "tests/provider_feature_contract.rs",
       "sourceSymbolOrTest": "should_keep_provider_dtos_in_configuration_layer",
       "observableBehavior": "keep provider dtos in configuration layer",
-      "status": "n/a",
+      "status": "mapped",
       "expectedError": null,
       "issue": 7,
-      "rationale": "Rust Cargo feature ownership of configuration DTOs has no equivalent in the single Pants .NET assembly."
+      "pantsTests": [
+        "Pants.Tests.CloudArchitectureTests.ShouldKeepProviderDtosInConfigurationLayer"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/read_amp_api.rs:should_accumulate_exact_average_across_multiple_local_sst_reads",
