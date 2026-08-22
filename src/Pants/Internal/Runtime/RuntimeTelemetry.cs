@@ -252,6 +252,15 @@ internal sealed class RuntimeTelemetry
         SetMaximum(ref _walLastSyncedSequence, sequence);
     }
 
+    public void RecordWalFsyncBoundary(TimeSpan elapsed, long sequence)
+    {
+        var nanoseconds = ToNanoseconds(elapsed);
+        Interlocked.Increment(ref _walFsyncCount);
+        Interlocked.Add(ref _walFsyncNanosecondsTotal, nanoseconds);
+        SetMaximum(ref _walFsyncNanosecondsMaximum, nanoseconds);
+        SetMaximum(ref _walLastSyncedSequence, sequence);
+    }
+
     public void RecordWalDurabilityBoundary(long sequence) =>
         SetMaximum(ref _walLastSyncedSequence, sequence);
 

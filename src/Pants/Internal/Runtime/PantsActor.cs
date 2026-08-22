@@ -1363,6 +1363,14 @@ sealed class PantsActor : IAsyncDisposable
 
             await FlushAtConfiguredThresholdAsync(state, payload).ConfigureAwait(false);
         }
+        else if (payload.Mode == PantsTransactionMode.ReadWrite &&
+                 writeOptions.Durability == PantsDurability.Sync &&
+                 _diskStore is not null)
+        {
+            var started = Stopwatch.GetTimestamp();
+            await _walWorker.ExecuteAsync(_diskStore.FlushDurabilityBoundary).ConfigureAwait(false);
+            _telemetry.RecordWalFsyncBoundary(Stopwatch.GetElapsedTime(started), state.Sequence);
+        }
 
         PublishSnapshot(state);
         PantsDiagnostics.TransactionsCommitted.Add(1);

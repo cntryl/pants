@@ -2866,9 +2866,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_issue_one_physical_wal_sync_when_assertion_only_sync_transaction_commits",
       "observableBehavior": "issue one physical wal sync when assertion only sync transaction commits",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenAssertionOnlySyncCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_sync_count.rs:should_issue_one_physical_wal_sync_when_empty_sync_transaction_commits",
@@ -2876,9 +2879,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_issue_one_physical_wal_sync_when_empty_sync_transaction_commits",
       "observableBehavior": "issue one physical wal sync when empty sync transaction commits",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenEmptySyncCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_sync_count.rs:should_issue_one_physical_wal_sync_when_non_empty_sync_transaction_commits",
@@ -2886,9 +2892,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_issue_one_physical_wal_sync_when_non_empty_sync_transaction_commits",
       "observableBehavior": "issue one physical wal sync when non empty sync transaction commits",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenNonEmptySyncCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_sync_count.rs:should_issue_one_physical_wal_sync_when_spilled_transaction_commits",
@@ -2896,9 +2905,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_issue_one_physical_wal_sync_when_spilled_transaction_commits",
       "observableBehavior": "issue one physical wal sync when spilled transaction commits",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenSpilledSyncCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_sync_count.rs:should_not_issue_physical_wal_sync_before_buffered_commit_returns",
@@ -2906,9 +2918,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_not_issue_physical_wal_sync_before_buffered_commit_returns",
       "observableBehavior": "not issue physical wal sync before buffered commit returns",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsWalSyncCountContractTests.ShouldNotIssuePhysicalWalSyncGivenBufferedCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_sync_count.rs:should_share_physical_wal_sync_across_concurrent_strict_transactions",
@@ -2916,9 +2931,12 @@
       "source": "tests/durability_sync_count.rs",
       "sourceSymbolOrTest": "should_share_physical_wal_sync_across_concurrent_strict_transactions",
       "observableBehavior": "share physical wal sync across concurrent strict transactions",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsCommitCoalescingTests.ShouldFanOutOneDurableSyncGivenConcurrentCommitsAndRecoverAll"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_wal.rs:should_allow_data_loss_given_skipped_fsync_when_crash_occurs",
