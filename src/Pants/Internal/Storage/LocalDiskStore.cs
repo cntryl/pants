@@ -245,42 +245,52 @@ internal sealed class LocalDiskStore : IDisposable
         });
     }
 
-    public void ValidateScanRead(
+    public IScanReadValidator CreateScanReadValidator(
         RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily)
+        ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds)
     {
-        int candidateSsts = 0;
-        int candidateBlocks = 0;
-        int readerCacheHits = 0;
-        int readerCacheMisses = 0;
-        foreach (MidgeFileMeta file in _manifest.Files.Where(
-                     file => file.ColumnFamilyId == columnFamily.Id))
+        var readers = new List<MidgeSstReader>();
+        var blocks = new List<SstScanBlock>();
+        try
         {
-            string path = Path.Combine(_sstDirectory, file.Name);
-            _ = _readerCache.GetOrAdd(file.Name, path, out bool readerCacheHit);
-            if (readerCacheHit)
+            foreach (MidgeFileMeta file in _manifest.Files.Where(file =>
+                         file.ColumnFamilyId == columnFamily.Id &&
+                         file.SmallestKey is not null &&
+                         file.LargestKey is not null &&
+                         bounds.Overlaps(GetMetadataKey(file.SmallestKey), GetMetadataKey(file.LargestKey))))
             {
-                readerCacheHits++;
-            }
-            else
-            {
-                readerCacheMisses++;
+                MidgeSstReader reader = MidgeSstReader.Open(Path.Combine(_sstDirectory, file.Name));
+                readers.Add(reader);
+                for (var blockIndex = 0; blockIndex < reader.DataBlockCount; blockIndex++)
+                {
+                    byte[] firstKey = reader.GetFirstKey(blockIndex);
+                    byte[]? nextFirstKey = blockIndex + 1 < reader.DataBlockCount
+                        ? reader.GetFirstKey(blockIndex + 1)
+                        : null;
+                    bool overlaps =
+                        (bounds.EndExclusive is null ||
+                         firstKey.AsSpan().SequenceCompareTo(bounds.EndExclusive) < 0) &&
+                        (bounds.StartInclusive is null || nextFirstKey is null ||
+                         nextFirstKey.AsSpan().SequenceCompareTo(bounds.StartInclusive) > 0);
+                    if (overlaps)
+                    {
+                        blocks.Add(new SstScanBlock(reader, blockIndex, firstKey, nextFirstKey));
+                    }
+                }
             }
 
-            MidgeSstContents contents = MidgeSstCodec.Decode(
-                PositionalFile.ReadAllBytes(path));
-            candidateSsts++;
-            candidateBlocks = checked(candidateBlocks + contents.DataBlockCount);
+            return new SstScanReadValidator(telemetry, readers, blocks, readers.Count);
         }
-
-        telemetry.RecordSstScan(
-            candidateSsts,
-            candidateBlocks,
-            candidateBlocks,
-            readerCacheHits,
-            readerCacheMisses,
-            candidateSsts);
+        catch
+        {
+            readers.ForEach(static reader => reader.Dispose());
+            throw;
+        }
     }
+
+    private static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
+        key.Select(static value => checked((byte)value)).ToArray();
 
     public static LocalDiskStore Open(
         string directory,

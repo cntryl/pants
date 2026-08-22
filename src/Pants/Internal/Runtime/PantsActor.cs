@@ -574,18 +574,20 @@ internal sealed class PantsActor : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask ValidateScanReadAsync(
+    public ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
         ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds,
         CancellationToken cancellationToken)
-    {
-        _ = await SendAsync(
+        => SendAsync(
             _ =>
             {
-                _diskStore?.ValidateScanRead(_telemetry, columnFamily);
-                return ValueTask.FromResult(true);
+                IScanReadValidator? validator = _diskStore?.CreateScanReadValidator(
+                    _telemetry,
+                    columnFamily,
+                    bounds);
+                return ValueTask.FromResult(validator);
             },
-            cancellationToken).ConfigureAwait(false);
-    }
+            cancellationToken);
 
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken) =>

@@ -27,6 +27,28 @@ internal sealed class MidgeSstReader : IDisposable
 
     public int DataBlockCount => _index.Length;
 
+    public byte[] GetFirstKey(int blockIndex)
+    {
+        ThrowIfDisposed();
+        if ((uint)blockIndex >= (uint)_index.Length)
+        {
+            throw new PantsStorageException("SST block index is invalid.");
+        }
+
+        return _index[blockIndex].FirstKey.ToArray();
+    }
+
+    public MidgeSstBlockHandle GetDataBlockHandle(int blockIndex)
+    {
+        ThrowIfDisposed();
+        if ((uint)blockIndex >= (uint)_index.Length)
+        {
+            throw new PantsStorageException("SST block index is invalid.");
+        }
+
+        return _index[blockIndex].Handle;
+    }
+
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     public static MidgeSstReader Open(string path)
