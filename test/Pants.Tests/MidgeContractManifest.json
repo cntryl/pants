@@ -6041,8 +6041,11 @@
       "sourceSymbolOrTest": "should_reject_runtime_metrics_request_after_engine_shutdown",
       "observableBehavior": "reject runtime metrics request after engine shutdown",
       "expectedError": "Busy",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldRejectRuntimeMetricsGivenCompletedShutdown"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_reject_storage_verification_in_memory_mode",
@@ -6064,8 +6067,11 @@
       "sourceSymbolOrTest": "should_reject_zero_deadline_for_runtime_metrics_without_sending_a_request",
       "observableBehavior": "reject zero deadline for runtime metrics without sending a request",
       "expectedError": "Timeout",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldRejectRuntimeMetricsBeforeAdmissionGivenCanceledCaller"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_report_degraded_health_given_obsolete_sst_files_and_json_verification",
@@ -6114,9 +6120,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_return_runtime_metrics_within_generous_timeout",
       "observableBehavior": "return runtime metrics within generous timeout",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldReturnRuntimeMetricsGivenGenerousCallerDeadline"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_treat_unrecognized_flag_as_path_given_typoed_json_flag_when_verify_invoked",
