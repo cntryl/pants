@@ -11,7 +11,8 @@ internal sealed class TransactionIntentOperation
         byte[]? value,
         TimeSpan? timeToLive,
         DateTimeOffset? expiryUtc,
-        bool insertOnly)
+        bool insertOnly,
+        ulong? expirationUnixMilliseconds = null)
     {
         Ordinal = ordinal;
         Kind = kind;
@@ -20,7 +21,14 @@ internal sealed class TransactionIntentOperation
         EndExclusive = endExclusive;
         Value = value;
         TimeToLive = timeToLive;
-        ExpiryUtc = expiryUtc;
+        ExpirationUnixMilliseconds = expirationUnixMilliseconds ??
+            (expiryUtc is { } expiration
+                ? PantsUnixTimestamp.FromDateTimeOffset(expiration)
+                : null);
+        ExpiryUtc = expiryUtc ??
+            (expirationUnixMilliseconds is { } rawExpiration
+                ? PantsUnixTimestamp.ToDateTimeOffsetSaturating(rawExpiration)
+                : null);
         InsertOnly = insertOnly;
     }
 
@@ -39,6 +47,8 @@ internal sealed class TransactionIntentOperation
     public TimeSpan? TimeToLive { get; }
 
     public DateTimeOffset? ExpiryUtc { get; }
+
+    public ulong? ExpirationUnixMilliseconds { get; }
 
     public bool InsertOnly { get; }
 }

@@ -4458,9 +4458,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_expire_after_restart_given_ttl_elapsed_during_shutdown_when_reopening",
       "observableBehavior": "expire after restart given ttl elapsed during shutdown when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldExpireAfterRestartGivenTtlElapsedDuringShutdownWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_expire_keys_covered_by_range_tombstone_during_compaction",
@@ -4468,9 +4471,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_expire_keys_covered_by_range_tombstone_during_compaction",
       "observableBehavior": "expire keys covered by range tombstone during compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldExpireKeysCoveredByRangeTombstoneDuringCompaction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_handle_mixed_ttl_keys_given_some_expire_when_reading",
@@ -4478,9 +4484,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_handle_mixed_ttl_keys_given_some_expire_when_reading",
       "observableBehavior": "handle mixed ttl keys given some expire when reading",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldHandleMixedTtlKeysGivenSomeExpireWhenReading"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_handle_ttl_expiry_during_multi_level_compaction",
@@ -4488,9 +4497,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_handle_ttl_expiry_during_multi_level_compaction",
       "observableBehavior": "handle ttl expiry during multi level compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldHandleTtlExpiryDuringMultiLevelCompaction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_keep_pending_ttl_visible_given_read_your_own_write_before_commit",
@@ -4498,9 +4510,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_keep_pending_ttl_visible_given_read_your_own_write_before_commit",
       "observableBehavior": "keep pending ttl visible given read your own write before commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldKeepPendingTtlVisibleGivenReadYourOwnWriteBeforeCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_match_expiration_given_resident_and_spilled_transaction_paths",
@@ -4508,9 +4523,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_match_expiration_given_resident_and_spilled_transaction_paths",
       "observableBehavior": "match expiration given resident and spilled transaction paths",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldMatchExpirationGivenResidentAndSpilledTransactionPaths"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_not_expire_key_given_zero_ttl_when_zero_means_infinite",
@@ -4518,9 +4536,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_not_expire_key_given_zero_ttl_when_zero_means_infinite",
       "observableBehavior": "not expire key given zero ttl when zero means infinite",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldNotExpireKeyGivenZeroTtlWhenZeroMeansInfinite"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_not_expose_ttl_expired_key_covered_by_range_tombstone",
@@ -4528,9 +4549,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_not_expose_ttl_expired_key_covered_by_range_tombstone",
       "observableBehavior": "not expose ttl expired key covered by range tombstone",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldNotExposeTtlExpiredKeyCoveredByRangeTombstone"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_not_reexpose_expired_key_given_clock_steps_backward_when_reading",
@@ -4538,9 +4562,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_not_reexpose_expired_key_given_clock_steps_backward_when_reading",
       "observableBehavior": "not reexpose expired key given clock steps backward when reading",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldNotReexposeExpiredKeyGivenClockStepsBackwardWhenReading"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_persist_ttl_metadata_given_flush_and_restart_when_reopening",
@@ -4548,9 +4575,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_persist_ttl_metadata_given_flush_and_restart_when_reopening",
       "observableBehavior": "persist ttl metadata given flush and restart when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldPersistTtlMetadataGivenFlushAndRestartWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_persist_ttl_metadata_given_restart_when_reopening",
@@ -4558,9 +4588,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_persist_ttl_metadata_given_restart_when_reopening",
       "observableBehavior": "persist ttl metadata given restart when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldPersistTtlMetadataGivenRestartWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_preserve_maximum_expiration_given_resident_spilled_transactions",
@@ -4568,9 +4601,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_preserve_maximum_expiration_given_resident_spilled_transactions",
       "observableBehavior": "preserve maximum expiration given resident spilled transactions",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldPreserveMaximumExpirationGivenResidentAndSpilledTransactions"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_preserve_non_expired_entries_given_compaction_when_ttl_not_exceeded",
@@ -4578,9 +4614,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_preserve_non_expired_entries_given_compaction_when_ttl_not_exceeded",
       "observableBehavior": "preserve non expired entries given compaction when ttl not exceeded",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldPreserveNonExpiredEntriesGivenCompactionWhenTtlNotExceeded"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_preserve_raw_ttl_value_given_forward_skew_during_flush_and_compaction",
@@ -4588,9 +4627,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_preserve_raw_ttl_value_given_forward_skew_during_flush_and_compaction",
       "observableBehavior": "preserve raw ttl value given forward skew during flush and compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldPreserveRawTtlValueGivenForwardSkewDuringFlushAndCompaction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_remove_expired_entries_given_compaction_when_ttl_exceeded",
@@ -4598,9 +4640,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_remove_expired_entries_given_compaction_when_ttl_exceeded",
       "observableBehavior": "remove expired entries given compaction when ttl exceeded",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldRemoveExpiredEntriesGivenCompactionWhenTtlExceeded"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_return_none_given_ttl_elapsed_when_reading",
@@ -4608,9 +4653,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_return_none_given_ttl_elapsed_when_reading",
       "observableBehavior": "return none given ttl elapsed when reading",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldReturnNoneGivenTtlElapsedWhenReading"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_return_value_given_ttl_not_elapsed_when_reading",
@@ -4618,9 +4666,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_return_value_given_ttl_not_elapsed_when_reading",
       "observableBehavior": "return value given ttl not elapsed when reading",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldReturnValueGivenTtlNotElapsedWhenReading"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_round_trip_maximum_expiration_value_given_sst_flush_when_ttl_saturates_to_u64_max",
@@ -4628,9 +4679,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_round_trip_maximum_expiration_value_given_sst_flush_when_ttl_saturates_to_u64_max",
       "observableBehavior": "round trip maximum expiration value given sst flush when ttl saturates to u64 max",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldRoundTripMaximumExpirationValueGivenSstFlushWhenTtlSaturatesToUlongMax"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_update_ttl_given_overwrite_with_new_ttl_when_writing",
@@ -4638,9 +4692,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_update_ttl_given_overwrite_with_new_ttl_when_writing",
       "observableBehavior": "update ttl given overwrite with new ttl when writing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldUpdateTtlGivenOverwriteWithNewTtlWhenWriting"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_use_fixed_snapshot_time_given_range_scan_crosses_ttl_boundary",
@@ -4648,9 +4705,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_use_fixed_snapshot_time_given_range_scan_crosses_ttl_boundary",
       "observableBehavior": "use fixed snapshot time given range scan crosses ttl boundary",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldUseFixedSnapshotTimeGivenRangeScanCrossesTtlBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_use_one_commit_time_given_multiple_ttl_puts_when_committing",
@@ -4658,9 +4718,12 @@
       "source": "tests/engine_ttl.rs",
       "sourceSymbolOrTest": "should_use_one_commit_time_given_multiple_ttl_puts_when_committing",
       "observableBehavior": "use one commit time given multiple ttl puts when committing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTtlBehaviorTests.ShouldUseOneCommitTimeGivenMultipleTtlPutsWhenCommitting"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_wal.rs:should_handle_large_values_in_wal",

@@ -742,7 +742,7 @@ internal sealed class LocalDiskStore : IDisposable
             operation.Key.ToArray(),
             operation.Value?.ToArray(),
             0,
-            ToUnixMilliseconds(operation.ExpiryUtc),
+            operation.ExpirationUnixMilliseconds,
             operation.EndExclusive?.ToArray())).ToList();
         for (var index = 0; index < mutations.Count; index++)
         {
@@ -1603,10 +1603,10 @@ internal sealed class LocalDiskStore : IDisposable
             {
                 case MidgeWalOperation.Put:
                 case MidgeWalOperation.Insert:
-                    family[mutation.Key] = new CellState(
+                    family[mutation.Key] = CellState.FromUnixMilliseconds(
                         mutation.Value?.ToArray(),
                         checked((long)mutation.Sequence),
-                        FromUnixMilliseconds(mutation.Expiration));
+                        mutation.Expiration);
                     break;
                 case MidgeWalOperation.Delete:
                     family.Remove(mutation.Key);
@@ -1819,12 +1819,6 @@ internal sealed class LocalDiskStore : IDisposable
         _familyIds.TryGetValue(identity, out var id)
             ? id
             : throw new PantsStorageException($"Column family '{identity}' has no persistent Midge identity.");
-
-    private static ulong? ToUnixMilliseconds(DateTimeOffset? value) =>
-        value.HasValue ? checked((ulong)value.Value.ToUnixTimeMilliseconds()) : null;
-
-    private static DateTimeOffset? FromUnixMilliseconds(ulong? value) =>
-        value.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(checked((long)value.Value)) : null;
 
     private static bool IsWithinFileRange(MidgeFileMeta file, ReadOnlySpan<byte> key)
     {

@@ -338,8 +338,11 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                     operation.EndExclusive?.ToArray(),
                     operation.Value?.ToArray(),
                     null,
-                    CalculateExpiration(commitTime, operation.TimeToLive),
-                    operation.InsertOnly))
+                    null,
+                    operation.InsertOnly,
+                    PantsUnixTimestamp.ExpirationFromTimeToLive(
+                        commitTime,
+                        operation.TimeToLive)))
                 .ToArray();
             var familyWrites = new Dictionary<byte[], TransactionPendingWrite>(ByteArrayComparer.Instance);
             var familyDeleteRanges = new List<DeleteRange>();
@@ -696,21 +699,6 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             throw PantsException.InvalidArgument(
                 "TTL must be null, zero, or a non-negative whole number of seconds.");
         }
-    }
-
-    private static DateTimeOffset? CalculateExpiration(
-        DateTimeOffset commitTime,
-        TimeSpan? timeToLive)
-    {
-        if (timeToLive is null)
-        {
-            return null;
-        }
-
-        long maximumDeltaTicks = DateTimeOffset.MaxValue.UtcTicks - commitTime.UtcTicks;
-        return timeToLive.Value.Ticks > maximumDeltaTicks
-            ? DateTimeOffset.MaxValue
-            : commitTime.Add(timeToLive.Value);
     }
 
     private static bool IsInRange(byte[] key, byte[] startInclusive, byte[] endExclusive) =>
