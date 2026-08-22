@@ -547,10 +547,13 @@ sealed class PantsActor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
+                        var storageChanged = false;
                         await _garbageCollectionWorker
-                            .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                            .ExecuteAsync(() =>
+                                storageChanged = _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
-                        if (_cloudPersistence is not null)
+                        if (_cloudPersistence is not null &&
+                            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
                         {
                             try
                             {
@@ -637,10 +640,13 @@ sealed class PantsActor : IAsyncDisposable
                     _telemetry.RecordSnapshotUnregister();
                     if (_diskStore is not null)
                     {
+                        var storageChanged = false;
                         await _garbageCollectionWorker
-                            .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                            .ExecuteAsync(() =>
+                                storageChanged = _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
-                        if (_cloudPersistence is not null)
+                        if (_cloudPersistence is not null &&
+                            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
                         {
                             await MirrorCloudStorageAsync().ConfigureAwait(false);
                         }
@@ -721,10 +727,13 @@ sealed class PantsActor : IAsyncDisposable
                     PantsDiagnostics.TransactionsRolledBack.Add(1);
                     if (_diskStore is not null)
                     {
+                        var storageChanged = false;
                         await _garbageCollectionWorker
-                            .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                            .ExecuteAsync(() =>
+                                storageChanged = _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
-                        if (_cloudPersistence is not null)
+                        if (_cloudPersistence is not null &&
+                            (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
                         {
                             await MirrorCloudStorageAsync().ConfigureAwait(false);
                         }
@@ -1637,12 +1646,20 @@ sealed class PantsActor : IAsyncDisposable
                 _hybridCache?.EnsureWriteAdmitted(_diskStore, state);
             }
 
+            var storageChanged = false;
             await _garbageCollectionWorker
-                .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                .ExecuteAsync(() =>
+                    storageChanged = _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
-            if (_cloudPersistence is not null)
+            if (_cloudPersistence is not null &&
+                (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
             {
                 await MirrorCloudStorageAsync().ConfigureAwait(false);
+            }
+            else if (_cloudPersistence is not null && payload.OrderedOperations.Count != 0)
+            {
+                await _cloudWorker.ExecuteAsync(_cloudPersistence.ValidateWriteAuthorityAsync)
+                    .ConfigureAwait(false);
             }
         }
 

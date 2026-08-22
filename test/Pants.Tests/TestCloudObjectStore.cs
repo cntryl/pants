@@ -4,10 +4,13 @@ internal sealed class TestCloudObjectStore : ICloudObjectStore
 {
     string? _objectKey;
     string? _version;
+    int _putCount;
 
     public ReadOnlyMemory<byte> Data { get; set; }
 
     public CloudObjectWriteCondition? LastCondition { get; set; }
+
+    public int PutCount => Volatile.Read(ref _putCount);
 
     public Func<CancellationToken, ValueTask>? BeforeNextPutAsync { get; set; }
 
@@ -46,6 +49,7 @@ internal sealed class TestCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _putCount);
         var beforePut = BeforeNextPutAsync;
         BeforeNextPutAsync = null;
         if (beforePut is not null)

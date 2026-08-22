@@ -415,6 +415,13 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
+    public async ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
+    {
+        _lease.EnsureValid();
+        await EnsureRemoteManifestNotAheadAsync(cancellationToken).ConfigureAwait(false);
+        _lease.EnsureValid();
+    }
+
     public async ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
         CancellationToken cancellationToken)
     {
@@ -596,6 +603,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         var current = await _controlStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false);
         _lease.EnsureValid();
+        if (current?.Data.Span.SequenceEqual(data.Span) == true)
+        {
+            return;
+        }
+
         if (current is not null && IsManifestObjectKey(objectKey))
         {
             var currentManifest = CloudManifestReader.DecodeManifest(current.Data.Span);

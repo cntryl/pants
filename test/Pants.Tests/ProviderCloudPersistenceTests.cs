@@ -3,6 +3,35 @@ namespace Pants.Tests;
 public sealed class ProviderCloudPersistenceTests
 {
     [Fact]
+    public async Task ShouldSkipControlPublicationGivenRemoteBytesAlreadyMatch()
+    {
+        using var cache = new TemporaryDirectory();
+        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "format"u8.ToArray());
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        _ = await lease.AcquireAsync(CancellationToken.None);
+        var controlStore = new TestCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            controlStore,
+            lease);
+        await persistence.MirrorMetadataAndSstsAsync(CancellationToken.None);
+        var baseline = controlStore.PutCount;
+
+        await persistence.MirrorMetadataAndSstsAsync(CancellationToken.None);
+
+        Assert.Equal(baseline, controlStore.PutCount);
+    }
+
+    [Fact]
     public async Task ShouldRejectStaleDdlCasGivenSuccessorClaimsRegistryDuringRequest()
     {
         using var firstCache = new TemporaryDirectory();

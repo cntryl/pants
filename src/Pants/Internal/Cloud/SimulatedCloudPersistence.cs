@@ -224,20 +224,32 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 "*.sst",
                 SearchOption.TopDirectoryOnly)
             .ToArray();
-        if (localSsts.Length > 0)
-        {
-            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
-        }
-
+        var pendingSsts = new List<(string RemotePath, byte[] Bytes)>();
         foreach (var localSst in localSsts)
         {
-            AtomicStagedFile.Write(
-                Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
-                File.ReadAllBytes(localSst));
+            var remotePath = Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst));
+            var bytes = File.ReadAllBytes(localSst);
+            if (!File.Exists(remotePath))
+            {
+                pendingSsts.Add((remotePath, bytes));
+                continue;
+            }
+
+            if (!File.ReadAllBytes(remotePath).AsSpan().SequenceEqual(bytes))
+            {
+                throw new PantsFencedException(
+                    $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
+            }
         }
 
-        if (localSsts.Length > 0)
+        if (pendingSsts.Count > 0)
         {
+            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+            foreach (var (remotePath, bytes) in pendingSsts)
+            {
+                AtomicStagedFile.Write(remotePath, bytes);
+            }
+
             _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
         }
 
@@ -246,7 +258,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             var localPath = Path.Combine(_localRoot, fileName);
             if (File.Exists(localPath))
             {
-                AtomicStagedFile.Write(
+                WriteIfChanged(
                     Path.Combine(_cloudRoot, "metadata", fileName),
                     File.ReadAllBytes(localPath));
             }
@@ -255,6 +267,16 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         CollectObsoleteSsts();
 
         PruneCoveredWal(CloudManifestReader.ReadLastPersistedSequence(_localRoot));
+    }
+
+    static void WriteIfChanged(string path, ReadOnlySpan<byte> bytes)
+    {
+        if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+        {
+            return;
+        }
+
+        AtomicStagedFile.Write(path, bytes);
     }
 
     public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
@@ -349,6 +371,18 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     {
         cancellationToken.ThrowIfCancellationRequested();
         CollectObsoleteSsts();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_catalog.FencingEpoch != _writerEpoch)
+        {
+            throw new PantsFencedException(
+                "The simulated-cloud WAL catalog is not fenced to this writer.");
+        }
+
         return ValueTask.CompletedTask;
     }
 

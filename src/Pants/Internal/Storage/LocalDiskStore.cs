@@ -196,13 +196,14 @@ internal sealed class LocalDiskStore : IDisposable
             .ToArray();
     }
 
-    public void CollectObsoleteFiles(PantsRuntimeState state)
+    public bool CollectObsoleteFiles(PantsRuntimeState state)
     {
         if (state.ActiveSnapshotCount != 0)
         {
-            return;
+            return false;
         }
 
+        var collected = _snapshotPinnedObsoleteFiles.Count != 0;
         foreach (var name in _snapshotPinnedObsoleteFiles.ToArray())
         {
             File.Delete(Path.Combine(_sstDirectory, name));
@@ -216,7 +217,7 @@ internal sealed class LocalDiskStore : IDisposable
             .ToArray();
         if (droppedFamilies.Length == 0)
         {
-            return;
+            return collected;
         }
 
         var edits = new List<JsonElement>();
@@ -240,6 +241,8 @@ internal sealed class LocalDiskStore : IDisposable
             File.Delete(Path.Combine(_sstDirectory, name));
             RemoveSstFromCaches(name);
         }
+
+        return true;
     }
 
     public MidgeColumnFamilyMeta GetColumnFamilyMetadata(ColumnFamilyIdentity identity)
