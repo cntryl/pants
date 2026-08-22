@@ -60,5 +60,6 @@ jobs:
           --configuration Release
           --no-build
           --filter "FullyQualifiedName!~PantsCloudCrashRecoveryTests"
+          --logger "console;verbosity=detailed"
           --blame-hang-timeout 3m
           --blame-hang-dump-type none
