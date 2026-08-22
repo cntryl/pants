@@ -10649,9 +10649,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_cleanup_spill_files_given_transaction_rollback_when_finalizing",
       "observableBehavior": "cleanup spill files given transaction rollback when finalizing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldCleanupSpillFilesGivenTransactionRollbackWhenFinalizing"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_commit_large_transaction_given_many_writes_exceeding_memory_limit",
@@ -10659,9 +10662,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_commit_large_transaction_given_many_writes_exceeding_memory_limit",
       "observableBehavior": "commit large transaction given many writes exceeding memory limit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldCommitLargeTransactionGivenManyWritesExceedingMemoryLimit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_handle_concurrent_large_transactions_given_memory_pressure",
@@ -10669,9 +10675,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_handle_concurrent_large_transactions_given_memory_pressure",
       "observableBehavior": "handle concurrent large transactions given memory pressure",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldHandleConcurrentLargeTransactionsGivenMemoryPressure"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_handle_mixed_value_sizes_in_spilled_transaction_when_committed",
@@ -10679,9 +10688,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_handle_mixed_value_sizes_in_spilled_transaction_when_committed",
       "observableBehavior": "handle mixed value sizes in spilled transaction when committed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldHandleMixedValueSizesInSpilledTransactionWhenCommitted"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_handle_transaction_with_tiny_memory_limit_given_forced_spill",
@@ -10689,9 +10701,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_handle_transaction_with_tiny_memory_limit_given_forced_spill",
       "observableBehavior": "handle transaction with tiny memory limit given forced spill",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldHandleTransactionWithTinyMemoryLimitGivenForcedSpill"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_handle_very_large_transaction_given_multiple_spills_when_persisted",
@@ -10699,9 +10714,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_handle_very_large_transaction_given_multiple_spills_when_persisted",
       "observableBehavior": "handle very large transaction given multiple spills when persisted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldHandleVeryLargeTransactionGivenMultipleSpillsWhenPersisted"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_not_create_disk_artifacts_given_large_transaction_when_memory_mode",
@@ -10709,9 +10727,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_not_create_disk_artifacts_given_large_transaction_when_memory_mode",
       "observableBehavior": "not create disk artifacts given large transaction when memory mode",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldNotCreateDiskArtifactsGivenLargeTransactionWhenMemoryMode"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_not_starve_foreground_writes_given_background_spill_activity",
@@ -10719,9 +10740,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_not_starve_foreground_writes_given_background_spill_activity",
       "observableBehavior": "not starve foreground writes given background spill activity",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldNotStarveForegroundWritesGivenBackgroundSpillActivity"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_preserve_data_integrity_given_large_transaction_with_specific_values",
@@ -10729,9 +10753,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_preserve_data_integrity_given_large_transaction_with_specific_values",
       "observableBehavior": "preserve data integrity given large transaction with specific values",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldPreserveDataIntegrityGivenLargeTransactionWithSpecificValues"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_preserve_key_order_given_large_transaction_when_iterating",
@@ -10739,9 +10766,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_preserve_key_order_given_large_transaction_when_iterating",
       "observableBehavior": "preserve key order given large transaction when iterating",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldPreserveKeyOrderGivenLargeTransactionWhenIterating"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_recover_committed_spill_given_restart_after_commit",
@@ -10749,9 +10779,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_recover_committed_spill_given_restart_after_commit",
       "observableBehavior": "recover committed spill given restart after commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldRecoverCommittedSpillGivenRestartAfterCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_rollback_spilled_transaction_given_drop_without_commit",
@@ -10759,9 +10792,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_rollback_spilled_transaction_given_drop_without_commit",
       "observableBehavior": "rollback spilled transaction given drop without commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldRollbackSpilledTransactionGivenDropWithoutCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill.rs:should_rollback_uncommitted_spill_given_restart_before_commit",
@@ -10769,9 +10805,12 @@
       "source": "tests/transaction_spill.rs",
       "sourceSymbolOrTest": "should_rollback_uncommitted_spill_given_restart_before_commit",
       "observableBehavior": "rollback uncommitted spill given restart before commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillBehaviorTests.ShouldRollbackUncommittedSpillGivenRestartBeforeCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_abort_in_child_process_when_spilled_transaction_commit_is_interrupted",
