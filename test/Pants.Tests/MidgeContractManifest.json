@@ -7875,9 +7875,10 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_initialize_global_telemetry_once_given_repeated_init_calls_when_starting",
       "observableBehavior": "initialize global telemetry once given repeated init calls when starting",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "rationale": "Pants exposes CLR-initialized singleton ActivitySource and Meter instances without a global telemetry initializer; listener and exporter registration belongs to consumers."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_all_values_given_compaction_when_requested",
@@ -7885,9 +7886,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_all_values_given_compaction_when_requested",
       "observableBehavior": "preserve all values given compaction when requested",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveAllValuesGivenCompactionWhenRequested"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_all_values_given_repeated_reads_when_values_accessed_repeatedly",
@@ -7895,9 +7899,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_all_values_given_repeated_reads_when_values_accessed_repeatedly",
       "observableBehavior": "preserve all values given repeated reads when values accessed repeatedly",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveAllValuesGivenRepeatedReadsWhenValuesAccessedRepeatedly"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_all_written_values_given_large_write_batch_when_written",
@@ -7905,9 +7912,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_all_written_values_given_large_write_batch_when_written",
       "observableBehavior": "preserve all written values given large write batch when written",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveAllWrittenValuesGivenLargeWriteBatchWhenWritten"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_existing_data_given_placeholder_reset_when_new_write_added",
@@ -7915,9 +7925,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_existing_data_given_placeholder_reset_when_new_write_added",
       "observableBehavior": "preserve existing data given placeholder reset when new write added",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveExistingDataGivenPlaceholderResetWhenNewWriteAdded"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_large_values_given_wal_backed_write_batch_when_flushed",
@@ -7925,9 +7938,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_large_values_given_wal_backed_write_batch_when_flushed",
       "observableBehavior": "preserve large values given wal backed write batch when flushed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveLargeValuesGivenWalBackedWriteBatchWhenFlushed"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_preserve_repeated_reads_given_short_cache_warmup_window_when_reads_repeated",
@@ -7935,9 +7951,12 @@
       "source": "tests/telemetry_integration.rs",
       "sourceSymbolOrTest": "should_preserve_repeated_reads_given_short_cache_warmup_window_when_reads_repeated",
       "observableBehavior": "preserve repeated reads given short cache warmup window when reads repeated",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveRepeatedReadsGivenCompletedCacheWarmupWhenReadsRepeated"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/testing_governance.rs:should_accept_benchmark_candidate_at_regression_budget",
