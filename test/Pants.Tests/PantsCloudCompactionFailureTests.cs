@@ -119,6 +119,11 @@ public sealed class PantsCloudCompactionFailureTests
             () => OpenAsync(options, cleanupFailure).AsTask());
 
         Assert.Equal(replacement, await File.ReadAllBytesAsync(orphanPath));
+        using var lockProbe = new FileStream(
+            Path.Combine(directory.Path, "LOCK"),
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
     }
 
     [Fact]

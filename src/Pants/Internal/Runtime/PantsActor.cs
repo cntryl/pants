@@ -86,37 +86,45 @@ sealed class PantsActor : IAsyncDisposable
                 {
                     _state.MarkSalvageMode();
                 }
-                _diskStore = LocalDiskStore.Open(
-                    simulated.LocalCachePath,
-                    _state,
-                    simulatedHydration.MinimumWriterEpoch,
-                    options.RecoveryPolicy,
-                    options.PerformanceGoal,
-                    options.LeaseClockSkewTolerance,
-                    options.LeaseLossCallback,
-                    dependencies.Failpoints,
-                    options.Compaction,
-                    options.TargetSstSizeBytes,
-                    options.BlockCachePolicy,
-                    options.BlockCacheBytes,
-                    dependencies.LeaseHeartbeatInterval,
-                    simulatedHydration.RecoverySsts);
-                var simulatedPersistence = new SimulatedCloudPersistence(
-                    simulated.LocalCachePath,
-                    _diskStore.WriterEpoch,
-                    dependencies.Failpoints);
-                _cloudPersistence = simulatedPersistence;
-                _cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
-                    simulated.LocalCachePath,
-                    dependencies.Failpoints).PublishAsync;
-                _cloudDdlCoordinator = new CloudDdlCoordinator(
-                    simulated.LocalCachePath,
-                    simulatedPersistence,
-                    _diskStore,
-                    dependencies.Failpoints);
-                _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
-                    .AsTask().GetAwaiter().GetResult();
-                _cloudMode = true;
+                try
+                {
+                    _diskStore = LocalDiskStore.Open(
+                        simulated.LocalCachePath,
+                        _state,
+                        simulatedHydration.MinimumWriterEpoch,
+                        options.RecoveryPolicy,
+                        options.PerformanceGoal,
+                        options.LeaseClockSkewTolerance,
+                        options.LeaseLossCallback,
+                        dependencies.Failpoints,
+                        options.Compaction,
+                        options.TargetSstSizeBytes,
+                        options.BlockCachePolicy,
+                        options.BlockCacheBytes,
+                        dependencies.LeaseHeartbeatInterval,
+                        simulatedHydration.RecoverySsts);
+                    var simulatedPersistence = new SimulatedCloudPersistence(
+                        simulated.LocalCachePath,
+                        _diskStore.WriterEpoch,
+                        dependencies.Failpoints);
+                    _cloudPersistence = simulatedPersistence;
+                    _cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
+                        simulated.LocalCachePath,
+                        dependencies.Failpoints).PublishAsync;
+                    _cloudDdlCoordinator = new CloudDdlCoordinator(
+                        simulated.LocalCachePath,
+                        simulatedPersistence,
+                        _diskStore,
+                        dependencies.Failpoints);
+                    _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
+                        .AsTask().GetAwaiter().GetResult();
+                    _cloudMode = true;
+                }
+                catch
+                {
+                    CleanupFailedDiskStartup(_diskStore);
+                    throw;
+                }
                 break;
             case PantsStorageConfiguration.Cloud cloud:
                 var walStore = CloudObjectStoreFactory.Create(
@@ -269,14 +277,34 @@ sealed class PantsActor : IAsyncDisposable
             _currentSnapshot = _state.CreateSnapshot();
             _loopTask = Task.Run(RunLoopAsync);
         }
-        catch when (_cloudLease is not null)
+        catch
         {
-            CleanupFailedProviderStartup(
-                _cloudLease,
-                _diskStore,
-                _cloudLeaseCancellation,
-                _cloudLeaseHeartbeat);
+            if (_cloudLease is not null)
+            {
+                CleanupFailedProviderStartup(
+                    _cloudLease,
+                    _diskStore,
+                    _cloudLeaseCancellation,
+                    _cloudLeaseHeartbeat);
+            }
+            else
+            {
+                CleanupFailedDiskStartup(_diskStore);
+            }
+
             throw;
+        }
+    }
+
+    static void CleanupFailedDiskStartup(LocalDiskStore? diskStore)
+    {
+        try
+        {
+            diskStore?.Dispose();
+        }
+        catch (Exception)
+        {
+            // Startup cleanup must not replace the original failure.
         }
     }
 
@@ -301,14 +329,7 @@ sealed class PantsActor : IAsyncDisposable
             heartbeatCancellation?.Dispose();
         }
 
-        try
-        {
-            diskStore?.Dispose();
-        }
-        catch (Exception)
-        {
-            // Startup cleanup must not replace the original failure.
-        }
+        CleanupFailedDiskStartup(diskStore);
 
         try
         {
