@@ -207,9 +207,12 @@
       "source": "tests/best_effort_durability.rs",
       "sourceSymbolOrTest": "should_handle_large_batches_with_best_effort",
       "observableBehavior": "handle large batches with best effort",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBestEffortDurabilityTests.ShouldHandleFiftyThousandOperationsGivenBestEffortBatch"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/best_effort_durability.rs:should_lose_best_effort_data_when_not_flushed",
@@ -217,9 +220,12 @@
       "source": "tests/best_effort_durability.rs",
       "sourceSymbolOrTest": "should_lose_best_effort_data_when_not_flushed",
       "observableBehavior": "lose best effort data when not flushed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBestEffortDurabilityTests.ShouldLoseBestEffortDataGivenShutdownWithoutFlush"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/best_effort_durability.rs:should_persist_best_effort_data_when_flushed",
@@ -227,9 +233,12 @@
       "source": "tests/best_effort_durability.rs",
       "sourceSymbolOrTest": "should_persist_best_effort_data_when_flushed",
       "observableBehavior": "persist best effort data when flushed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBestEffortDurabilityTests.ShouldPersistBestEffortDataGivenExplicitFlushBeforeReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/best_effort_durability.rs:should_skip_wal_when_using_best_effort",
@@ -237,9 +246,12 @@
       "source": "tests/best_effort_durability.rs",
       "sourceSymbolOrTest": "should_skip_wal_when_using_best_effort",
       "observableBehavior": "skip wal when using best effort",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsBestEffortDurabilityTests.ShouldSkipWalAndExposeMemtableGivenBestEffortCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/chaos_compaction.rs:should_crash_in_child_when_compaction_crash_scenario_requested",
