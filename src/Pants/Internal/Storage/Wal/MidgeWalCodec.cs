@@ -48,7 +48,15 @@ internal static class MidgeWalCodec
         return payload.ToArray();
     }
 
-    public static IReadOnlyList<MidgeWalMutation> DecodeTransactionBatch(ReadOnlySpan<byte> payload, out ulong commitSequence)
+    public static IReadOnlyList<MidgeWalMutation> DecodeTransactionBatch(
+        ReadOnlySpan<byte> payload,
+        out ulong commitSequence) =>
+        DecodeTransactionBatch(payload, out commitSequence, out _);
+
+    public static IReadOnlyList<MidgeWalMutation> DecodeTransactionBatch(
+        ReadOnlySpan<byte> payload,
+        out ulong commitSequence,
+        out ulong writerEpoch)
     {
         if (payload.Length < 3 || !payload[..2].SequenceEqual(RecordMagic) || payload[2] != 1)
         {
@@ -58,6 +66,7 @@ internal static class MidgeWalCodec
         byte? operation = null;
         ulong? outerSequence = null;
         ulong? outerTransactionId = null;
+        ulong? outerWriterEpoch = null;
         byte[]? batchPayload = null;
         byte compression = 0;
         var cursor = 3;
@@ -95,6 +104,9 @@ internal static class MidgeWalCodec
                 case 9 when length == 1:
                     compression = value[0];
                     break;
+                case 10 when length == 8:
+                    outerWriterEpoch = BinaryPrimitives.ReadUInt64LittleEndian(value);
+                    break;
             }
         }
 
@@ -102,6 +114,9 @@ internal static class MidgeWalCodec
         {
             throw new PantsStorageException("Pants requires an atomic Midge WAL transaction batch.");
         }
+
+        writerEpoch = outerWriterEpoch ??
+            throw new PantsStorageException("WAL transaction batch writer epoch is missing.");
 
         batchPayload = MidgeDiskFormat.Decompress(batchPayload, compression);
         var batch = batchPayload.AsSpan();

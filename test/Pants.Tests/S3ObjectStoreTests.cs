@@ -73,6 +73,28 @@ public sealed class S3ObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldApplyOperationDeadlineWhileReadingResponseBody()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new NeverCompletingHttpContent(),
+            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+        });
+        using var client = new HttpClient(handler);
+        var store = new S3ObjectStore(
+            new PantsCloudProviderConfiguration.AwsS3(
+                "bucket",
+                "us-east-1",
+                new PantsS3CredentialSource.StaticCredentials("access", "secret")),
+            string.Empty,
+            client,
+            TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAsync<PantsTimeoutException>(
+            () => store.GetAsync("object", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
     public void ShouldResolveSharedProfileAndRouteEveryS3ProviderVariant()
     {
         using var directory = new TemporaryDirectory();

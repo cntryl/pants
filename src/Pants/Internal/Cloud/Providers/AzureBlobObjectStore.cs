@@ -9,7 +9,7 @@ namespace Pants;
 internal sealed class AzureBlobObjectStore : ICloudObjectStore
 {
     const int MaximumAttempts = 3;
-    const string ServiceVersion = "2023-11-03";
+    const string ServiceVersion = "2024-11-04";
     private readonly HttpClient _httpClient;
     private readonly Uri _containerEndpoint;
     private readonly string _account;
@@ -132,7 +132,7 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
             {
                 var response = await _httpClient.SendAsync(
                     request,
-                    HttpCompletionOption.ResponseHeadersRead,
+                    HttpCompletionOption.ResponseContentRead,
                     linked.Token).ConfigureAwait(false);
                 if (!IsRetryable(response.StatusCode) || attempt >= MaximumAttempts)
                 {
@@ -191,18 +191,50 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
 
     private string CreateSharedKeySignature(HttpRequestMessage request, string accountKey)
     {
-        string contentLength = request.Content?.Headers.ContentLength is > 0 and var length
+        var stringToSign = CreateSharedKeyStringToSign(request, _account);
+        byte[] key;
+        try
+        {
+            key = Convert.FromBase64String(accountKey);
+        }
+        catch (FormatException exception)
+        {
+            throw new PantsInvalidArgumentException(
+                "Azure Storage shared key must be base64 encoded.",
+                exception);
+        }
+
+        return Convert.ToBase64String(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(stringToSign)));
+    }
+
+    internal static string CreateSharedKeyStringToSign(
+        HttpRequestMessage request,
+        string account)
+    {
+        var contentLength = request.Content?.Headers.ContentLength is > 0 and var length
             ? length.ToString(CultureInfo.InvariantCulture)
             : string.Empty;
-        string canonicalHeaders = string.Join(
+        var canonicalHeaders = string.Join(
             '\n',
             request.Headers
                 .Where(static header => header.Key.StartsWith("x-ms-", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(static header => header.Key, StringComparer.OrdinalIgnoreCase)
                 .Select(static header =>
                     $"{header.Key.ToLowerInvariant()}:{string.Join(',', header.Value).Trim()}")) + "\n";
-        string canonicalResource = $"/{_account}{request.RequestUri!.AbsolutePath}";
-        string stringToSign = string.Join(
+        var canonicalResource = $"/{account}{request.RequestUri!.AbsolutePath}";
+        foreach (var query in request.RequestUri.Query.TrimStart('?')
+                     .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                     .Select(static pair => pair.Split('=', 2))
+                     .GroupBy(
+                         static pair => Uri.UnescapeDataString(pair[0]).ToLowerInvariant(),
+                         StringComparer.Ordinal)
+                     .OrderBy(static group => group.Key, StringComparer.Ordinal))
+        {
+            canonicalResource +=
+                $"\n{query.Key}:{string.Join(',', query.Select(static pair => Uri.UnescapeDataString(pair.ElementAtOrDefault(1) ?? string.Empty)).Order(StringComparer.Ordinal))}";
+        }
+
+        return string.Join(
             '\n',
             request.Method.Method,
             string.Empty,
@@ -217,19 +249,6 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
             string.Empty,
             string.Empty,
             canonicalHeaders + canonicalResource);
-        byte[] key;
-        try
-        {
-            key = Convert.FromBase64String(accountKey);
-        }
-        catch (FormatException exception)
-        {
-            throw new PantsInvalidArgumentException(
-                "Azure Storage shared key must be base64 encoded.",
-                exception);
-        }
-
-        return Convert.ToBase64String(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(stringToSign)));
     }
 
     private Uri BuildObjectUri(string objectKey)

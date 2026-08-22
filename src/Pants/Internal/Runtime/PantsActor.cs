@@ -30,6 +30,8 @@ sealed class PantsActor : IAsyncDisposable
     bool _shutdownRequested;
     bool _verificationInProgress;
     bool _backgroundCompactionEnabled;
+    readonly bool _workersStarted;
+    long _walCloudDurableSequence;
 
     public PantsActor(
         PantsOpenOptions options,
@@ -107,7 +109,7 @@ sealed class PantsActor : IAsyncDisposable
                     options.LeaseLossCallback);
                 var cloudEpoch = _cloudLease.AcquireAsync(CancellationToken.None)
                     .AsTask().GetAwaiter().GetResult();
-                ProviderCloudPersistence.HydrateLocalCacheAsync(
+                var hydration = ProviderCloudPersistence.HydrateLocalCacheAsync(
                     cloud.LocalCachePath,
                     walStore,
                     sstStore,
@@ -127,12 +129,25 @@ sealed class PantsActor : IAsyncDisposable
                     options.BlockCachePolicy,
                     options.BlockCacheBytes,
                     dependencies.LeaseHeartbeatInterval);
-                _cloudPersistence = new ProviderCloudPersistence(
+                var providerPersistence = new ProviderCloudPersistence(
                     cloud.LocalCachePath,
                     walStore,
                     sstStore,
                     controlStore,
                     _cloudLease);
+                _cloudPersistence = providerPersistence;
+                providerPersistence.FenceWalCatalogAsync(CancellationToken.None)
+                    .AsTask().GetAwaiter().GetResult();
+                Volatile.Write(
+                    ref _walCloudDurableSequence,
+                    checked((long)hydration.CloudDurableSequence));
+                foreach (var recoveredSegment in
+                         _diskStore.GetSealedWalSegmentsForCloudPublication())
+                {
+                    PublishCloudWalAsync(recoveredSegment, CancellationToken.None)
+                        .AsTask().GetAwaiter().GetResult();
+                }
+
                 _cloudLeaseCancellation = new CancellationTokenSource();
                 _cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
                     _cloudLease,
@@ -150,6 +165,7 @@ sealed class PantsActor : IAsyncDisposable
         _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
         _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
         _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
+        _workersStarted = true;
         _commands = Channel.CreateBounded<IRuntimeCommand>(new BoundedChannelOptions(
             options.CoordinatorQueueCapacity)
         {
@@ -177,6 +193,7 @@ sealed class PantsActor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
+                EnsureCloudLeaseValid();
                 if (state.ActiveFamilyVersions.TryGetValue(name, out var activeGeneration))
                 {
                     return state.FamilyData.Keys.Single(identity =>
@@ -228,6 +245,7 @@ sealed class PantsActor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
+                EnsureCloudLeaseValid();
                 ValidateActiveFamily(state, identity);
                 if (!discardUnflushed && state.UnflushedFamilies.Contains(identity))
                 {
@@ -558,6 +576,7 @@ sealed class PantsActor : IAsyncDisposable
                 MemtableSizeLimitBytes = _options.MemtableSizeLimitBytes,
                 MemtableFlushThresholdBytes = _options.MemtableFlushThresholdBytes,
                 WalPendingWrites = _walWorker.QueueDepth + _walWorker.InFlight,
+                WalCloudDurableSequence = Volatile.Read(ref _walCloudDurableSequence),
                 PendingCompactions = _compactionWorker.QueueDepth,
                 ActiveCompactions = _compactionWorker.InFlight,
                 PendingCloudUploads = _cloudWorker.QueueDepth + _cloudWorker.InFlight,
@@ -762,7 +781,7 @@ sealed class PantsActor : IAsyncDisposable
                 {
                     await _walWorker.ExecuteAsync(_diskStore.FlushDurabilityBoundary)
                         .ConfigureAwait(false);
-                    if (_cloudPersistence is not null)
+                    if (_cloudPersistence is not null && (_cloudLease?.IsHealthy ?? true))
                     {
                         SealedWalSegment? segment = null;
                         await _walWorker.ExecuteAsync(() => segment = _diskStore.SealActiveWal())
@@ -770,13 +789,16 @@ sealed class PantsActor : IAsyncDisposable
                         if (segment is not null)
                         {
                             await _cloudWorker.ExecuteAsync(cancellation =>
-                                    _cloudPersistence.PublishWalAsync(segment, cancellation))
+                                    PublishCloudWalAsync(segment, cancellation))
                                 .ConfigureAwait(false);
                         }
                     }
                 }
 
-                await MirrorCloudStorageAsync().ConfigureAwait(false);
+                if (_cloudLease?.IsHealthy ?? true)
+                {
+                    await MirrorCloudStorageAsync().ConfigureAwait(false);
+                }
                 return true;
             },
             cancellationToken).ConfigureAwait(false);
@@ -791,12 +813,12 @@ sealed class PantsActor : IAsyncDisposable
 
         _commands.Writer.TryComplete();
         await _loopTask.ConfigureAwait(false);
+        await _cloudWorker.DisposeAsync().ConfigureAwait(false);
         await _walWorker.DisposeAsync().ConfigureAwait(false);
         await _flushWorker.DisposeAsync().ConfigureAwait(false);
         await _compactionWorker.DisposeAsync().ConfigureAwait(false);
         await _manifestWorker.DisposeAsync().ConfigureAwait(false);
         await _garbageCollectionWorker.DisposeAsync().ConfigureAwait(false);
-        await _cloudWorker.DisposeAsync().ConfigureAwait(false);
         if (_cloudLeaseCancellation is not null)
         {
             await _cloudLeaseCancellation.CancelAsync().ConfigureAwait(false);
@@ -1061,6 +1083,7 @@ sealed class PantsActor : IAsyncDisposable
         PantsWriteOptions writeOptions,
         CommitPayload payload)
     {
+        EnsureCloudLeaseValid();
         await PrepareCommitAsync(state, payload).ConfigureAwait(false);
         if (payload.OrderedOperations.Count != 0)
         {
@@ -1173,7 +1196,7 @@ sealed class PantsActor : IAsyncDisposable
             {
                 await _cloudWorker
                     .EnqueueAsync(cancellation =>
-                        _cloudPersistence.PublishWalAsync(asynchronousSegment, cancellation))
+                        PublishCloudWalAsync(asynchronousSegment, cancellation))
                     .ConfigureAwait(false);
             }
         }
@@ -1184,12 +1207,49 @@ sealed class PantsActor : IAsyncDisposable
                 .ConfigureAwait(false);
             if (segment is not null)
             {
-                await _cloudWorker.ExecuteAsync(cancellation =>
-                        _cloudPersistence.PublishWalAsync(segment, cancellation))
-                    .ConfigureAwait(false);
+                try
+                {
+                    await _cloudWorker.ExecuteAsync(cancellation =>
+                            PublishCloudWalAsync(segment, cancellation))
+                        .ConfigureAwait(false);
+                }
+                catch (PantsIOException exception)
+                {
+                    throw new PantsInternalException(
+                        "Cloud-strict WAL publication failed before acknowledgement.",
+                        exception);
+                }
             }
         }
 
+    }
+
+    async ValueTask PublishCloudWalAsync(
+        SealedWalSegment segment,
+        CancellationToken cancellationToken)
+    {
+        var persistence = _cloudPersistence ??
+            throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
+        await persistence.PublishWalAsync(segment, cancellationToken).ConfigureAwait(false);
+        Volatile.Write(
+            ref _walCloudDurableSequence,
+            Math.Max(
+                Volatile.Read(ref _walCloudDurableSequence),
+                checked((long)segment.MaximumSequence)));
+        if (_diskStore is not null)
+        {
+            if (_workersStarted)
+            {
+                await _walWorker.ExecuteAsync(() =>
+                        _diskStore.DeleteCloudDurableWalSegment(segment),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                _diskStore.DeleteCloudDurableWalSegment(segment);
+            }
+        }
     }
 
     async ValueTask RotateLocalWalAtConfiguredThresholdAsync(LocalDiskStore diskStore)
@@ -1387,6 +1447,8 @@ sealed class PantsActor : IAsyncDisposable
 
     void PublishSnapshot(PantsRuntimeState state) =>
         Volatile.Write(ref _currentSnapshot, state.CreateSnapshot());
+
+    void EnsureCloudLeaseValid() => _cloudLease?.EnsureValid();
 
     static void ThrowIfShuttingDown(PantsRuntimeState state)
     {

@@ -7,8 +7,29 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 {
     readonly Lock _gate = new();
     readonly Dictionary<string, (byte[] Data, long Version)> _objects = new(StringComparer.Ordinal);
+    int _failedWalWriteAttempts;
 
     public bool FailWalWrites { get; set; }
+
+    public int FailedWalWriteAttempts => Volatile.Read(ref _failedWalWriteAttempts);
+
+    public bool ContainsObjectPath(string pathFragment)
+    {
+        lock (_gate)
+        {
+            return _objects.Keys.Any(path => path.Contains(pathFragment, StringComparison.Ordinal));
+        }
+    }
+
+    public string GetObjectText(string pathFragment)
+    {
+        lock (_gate)
+        {
+            var value = _objects.Single(pair =>
+                pair.Key.Contains(pathFragment, StringComparison.Ordinal)).Value;
+            return System.Text.Encoding.UTF8.GetString(value.Data);
+        }
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -18,6 +39,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         if (FailWalWrites && request.Method == HttpMethod.Put &&
             key.Contains("/wal/epochs/", StringComparison.Ordinal))
         {
+            Interlocked.Increment(ref _failedWalWriteAttempts);
             return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         }
 

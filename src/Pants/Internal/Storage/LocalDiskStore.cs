@@ -717,6 +717,90 @@ internal sealed class LocalDiskStore : IDisposable
         }
     }
 
+    public IReadOnlyList<SealedWalSegment> GetSealedWalSegmentsForCloudPublication()
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        return Directory.EnumerateFiles(_walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(ReadSealedWalSegment)
+            .ToArray();
+    }
+
+    public void DeleteCloudDurableWalSegment(SealedWalSegment segment)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        var path = Path.Combine(_walDirectory, segment.FileName);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    static SealedWalSegment ReadSealedWalSegment(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (!ulong.TryParse(Path.GetFileNameWithoutExtension(fileName), out var segmentId))
+        {
+            throw new PantsCorruptionException($"Sealed WAL name '{fileName}' is invalid.");
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        var cursor = 0;
+        ulong maximumSequence = 0;
+        ulong? writerEpoch = null;
+        while (cursor < bytes.Length)
+        {
+            if (bytes.Length - cursor < 2 * sizeof(uint))
+            {
+                throw new PantsCorruptionException($"Sealed WAL '{fileName}' has a torn frame header.");
+            }
+
+            var length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(cursor, sizeof(uint))));
+            var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(cursor + sizeof(uint), sizeof(uint)));
+            cursor += 2 * sizeof(uint);
+            if (length > bytes.Length - cursor)
+            {
+                throw new PantsCorruptionException($"Sealed WAL '{fileName}' has a torn frame payload.");
+            }
+
+            var payload = bytes.AsSpan(cursor, length);
+            if (MidgeDiskFormat.Crc32C(payload) != expectedCrc)
+            {
+                throw new PantsCorruptionException($"Sealed WAL '{fileName}' has a corrupt frame.");
+            }
+
+            _ = MidgeWalCodec.DecodeTransactionBatch(
+                payload,
+                out var commitSequence,
+                out var frameWriterEpoch);
+            if (writerEpoch.HasValue && writerEpoch.Value != frameWriterEpoch)
+            {
+                throw new PantsCorruptionException(
+                    $"Sealed WAL '{fileName}' contains mixed writer epochs.");
+            }
+
+            writerEpoch = frameWriterEpoch;
+            maximumSequence = Math.Max(maximumSequence, commitSequence);
+            cursor += length;
+        }
+
+        if (maximumSequence == 0)
+        {
+            throw new PantsCorruptionException($"Sealed WAL '{fileName}' contains no transactions.");
+        }
+
+        return new SealedWalSegment(
+            segmentId,
+            writerEpoch!.Value,
+            maximumSequence,
+            fileName,
+            bytes);
+    }
+
     public PantsStorageLayout GetStorageLayout(PantsRuntimeState state)
     {
         PantsStorageLevelLayout[] levels = _manifest.Files

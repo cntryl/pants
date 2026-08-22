@@ -44,7 +44,7 @@ public sealed class GcsObjectStoreTests
     }
 
     [Fact]
-    public async Task ShouldSignXmlApiWithGoog4HmacWithoutDisclosingSecret()
+    public async Task ShouldSignXmlApiWithGoog1HmacWithoutDisclosingSecret()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Created));
         using var client = new HttpClient(handler);
@@ -68,12 +68,33 @@ public sealed class GcsObjectStoreTests
 
         RecordedRequest request = Assert.Single(handler.Requests);
         Assert.Equal("/bucket/database/metadata/manifest.json", request.Uri.AbsolutePath);
-        Assert.StartsWith(
-            "GOOG4-HMAC-SHA256 Credential=access-id/",
-            request.Authorization,
-            StringComparison.Ordinal);
+        Assert.StartsWith("GOOG1 access-id:", request.Authorization, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, request.Authorization, StringComparison.Ordinal);
-        Assert.Equal("*", request.IfNoneMatch);
+        Assert.Equal("0", request.GenerationMatch);
+    }
+
+    [Fact]
+    public void ShouldMatchPinnedMidgeGoog1CanonicalSignature()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            "https://storage.googleapis.com/bucket/lease/primary")
+        {
+            Content = new ByteArrayContent("lease"u8.ToArray())
+        };
+        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+            "application/octet-stream");
+        request.Headers.TryAddWithoutValidation("X-Goog-Meta-Owner", " first   holder ");
+        request.Headers.TryAddWithoutValidation("x-goog-if-generation-match", "42");
+        request.Headers.TryAddWithoutValidation("x-goog-meta-owner", "second holder");
+
+        var authorization = GcsObjectStore.CreateGoog1Authorization(
+            request,
+            "GOOG123",
+            "c2VjcmV0",
+            "Sat, 08 Aug 2026 12:00:00 GMT");
+
+        Assert.Equal("GOOG1 GOOG123:rkS054NuU5pCTrAsV8U7cjpRaOY=", authorization);
     }
 
     [Fact]
@@ -146,7 +167,10 @@ public sealed class GcsObjectStoreTests
                 request.Method,
                 request.RequestUri!,
                 request.Headers.Authorization?.ToString(),
-                request.Headers.IfNoneMatch.SingleOrDefault()?.Tag));
+                request.Headers.IfNoneMatch.SingleOrDefault()?.Tag,
+                request.Headers.TryGetValues("x-goog-if-generation-match", out var generations)
+                    ? generations.Single()
+                    : null));
             return Task.FromResult(responseFactory(request));
         }
     }
@@ -155,5 +179,6 @@ public sealed class GcsObjectStoreTests
         HttpMethod Method,
         Uri Uri,
         string? Authorization,
-        string? IfNoneMatch);
+        string? IfNoneMatch,
+        string? GenerationMatch);
 }

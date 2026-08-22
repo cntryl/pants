@@ -193,7 +193,10 @@ internal sealed class CloudLeaseCoordinator : IDisposable
 
             var released = await _store.TryReplaceAsync(
                 current.Version,
-                current.Lease with { ExpiresAtUtc = _clock.UtcNow - _clockSkewTolerance },
+                current.Lease with
+                {
+                    ExpiresAtUtc = _clock.UtcNow - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                },
                 cancellationToken).ConfigureAwait(false);
             if (!released)
             {

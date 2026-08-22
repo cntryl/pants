@@ -114,7 +114,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
             {
                 HttpResponseMessage response = await _httpClient.SendAsync(
                     request,
-                    HttpCompletionOption.ResponseHeadersRead,
+                    HttpCompletionOption.ResponseContentRead,
                     linked.Token).ConfigureAwait(false);
                 if (!IsRetryable(response.StatusCode) || attempt >= MaximumAttempts)
                 {

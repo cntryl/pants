@@ -109,7 +109,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
             {
                 HttpResponseMessage response = await _httpClient.SendAsync(
                     request,
-                    HttpCompletionOption.ResponseHeadersRead,
+                    HttpCompletionOption.ResponseContentRead,
                     linked.Token).ConfigureAwait(false);
                 if (!IsRetryable(response.StatusCode) || attempt >= MaximumAttempts)
                 {
@@ -218,10 +218,12 @@ internal sealed class GcsObjectStore : ICloudObjectStore
             case CloudObjectWriteCondition.Unconditional:
                 break;
             case CloudObjectWriteCondition.IfAbsent:
-                request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
+                request.Headers.TryAddWithoutValidation("x-goog-if-generation-match", "0");
                 break;
             case CloudObjectWriteCondition.IfVersion expected:
-                request.Headers.IfMatch.Add(new EntityTagHeaderValue(expected.Version));
+                request.Headers.TryAddWithoutValidation(
+                    "x-goog-if-generation-match",
+                    expected.Version);
                 break;
             default:
                 throw PantsException.InvalidArgument("The cloud object write condition is invalid.");
@@ -230,49 +232,62 @@ internal sealed class GcsObjectStore : ICloudObjectStore
 
     private void SignHmac(HttpRequestMessage request, ReadOnlySpan<byte> payload)
     {
-        string accessId = _credential.HmacAccessId ??
+        _ = payload;
+        var accessId = _credential.HmacAccessId ??
             throw new PantsInternalException("GCS HMAC access ID is unavailable.");
-        string secret = _credential.HmacSecret ??
+        var secret = _credential.HmacSecret ??
             throw new PantsInternalException("GCS HMAC secret is unavailable.");
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        string timestamp = now.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        string date = now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-        string payloadHash = Convert.ToHexStringLower(SHA256.HashData(payload));
-        request.Headers.TryAddWithoutValidation("x-goog-date", timestamp);
-        request.Headers.TryAddWithoutValidation("x-goog-content-sha256", payloadHash);
-        string host = request.RequestUri!.IsDefaultPort
-            ? request.RequestUri.Host
-            : request.RequestUri.Authority;
-        string canonicalHeaders =
-            $"host:{host}\nx-goog-content-sha256:{payloadHash}\nx-goog-date:{timestamp}\n";
-        const string signedHeaders = "host;x-goog-content-sha256;x-goog-date";
-        string canonicalRequest = string.Join(
+        var date = DateTimeOffset.UtcNow.ToString("R", CultureInfo.InvariantCulture);
+        request.Headers.Date = DateTimeOffset.ParseExact(date, "R", CultureInfo.InvariantCulture);
+        var authorization = CreateGoog1Authorization(request, accessId, secret, date);
+        request.Headers.Authorization = AuthenticationHeaderValue.Parse(authorization);
+    }
+
+    internal static string CreateGoog1Authorization(
+        HttpRequestMessage request,
+        string accessId,
+        string secret,
+        string date)
+    {
+        var canonicalHeaders = string.Concat(request.Headers
+            .Where(static header =>
+                header.Key.StartsWith("x-goog-", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(static header => header.Value.Select(value => new
+            {
+                Name = header.Key.ToLowerInvariant(),
+                Value = string.Join(' ', value.Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries))
+            }))
+            .GroupBy(static header => header.Name, StringComparer.Ordinal)
+            .OrderBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group =>
+                $"{group.Key}:{string.Join(',', group.Select(value => value.Value))}\n"));
+        var contentMd5 = request.Content?.Headers.ContentMD5 is { } contentMd5Bytes
+            ? Convert.ToBase64String(contentMd5Bytes)
+            : string.Empty;
+        var contentType = request.Content?.Headers.ContentType?.ToString() ?? string.Empty;
+        var stringToSign = string.Join(
             '\n',
             request.Method.Method,
-            request.RequestUri.AbsolutePath,
-            string.Empty,
-            canonicalHeaders,
-            signedHeaders,
-            payloadHash);
-        string scope = $"{date}/auto/storage/goog4_request";
-        string stringToSign = string.Join(
-            '\n',
-            "GOOG4-HMAC-SHA256",
-            timestamp,
-            scope,
-            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalRequest))));
-        byte[] dateKey = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes("GOOG4" + secret),
-            Encoding.UTF8.GetBytes(date));
-        byte[] regionKey = HMACSHA256.HashData(dateKey, "auto"u8.ToArray());
-        byte[] serviceKey = HMACSHA256.HashData(regionKey, "storage"u8.ToArray());
-        byte[] signingKey = HMACSHA256.HashData(serviceKey, "goog4_request"u8.ToArray());
-        string signature = Convert.ToHexStringLower(HMACSHA256.HashData(
-            signingKey,
-            Encoding.UTF8.GetBytes(stringToSign)));
-        request.Headers.Authorization = new AuthenticationHeaderValue(
-            "GOOG4-HMAC-SHA256",
-            $"Credential={accessId}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}");
+            contentMd5,
+            contentType,
+            date,
+            canonicalHeaders + request.RequestUri!.AbsolutePath);
+        byte[] key;
+        try
+        {
+            key = Convert.FromBase64String(secret);
+        }
+        catch (FormatException)
+        {
+            key = Encoding.UTF8.GetBytes(secret);
+        }
+
+        using var hmac = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA1, key);
+        hmac.AppendData(Encoding.UTF8.GetBytes(stringToSign));
+        var signature = Convert.ToBase64String(hmac.GetHashAndReset());
+        return $"GOOG1 {accessId}:{signature}";
     }
 
     private string CombineKey(string objectKey)

@@ -38,9 +38,9 @@ public sealed class PantsSimulatedCloudTests
             "epochs",
             "00000000000000000001",
             "00000000000000000001.wal")));
-        PantsStorageVerificationReport report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(1, report.WalRecoveryRecordsReplayed);
-        Assert.Equal(2, report.WalBoundary);
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(2, metrics.WalCloudDurableSequence);
+        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
     }
 
     [Fact]

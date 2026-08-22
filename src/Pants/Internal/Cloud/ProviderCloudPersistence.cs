@@ -42,7 +42,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _writerEpoch = lease.Epoch;
     }
 
-    public static async ValueTask HydrateLocalCacheAsync(
+    public static async ValueTask<ProviderCloudHydrationResult> HydrateLocalCacheAsync(
         string localRoot,
         ICloudObjectStore walStore,
         ICloudObjectStore sstStore,
@@ -83,7 +83,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             cancellationToken).ConfigureAwait(false);
         if (catalogObject is null)
         {
-            return;
+            return ProviderCloudHydrationResult.Empty;
         }
 
         var catalog = DecodeCatalog(catalogObject.Data.Span);
@@ -104,6 +104,51 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 Path.Combine(root, "wal", $"{segmentId:00000000000000000000}.wal"),
                 remote.Data.Span);
         }
+
+        return new ProviderCloudHydrationResult(
+            catalog.Segments,
+            catalog.Segments.Values.Select(static segment => segment.MaximumSequence)
+                .DefaultIfEmpty().Max());
+    }
+
+    public async ValueTask FenceWalCatalogAsync(CancellationToken cancellationToken)
+    {
+        _lease.EnsureValid();
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var current = await _walStore.GetAsync(
+                PantsCloudObjectLayout.WalCatalogObjectKey,
+                cancellationToken).ConfigureAwait(false);
+            var catalog = current is null
+                ? new ProviderWalCatalog()
+                : DecodeCatalog(current.Data.Span);
+            if (catalog.FencingEpoch > _writerEpoch)
+            {
+                throw new PantsFencedException("The cloud WAL catalog has a newer fencing epoch.");
+            }
+
+            if (catalog.FencingEpoch == _writerEpoch)
+            {
+                return;
+            }
+
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+                catalog with { FencingEpoch = _writerEpoch },
+                JsonOptions);
+            var fenced = await _walStore.PutAsync(
+                PantsCloudObjectLayout.WalCatalogObjectKey,
+                bytes,
+                current is null
+                    ? new CloudObjectWriteCondition.IfAbsent()
+                    : new CloudObjectWriteCondition.IfVersion(current.Version),
+                cancellationToken).ConfigureAwait(false);
+            if (fenced)
+            {
+                return;
+            }
+        }
+
+        throw new PantsBusyException("Cloud WAL catalog fencing exceeded its bounded CAS retries.");
     }
 
     public async ValueTask PublishWalAsync(
@@ -111,13 +156,13 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        if (segment.WriterEpoch != _writerEpoch)
+        if (segment.WriterEpoch > _writerEpoch)
         {
-            throw new PantsFencedException("A WAL segment from a stale cloud lease cannot be published.");
+            throw new PantsFencedException("A WAL segment from a future cloud lease cannot be published.");
         }
 
         var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
-            _writerEpoch,
+            segment.WriterEpoch,
             segment.SegmentId);
         var created = await _walStore.PutAsync(
             objectKey,
@@ -143,9 +188,24 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             var catalog = current is null
                 ? new ProviderWalCatalog { FencingEpoch = _writerEpoch }
                 : DecodeCatalog(current.Data.Span);
-            if (catalog.FencingEpoch > _writerEpoch)
+            if (catalog.FencingEpoch != _writerEpoch)
             {
-                throw new PantsFencedException("The cloud WAL catalog has a newer fencing epoch.");
+                throw new PantsFencedException("The cloud WAL catalog is not fenced to this writer.");
+            }
+
+            if (catalog.Segments.TryGetValue(segment.SegmentId, out var publishedSegment))
+            {
+                if (publishedSegment.WriterEpoch == segment.WriterEpoch &&
+                    publishedSegment.MaximumSequence == segment.MaximumSequence &&
+                    publishedSegment.SizeBytes == checked((ulong)segment.Bytes.Length) &&
+                    publishedSegment.ContentCrc32C == MidgeDiskFormat.Crc32C(segment.Bytes) &&
+                    StringComparer.Ordinal.Equals(publishedSegment.ObjectKey, objectKey))
+                {
+                    return;
+                }
+
+                throw new PantsCorruptionException(
+                    $"Cloud WAL catalog segment {segment.SegmentId} conflicts with recovered bytes.");
             }
 
             var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>(catalog.Segments)
@@ -153,7 +213,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 [segment.SegmentId] = new ProviderPublishedWalSegment
                 {
                     SegmentId = segment.SegmentId,
-                    WriterEpoch = _writerEpoch,
+                    WriterEpoch = segment.WriterEpoch,
                     MaximumSequence = segment.MaximumSequence,
                     SizeBytes = checked((ulong)segment.Bytes.Length),
                     ContentCrc32C = MidgeDiskFormat.Crc32C(segment.Bytes),

@@ -98,6 +98,26 @@ public sealed class AzureBlobObjectStoreTests
     }
 
     [Fact]
+    public void ShouldJoinPinnedCanonicalHeadersDirectlyToAzureResource()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "http://127.0.0.1:10000/devstoreaccount1/container/blob");
+        request.Headers.TryAddWithoutValidation("x-ms-date", "Sun, 10 Aug 2026 12:00:00 GMT");
+        request.Headers.TryAddWithoutValidation("x-ms-version", "2024-11-04");
+
+        var value = AzureBlobObjectStore.CreateSharedKeyStringToSign(
+            request,
+            "devstoreaccount1");
+
+        Assert.Contains(
+            "x-ms-version:2024-11-04\n/devstoreaccount1/devstoreaccount1/container/blob",
+            value,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("x-ms-version:2024-11-04\n\n/", value, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ShouldRetryTransientFailuresWithinOperationDeadline()
     {
         var attempts = 0;
