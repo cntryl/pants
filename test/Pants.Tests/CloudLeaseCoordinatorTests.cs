@@ -7,7 +7,7 @@ public sealed class CloudLeaseCoordinatorTests
     {
         var store = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
-        int leaseLosses = 0;
+        var leaseLosses = 0;
         using var first = new CloudLeaseCoordinator(
             store,
             clock,
@@ -39,12 +39,14 @@ public sealed class CloudLeaseCoordinatorTests
     {
         var store = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
         using var lease = new CloudLeaseCoordinator(
             store,
             clock,
             "holder",
             TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
         store.IndeterminateRead = true;
 
@@ -53,6 +55,206 @@ public sealed class CloudLeaseCoordinatorTests
 
         Assert.False(lease.IsHealthy);
         Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldFenceBeforeRenewalWriteGivenReadCrossesMonotonicDeadline()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.AfterNextRead = () => clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+
+        await Assert.ThrowsAsync<PantsFencedException>(
+            () => lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.Equal(0, store.ReplaceAttempts);
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldNeverResurrectAuthorityGivenRenewalCompletesAfterDeadline()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        var renewalStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRenewal = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.BeforeNextReplaceAsync = async cancellationToken =>
+        {
+            renewalStarted.SetResult();
+            await allowRenewal.Task.WaitAsync(cancellationToken);
+        };
+
+        var renewal = lease.RenewAsync(CancellationToken.None).AsTask();
+        await renewalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+        Assert.False(lease.IsHealthy);
+        allowRenewal.SetResult();
+
+        await Assert.ThrowsAsync<PantsFencedException>(
+            () => renewal);
+
+        Assert.NotNull(store.Lease);
+        Assert.True(store.Lease.ExpiresAtUtc + TimeSpan.FromSeconds(1) < clock.UtcNow);
+        Assert.Equal(2, store.ReplaceAttempts);
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        await Assert.ThrowsAsync<PantsFencedException>(
+            () => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(
+            () => lease.AcquireAsync(CancellationToken.None).AsTask());
+        Assert.Equal(2, store.ReplaceAttempts);
+        Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldRemainHealthyPastPreviousDeadlineGivenTimelyRenewal()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1));
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.AfterNextReplace = () =>
+            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(9);
+
+        await lease.RenewAsync(CancellationToken.None);
+        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+
+        Assert.True(lease.IsHealthy);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15), store.Lease?.ExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task ShouldConfirmIndeterminateRenewalGivenMatchingReadbackBeforeDeadline()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.ApplyIndeterminateReplace = true;
+        store.IndeterminateReplace = true;
+
+        await lease.RenewAsync(CancellationToken.None);
+
+        Assert.True(lease.IsHealthy);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15), store.Lease?.ExpiresAtUtc);
+        Assert.Equal(1, store.ReplaceAttempts);
+        Assert.Equal(0, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldSurfaceUnavailableRenewalGivenMismatchedReadback()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.IndeterminateReplace = true;
+
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(
+            () => lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, store.ReplaceAttempts);
+        Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldSurfaceIndeterminateRenewalGivenReadbackFailure()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.IndeterminateReplace = true;
+        store.AfterNextReplace = () => store.IndeterminateRead = true;
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(
+            () => lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, store.ReplaceAttempts);
+        Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldNotifyLeaseLossExactlyOnceGivenRepeatedExpiredObservations()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(10);
+
+        Assert.False(lease.IsHealthy);
+        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(1);
+        for (var observation = 0; observation < 10; observation++)
+        {
+            Assert.False(lease.IsHealthy);
+        }
+
+        Assert.Equal(1, leaseLosses);
     }
 
     [Fact]
@@ -69,7 +271,7 @@ public sealed class CloudLeaseCoordinatorTests
             TimeSpan.FromSeconds(1));
 
         Assert.Equal(1UL, await lease.AcquireAsync(CancellationToken.None));
-        string document = System.Text.Encoding.UTF8.GetString(objects.Data.Span);
+        var document = System.Text.Encoding.UTF8.GetString(objects.Data.Span);
         Assert.Contains("epoch: 1\n", document, StringComparison.Ordinal);
         Assert.Contains("holder_id: holder@host\n", document, StringComparison.Ordinal);
         Assert.Contains("owner_token: ", document, StringComparison.Ordinal);
@@ -80,104 +282,5 @@ public sealed class CloudLeaseCoordinatorTests
         clock.UtcNow += TimeSpan.FromSeconds(5);
         await lease.RenewAsync(CancellationToken.None);
         Assert.IsType<CloudObjectWriteCondition.IfVersion>(objects.LastCondition);
-    }
-
-    private sealed class TestCloudLeaseStore : ICloudLeaseStore
-    {
-        private CloudLeaseRecord? _lease;
-        private int _version;
-
-        public bool IndeterminateRead { get; set; }
-
-        public ValueTask<CloudLeaseSnapshot?> ReadAsync(CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (IndeterminateRead)
-            {
-                throw new PantsLeaseIndeterminateException(
-                    "The conditional lease read outcome is unknown.");
-            }
-
-            CloudLeaseSnapshot? snapshot = _lease is null
-                ? null
-                : new CloudLeaseSnapshot(_lease, _version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            return ValueTask.FromResult(snapshot);
-        }
-
-        public ValueTask<bool> TryCreateAsync(
-            CloudLeaseRecord lease,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_lease is not null)
-            {
-                return ValueTask.FromResult(false);
-            }
-
-            _lease = lease;
-            _version++;
-            return ValueTask.FromResult(true);
-        }
-
-        public ValueTask<bool> TryReplaceAsync(
-            string expectedVersion,
-            CloudLeaseRecord lease,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!StringComparer.Ordinal.Equals(
-                    expectedVersion,
-                    _version.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-            {
-                return ValueTask.FromResult(false);
-            }
-
-            _lease = lease;
-            _version++;
-            return ValueTask.FromResult(true);
-        }
-    }
-
-    private sealed class TestCloudObjectStore : ICloudObjectStore
-    {
-        private string? _version;
-
-        public ReadOnlyMemory<byte> Data { get; private set; }
-
-        public CloudObjectWriteCondition? LastCondition { get; private set; }
-
-        public ValueTask<CloudObject?> GetAsync(
-            string objectKey,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            CloudObject? value = _version is null ? null : new CloudObject(Data, _version);
-            return ValueTask.FromResult(value);
-        }
-
-        public ValueTask<bool> PutAsync(
-            string objectKey,
-            ReadOnlyMemory<byte> data,
-            CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            LastCondition = condition;
-            bool accepted = condition switch
-            {
-                CloudObjectWriteCondition.Unconditional => true,
-                CloudObjectWriteCondition.IfAbsent => _version is null,
-                CloudObjectWriteCondition.IfVersion expected =>
-                    StringComparer.Ordinal.Equals(expected.Version, _version),
-                _ => false
-            };
-            if (accepted)
-            {
-                Data = data.ToArray();
-                _version = Guid.NewGuid().ToString("N");
-            }
-
-            return ValueTask.FromResult(accepted);
-        }
     }
 }

@@ -2,7 +2,7 @@ namespace Pants;
 
 public abstract record PantsAzureCredentialSource
 {
-    private PantsAzureCredentialSource()
+    PantsAzureCredentialSource()
     {
     }
 

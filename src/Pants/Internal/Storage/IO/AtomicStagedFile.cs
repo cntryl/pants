@@ -54,6 +54,21 @@ internal static class AtomicStagedFile
         }
     }
 
+    public static void Delete(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
+        {
+            return;
+        }
+
+        File.Delete(fullPath);
+        var directory = Path.GetDirectoryName(fullPath) ??
+            throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
+        FlushParentDirectory(directory);
+    }
+
     private static void FlushParentDirectory(string directory)
     {
         if (OperatingSystem.IsWindows())

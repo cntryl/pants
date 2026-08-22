@@ -452,9 +452,12 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_abort_in_child_process_when_cloud_crash_scenario_requested",
       "observableBehavior": "abort in child process when cloud crash scenario requested",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldWaitForTerminationGivenCloudCrashChildScenario"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_clear_acquisition_lock_when_simulating_crash_timeout",
@@ -462,9 +465,10 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_clear_acquisition_lock_when_simulating_crash_timeout",
       "observableBehavior": "clear acquisition lock when simulating crash timeout",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Midge-specific Rust crash-harness cleanup; after confirmed child exit, Pants explicitly expires and removes only temporary test lease-acquisition state, never production stale locks."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_clear_incomplete_acquisition_lock_when_crashed_child_has_exited",
@@ -472,9 +476,10 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_clear_incomplete_acquisition_lock_when_crashed_child_has_exited",
       "observableBehavior": "clear incomplete acquisition lock when crashed child has exited",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "rationale": "Midge-specific Rust crash-harness cleanup; after confirmed child exit, Pants explicitly expires the test lease and removes only its temporary acquisition lock, never production stale locks."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_recover_cloud_strict_write_when_cache_lost_after_child_abort",
@@ -482,9 +487,12 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_recover_cloud_strict_write_when_cache_lost_after_child_abort",
       "observableBehavior": "recover cloud strict write when cache lost after child abort",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldRecoverCloudStrictWriteWhenCacheLostAfterChildAbort"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_recover_local_cloud_async_wal_when_child_aborts_before_upload",
@@ -492,9 +500,12 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_recover_local_cloud_async_wal_when_child_aborts_before_upload",
       "observableBehavior": "recover local cloud async wal when child aborts before upload",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldRecoverLocalCloudAsyncWalWhenChildAbortsBeforeUpload"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_restore_published_cloud_sst_when_cache_lost_after_child_abort",
@@ -502,9 +513,12 @@
       "source": "tests/cloud_crash_recovery.rs",
       "sourceSymbolOrTest": "should_restore_published_cloud_sst_when_cache_lost_after_child_abort",
       "observableBehavior": "restore published cloud sst when cache lost after child abort",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldRestorePublishedCloudSstWhenCacheLostAfterChildAbort"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_crash_recovery.rs:should_resume_cloud_upload_from_recovered_active_wal_after_child_abort",
@@ -516,7 +530,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-        "Pants.Tests.ProviderCloudPersistenceTests.ShouldResumeFailedCloudAsyncUploadFromRecoveredLocalWal"
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldResumeCloudUploadFromRecoveredActiveWalAfterChildAbort"
       ]
     },
     {
@@ -526,8 +540,11 @@
       "sourceSymbolOrTest": "should_abort_torn_ddl_prepare_given_local_prepare_without_remote_commit_when_reopening",
       "observableBehavior": "abort torn ddl prepare given local prepare without remote commit when reopening",
       "expectedError": "Internal",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldAbortTornDdlPrepareGivenLocalPrepareWithoutRemoteCommitWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_converge_local_remote_ddl_state_given_normal_create_drop_when_reopening",
@@ -535,9 +552,12 @@
       "source": "tests/cloud_ddl_two_phase_hardening.rs",
       "sourceSymbolOrTest": "should_converge_local_remote_ddl_state_given_normal_create_drop_when_reopening",
       "observableBehavior": "converge local remote ddl state given normal create drop when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldAppendCreateAndDropToAuthoritativeRegistryGivenNormalCloudDdl"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_converge_local_remote_ddl_state_given_remote_cas_failure_when_reopening",
@@ -546,8 +566,11 @@
       "sourceSymbolOrTest": "should_converge_local_remote_ddl_state_given_remote_cas_failure_when_reopening",
       "observableBehavior": "converge local remote ddl state given remote cas failure when reopening",
       "expectedError": "Internal",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldConvergeDdlStateGivenRemoteCasFailureWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_fence_column_family_when_remote_drop_cas_response_is_lost",
@@ -555,9 +578,12 @@
       "source": "tests/cloud_ddl_two_phase_hardening.rs",
       "sourceSymbolOrTest": "should_fence_column_family_when_remote_drop_cas_response_is_lost",
       "observableBehavior": "fence column family when remote drop cas response is lost",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 8
+      "issue": 8,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldAdoptRemoteDropGivenLostCasResponseWhenReadbackConfirmsCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_fence_column_family_when_remote_drop_commits_before_local_commit",
@@ -565,9 +591,12 @@
       "source": "tests/cloud_ddl_two_phase_hardening.rs",
       "sourceSymbolOrTest": "should_fence_column_family_when_remote_drop_commits_before_local_commit",
       "observableBehavior": "fence column family when remote drop commits before local commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 8
+      "issue": 8,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldFenceColumnFamilyWhenRemoteDropCommitsBeforeLocalCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_fence_writes_when_remote_drop_authority_cannot_be_resolved",
@@ -576,8 +605,11 @@
       "sourceSymbolOrTest": "should_fence_writes_when_remote_drop_authority_cannot_be_resolved",
       "observableBehavior": "fence writes when remote drop authority cannot be resolved",
       "expectedError": "Fenced",
-      "status": "planned",
-      "issue": 8
+      "status": "mapped",
+      "issue": 8,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldFenceWritesGivenLostDropResponseWhenAuthorityReadbackFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_reconcile_remote_commit_when_local_commit_fails",
@@ -585,9 +617,12 @@
       "source": "tests/cloud_ddl_two_phase_hardening.rs",
       "sourceSymbolOrTest": "should_reconcile_remote_commit_when_local_commit_fails",
       "observableBehavior": "reconcile remote commit when local commit fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldReconcileRemoteCreateGivenLocalCommitFailureWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_retry_cloud_column_family_create_after_remote_cas_failure",
@@ -596,8 +631,11 @@
       "sourceSymbolOrTest": "should_retry_cloud_column_family_create_after_remote_cas_failure",
       "observableBehavior": "retry cloud column family create after remote cas failure",
       "expectedError": "Internal",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldAbortPreparedCreateGivenRemoteCasFailureWhenRetrying"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_ddl_two_phase_hardening.rs:should_return_usable_column_family_when_create_metadata_mirror_fails_after_commit",
@@ -605,9 +643,12 @@
       "source": "tests/cloud_ddl_two_phase_hardening.rs",
       "sourceSymbolOrTest": "should_return_usable_column_family_when_create_metadata_mirror_fails_after_commit",
       "observableBehavior": "return usable column family when create metadata mirror fails after commit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldReturnUsableColumnFamilyWhenCreateMetadataMirrorFailsAfterCommit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_eventual_flush.rs:should_eventually_publish_sst_given_many_cloud_buffered_writes_when_memtable_never_reaches_size_threshold",
@@ -615,9 +656,12 @@
       "source": "tests/cloud_eventual_flush.rs",
       "sourceSymbolOrTest": "should_eventually_publish_sst_given_many_cloud_buffered_writes_when_memtable_never_reaches_size_threshold",
       "observableBehavior": "eventually publish sst given many cloud buffered writes when memtable never reaches size threshold",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldEventuallyPublishSstGivenManyCloudBufferedWritesWhenMemtableNeverReachesSizeThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_eventual_flush.rs:should_eventually_publish_sst_given_many_cloud_strict_writes_when_memtable_never_reaches_size_threshold",
@@ -625,9 +669,12 @@
       "source": "tests/cloud_eventual_flush.rs",
       "sourceSymbolOrTest": "should_eventually_publish_sst_given_many_cloud_strict_writes_when_memtable_never_reaches_size_threshold",
       "observableBehavior": "eventually publish sst given many cloud strict writes when memtable never reaches size threshold",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldEventuallyPublishSstGivenManyCloudStrictWritesWhenMemtableNeverReachesSizeThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_eventual_flush.rs:should_publish_lightly_written_column_family_given_busy_neighbor_when_cloud_segment_gap_flush_runs",
@@ -635,9 +682,12 @@
       "source": "tests/cloud_eventual_flush.rs",
       "sourceSymbolOrTest": "should_publish_lightly_written_column_family_given_busy_neighbor_when_cloud_segment_gap_flush_runs",
       "observableBehavior": "publish lightly written column family given busy neighbor when cloud segment gap flush runs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldPublishLightlyWrittenColumnFamilyGivenBusyNeighborWhenCloudSegmentGapFlushRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_eventual_flush.rs:should_reset_memtable_wal_gap_after_reopen_before_new_segment_churn",
@@ -645,9 +695,12 @@
       "source": "tests/cloud_eventual_flush.rs",
       "sourceSymbolOrTest": "should_reset_memtable_wal_gap_after_reopen_before_new_segment_churn",
       "observableBehavior": "reset memtable wal gap after reopen before new segment churn",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldResetMemtableWalGapAfterReopenBeforeNewSegmentChurn"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_fail_cloud_strict_commit_given_cloud_upload_failure_when_waiting_for_ack",
@@ -669,8 +722,11 @@
       "sourceSymbolOrTest": "should_fail_strict_recovery_given_authoritative_remote_sst_missing_when_reopening",
       "observableBehavior": "fail strict recovery given authoritative remote sst missing when reopening",
       "expectedError": "RecoveryFailed",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldFailStrictRecoveryGivenAuthoritativeRemoteSstMissingWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_ignore_reintroduced_manifest_covered_remote_wal_after_restart",
@@ -678,9 +734,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_ignore_reintroduced_manifest_covered_remote_wal_after_restart",
       "observableBehavior": "ignore reintroduced manifest covered remote wal after restart",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldIgnoreReintroducedWalObjectAfterCatalogRetiresSegment"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_keep_cloud_async_commit_visible_given_cloud_upload_failure_when_committing",
@@ -701,9 +760,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_preserve_remote_wal_when_unflushed_column_family_still_depends_on_it_given_partial_gc",
       "observableBehavior": "preserve remote wal when unflushed column family still depends on it given partial gc",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldPreserveRemoteWalWhenUnflushedColumnFamilyStillDependsOnItGivenPartialGc"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_prune_remote_wal_segment_after_cloud_sst_covers_it",
@@ -711,9 +773,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_prune_remote_wal_segment_after_cloud_sst_covers_it",
       "observableBehavior": "prune remote wal segment after cloud sst covers it",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldPruneRemoteWalAfterPublishedSstCoversItsSequence"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_recover_cloud_async_commit_given_intact_local_wal_when_upload_fails",
@@ -721,9 +786,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_recover_cloud_async_commit_given_intact_local_wal_when_upload_fails",
       "observableBehavior": "recover cloud async commit given intact local wal when upload fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.ProviderCloudPersistenceTests.ShouldResumeFailedCloudAsyncUploadFromRecoveredLocalWal"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_recover_cloud_strict_write_from_authoritative_remote_wal_after_local_cache_loss",
@@ -744,9 +812,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_recover_delete_range_given_remote_wal_only_when_local_cache_is_lost",
       "observableBehavior": "recover delete range given remote wal only when local cache is lost",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldRecoverDeleteRangeGivenRemoteWalOnlyWhenLocalCacheIsLost"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_recover_partial_remote_wal_cleanup_given_mixed_flush_state_when_reopening",
@@ -754,9 +825,12 @@
       "source": "tests/cloud_persistence_hardening.rs",
       "sourceSymbolOrTest": "should_recover_partial_remote_wal_cleanup_given_mixed_flush_state_when_reopening",
       "observableBehavior": "recover partial remote wal cleanup given mixed flush state when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudWalPruningTests.ShouldRecoverPartialRemoteWalCleanupGivenMixedFlushStateWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_persistence_hardening.rs:should_reject_sync_buffered_options_given_cloud_storage_when_committing",
@@ -804,8 +878,11 @@
       "sourceSymbolOrTest": "should_salvage_valid_prefix_when_remote_wal_segment_is_corrupt",
       "observableBehavior": "salvage valid prefix when remote wal segment is corrupt",
       "expectedError": "RecoveryFailed",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCrashRecoveryTests.ShouldFailStrictButSalvageValidPrefixGivenCorruptRemoteWalSegment"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_join_azure_canonical_headers_directly_to_resource",
@@ -826,9 +903,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_recover_engine_from_real_s3_after_local_cache_loss_if_configured",
       "observableBehavior": "recover engine from real s3 after local cache loss if configured",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudProviderEngineQualificationTests.ShouldRecoverEngineFromRealS3AfterLocalCacheLossIfConfigured"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_recover_engine_from_sqrzl_azure_after_local_cache_loss",
@@ -849,9 +929,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_recover_engine_from_sqrzl_gcs_json_after_local_cache_loss",
       "observableBehavior": "recover engine from sqrzl gcs json after local cache loss",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudProviderEngineQualificationTests.ShouldRecoverEngineFromSqrzlGcsJsonAfterLocalCacheLoss"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_recover_engine_from_sqrzl_s3_after_local_cache_loss",
@@ -859,9 +942,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_recover_engine_from_sqrzl_s3_after_local_cache_loss",
       "observableBehavior": "recover engine from sqrzl s3 after local cache loss",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudProviderEngineQualificationTests.ShouldRecoverEngineFromSqrzlS3AfterLocalCacheLoss"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_route_three_location_topology_through_sqrzl",
@@ -869,9 +955,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_route_three_location_topology_through_sqrzl",
       "observableBehavior": "route three location topology through sqrzl",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudProviderEngineQualificationTests.ShouldRouteThreeLocationTopologyThroughSqrzl"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_provider_engine_qualification.rs:should_route_two_location_topology_through_sqrzl",
@@ -879,9 +968,12 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_route_two_location_topology_through_sqrzl",
       "observableBehavior": "route two location topology through sqrzl",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudProviderEngineQualificationTests.ShouldRouteTwoLocationTopologyThroughSqrzl"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_both_flushed_batches_when_reopening_after_compaction_request",
@@ -889,9 +981,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_both_flushed_batches_when_reopening_after_compaction_request",
       "observableBehavior": "preserve both flushed batches when reopening after compaction request",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveBothFlushedBatchesWhenReopeningAfterCompactionRequest"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_both_generations_when_reopening_after_compaction_request",
@@ -899,9 +994,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_both_generations_when_reopening_after_compaction_request",
       "observableBehavior": "preserve both generations when reopening after compaction request",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveBothGenerationsWhenReopeningAfterCompactionRequest"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_flushed_values_when_reopening_after_background_upload_delay",
@@ -909,9 +1007,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_flushed_values_when_reopening_after_background_upload_delay",
       "observableBehavior": "preserve flushed values when reopening after background upload delay",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveFlushedValuesWhenReopeningAfterBackgroundUploadDelay"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_flushed_values_when_reopening_after_short_retry_window",
@@ -919,9 +1020,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_flushed_values_when_reopening_after_short_retry_window",
       "observableBehavior": "preserve flushed values when reopening after short retry window",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveFlushedValuesWhenReopeningAfterShortRetryWindow"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_flushed_values_when_reopening_after_short_upload_window",
@@ -929,9 +1033,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_flushed_values_when_reopening_after_short_upload_window",
       "observableBehavior": "preserve flushed values when reopening after short upload window",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveFlushedValuesWhenReopeningAfterShortUploadWindow"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_multiple_flushed_batches_when_reopening_after_short_upload_window",
@@ -939,9 +1046,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_multiple_flushed_batches_when_reopening_after_short_upload_window",
       "observableBehavior": "preserve multiple flushed batches when reopening after short upload window",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveMultipleFlushedBatchesWhenReopeningAfterShortUploadWindow"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_snapshot_visibility_when_flushing_with_snapshot_open",
@@ -949,9 +1059,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_snapshot_visibility_when_flushing_with_snapshot_open",
       "observableBehavior": "preserve snapshot visibility when flushing with snapshot open",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveSnapshotVisibilityWhenFlushingWithSnapshotOpen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloud_recovery.rs:should_preserve_values_when_reopening_after_flush_attempt",
@@ -959,9 +1072,12 @@
       "source": "tests/cloud_recovery.rs",
       "sourceSymbolOrTest": "should_preserve_values_when_reopening_after_flush_attempt",
       "observableBehavior": "preserve values when reopening after flush attempt",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudRecoveryTests.ShouldPreserveValuesWhenReopeningAfterFlushAttempt"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloudfirst_benchmark_safe.rs:should_batch_writes_when_using_cloud_mode",
@@ -969,9 +1085,12 @@
       "source": "tests/cloudfirst_benchmark_safe.rs",
       "sourceSymbolOrTest": "should_batch_writes_when_using_cloud_mode",
       "observableBehavior": "batch writes when using cloud mode",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldBatchWritesWhenUsingCloudMode"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloudfirst_benchmark_safe.rs:should_flush_cloud_segments_on_shutdown",
@@ -979,9 +1098,12 @@
       "source": "tests/cloudfirst_benchmark_safe.rs",
       "sourceSymbolOrTest": "should_flush_cloud_segments_on_shutdown",
       "observableBehavior": "flush cloud segments on shutdown",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudEventualFlushTests.ShouldFlushCloudSegmentsOnShutdown"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/cloudfirst_benchmark_safe.rs:should_support_cloud_strict_for_explicit_durability",
@@ -3816,9 +3938,12 @@
       "source": "tests/engine_gc_cloud.rs",
       "sourceSymbolOrTest": "should_collect_orphaned_cloud_objects_after_compaction",
       "observableBehavior": "collect orphaned cloud objects after compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudSstGarbageCollectionTests.ShouldCollectOrphanedCloudObjectsAfterCompaction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc_cloud.rs:should_handle_gc_when_cloud_delete_fails",
@@ -3826,9 +3951,12 @@
       "source": "tests/engine_gc_cloud.rs",
       "sourceSymbolOrTest": "should_handle_gc_when_cloud_delete_fails",
       "observableBehavior": "handle gc when cloud delete fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudSstGarbageCollectionTests.ShouldHandleGcWhenCloudDeleteFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc_cloud.rs:should_handle_gc_when_cloud_list_fails",
@@ -3836,9 +3964,12 @@
       "source": "tests/engine_gc_cloud.rs",
       "sourceSymbolOrTest": "should_handle_gc_when_cloud_list_fails",
       "observableBehavior": "handle gc when cloud list fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudSstGarbageCollectionTests.ShouldHandleGcWhenCloudListFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc_cloud.rs:should_not_collect_cloud_objects_referenced_by_manifest",
@@ -3846,9 +3977,12 @@
       "source": "tests/engine_gc_cloud.rs",
       "sourceSymbolOrTest": "should_not_collect_cloud_objects_referenced_by_manifest",
       "observableBehavior": "not collect cloud objects referenced by manifest",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudSstGarbageCollectionTests.ShouldNotCollectCloudObjectsReferencedByManifest"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_init.rs:should_create_engine_in_all_modes",
@@ -4813,9 +4947,12 @@
       "source": "tests/failure_injection.rs",
       "sourceSymbolOrTest": "should_not_upload_remote_compaction_output_when_intent_save_fails",
       "observableBehavior": "not upload remote compaction output when intent save fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCompactionFailureTests.ShouldNotUploadRemoteCompactionOutputWhenIntentSaveFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_open_in_salvage_mode_when_replay_cannot_checkpoint_manifest",
@@ -5051,9 +5188,12 @@
       "source": "tests/failure_injection.rs",
       "sourceSymbolOrTest": "should_remove_remote_compaction_orphan_on_reopen_when_manifest_batch_fails",
       "observableBehavior": "remove remote compaction orphan on reopen when manifest batch fails",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCompactionFailureTests.ShouldRemoveRemoteCompactionOrphanOnReopenWhenManifestBatchFails"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_remove_remote_compaction_orphan_when_column_family_is_dropped_before_reopen",
@@ -5061,9 +5201,12 @@
       "source": "tests/failure_injection.rs",
       "sourceSymbolOrTest": "should_remove_remote_compaction_orphan_when_column_family_is_dropped_before_reopen",
       "observableBehavior": "remove remote compaction orphan when column family is dropped before reopen",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCompactionFailureTests.ShouldRemoveRemoteCompactionOrphanWhenColumnFamilyIsDroppedBeforeReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_report_success_when_drop_metadata_mirror_fails_after_authority_switch",
@@ -5071,9 +5214,12 @@
       "source": "tests/failure_injection.rs",
       "sourceSymbolOrTest": "should_report_success_when_drop_metadata_mirror_fails_after_authority_switch",
       "observableBehavior": "report success when drop metadata mirror fails after authority switch",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.CloudDdlTwoPhaseTests.ShouldReportSuccessWhenDropMetadataMirrorFailsAfterAuthoritySwitch"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_restore_sequence_floor_from_flushed_ssts_without_wal_recovery",
@@ -5101,8 +5247,11 @@
       "sourceSymbolOrTest": "should_retain_replaced_remote_compaction_orphan_when_cleanup_proof_is_stale",
       "observableBehavior": "retain replaced remote compaction orphan when cleanup proof is stale",
       "expectedError": "RecoveryFailed",
-      "status": "planned",
-      "issue": 7
+      "status": "mapped",
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCompactionFailureTests.ShouldRetainReplacedRemoteCompactionOrphanWhenCleanupProofIsStale"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_retry_flush_given_transient_publish_failure_when_reopening",
@@ -5129,9 +5278,12 @@
       "source": "tests/failure_injection.rs",
       "sourceSymbolOrTest": "should_retry_frozen_memtable_when_cloud_sst_upload_recovers",
       "observableBehavior": "retry frozen memtable when cloud sst upload recovers",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsCloudCompactionFailureTests.ShouldRetryFrozenMemtableWhenCloudSstUploadRecovers"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/failure_injection.rs:should_retry_frozen_memtable_when_sst_sequence_journal_recovers",
@@ -5248,9 +5400,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_apply_simulated_cloud_local_storage_budget_when_opening_simulated_cloud",
       "observableBehavior": "apply simulated cloud local storage budget when opening simulated cloud",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldApplySimulatedCloudLocalStorageBudgetWhenOpeningSimulatedCloud"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_block_writes_at_emergency_watermark",
@@ -5258,9 +5413,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_block_writes_at_emergency_watermark",
       "observableBehavior": "block writes at emergency watermark",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldBlockWritesAtEmergencyWatermark"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_fetch_from_cloud_after_local_eviction",
@@ -5268,9 +5426,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_fetch_from_cloud_after_local_eviction",
       "observableBehavior": "fetch from cloud after local eviction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldFetchFromCloudAfterLocalEviction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_handle_cloud_unavailable_during_eviction",
@@ -5278,9 +5439,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_handle_cloud_unavailable_during_eviction",
       "observableBehavior": "handle cloud unavailable during eviction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldHandleCloudUnavailableDuringEviction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_keep_pinned_sst_local_given_active_snapshot_when_eviction_runs",
@@ -5288,9 +5452,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_keep_pinned_sst_local_given_active_snapshot_when_eviction_runs",
       "observableBehavior": "keep pinned sst local given active snapshot when eviction runs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldKeepPinnedSstLocalGivenActiveSnapshotWhenEvictionRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_persist_eviction_state_across_restart",
@@ -5298,9 +5465,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_persist_eviction_state_across_restart",
       "observableBehavior": "persist eviction state across restart",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldPersistEvictionStateAcrossRestart"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_prefer_local_reads_before_eviction",
@@ -5308,9 +5478,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_prefer_local_reads_before_eviction",
       "observableBehavior": "prefer local reads before eviction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldPreferLocalReadsBeforeEviction"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_resume_writes_given_cloud_upload_completes_when_emergency_watermark_is_active",
@@ -5318,9 +5491,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_resume_writes_given_cloud_upload_completes_when_emergency_watermark_is_active",
       "observableBehavior": "resume writes given cloud upload completes when emergency watermark is active",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldResumeWritesGivenCloudUploadCompletesWhenEmergencyWatermarkIsActive"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_trigger_eviction_at_high_watermark",
@@ -5328,9 +5504,12 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_trigger_eviction_at_high_watermark",
       "observableBehavior": "trigger eviction at high watermark",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 7
+      "issue": 7,
+      "pantsTests": [
+        "Pants.Tests.PantsHybridStorageTests.ShouldTriggerEvictionAtHighWatermark"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/memory_management.rs:should_complete_shutdown_when_wal_writer_drops",

@@ -1,18 +1,18 @@
 namespace Pants;
 
-interface ICloudPersistence
+interface ICloudPersistence : ICloudDdlAuthority
 {
+    bool HasPersistenceAnomaly { get; }
+
     ValueTask PublishWalAsync(
         SealedWalSegment segment,
         CancellationToken cancellationToken);
 
     ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken);
 
-    ValueTask PublishColumnFamilyCreateAsync(
-        MidgeColumnFamilyMeta metadata,
-        CancellationToken cancellationToken);
+    ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken);
 
-    ValueTask PublishColumnFamilyDropAsync(
-        MidgeColumnFamilyMeta metadata,
+    ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
+        string name,
         CancellationToken cancellationToken);
 }

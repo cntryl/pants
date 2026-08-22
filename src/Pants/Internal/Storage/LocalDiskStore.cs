@@ -99,17 +99,22 @@ internal sealed class LocalDiskStore : IDisposable
 
     public long LastPersistedSequence => checked((long)_manifest.LastPersistedSequence);
     public long NextWalSequence => checked((long)_manifest.NextWalSeq);
+    public ulong CurrentWalSegmentId => _manifest.NextWalSeq;
     public int SstCount => _manifest.Files.Count;
     public long SstBytes => checked((long)_manifest.Files.Aggregate(0UL, static (total, file) => total + file.SizeBytes));
+    public long LocalWalBytes => checked(
+        GetLocalFileBytes(_walDirectory, "*.wal") + GetExistingFileBytes(_walPath));
+    public long LocalSstBytes => GetLocalFileBytes(_sstDirectory, "*.sst");
+    public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
     public long WalRecoveryRecordsReplayed => _walRecoveryRecordsReplayed;
     public long WalRecoveryBytesReplayed => _walRecoveryBytesReplayed;
     public ulong WriterEpoch => _lease.Epoch;
 
     public PantsEngineHealth GetHealth(PantsRuntimeState state)
     {
-        if (state.Health == PantsEngineHealth.SalvageMode)
+        if (state.Health != PantsEngineHealth.Healthy)
         {
-            return PantsEngineHealth.SalvageMode;
+            return state.Health;
         }
 
         return GetObsoleteFiles().Any(name => !_snapshotPinnedObsoleteFiles.Contains(name))
@@ -177,6 +182,94 @@ internal sealed class LocalDiskStore : IDisposable
     {
         MidgeColumnFamilyMeta metadata = _manifest.ColumnFamilies.Single(family => family.Id == identity.Id);
         return metadata.Clone();
+    }
+
+    public IReadOnlyList<MidgeColumnFamilyMeta> GetColumnFamilyMetadataSnapshot() =>
+        _manifest.ColumnFamilies.Select(static family => family.Clone()).ToArray();
+
+    public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
+        _manifest.Files
+            .OrderBy(static file => file.SstSequence)
+            .ThenBy(static file => file.Name, StringComparer.Ordinal)
+            .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
+            .Select(file => new HybridLocalSst(
+                file.Name,
+                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
+            .ToArray();
+
+    public IReadOnlyList<string> GetPointReadSstNames(
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlySpan<byte> key)
+    {
+        var keyCopy = key.ToArray();
+        return _manifest.Files
+            .Where(file =>
+                file.ColumnFamilyId == columnFamily.Id &&
+                IsWithinFileRange(file, keyCopy))
+            .Select(static file => file.Name)
+            .ToArray();
+    }
+
+    public IReadOnlyList<string> GetScanSstNames(
+        ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds) =>
+        _manifest.Files
+            .Where(file =>
+                file.ColumnFamilyId == columnFamily.Id &&
+                file.SmallestKey is not null &&
+                file.LargestKey is not null &&
+                bounds.Overlaps(
+                    GetMetadataKey(file.SmallestKey),
+                    GetMetadataKey(file.LargestKey)))
+            .Select(static file => file.Name)
+            .ToArray();
+
+    public IReadOnlyList<string> GetManifestSstNames() =>
+        _manifest.Files.Select(static file => file.Name).ToArray();
+
+    public bool IsSstLocal(string name)
+    {
+        _ = GetManifestSst(name);
+        return File.Exists(Path.Combine(_sstDirectory, name));
+    }
+
+    public void HydrateLocalSst(string name, ReadOnlySpan<byte> bytes)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        var metadata = GetManifestSst(name);
+        if (checked((ulong)bytes.Length) != metadata.SizeBytes ||
+            metadata.ContentCrc32C.HasValue &&
+            MidgeDiskFormat.Crc32C(bytes) != metadata.ContentCrc32C.Value)
+        {
+            throw new PantsCorruptionException(
+                $"Cloud SST '{name}' does not match its manifest metadata.");
+        }
+
+        var bytesCopy = bytes.ToArray();
+        _ = MidgeSstCodec.Decode(bytesCopy);
+        var path = Path.Combine(_sstDirectory, name);
+        if (File.Exists(path))
+        {
+            if (!PositionalFile.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+            {
+                throw new PantsCorruptionException(
+                    $"Local immutable SST '{name}' conflicts with its cloud copy.");
+            }
+
+            return;
+        }
+
+        AtomicStagedFile.Write(path, bytesCopy);
+    }
+
+    public void EvictLocalSst(string name)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        _ = GetManifestSst(name);
+        RemoveSstFromCaches(name);
+        File.Delete(Path.Combine(_sstDirectory, name));
     }
 
     public bool RecordPointRead(
@@ -335,7 +428,8 @@ internal sealed class LocalDiskStore : IDisposable
         long targetSstSizeBytes = 128L * 1024 * 1024,
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
-        TimeSpan? leaseHeartbeatInterval = null)
+        TimeSpan? leaseHeartbeatInterval = null,
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -395,6 +489,9 @@ internal sealed class LocalDiskStore : IDisposable
                 manifest,
                 recoveryPolicy,
                 state);
+            AdvanceNextWalSequencePastSealedSegments(
+                Path.Combine(root, "wal"),
+                manifest);
             walStream = new FileStream(Path.Combine(root, "wal", "wal.log"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
             var store = new LocalDiskStore(
                 root,
@@ -409,7 +506,7 @@ internal sealed class LocalDiskStore : IDisposable
                 targetSstSizeBytes,
                 blockCachePolicy,
                 blockCacheBytes);
-            store.Recover(state);
+            store.Recover(state, recoverySsts);
             store.SaveManifestCheckpoint();
             if (clearRecoveredIntents)
             {
@@ -435,6 +532,26 @@ internal sealed class LocalDiskStore : IDisposable
         }
     }
 
+    static void AdvanceNextWalSequencePastSealedSegments(
+        string walDirectory,
+        MidgeManifest manifest)
+    {
+        var maximumSegmentId = Directory
+            .EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+            .Select(static path => Path.GetFileNameWithoutExtension(path))
+            .Select(static name => ulong.TryParse(name, out var segmentId) ? segmentId : 0)
+            .DefaultIfEmpty()
+            .Max();
+        if (maximumSegmentId == ulong.MaxValue)
+        {
+            throw new PantsResourceLimitException("The WAL segment sequence is exhausted.");
+        }
+
+        manifest.NextWalSeq = Math.Max(
+            manifest.NextWalSeq,
+            checked(maximumSegmentId + 1));
+    }
+
     public void CreateColumnFamily(ColumnFamilyIdentity identity)
     {
         ThrowIfDisposed();
@@ -450,6 +567,131 @@ internal sealed class LocalDiskStore : IDisposable
         DurablyApplyManifestEdit(edit);
         _familyIds[identity] = identity.Id;
         SaveManifestCheckpoint();
+    }
+
+    public static JsonElement CreateColumnFamilyEdit(ColumnFamilyIdentity identity) =>
+        CreateManifestEdit(
+            "CreateColumnFamily",
+            new
+            {
+                id = identity.Id,
+                name = identity.Name,
+                created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            });
+
+    public JsonElement CreateDropColumnFamilyEdit(
+        PantsRuntimeState state,
+        ColumnFamilyIdentity identity)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        if (!_familyIds.TryGetValue(identity, out var id))
+        {
+            throw new PantsStorageException(
+                $"Column family '{identity}' has no persistent Midge identity.");
+        }
+
+        var droppedSstNames = _manifest.Files
+            .Where(file => file.ColumnFamilyId == id)
+            .Select(static file => file.Name)
+            .ToArray();
+        return CreateManifestEdit(
+            "DropColumnFamilyAt",
+            new
+            {
+                id,
+                drop_sequence = checked((ulong)state.Sequence),
+                dropped_sst_names = droppedSstNames
+            });
+    }
+
+    public bool IsColumnFamilyEditApplied(JsonElement edit) =>
+        CloudDdlEdit.Matches(_manifest.ColumnFamilies, edit);
+
+    public void CommitColumnFamilyEdit(PantsRuntimeState state, JsonElement edit)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        CloudDdlEdit.Validate(edit);
+        if (IsColumnFamilyEditApplied(edit))
+        {
+            ApplyColumnFamilyEditVisibility(state, edit);
+            return;
+        }
+
+        _failpoints.Hit(PantsFailpoint.BeforeDdlLocalCommit);
+        DurablyApplyManifestEdit(edit);
+        _failpoints.Hit(PantsFailpoint.AfterDdlLocalJournalBeforeVisibility);
+        ApplyColumnFamilyEditVisibility(state, edit);
+        SaveManifestCheckpoint();
+    }
+
+    public void AdoptRemoteCommittedColumnFamilyEdit(
+        PantsRuntimeState state,
+        JsonElement edit)
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        CloudDdlEdit.Validate(edit);
+        if (!IsColumnFamilyEditApplied(edit))
+        {
+            DurablyApplyManifestEdit(edit);
+        }
+
+        ApplyColumnFamilyEditVisibility(state, edit);
+    }
+
+    public void ApplyColumnFamilyEditVisibility(PantsRuntimeState state, JsonElement edit)
+    {
+        CloudDdlEdit.Validate(edit);
+        var id = CloudDdlEdit.GetColumnFamilyId(edit);
+        if (CloudDdlEdit.IsCreate(edit))
+        {
+            var name = CloudDdlEdit.GetColumnFamilyName(edit);
+            var existing = state.FamilyData.Keys
+                .Where(identity => identity.Id == id)
+                .Select(static identity => (ColumnFamilyIdentity?)identity)
+                .FirstOrDefault();
+            if (existing.HasValue)
+            {
+                _familyIds[existing.Value] = id;
+                state.NextColumnFamilyId = Math.Max(
+                    state.NextColumnFamilyId,
+                    checked(id + 1));
+                return;
+            }
+
+            var generation = state.FamilyGeneration.TryGetValue(name, out var currentGeneration)
+                ? checked(currentGeneration + 1)
+                : 0;
+            var identity = new ColumnFamilyIdentity(id, name, generation);
+            state.FamilyGeneration[name] = generation;
+            state.ActiveFamilyVersions[name] = generation;
+            state.FamilyData[identity] = new SortedDictionary<byte[], CellState>(
+                ByteArrayComparer.Instance);
+            state.RangeTombstones[identity] = [];
+            state.ActiveMemtableBytes[identity] = 0;
+            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, checked(id + 1));
+            _familyIds[identity] = id;
+            return;
+        }
+
+        var dropped = _familyIds
+            .Where(pair => pair.Value == id)
+            .Select(static pair => (ColumnFamilyIdentity?)pair.Key)
+            .FirstOrDefault();
+        if (!dropped.HasValue)
+        {
+            return;
+        }
+
+        var droppedIdentity = dropped.Value;
+        state.ActiveFamilyVersions.Remove(droppedIdentity.Name);
+        state.FamilyData.Remove(droppedIdentity);
+        state.RangeTombstones.Remove(droppedIdentity);
+        state.ActiveMemtableBytes.Remove(droppedIdentity);
+        state.UnflushedFamilies.Remove(droppedIdentity);
+        _familyIds.Remove(droppedIdentity);
     }
 
     public void DropColumnFamily(PantsRuntimeState state, ColumnFamilyIdentity identity)
@@ -853,14 +1095,44 @@ internal sealed class LocalDiskStore : IDisposable
     public long Compact(
         PantsRuntimeState state,
         bool force,
-        bool continueCompacting = false)
+        bool continueCompacting = false) =>
+        CompactAsync(
+                state,
+                force,
+                outputPublisher: null,
+                continueCompacting,
+                CancellationToken.None)
+            .AsTask()
+            .GetAwaiter()
+            .GetResult();
+
+    public ValueTask<long> CompactAsync(
+        PantsRuntimeState state,
+        bool force,
+        CloudCompactionOutputPublisher? outputPublisher,
+        CancellationToken cancellationToken = default) =>
+        CompactAsync(
+            state,
+            force,
+            outputPublisher,
+            continueCompacting: false,
+            cancellationToken);
+
+    async ValueTask<long> CompactAsync(
+        PantsRuntimeState state,
+        bool force,
+        CloudCompactionOutputPublisher? outputPublisher,
+        bool continueCompacting,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         _lease.EnsureValid();
         Flush(state);
         var obsoleteNames = new List<string>();
         var edits = new List<JsonElement>();
         var intents = new List<JsonElement>();
+        var outputNames = new List<string>();
         long bytesRewritten = 0;
         foreach ((ColumnFamilyIdentity _, uint familyId) in _familyIds.ToList())
         {
@@ -899,6 +1171,7 @@ internal sealed class LocalDiskStore : IDisposable
                     PantsFailpoint.AfterCompactionOutputDurable,
                     checked(firstOutputSequence + (ulong)outputIndex));
                 outputs.Add(output);
+                outputNames.Add(output.Name);
                 edits.Add(CreateManifestEdit("AddSst", output));
             }
 
@@ -945,6 +1218,14 @@ internal sealed class LocalDiskStore : IDisposable
         }
 
         SaveIntentLog(intents);
+        if (outputPublisher is not null && outputNames.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await outputPublisher(outputNames, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            _lease.EnsureValid();
+        }
+
         _failpoints.Hit(PantsFailpoint.BeforeCompactionManifestPublish);
         DurablyApplyManifestBatch(edits);
         _failpoints.Hit(PantsFailpoint.AfterCompactionManifestPublish);
@@ -965,10 +1246,12 @@ internal sealed class LocalDiskStore : IDisposable
 
         if ((force || continueCompacting) && bytesRewritten > 0)
         {
-            bytesRewritten = checked(bytesRewritten + Compact(
+            bytesRewritten = checked(bytesRewritten + await CompactAsync(
                 state,
                 force: false,
-                continueCompacting: true));
+                outputPublisher,
+                continueCompacting: true,
+                cancellationToken).ConfigureAwait(false));
         }
 
         return bytesRewritten;
@@ -980,7 +1263,18 @@ internal sealed class LocalDiskStore : IDisposable
         _blockCache.RemoveFile(name);
     }
 
-    private void Recover(PantsRuntimeState state)
+    MidgeFileMeta GetManifestSst(string name)
+    {
+        var safeName = ValidateSstName(name);
+        return _manifest.Files.SingleOrDefault(file =>
+                StringComparer.Ordinal.Equals(file.Name, safeName)) ??
+            throw new PantsCorruptionException(
+                $"SST '{safeName}' is not owned by the active manifest.");
+    }
+
+    void Recover(
+        PantsRuntimeState state,
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts)
     {
         RestoreColumnFamilies(state);
         var recoveredOperations = new List<MidgeWalMutation>();
@@ -988,13 +1282,13 @@ internal sealed class LocalDiskStore : IDisposable
         {
             try
             {
-                string path = Path.Combine(_sstDirectory, ValidateSstName(file.Name));
-                if (!File.Exists(path))
-                {
-                    throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
-                }
-
-                byte[] bytes = PositionalFile.ReadAllBytes(path);
+                var name = ValidateSstName(file.Name);
+                var path = Path.Combine(_sstDirectory, name);
+                var bytes = File.Exists(path)
+                    ? PositionalFile.ReadAllBytes(path)
+                    : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
+                        ? recovered.ToArray()
+                        : throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
                 if (file.ContentCrc32C.HasValue && MidgeDiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
                 {
                     throw new PantsStorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
@@ -1181,6 +1475,7 @@ internal sealed class LocalDiskStore : IDisposable
                     (operation.Value?.Length ?? 0) +
                     (operation.RangeEnd?.Length ?? 0) +
                     64));
+            state.UnflushedFamilies.Add(identity);
         }
     }
 
@@ -1831,10 +2126,22 @@ internal sealed class LocalDiskStore : IDisposable
             .EnumerateArray()
             .Select(ParseIntentFileMetadata)
             .ToArray();
+        var columnFamilyId = GetRequiredUInt32(intent, "cf_id");
+        var columnFamilyInactive = manifest.ColumnFamilies.All(family =>
+            family.Id != columnFamilyId || family.DeletedAt.HasValue);
         bool allInputsPresent = removed.All(name => manifest.Files.Any(file => file.Name == name));
         bool allInputsAbsent = removed.All(name => manifest.Files.All(file => file.Name != name));
         bool allOutputsPresent = added.All(output => manifest.Files.Any(file => file.Name == output.Name));
         bool allOutputsAbsent = added.All(output => manifest.Files.All(file => file.Name != output.Name));
+
+        if (phase == "OutputDurable" && columnFamilyInactive && allOutputsAbsent)
+        {
+            return added.All(output => DeleteUnpublishedIntentSst(
+                root,
+                output,
+                recoveryPolicy,
+                state));
+        }
 
         if (phase == "OutputDurable" && allInputsPresent && allOutputsAbsent)
         {
@@ -2393,12 +2700,50 @@ internal sealed class LocalDiskStore : IDisposable
 
     private static string ValidateSstName(string name)
     {
-        if (string.IsNullOrEmpty(name) || name != Path.GetFileName(name) || !name.EndsWith(".sst", StringComparison.Ordinal) || name.Contains(':'))
+        if (string.IsNullOrEmpty(name) ||
+            name != Path.GetFileName(name) ||
+            !name.EndsWith(".sst", StringComparison.Ordinal) ||
+            name.Contains(':') ||
+            name.Contains('\\'))
         {
             throw new PantsStorageException($"Manifest SST name '{name}' is unsafe.");
         }
 
         return name;
+    }
+
+    static long GetLocalFileBytes(string directory, string pattern)
+    {
+        var total = 0L;
+        foreach (var path in Directory.EnumerateFiles(
+                     directory,
+                     pattern,
+                     SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                total = checked(total + new FileInfo(path).Length);
+            }
+            catch (FileNotFoundException)
+            {
+                // A cloud acknowledgement may remove a sealed WAL between
+                // enumeration and accounting. Its bytes are no longer local.
+            }
+        }
+
+        return total;
+    }
+
+    static long GetExistingFileBytes(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return 0;
+        }
     }
 
     private void ThrowIfDisposed()

@@ -1,0 +1,44 @@
+name: Release Cloud Provider Qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-s3:
+    name: AWS S3 cache-loss recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloud-provider-qualification
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore locked dependencies
+        run: dotnet restore Pants.slnx --locked-mode
+
+      - name: Build release qualification suite
+        run: dotnet build Pants.slnx --configuration Release --no-restore
+
+      - name: Recover from live S3 after local cache loss
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.PANTS_QUALIFICATION_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.PANTS_QUALIFICATION_AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.PANTS_QUALIFICATION_AWS_SESSION_TOKEN }}
+          PANTS_LIVE_S3_BUCKET: ${{ secrets.PANTS_QUALIFICATION_S3_BUCKET }}
+          PANTS_LIVE_S3_REGION: ${{ secrets.PANTS_QUALIFICATION_S3_REGION }}
+          PANTS_REQUIRE_LIVE_S3: "true"
+        run: >-
+          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter
+          FullyQualifiedName~CloudProviderEngineQualificationTests.ShouldRecoverEngineFromRealS3AfterLocalCacheLossIfConfigured

@@ -44,6 +44,61 @@ public sealed class GcsObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldNotRetryConditionalPutGivenCommittedMutationReturnsServiceUnavailable()
+    {
+        var mutationCommitted = false;
+        var handler = new RecordingHandler(_ =>
+        {
+            if (!mutationCommitted)
+            {
+                mutationCommitted = true;
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
+            "metadata/manifest.json",
+            "replacement"u8.ToArray(),
+            new CloudObjectWriteCondition.IfVersion("1"),
+            CancellationToken.None).AsTask());
+
+        Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
+        Assert.True(mutationCommitted);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldNotRetryConditionalDeleteGivenCommittedMutationLosesResponse()
+    {
+        var objectExists = true;
+        var handler = new RecordingHandler(_ =>
+        {
+            if (objectExists)
+            {
+                objectExists = false;
+                throw new HttpRequestException("response lost after delete commit");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
+            "metadata/manifest.json",
+            new CloudObjectDeleteCondition.IfVersion("1"),
+            CancellationToken.None).AsTask());
+
+        Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
+        Assert.False(objectExists);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task ShouldSignXmlApiWithGoog1HmacWithoutDisclosingSecret()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Created));
@@ -138,6 +193,189 @@ public sealed class GcsObjectStoreTests
         Assert.IsType<GcsObjectStore>(store);
         Assert.Equal(2, handler.Requests.Count);
         Assert.Equal("Bearer refreshed-token", handler.Requests[1].Authorization);
+    }
+
+    [Fact]
+    public async Task ShouldFollowEveryGcsJsonListPageUsingOpaquePageToken()
+    {
+        var page = 0;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(++page == 1
+                ? """
+                  {
+                    "items": [{ "name": "database/sst/0001.sst" }],
+                    "nextPageToken": "opaque+/ token"
+                  }
+                  """
+                : """
+                  { "items": [{ "name": "database/sst/0002.sst" }] }
+                  """)
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, "database");
+
+        var objectKeys = await store.ListAllAsync("sst/", CancellationToken.None);
+
+        Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("prefix=database%2Fsst%2F", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
+        Assert.Contains("pageToken=opaque%2B%2F%20token", handler.Requests[1].Uri.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShouldRejectRepeatedGcsJsonListPageToken()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{ \"nextPageToken\": \"repeat\" }")
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        var exception = await Assert.ThrowsAsync<PantsInternalException>(
+            () => store.ListAllAsync("sst/", CancellationToken.None).AsTask());
+
+        Assert.Contains("repeated continuation token", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task ShouldFollowEveryGcsXmlListPageUsingLastKeyMarkerFallback()
+    {
+        var page = 0;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(++page == 1
+                ? """
+                  <ListBucketResult>
+                    <Contents><Key>database/sst/0001.sst</Key></Contents>
+                    <IsTruncated>true</IsTruncated>
+                  </ListBucketResult>
+                  """
+                : """
+                  <ListBucketResult>
+                    <Contents><Key>database/sst/0002.sst</Key></Contents>
+                    <IsTruncated>false</IsTruncated>
+                  </ListBucketResult>
+                  """)
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Xml, "database");
+
+        var objectKeys = await store.ListAllAsync("sst/", CancellationToken.None);
+
+        Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains(
+            "marker=database%2Fsst%2F0001.sst",
+            handler.Requests[1].Uri.Query,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShouldReadGcsJsonMetadataAndUseGenerationForConditionalDelete()
+    {
+        var handler = new RecordingHandler(request => request.Method == HttpMethod.Get
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{ \"size\": \"17\", \"etag\": \"etag-17\", \"generation\": \"17\" }")
+            }
+            : GcsJsonPredicateFailure("conditionNotMet"));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
+        var outcome = await store.DeleteAsync(
+            "sst/object.sst",
+            new CloudObjectDeleteCondition.IfVersion("17"),
+            CancellationToken.None);
+
+        Assert.Equal(17UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
+        Assert.Equal("etag-17", metadata.ETag);
+        Assert.Equal("17", metadata.Generation);
+        Assert.Equal(CloudObjectDeleteOutcome.ConditionNotMet, outcome);
+        Assert.Contains("ifGenerationMatch=17", handler.Requests[1].Uri.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShouldFailClosedGivenGcsRetentionPolicyResponseToConditionalDelete()
+    {
+        var handler = new RecordingHandler(_ => GcsJsonPredicateFailure("retentionPolicyNotMet"));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        await Assert.ThrowsAsync<PantsIOException>(
+            () => store.DeleteAsync(
+                "sst/object.sst",
+                new CloudObjectDeleteCondition.IfVersion("17"),
+                CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ShouldReadGcsXmlMetadataAndUseGenerationHeaderForConditionalDelete()
+    {
+        var handler = new RecordingHandler(request => request.Method == HttpMethod.Head
+            ? XmlMetadataResponse(19, "\"etag-19\"", "19")
+            : new HttpResponseMessage(HttpStatusCode.PreconditionFailed)
+            {
+                Content = new StringContent(
+                    "<Error><Code>PreconditionFailed</Code></Error>")
+            });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Xml, string.Empty);
+
+        var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
+        var outcome = await store.DeleteAsync(
+            "sst/object.sst",
+            new CloudObjectDeleteCondition.IfVersion("19"),
+            CancellationToken.None);
+
+        Assert.Equal(19UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
+        Assert.Equal("\"etag-19\"", metadata.ETag);
+        Assert.Equal("19", metadata.Generation);
+        Assert.Equal(CloudObjectDeleteOutcome.ConditionNotMet, outcome);
+        Assert.Equal("19", handler.Requests[1].GenerationMatch);
+    }
+
+    static GcsObjectStore CreateStore(
+        HttpClient client,
+        PantsGcsApiStyle apiStyle,
+        string prefix) => new(
+            new PantsCloudProviderConfiguration.Gcs(
+                "bucket",
+                "project",
+                new Uri("https://gcs.example.test"),
+                apiStyle,
+                apiStyle == PantsGcsApiStyle.Json
+                    ? new PantsGcsCredentialSource.BearerToken("token")
+                    : new PantsGcsCredentialSource.HmacKey("access", "secret")),
+            prefix,
+            client,
+            TimeSpan.FromSeconds(5));
+
+    static HttpResponseMessage GcsJsonPredicateFailure(string reason) => new(
+        HttpStatusCode.PreconditionFailed)
+    {
+        Content = new StringContent(
+            $$"""
+            { "error": { "errors": [{ "reason": "{{reason}}" }] } }
+            """)
+    };
+
+    static HttpResponseMessage XmlMetadataResponse(
+        int size,
+        string etag,
+        string generation)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[size]),
+            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue(etag) }
+        };
+        response.Headers.TryAddWithoutValidation("x-goog-generation", generation);
+        return response;
     }
 
     private static HttpResponseMessage Response(

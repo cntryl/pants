@@ -2,7 +2,7 @@ namespace Pants;
 
 internal sealed class StaticGcsTokenProvider(string token) : IGcsTokenProvider
 {
-    private readonly string _token = string.IsNullOrWhiteSpace(token)
+    readonly string _token = string.IsNullOrWhiteSpace(token)
         ? throw new PantsInvalidArgumentException("GCS bearer token must not be empty.")
         : token;
 

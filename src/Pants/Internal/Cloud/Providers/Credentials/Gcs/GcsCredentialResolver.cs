@@ -29,7 +29,7 @@ internal static class GcsCredentialResolver
         };
     }
 
-    private static string Require(string value, string description) =>
+    static string Require(string value, string description) =>
         string.IsNullOrWhiteSpace(value)
             ? throw new PantsInvalidArgumentException($"{description} must not be empty.")
             : value;
