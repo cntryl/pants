@@ -26,6 +26,7 @@ internal sealed class PantsActor : IAsyncDisposable
     private int _disposed;
     private bool _shutdownRequested;
     private bool _verificationInProgress;
+    private bool _backgroundCompactionEnabled;
 
     public PantsActor(
         PantsOpenOptions options,
@@ -34,6 +35,7 @@ internal sealed class PantsActor : IAsyncDisposable
         PantsRuntimeDependencies dependencies)
     {
         _options = options;
+        _backgroundCompactionEnabled = options.BackgroundCompaction;
         _telemetry = telemetry;
         _storageVerifier = dependencies.StorageVerifier;
         _state = new PantsRuntimeState(ttlClock);
@@ -51,7 +53,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     leaseClockSkewTolerance: options.LeaseClockSkewTolerance,
                     leaseLossCallback: options.LeaseLossCallback,
                     failpoints: dependencies.Failpoints,
-                    l0CompactionTrigger: options.L0CompactionTrigger,
+                    compaction: options.Compaction,
+                    targetSstSizeBytes: options.TargetSstSizeBytes,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
                     leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
@@ -69,7 +72,8 @@ internal sealed class PantsActor : IAsyncDisposable
                     options.LeaseClockSkewTolerance,
                     options.LeaseLossCallback,
                     dependencies.Failpoints,
-                    options.L0CompactionTrigger,
+                    options.Compaction,
+                    options.TargetSstSizeBytes,
                     options.BlockCachePolicy,
                     options.BlockCacheBytes,
                     dependencies.LeaseHeartbeatInterval);
@@ -196,6 +200,18 @@ internal sealed class PantsActor : IAsyncDisposable
                 state.RangeTombstones.Remove(identity);
                 state.ActiveMemtableBytes.Remove(identity);
                 state.UnflushedFamilies.Remove(identity);
+                if (_diskStore is not null)
+                {
+                    await _garbageCollectionWorker
+                        .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
+                        .ConfigureAwait(false);
+                    if (_simulatedCloud is not null)
+                    {
+                        await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                            .ConfigureAwait(false);
+                    }
+                }
+
                 PublishSnapshot(state);
                 return true;
             },
@@ -265,6 +281,11 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
+                        if (_simulatedCloud is not null)
+                        {
+                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -339,6 +360,11 @@ internal sealed class PantsActor : IAsyncDisposable
                         await _garbageCollectionWorker
                             .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                             .ConfigureAwait(false);
+                        if (_simulatedCloud is not null)
+                        {
+                            await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -400,6 +426,18 @@ internal sealed class PantsActor : IAsyncDisposable
                 ClearMemtableAccounting(state);
                 PublishSnapshot(state);
                 return true;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask SetBackgroundCompactionAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        await SendAsync(
+            state =>
+            {
+                ThrowIfShuttingDown(state);
+                _backgroundCompactionEnabled = enabled;
+                return ValueTask.FromResult(true);
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -548,7 +586,7 @@ internal sealed class PantsActor : IAsyncDisposable
                         key.Span);
                 }
 
-                if (exceedsBudget && _options.BackgroundCompaction && _diskStore is not null)
+                if (exceedsBudget && _backgroundCompactionEnabled && _diskStore is not null)
                 {
                     await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
                 }
@@ -558,18 +596,20 @@ internal sealed class PantsActor : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask ValidateScanReadAsync(
+    public ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
         ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds,
         CancellationToken cancellationToken)
-    {
-        _ = await SendAsync(
+        => SendAsync(
             _ =>
             {
-                _diskStore?.ValidateScanRead(_telemetry, columnFamily);
-                return ValueTask.FromResult(true);
+                IScanReadValidator? validator = _diskStore?.CreateScanReadValidator(
+                    _telemetry,
+                    columnFamily,
+                    bounds);
+                return ValueTask.FromResult(validator);
             },
-            cancellationToken).ConfigureAwait(false);
-    }
+            cancellationToken);
 
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken) =>
@@ -954,6 +994,11 @@ internal sealed class PantsActor : IAsyncDisposable
             await _garbageCollectionWorker
                 .ExecuteAsync(() => _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
+            if (_simulatedCloud is not null)
+            {
+                await _cloudWorker.ExecuteAsync(_simulatedCloud.MirrorMetadataAndSsts)
+                    .ConfigureAwait(false);
+            }
         }
 
         try
@@ -1136,7 +1181,7 @@ internal sealed class PantsActor : IAsyncDisposable
 
     private async ValueTask RunBackgroundCompactionAsync(PantsRuntimeState state)
     {
-        if (!_options.BackgroundCompaction || _diskStore is null)
+        if (!_backgroundCompactionEnabled || _diskStore is null)
         {
             return;
         }

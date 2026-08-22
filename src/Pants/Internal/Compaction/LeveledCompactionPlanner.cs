@@ -2,123 +2,142 @@ namespace Pants;
 
 internal static class LeveledCompactionPlanner
 {
-    private const int LevelMultiplier = 10;
-    private const uint MaximumLevel = 6;
-
     public static CompactionPlan? Pick(
         IReadOnlyList<MidgeFileMeta> files,
         uint columnFamilyId,
-        int l0FileTrigger,
-        long l1TargetBytes,
-        int maximumInputs,
+        PantsCompactionConfiguration configuration,
+        long? snapshotHorizon,
         bool force)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(l0FileTrigger);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(l1TargetBytes);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumInputs);
-
-        MidgeFileMeta[] familyFiles = files
-            .Where(file => file.ColumnFamilyId == columnFamilyId)
-            .ToArray();
-        MidgeFileMeta[] l0Files = familyFiles
-            .Where(static file => file.Level == 0)
-            .OrderBy(static file => file.SstSequence)
-            .ToArray();
-        if (l0Files.Length >= l0FileTrigger || force && l0Files.Length > 1)
+        ValidateConfiguration(configuration);
+        MidgeFileMeta[] familyFiles = files.Where(file => file.ColumnFamilyId == columnFamilyId).ToArray();
+        ValidateMetadata(familyFiles, columnFamilyId, configuration.MaximumLevels);
+        if (familyFiles.Length == 0)
         {
-            if (l0Files.Length > maximumInputs)
-            {
-                l0Files = l0Files[..maximumInputs];
-            }
-
-            return CloseOverlaps(
-                l0Files,
-                familyFiles.Where(static file => file.Level == 1),
-                sourceLevel: 0,
-                targetLevel: 1,
-                maximumInputs);
+            return null;
         }
 
-        long levelTarget = l1TargetBytes;
-        for (uint level = 1; level < MaximumLevel; level++)
+        MidgeFileMeta[] l0Files = FilesAtLevel(familyFiles, 0);
+        ulong l0Size = l0Files.Aggregate(0UL, static (total, file) => checked(total + file.SizeBytes));
+        if (l0Size > checked((ulong)configuration.L0SizeTriggerBytes) ||
+            l0Files.Length >= configuration.L0FileCountTrigger ||
+            force && l0Files.Length > 1)
         {
-            MidgeFileMeta[] source = familyFiles
-                .Where(file => file.Level == level)
+            MidgeFileMeta[] source = l0Files
                 .OrderBy(static file => file.SstSequence)
+                .Take(Math.Min(l0Files.Length, configuration.L0FileCountTrigger))
                 .ToArray();
-            if (source.Aggregate(0UL, static (total, file) => total + file.SizeBytes) >
-                checked((ulong)levelTarget))
+            return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, 1), 0, 1,
+                columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
+        }
+
+        ulong targetSize = checked((ulong)configuration.L1TargetSizeBytes);
+        for (uint level = 1; level < configuration.MaximumLevels - 1; level++)
+        {
+            MidgeFileMeta[] sourceLevelFiles = FilesAtLevel(familyFiles, level);
+            ulong levelSize = sourceLevelFiles.Aggregate(0UL, static (total, file) =>
+                checked(total + file.SizeBytes));
+            if (levelSize > targetSize || force && sourceLevelFiles.Length > 1)
             {
-                return CloseOverlaps(
-                    source.Take(1),
-                    familyFiles.Where(file => file.Level == level + 1),
-                    level,
-                    level + 1,
-                    maximumInputs);
+                MidgeFileMeta[] source = sourceLevelFiles
+                    .OrderBy(GetSmallestKey, ByteArrayComparer.Instance)
+                    .ThenBy(static file => file.Name, StringComparer.Ordinal)
+                    .Take(configuration.L0FileCountTrigger)
+                    .ToArray();
+                return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, level + 1), level,
+                    level + 1, columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
             }
 
-            levelTarget = checked(levelTarget * LevelMultiplier);
+            targetSize = SaturatingMultiply(targetSize, checked((ulong)configuration.LevelMultiplier));
         }
 
         return null;
     }
 
-    private static CompactionPlan? CloseOverlaps(
-        IEnumerable<MidgeFileMeta> sourceFiles,
-        IEnumerable<MidgeFileMeta> targetFiles,
+    private static CompactionPlan CreatePlan(
+        MidgeFileMeta[] familyFiles,
+        IReadOnlyList<MidgeFileMeta> sourceFiles,
+        IReadOnlyList<MidgeFileMeta> targetFiles,
         uint sourceLevel,
         uint targetLevel,
-        int maximumInputs)
+        uint columnFamilyId,
+        int maximumInputs,
+        long? snapshotHorizon)
     {
         var selected = sourceFiles.ToList();
-        if (selected.Count == 0 || selected.Any(static file => !HasBounds(file)))
-        {
-            return null;
-        }
-
-        MidgeFileMeta[] targets = targetFiles
-            .OrderBy(static file => file.SstSequence)
-            .ToArray();
         bool changed;
         do
         {
             changed = false;
-            byte[] smallest = selected
-                .Select(GetSmallestKey)
-                .Min(ByteArrayComparer.Instance)!;
-            byte[] largest = selected
-                .Select(GetLargestKey)
-                .Max(ByteArrayComparer.Instance)!;
-            foreach (MidgeFileMeta target in targets)
+            byte[] smallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;
+            byte[] largest = selected.Select(GetLargestKey).Max(ByteArrayComparer.Instance)!;
+            foreach (MidgeFileMeta target in targetFiles)
             {
-                if (selected.Contains(target) || !HasBounds(target) ||
+                if (selected.Contains(target) ||
                     !Overlaps(smallest, largest, GetSmallestKey(target), GetLargestKey(target)))
                 {
                     continue;
                 }
 
                 selected.Add(target);
-                if (selected.Count > maximumInputs)
-                {
-                    return null;
-                }
-
                 changed = true;
             }
         }
         while (changed);
 
-        return new CompactionPlan(
-            sourceLevel,
-            targetLevel,
-            selected
+        if (selected.Count > maximumInputs)
+        {
+            throw PantsException.ResourceLimit(
+                $"Compaction L{sourceLevel}->L{targetLevel} for column family {columnFamilyId} " +
+                $"requires {selected.Count} inputs, exceeding the configured limit {maximumInputs}.");
+        }
+
+        byte[] selectedSmallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;
+        byte[] selectedLargest = selected.Select(GetLargestKey).Max(ByteArrayComparer.Instance)!;
+        var selectedNames = selected.Select(static file => file.Name).ToHashSet(StringComparer.Ordinal);
+        bool pointEligible = !familyFiles.Any(file =>
+            !selectedNames.Contains(file.Name) &&
+            Overlaps(selectedSmallest, selectedLargest, GetSmallestKey(file), GetLargestKey(file)));
+        bool rangeEligible = pointEligible && selected.Count == familyFiles.Length;
+
+        return new CompactionPlan(sourceLevel, targetLevel, columnFamilyId, snapshotHorizon,
+            pointEligible, rangeEligible, selected
                 .OrderBy(static file => file.Level)
                 .ThenBy(static file => file.SstSequence)
+                .ThenBy(static file => file.Name, StringComparer.Ordinal)
                 .ToArray());
     }
 
-    private static bool HasBounds(MidgeFileMeta file) =>
-        file.SmallestKey is not null && file.LargestKey is not null;
+    private static MidgeFileMeta[] FilesAtLevel(IEnumerable<MidgeFileMeta> files, uint level) =>
+        files.Where(file => file.Level == level).ToArray();
+
+    private static void ValidateConfiguration(PantsCompactionConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration.L0SizeTriggerBytes <= 0 || configuration.L0FileCountTrigger <= 0 ||
+            configuration.MaximumInputFiles <= 0 || configuration.LevelMultiplier <= 1 ||
+            configuration.L1TargetSizeBytes <= 0 || configuration.MaximumLevels < 2)
+        {
+            throw PantsException.InvalidArgument("Compaction limits are invalid.");
+        }
+    }
+
+    private static void ValidateMetadata(IEnumerable<MidgeFileMeta> files, uint columnFamilyId,
+        int maximumLevels)
+    {
+        foreach (MidgeFileMeta file in files)
+        {
+            if (file.Level >= maximumLevels || file.SmallestKey is null || file.LargestKey is null ||
+                ByteArrayComparer.Instance.Compare(GetSmallestKey(file), GetLargestKey(file)) > 0)
+            {
+                throw PantsException.Create(PantsErrorCode.Corruption,
+                    $"SST '{file.Name}' for column family {columnFamilyId} has invalid compaction metadata.");
+            }
+        }
+    }
+
+    private static ulong SaturatingMultiply(ulong value, ulong multiplier) =>
+        value > ulong.MaxValue / multiplier ? ulong.MaxValue : value * multiplier;
 
     private static byte[] GetSmallestKey(MidgeFileMeta file) =>
         file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
@@ -126,10 +145,7 @@ internal static class LeveledCompactionPlanner
     private static byte[] GetLargestKey(MidgeFileMeta file) =>
         file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
 
-    private static bool Overlaps(
-        byte[] leftSmallest,
-        byte[] leftLargest,
-        byte[] rightSmallest,
+    private static bool Overlaps(byte[] leftSmallest, byte[] leftLargest, byte[] rightSmallest,
         byte[] rightLargest) =>
         ByteArrayComparer.Instance.Compare(leftSmallest, rightLargest) <= 0 &&
         ByteArrayComparer.Instance.Compare(rightSmallest, leftLargest) <= 0;

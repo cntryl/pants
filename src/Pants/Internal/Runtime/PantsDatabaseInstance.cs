@@ -121,6 +121,14 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         return _actor.CompactAsync(cancellationToken);
     }
 
+    public ValueTask SetBackgroundCompactionAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _actor.SetBackgroundCompactionAsync(enabled, cancellationToken);
+    }
+
     public ValueTask<bool> WaitForWriteStallClearAsync(
         IPantsColumnFamily columnFamily,
         TimeSpan timeout,
@@ -279,10 +287,11 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken) =>
         _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
 
-    internal ValueTask ValidateScanReadAsync(
+    internal ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
         ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds,
         CancellationToken cancellationToken) =>
-        _actor.ValidateScanReadAsync(columnFamily, cancellationToken);
+        _actor.CreateScanReadValidatorAsync(columnFamily, bounds, cancellationToken);
 
     internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
 

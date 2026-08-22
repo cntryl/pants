@@ -129,9 +129,12 @@
       "source": "tests/backpressure.rs",
       "sourceSymbolOrTest": "should_auto_flush_explicit_small_memtable_without_permanent_write_stall",
       "observableBehavior": "auto flush explicit small memtable without permanent write stall",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldAutoFlushLocalMemtableAtConfiguredThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_auto_flush_when_explicit_flush_threshold_is_lower_than_size_limit",
@@ -139,9 +142,12 @@
       "source": "tests/backpressure.rs",
       "sourceSymbolOrTest": "should_auto_flush_when_explicit_flush_threshold_is_lower_than_size_limit",
       "observableBehavior": "auto flush when explicit flush threshold is lower than size limit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldAutoFlushLocalMemtableAtConfiguredThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_handle_concurrent_writes_with_consistent_backpressure",
@@ -150,8 +156,11 @@
       "sourceSymbolOrTest": "should_handle_concurrent_writes_with_consistent_backpressure",
       "observableBehavior": "handle concurrent writes with consistent backpressure",
       "expectedError": "WriteStall",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldRelieveConcurrentLocalWritePressureWithoutAStickyStall"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_prevent_oom_by_rejecting_writes_when_budget_exceeded",
@@ -160,8 +169,11 @@
       "sourceSymbolOrTest": "should_prevent_oom_by_rejecting_writes_when_budget_exceeded",
       "observableBehavior": "prevent oom by rejecting writes when budget exceeded",
       "expectedError": "WriteStall",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldAutoFlushLocalMemtableAtConfiguredThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_return_write_stall_when_memory_budget_exceeded",
@@ -170,8 +182,11 @@
       "sourceSymbolOrTest": "should_return_write_stall_when_memory_budget_exceeded",
       "observableBehavior": "return write stall when memory budget exceeded",
       "expectedError": "WriteStall",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldAutoFlushLocalMemtableAtConfiguredThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/backpressure.rs:should_succeed_after_backoff_when_write_stall_cleared",
@@ -180,8 +195,11 @@
       "sourceSymbolOrTest": "should_succeed_after_backoff_when_write_stall_cleared",
       "observableBehavior": "succeed after backoff when write stall cleared",
       "expectedError": "WriteStall",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeOperationsTests.ShouldAutoFlushLocalMemtableAtConfiguredThreshold"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/best_effort_durability.rs:should_handle_large_batches_with_best_effort",
@@ -1546,9 +1564,12 @@
       "source": "tests/column_family_reclamation_hardening.rs",
       "sourceSymbolOrTest": "should_defer_column_family_file_reclamation_given_old_snapshot_pin_when_gc_runs",
       "observableBehavior": "defer column family file reclamation given old snapshot pin when gc runs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsColumnFamilyReclamationTests.ShouldDeferReclamationUntilTheOldestSnapshotReleases"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/column_family_reclamation_hardening.rs:should_preserve_snapshot_visibility_given_column_family_drop_when_old_snapshot_is_active",
@@ -1557,8 +1578,11 @@
       "sourceSymbolOrTest": "should_preserve_snapshot_visibility_given_column_family_drop_when_old_snapshot_is_active",
       "observableBehavior": "preserve snapshot visibility given column family drop when old snapshot is active",
       "expectedError": "InvalidArgument",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsColumnFamilyReclamationTests.ShouldDeferReclamationUntilTheOldestSnapshotReleases"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/column_family_reclamation_hardening.rs:should_reclaim_column_family_files_given_no_snapshot_pin_when_gc_runs",
@@ -1566,9 +1590,12 @@
       "source": "tests/column_family_reclamation_hardening.rs",
       "sourceSymbolOrTest": "should_reclaim_column_family_files_given_no_snapshot_pin_when_gc_runs",
       "observableBehavior": "reclaim column family files given no snapshot pin when gc runs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsColumnFamilyReclamationTests.ShouldReclaimDroppedColumnFamilyFilesWithoutASnapshotPin"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compatibility_fixtures.rs:should_reject_future_v4_fixture_given_unsupported_version_when_reopening",
@@ -2204,9 +2231,12 @@
       "source": "tests/delete_range_audit.rs",
       "sourceSymbolOrTest": "should_delete_only_keys_within_requested_range_when_delete_range_commits",
       "observableBehavior": "delete only keys within requested range when delete range commits",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/delete_range_audit.rs:should_return_all_inserted_keys_when_scanning_unbounded_query",
@@ -2214,9 +2244,12 @@
       "source": "tests/delete_range_audit.rs",
       "sourceSymbolOrTest": "should_return_all_inserted_keys_when_scanning_unbounded_query",
       "observableBehavior": "return all inserted keys when scanning unbounded query",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/durability_atomicity.rs:should_apply_wal_tombstone_when_reopening_after_clean_shutdown",
@@ -3229,9 +3262,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_assign_unique_output_sequences_given_emergent_followup_compaction",
       "observableBehavior": "assign unique output sequences given emergent followup compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsLeveledCompactionTests.ShouldPublishMultipleTargetSizedOutputsWithUniqueSequences"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_cleanup_input_ssts_after_compaction_manifest_publishes",
@@ -3239,9 +3275,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_cleanup_input_ssts_after_compaction_manifest_publishes",
       "observableBehavior": "cleanup input ssts after compaction manifest publishes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_all_keys_after_repeated_flushes",
@@ -3249,9 +3288,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_all_keys_after_repeated_flushes",
       "observableBehavior": "preserve all keys after repeated flushes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_both_write_batches_after_flushing_between_batches",
@@ -3259,9 +3301,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_both_write_batches_after_flushing_between_batches",
       "observableBehavior": "preserve both write batches after flushing between batches",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_large_values_after_flushing",
@@ -3269,9 +3314,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_large_values_after_flushing",
       "observableBehavior": "preserve large values after flushing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_latest_overwritten_value_after_flushing",
@@ -3279,9 +3327,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_latest_overwritten_value_after_flushing",
       "observableBehavior": "preserve latest overwritten value after flushing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldCompactMultipleL0FilesAndPreserveLatestValue"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_range_tombstones_after_flushing_deleted_range",
@@ -3289,9 +3340,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_range_tombstones_after_flushing_deleted_range",
       "observableBehavior": "preserve range tombstones after flushing deleted range",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_preserve_snapshot_reads_when_flushing_while_snapshot_is_open",
@@ -3299,9 +3353,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_preserve_snapshot_reads_when_flushing_while_snapshot_is_open",
       "observableBehavior": "preserve snapshot reads when flushing while snapshot is open",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_compaction.rs:should_publish_compacted_ssts_in_manifest_when_compaction_completes",
@@ -3309,9 +3366,12 @@
       "source": "tests/engine_compaction.rs",
       "sourceSymbolOrTest": "should_publish_compacted_ssts_in_manifest_when_compaction_completes",
       "observableBehavior": "publish compacted ssts in manifest when compaction completes",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 4
+      "issue": 4,
+      "pantsTests": [
+        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_allow_multiple_delete_ranges_when_called_sequentially",
@@ -3319,9 +3379,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_allow_multiple_delete_ranges_when_called_sequentially",
       "observableBehavior": "allow multiple delete ranges when called sequentially",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_delete_key_given_delete_range_with_single_key_when_matching",
@@ -3329,9 +3392,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_delete_key_given_delete_range_with_single_key_when_matching",
       "observableBehavior": "delete key given delete range with single key when matching",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_delete_keys_in_range_given_delete_range_when_querying",
@@ -3339,9 +3405,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_delete_keys_in_range_given_delete_range_when_querying",
       "observableBehavior": "delete keys in range given delete range when querying",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_handle_concurrent_delete_ranges_when_multiple_threads",
@@ -3349,9 +3418,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_handle_concurrent_delete_ranges_when_multiple_threads",
       "observableBehavior": "handle concurrent delete ranges when multiple threads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_handle_empty_range_given_start_equals_end_when_delete_range",
@@ -3359,9 +3431,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_handle_empty_range_given_start_equals_end_when_delete_range",
       "observableBehavior": "handle empty range given start equals end when delete range",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionContractTests.ShouldApplyLastStagedIntentForPointAndRangeOperations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_persist_keys_across_delete_range_with_restart_when_durable",
@@ -3369,9 +3444,12 @@
       "source": "tests/engine_delete_range.rs",
       "sourceSymbolOrTest": "should_persist_keys_across_delete_range_with_restart_when_durable",
       "observableBehavior": "persist keys across delete range with restart when durable",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_delete_range.rs:should_reject_delete_range_given_reversed_bounds_when_called",
@@ -3380,8 +3458,11 @@
       "sourceSymbolOrTest": "should_reject_delete_range_given_reversed_bounds_when_called",
       "observableBehavior": "reject delete range given reversed bounds when called",
       "expectedError": "InvalidArgument",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsScanContractTests.ShouldRejectReversedBoundsButAllowEqualBounds"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_exclusivity.rs:should_allow_second_instance_when_first_is_shutdown",
@@ -3593,9 +3674,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_collect_orphaned_sst_files_after_compaction",
       "observableBehavior": "collect orphaned sst files after compaction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_collect_orphaned_wal_segments_after_flush",
@@ -3603,9 +3687,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_collect_orphaned_wal_segments_after_flush",
       "observableBehavior": "collect orphaned wal segments after flush",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRotateAndReplayEveryWalSegmentWhenBufferLimitIsExceeded"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_handle_gc_with_active_readers",
@@ -3613,9 +3700,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_handle_gc_with_active_readers",
       "observableBehavior": "handle gc with active readers",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_not_collect_sst_files_referenced_by_manifest",
@@ -3623,9 +3713,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_not_collect_sst_files_referenced_by_manifest",
       "observableBehavior": "not collect sst files referenced by manifest",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldVerifyLiveAndOfflineStorageWithoutMutation"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_not_collect_wal_segments_still_needed_for_recovery",
@@ -3633,9 +3726,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_not_collect_wal_segments_still_needed_for_recovery",
       "observableBehavior": "not collect wal segments still needed for recovery",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRecoverReadableDataAtEveryFlushPublicationBoundary"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_persist_gc_state_across_restart",
@@ -3643,9 +3739,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_persist_gc_state_across_restart",
       "observableBehavior": "persist gc state across restart",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc.rs:should_run_gc_after_configurable_interval",
@@ -3653,9 +3752,12 @@
       "source": "tests/engine_gc.rs",
       "sourceSymbolOrTest": "should_run_gc_after_configurable_interval",
       "observableBehavior": "run gc after configurable interval",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_gc_cloud.rs:should_collect_orphaned_cloud_objects_after_compaction",
@@ -3713,9 +3815,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_apply_tombstones_given_streaming_scan_when_keys_deleted",
       "observableBehavior": "apply tombstones given streaming scan when keys deleted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_handle_concurrent_streaming_scans_when_multiple_threads",
@@ -3723,9 +3828,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_handle_concurrent_streaming_scans_when_multiple_threads",
       "observableBehavior": "handle concurrent streaming scans when multiple threads",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsMemtableConcurrencyTests.ShouldKeepPinnedScanStableWhileConcurrentCommitsPublishNewSnapshots"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_handle_large_scan_given_many_keys_when_iterating",
@@ -3733,9 +3841,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_handle_large_scan_given_many_keys_when_iterating",
       "observableBehavior": "handle large scan given many keys when iterating",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_hide_deleted_keys_across_compacted_ssts_when_scanning",
@@ -3743,9 +3854,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_hide_deleted_keys_across_compacted_ssts_when_scanning",
       "observableBehavior": "hide deleted keys across compacted ssts when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_iterate_all_keys_in_order_given_populated_db_when_scanning",
@@ -3753,9 +3867,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_iterate_all_keys_in_order_given_populated_db_when_scanning",
       "observableBehavior": "iterate all keys in order given populated db when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_iterate_in_reverse_given_reverse_query_when_scanning",
@@ -3763,9 +3880,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_iterate_in_reverse_given_reverse_query_when_scanning",
       "observableBehavior": "iterate in reverse given reverse query when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_iterate_in_reverse_order_given_memtable_and_multiple_ssts",
@@ -3773,9 +3893,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_iterate_in_reverse_order_given_memtable_and_multiple_ssts",
       "observableBehavior": "iterate in reverse order given memtable and multiple ssts",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_iterate_memtable_plus_multiple_ssts_given_flushed_batches_when_scanning",
@@ -3783,9 +3906,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_iterate_memtable_plus_multiple_ssts_given_flushed_batches_when_scanning",
       "observableBehavior": "iterate memtable plus multiple ssts given flushed batches when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_limit_results_given_limit_query_when_scanning",
@@ -3793,9 +3919,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_limit_results_given_limit_query_when_scanning",
       "observableBehavior": "limit results given limit query when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_match_regular_scan_given_streaming_scan_when_comparing",
@@ -3803,9 +3932,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_match_regular_scan_given_streaming_scan_when_comparing",
       "observableBehavior": "match regular scan given streaming scan when comparing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_produce_identical_results_given_repeated_scans_when_rewinding",
@@ -3813,9 +3945,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_produce_identical_results_given_repeated_scans_when_rewinding",
       "observableBehavior": "produce identical results given repeated scans when rewinding",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_reject_reversed_bounds_consistently_given_scan_and_delete_range",
@@ -3824,8 +3959,11 @@
       "sourceSymbolOrTest": "should_reject_reversed_bounds_consistently_given_scan_and_delete_range",
       "observableBehavior": "reject reversed bounds consistently given scan and delete range",
       "expectedError": "InvalidArgument",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_respect_limit_given_streaming_scan_when_limited",
@@ -3833,9 +3971,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_respect_limit_given_streaming_scan_when_limited",
       "observableBehavior": "respect limit given streaming scan when limited",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_respect_limit_in_reverse_query_when_limited",
@@ -3843,9 +3984,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_respect_limit_in_reverse_query_when_limited",
       "observableBehavior": "respect limit in reverse query when limited",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_respect_range_tombstones_given_delete_range_when_scanning",
@@ -3853,9 +3997,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_respect_range_tombstones_given_delete_range_when_scanning",
       "observableBehavior": "respect range tombstones given delete range when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_correct_boundary_rows_when_reverse_scanning_with_explicit_start_and_end",
@@ -3863,9 +4010,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_correct_boundary_rows_when_reverse_scanning_with_explicit_start_and_end",
       "observableBehavior": "return correct boundary rows when reverse scanning with explicit start and end",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_empty_given_empty_db_when_scanning",
@@ -3873,9 +4023,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_empty_given_empty_db_when_scanning",
       "observableBehavior": "return empty given empty db when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_empty_given_equal_scan_bounds",
@@ -3883,9 +4036,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_empty_given_equal_scan_bounds",
       "observableBehavior": "return empty given equal scan bounds",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_empty_given_seek_past_end_when_scanning",
@@ -3893,9 +4049,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_empty_given_seek_past_end_when_scanning",
       "observableBehavior": "return empty given seek past end when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_latest_value_across_levels_given_overwrite_in_newer_sst_when_scanning",
@@ -3903,9 +4062,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_latest_value_across_levels_given_overwrite_in_newer_sst_when_scanning",
       "observableBehavior": "return latest value across levels given overwrite in newer sst when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_latest_value_given_interleaved_puts_deletes_when_scanning",
@@ -3913,9 +4075,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_latest_value_given_interleaved_puts_deletes_when_scanning",
       "observableBehavior": "return latest value given interleaved puts deletes when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_return_next_key_given_seek_to_missing_key_when_scanning",
@@ -3923,9 +4088,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_return_next_key_given_seek_to_missing_key_when_scanning",
       "observableBehavior": "return next key given seek to missing key when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_scan_compacted_ssts_given_new_iterator_after_compaction_when_levels_change",
@@ -3933,9 +4101,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_scan_compacted_ssts_given_new_iterator_after_compaction_when_levels_change",
       "observableBehavior": "scan compacted ssts given new iterator after compaction when levels change",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_iterators.rs:should_skip_deleted_keys_given_tombstones_when_scanning",
@@ -3943,9 +4114,12 @@
       "source": "tests/engine_iterators.rs",
       "sourceSymbolOrTest": "should_skip_deleted_keys_given_tombstones_when_scanning",
       "observableBehavior": "skip deleted keys given tombstones when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/engine_ttl.rs:should_expire_after_restart_given_ttl_elapsed_during_shutdown_when_reopening",
@@ -5229,9 +5403,12 @@
       "source": "tests/memory_spill_audit.rs",
       "sourceSymbolOrTest": "should_commit_large_transaction_given_memory_budget_exceeded_when_committed",
       "observableBehavior": "commit large transaction given memory budget exceeded when committed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/memory_spill_audit.rs:should_preserve_sample_keys_given_large_transaction_low_budget_when_committed",
@@ -5239,9 +5416,12 @@
       "source": "tests/memory_spill_audit.rs",
       "sourceSymbolOrTest": "should_preserve_sample_keys_given_large_transaction_low_budget_when_committed",
       "observableBehavior": "preserve sample keys given large transaction low budget when committed",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/memory_spill_audit.rs:should_preserve_values_given_two_large_transactions_within_budget_when_read",
@@ -5249,9 +5429,12 @@
       "source": "tests/memory_spill_audit.rs",
       "sourceSymbolOrTest": "should_preserve_values_given_two_large_transactions_within_budget_when_read",
       "observableBehavior": "preserve values given two large transactions within budget when read",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_delete_orphan_sst_residue_during_startup_cleanup",
@@ -6183,9 +6366,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_cleanup_block_cache_resources_when_dropped",
       "observableBehavior": "cleanup block cache resources when dropped",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_cleanup_cache_with_active_operations",
@@ -6193,9 +6379,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_cleanup_cache_with_active_operations",
       "observableBehavior": "cleanup cache with active operations",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_cleanup_multiple_component_types_together",
@@ -6203,9 +6392,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_cleanup_multiple_component_types_together",
       "observableBehavior": "cleanup multiple component types together",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_handle_cache_drop_in_panic_context",
@@ -6213,9 +6405,10 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_handle_cache_drop_in_panic_context",
       "observableBehavior": "handle cache drop in panic context",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "Rust panic-unwind drop semantics do not exist in managed C#; deterministic disposal and concurrent cache ownership are covered separately."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_handle_rapid_cache_creation_destruction",
@@ -6223,9 +6416,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_handle_rapid_cache_creation_destruction",
       "observableBehavior": "handle rapid cache creation destruction",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_handle_single_shard_cache_cleanup",
@@ -6233,9 +6429,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_handle_single_shard_cache_cleanup",
       "observableBehavior": "handle single shard cache cleanup",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/resource_cleanup.rs:should_handle_zero_capacity_cache_cleanup",
@@ -6243,9 +6442,12 @@
       "source": "tests/resource_cleanup.rs",
       "sourceSymbolOrTest": "should_handle_zero_capacity_cache_cleanup",
       "observableBehavior": "handle zero capacity cache cleanup",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/runtime_transaction_coalescing.rs:should_handle_concurrent_writes_correctly_with_runtime_coalescing",
@@ -6512,9 +6714,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_construct_runtime_observability_dtos_from_shared_types",
       "observableBehavior": "construct runtime observability dtos from shared types",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryContractTests.ShouldReportPerDatabaseReadPathActivity"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_delegate_provider_construction_to_provider_family_resolvers",
@@ -6522,9 +6727,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_delegate_provider_construction_to_provider_family_resolvers",
       "observableBehavior": "delegate provider construction to provider family resolvers",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_document_cloud_strict_durability_contract",
@@ -6532,9 +6740,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_document_cloud_strict_durability_contract",
       "observableBehavior": "document cloud strict durability contract",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsSimulatedCloudTests.ShouldPublishCloudStrictCommitThroughEpochScopedCatalog"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_enforce_tier3_system_benchmark_contract",
@@ -6542,9 +6753,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_enforce_tier3_system_benchmark_contract",
       "observableBehavior": "enforce tier3 system benchmark contract",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_block_cache_admission_synchronous",
@@ -6552,9 +6764,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_block_cache_admission_synchronous",
       "observableBehavior": "keep block cache admission synchronous",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.SstBlockCacheTests.ShouldOwnCachedBlockContent"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_cloud_provider_constructors_on_same_variants",
@@ -6562,9 +6777,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_cloud_provider_constructors_on_same_variants",
       "observableBehavior": "keep cloud provider constructors on same variants",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_engine_backed_provider_qualification_out_of_storage_layer",
@@ -6572,9 +6790,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_engine_backed_provider_qualification_out_of_storage_layer",
       "observableBehavior": "keep engine backed provider qualification out of storage layer",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_event_loop_message_families_in_owned_coordinators",
@@ -6582,9 +6803,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_event_loop_message_families_in_owned_coordinators",
       "observableBehavior": "keep event loop message families in owned coordinators",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_filesystem_persistence_out_of_dyn_sst_writer_trait",
@@ -6592,9 +6814,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_filesystem_persistence_out_of_dyn_sst_writer_trait",
       "observableBehavior": "keep filesystem persistence out of dyn sst writer trait",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_hybrid_storage_out_of_wal_frame_decoding",
@@ -6602,9 +6825,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_hybrid_storage_out_of_wal_frame_decoding",
       "observableBehavior": "keep hybrid storage out of wal frame decoding",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_moved_config_types_out_of_lower_layers_engine_imports",
@@ -6612,9 +6836,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_moved_config_types_out_of_lower_layers_engine_imports",
       "observableBehavior": "keep moved config types out of lower layers engine imports",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_production_sources_free_of_allow_expect_suppressions",
@@ -6622,9 +6847,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_production_sources_free_of_allow_expect_suppressions",
       "observableBehavior": "keep production sources free of allow expect suppressions",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_removed_testkit_api_out_of_public_surface",
@@ -6632,9 +6858,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_removed_testkit_api_out_of_public_surface",
       "observableBehavior": "keep removed testkit api out of public surface",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_runtime_free_of_engine_owned_type_imports",
@@ -6642,9 +6869,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_runtime_free_of_engine_owned_type_imports",
       "observableBehavior": "keep runtime free of engine owned type imports",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_source_free_of_assistant_rule_blocks",
@@ -6652,9 +6880,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_source_free_of_assistant_rule_blocks",
       "observableBehavior": "keep source free of assistant rule blocks",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_unsequenced_wal_append_op_out_of_public_writer_trait",
@@ -6662,9 +6891,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_unsequenced_wal_append_op_out_of_public_writer_trait",
       "observableBehavior": "keep unsequenced wal append op out of public writer trait",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_keep_wal_production_free_of_storage_dependencies",
@@ -6672,9 +6902,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_keep_wal_production_free_of_storage_dependencies",
       "observableBehavior": "keep wal production free of storage dependencies",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_make_startup_recovery_phases_owned",
@@ -6682,9 +6913,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_make_startup_recovery_phases_owned",
       "observableBehavior": "make startup recovery phases owned",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_not_document_removed_transaction_rollback_api",
@@ -6692,9 +6924,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_not_document_removed_transaction_rollback_api",
       "observableBehavior": "not document removed transaction rollback api",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_not_suppress_dead_code_in_production_sources",
@@ -6702,9 +6935,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_not_suppress_dead_code_in_production_sources",
       "observableBehavior": "not suppress dead code in production sources",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_own_cloud_provider_config_in_storage_providers",
@@ -6712,9 +6946,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_own_cloud_provider_config_in_storage_providers",
       "observableBehavior": "own cloud provider config in storage providers",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_propagate_transaction_encode_errors_without_expect",
@@ -6722,9 +6959,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_propagate_transaction_encode_errors_without_expect",
       "observableBehavior": "propagate transaction encode errors without expect",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillTests.ShouldNotPartiallyPublishWhenSpillRunCannotBeRead"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_reexport_shared_public_types_from_crate_root",
@@ -6732,9 +6972,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_reexport_shared_public_types_from_crate_root",
       "observableBehavior": "reexport shared public types from crate root",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_remove_eviction_actor_wrapper_provider_modules",
@@ -6742,9 +6985,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_remove_eviction_actor_wrapper_provider_modules",
       "observableBehavior": "remove eviction actor wrapper provider modules",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_remove_legacy_manifest_sst_list_from_current_model",
@@ -6752,9 +6998,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_remove_legacy_manifest_sst_list_from_current_model",
       "observableBehavior": "remove legacy manifest sst list from current model",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_remove_legacy_transaction_benchmark_surface_names",
@@ -6762,9 +7009,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_remove_legacy_transaction_benchmark_surface_names",
       "observableBehavior": "remove legacy transaction benchmark surface names",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_require_manifest_fsync_without_an_escape_hatch",
@@ -6772,9 +7020,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_require_manifest_fsync_without_an_escape_hatch",
       "observableBehavior": "require manifest fsync without an escape hatch",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsStorageIoTests.ShouldLeavePreviousFileIntactWhenStagedWriteFailsBeforePublish"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_select_same_storage_modes_from_open_options_constructors",
@@ -6782,9 +7033,12 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_select_same_storage_modes_from_open_options_constructors",
       "observableBehavior": "select same storage modes from open options constructors",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsConfigurationParityTests.ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/solid_cleanup.rs:should_show_benchmark_support_outside_core_architecture_diagram",
@@ -6792,9 +7046,10 @@
       "source": "tests/solid_cleanup.rs",
       "sourceSymbolOrTest": "should_show_benchmark_support_outside_core_architecture_diagram",
       "observableBehavior": "show benchmark support outside core architecture diagram",
-      "status": "planned",
+      "status": "n/a",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "rationale": "This is a Rust-only source-layout, import, trait, panic, benchmark, or documentation assertion with no observable C# runtime contract; Pants enforces its corresponding architecture through analyzers and repository structure."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/sst_reads_integration.rs:should_error_given_corrupt_sst_when_transaction_get_reads_flushed_key",
@@ -6960,9 +7215,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_apply_range_tombstones_before_streaming_rows",
       "observableBehavior": "apply range tombstones before streaming rows",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsTelemetryContractTests.ShouldReportPhysicalSstWorkGivenFlushedRangeScan"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_intersect_prefix_with_explicit_end_bound",
@@ -6970,9 +7228,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_intersect_prefix_with_explicit_end_bound",
       "observableBehavior": "intersect prefix with explicit end bound",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsScanContractTests.ShouldScanPrefixIntersectionInBothDirectionsWithLimit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_preserve_snapshot_visibility_during_streaming_scan",
@@ -6980,9 +7241,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_preserve_snapshot_visibility_during_streaming_scan",
       "observableBehavior": "preserve snapshot visibility during streaming scan",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsStreamingScanHardeningTests.ShouldKeepIndependentSstHandlesStableAcrossCompactionAndFlush"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_read_only_one_candidate_block_for_forward_limit",
@@ -6990,9 +7254,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_read_only_one_candidate_block_for_forward_limit",
       "observableBehavior": "read only one candidate block for forward limit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsStreamingScanHardeningTests.ShouldReadOnlyOneCandidateBlockGivenLimitOne"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_read_only_one_candidate_block_for_reverse_limit",
@@ -7000,9 +7267,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_read_only_one_candidate_block_for_reverse_limit",
       "observableBehavior": "read only one candidate block for reverse limit",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsStreamingScanHardeningTests.ShouldReadOnlyOneCandidateBlockGivenLimitOne"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_return_empty_given_valid_bounds_disjoint_from_prefix",
@@ -7010,9 +7280,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_return_empty_given_valid_bounds_disjoint_from_prefix",
       "observableBehavior": "return empty given valid bounds disjoint from prefix",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsScanContractTests.ShouldScanPrefixIntersectionInBothDirectionsWithLimit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_scan_binary_prefix_without_finite_successor",
@@ -7020,9 +7293,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_scan_binary_prefix_without_finite_successor",
       "observableBehavior": "scan binary prefix without finite successor",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsScanContractTests.ShouldScanPrefixIntersectionInBothDirectionsWithLimit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_stop_prefix_scan_before_neighboring_prefix",
@@ -7030,9 +7306,12 @@
       "source": "tests/streaming_scan_hardening.rs",
       "sourceSymbolOrTest": "should_stop_prefix_scan_before_neighboring_prefix",
       "observableBehavior": "stop prefix scan before neighboring prefix",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 6
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsScanContractTests.ShouldScanPrefixIntersectionInBothDirectionsWithLimit"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/streaming_scan_hardening.rs:should_surface_corrupt_later_sst_block_from_iterator_item",
@@ -7041,8 +7320,11 @@
       "sourceSymbolOrTest": "should_surface_corrupt_later_sst_block_from_iterator_item",
       "observableBehavior": "surface corrupt later sst block from iterator item",
       "expectedError": "Corruption",
-      "status": "planned",
-      "issue": 6
+      "status": "mapped",
+      "issue": 6,
+      "pantsTests": [
+        "Pants.Tests.PantsStreamingScanHardeningTests.ShouldYieldEarlierRowsBeforeAStickyLaterBlockFailure"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/telemetry_integration.rs:should_initialize_global_telemetry_once_given_repeated_init_calls_when_starting",

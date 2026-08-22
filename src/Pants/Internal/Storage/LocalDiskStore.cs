@@ -26,7 +26,8 @@ internal sealed class LocalDiskStore : IDisposable
     private readonly PantsRecoveryPolicy _recoveryPolicy;
     private readonly PantsPerformanceGoal _performanceGoal;
     private readonly IPantsFailpointHandler _failpoints;
-    private readonly int _l0CompactionTrigger;
+    private readonly PantsCompactionConfiguration _compaction;
+    private readonly long _targetSstSizeBytes;
     private readonly SstBlockCache _blockCache;
     private readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
     private readonly List<MidgeWalMutation> _mutableOperations = [];
@@ -50,7 +51,8 @@ internal sealed class LocalDiskStore : IDisposable
         PantsRecoveryPolicy recoveryPolicy,
         PantsPerformanceGoal performanceGoal,
         IPantsFailpointHandler failpoints,
-        int l0CompactionTrigger,
+        PantsCompactionConfiguration compaction,
+        long targetSstSizeBytes,
         PantsBlockCachePolicy blockCachePolicy,
         long blockCacheBytes)
     {
@@ -67,7 +69,8 @@ internal sealed class LocalDiskStore : IDisposable
         _recoveryPolicy = recoveryPolicy;
         _performanceGoal = performanceGoal;
         _failpoints = failpoints;
-        _l0CompactionTrigger = l0CompactionTrigger;
+        _compaction = compaction;
+        _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
         _walStream = walStream;
         _manifest = manifest;
@@ -137,6 +140,36 @@ internal sealed class LocalDiskStore : IDisposable
             File.Delete(Path.Combine(_sstDirectory, name));
             RemoveSstFromCaches(name);
             _snapshotPinnedObsoleteFiles.Remove(name);
+        }
+
+        MidgeColumnFamilyMeta[] droppedFamilies = _manifest.ColumnFamilies
+            .Where(static family => family.DeletedAt is not null && !family.Reclaimed)
+            .ToArray();
+        if (droppedFamilies.Length == 0)
+        {
+            return;
+        }
+
+        var edits = new List<JsonElement>();
+        var obsoleteNames = new List<string>();
+        foreach (MidgeColumnFamilyMeta family in droppedFamilies)
+        {
+            string[] names = _manifest.Files
+                .Where(file => file.ColumnFamilyId == family.Id)
+                .Select(static file => file.Name)
+                .ToArray();
+            edits.Add(CreateManifestEdit(
+                "ReclaimColumnFamily",
+                new { id = family.Id, names }));
+            obsoleteNames.AddRange(names);
+        }
+
+        DurablyApplyManifestBatch(edits);
+        SaveManifestCheckpoint();
+        foreach (string name in obsoleteNames)
+        {
+            File.Delete(Path.Combine(_sstDirectory, name));
+            RemoveSstFromCaches(name);
         }
     }
 
@@ -242,42 +275,52 @@ internal sealed class LocalDiskStore : IDisposable
         });
     }
 
-    public void ValidateScanRead(
+    public IScanReadValidator CreateScanReadValidator(
         RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily)
+        ColumnFamilyIdentity columnFamily,
+        PantsScanBounds bounds)
     {
-        int candidateSsts = 0;
-        int candidateBlocks = 0;
-        int readerCacheHits = 0;
-        int readerCacheMisses = 0;
-        foreach (MidgeFileMeta file in _manifest.Files.Where(
-                     file => file.ColumnFamilyId == columnFamily.Id))
+        var readers = new List<MidgeSstReader>();
+        var blocks = new List<SstScanBlock>();
+        try
         {
-            string path = Path.Combine(_sstDirectory, file.Name);
-            _ = _readerCache.GetOrAdd(file.Name, path, out bool readerCacheHit);
-            if (readerCacheHit)
+            foreach (MidgeFileMeta file in _manifest.Files.Where(file =>
+                         file.ColumnFamilyId == columnFamily.Id &&
+                         file.SmallestKey is not null &&
+                         file.LargestKey is not null &&
+                         bounds.Overlaps(GetMetadataKey(file.SmallestKey), GetMetadataKey(file.LargestKey))))
             {
-                readerCacheHits++;
-            }
-            else
-            {
-                readerCacheMisses++;
+                MidgeSstReader reader = MidgeSstReader.Open(Path.Combine(_sstDirectory, file.Name));
+                readers.Add(reader);
+                for (var blockIndex = 0; blockIndex < reader.DataBlockCount; blockIndex++)
+                {
+                    byte[] firstKey = reader.GetFirstKey(blockIndex);
+                    byte[]? nextFirstKey = blockIndex + 1 < reader.DataBlockCount
+                        ? reader.GetFirstKey(blockIndex + 1)
+                        : null;
+                    bool overlaps =
+                        (bounds.EndExclusive is null ||
+                         firstKey.AsSpan().SequenceCompareTo(bounds.EndExclusive) < 0) &&
+                        (bounds.StartInclusive is null || nextFirstKey is null ||
+                         nextFirstKey.AsSpan().SequenceCompareTo(bounds.StartInclusive) > 0);
+                    if (overlaps)
+                    {
+                        blocks.Add(new SstScanBlock(reader, blockIndex, firstKey, nextFirstKey));
+                    }
+                }
             }
 
-            MidgeSstContents contents = MidgeSstCodec.Decode(
-                PositionalFile.ReadAllBytes(path));
-            candidateSsts++;
-            candidateBlocks = checked(candidateBlocks + contents.DataBlockCount);
+            return new SstScanReadValidator(telemetry, readers, blocks, readers.Count);
         }
-
-        telemetry.RecordSstScan(
-            candidateSsts,
-            candidateBlocks,
-            candidateBlocks,
-            readerCacheHits,
-            readerCacheMisses,
-            candidateSsts);
+        catch
+        {
+            readers.ForEach(static reader => reader.Dispose());
+            throw;
+        }
     }
+
+    private static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
+        key.Select(static value => checked((byte)value)).ToArray();
 
     public static LocalDiskStore Open(
         string directory,
@@ -288,7 +331,8 @@ internal sealed class LocalDiskStore : IDisposable
         TimeSpan? leaseClockSkewTolerance = null,
         Action? leaseLossCallback = null,
         IPantsFailpointHandler? failpoints = null,
-        int l0CompactionTrigger = 4,
+        PantsCompactionConfiguration? compaction = null,
+        long targetSstSizeBytes = 128L * 1024 * 1024,
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null)
@@ -361,7 +405,8 @@ internal sealed class LocalDiskStore : IDisposable
                 recoveryPolicy,
                 performanceGoal,
                 failpoints ?? NullPantsFailpointHandler.Instance,
-                l0CompactionTrigger,
+                compaction ?? new PantsCompactionConfiguration(),
+                targetSstSizeBytes,
                 blockCachePolicy,
                 blockCacheBytes);
             store.Recover(state);
@@ -721,7 +766,10 @@ internal sealed class LocalDiskStore : IDisposable
             GetObsoleteFiles());
     }
 
-    public long Compact(PantsRuntimeState state, bool force)
+    public long Compact(
+        PantsRuntimeState state,
+        bool force,
+        bool continueCompacting = false)
     {
         ThrowIfDisposed();
         _lease.EnsureValid();
@@ -735,9 +783,8 @@ internal sealed class LocalDiskStore : IDisposable
             CompactionPlan? plan = LeveledCompactionPlanner.Pick(
                 _manifest.Files,
                 familyId,
-                _l0CompactionTrigger,
-                40L * 1024 * 1024,
-                maximumInputs: 64,
+                _compaction,
+                state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
                 force);
             if (plan is null)
             {
@@ -748,30 +795,40 @@ internal sealed class LocalDiskStore : IDisposable
                 .Select(input => MidgeSstCodec.Decode(
                     PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
                 .ToArray();
-            MidgeSstEntry[] entries = contents
-                .SelectMany(static content => content.Entries)
-                .OrderBy(static entry => entry.Key, ByteArrayComparer.Instance)
-                .ThenByDescending(static entry => entry.Sequence)
-                .ToArray();
-            MidgeRangeTombstone[] ranges = contents
-                .SelectMany(static content => content.RangeTombstones)
-                .OrderBy(static tombstone => tombstone.Start, ByteArrayComparer.Instance)
-                .ThenByDescending(static tombstone => tombstone.Sequence)
-                .ToArray();
-            MidgeFileMeta output = CreateSst(
+            CompactionMergeResult merged = CompactionMerger.Merge(contents, plan);
+            IReadOnlyList<CompactionMergeResult> partitions =
+                CompactionOutputPartitioner.Partition(merged, _targetSstSizeBytes);
+            var outputs = new List<MidgeFileMeta>(partitions.Count);
+            ulong firstOutputSequence = _manifest.NextSstSeqs.TryGetValue(
                 familyId,
-                plan.TargetLevel,
-                entries,
-                ranges,
-                PantsFailpoint.AfterCompactionOutputDurable);
-            edits.Add(CreateManifestEdit(
-                "BumpNextSstSeq",
-                new
-                {
-                    cf_id = familyId,
-                    next_seq = checked(output.SstSequence + 1)
-                }));
-            edits.Add(CreateManifestEdit("AddSst", output));
+                out ulong nextOutputSequence)
+                ? nextOutputSequence
+                : 1UL;
+            for (var outputIndex = 0; outputIndex < partitions.Count; outputIndex++)
+            {
+                CompactionMergeResult partition = partitions[outputIndex];
+                MidgeFileMeta output = CreateSst(
+                    familyId,
+                    plan.TargetLevel,
+                    partition.Entries,
+                    partition.RangeTombstones,
+                    PantsFailpoint.AfterCompactionOutputDurable,
+                    checked(firstOutputSequence + (ulong)outputIndex));
+                outputs.Add(output);
+                edits.Add(CreateManifestEdit("AddSst", output));
+            }
+
+            if (outputs.Count > 0)
+            {
+                edits.Add(CreateManifestEdit(
+                    "BumpNextSstSeq",
+                    new
+                    {
+                        cf_id = familyId,
+                        next_seq = checked(outputs[^1].SstSequence + 1)
+                    }));
+            }
+
             edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
                 "RemoveSst",
                 new { name = input.Name })));
@@ -782,7 +839,7 @@ internal sealed class LocalDiskStore : IDisposable
                     phase = "OutputDurable",
                     cf_id = familyId,
                     removed = plan.Inputs.Select(static input => input.Name).ToArray(),
-                    added = new[] { CreateIntentFileMetadata(output) }
+                    added = outputs.Select(CreateIntentFileMetadata).ToArray()
                 }));
 
             obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
@@ -820,6 +877,14 @@ internal sealed class LocalDiskStore : IDisposable
             {
                 _snapshotPinnedObsoleteFiles.Add(name);
             }
+        }
+
+        if ((force || continueCompacting) && bytesRewritten > 0)
+        {
+            bytesRewritten = checked(bytesRewritten + Compact(
+                state,
+                force: false,
+                continueCompacting: true));
         }
 
         return bytesRewritten;
@@ -1189,9 +1254,11 @@ internal sealed class LocalDiskStore : IDisposable
         uint level,
         IReadOnlyList<MidgeSstEntry> entries,
         IReadOnlyList<MidgeRangeTombstone> ranges,
-        PantsFailpoint outputDurableFailpoint)
+        PantsFailpoint outputDurableFailpoint,
+        ulong? assignedSequence = null)
     {
-        var sequence = _manifest.NextSstSeqs.TryGetValue(familyId, out var nextSequence) ? nextSequence : 1UL;
+        ulong sequence = assignedSequence ??
+            (_manifest.NextSstSeqs.TryGetValue(familyId, out ulong nextSequence) ? nextSequence : 1UL);
         var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
         var bytes = MidgeSstCodec.Encode(entries, ranges, _performanceGoal);
         var stagingPath = Path.Combine(_sstDirectory, ".flush-staging", name + ".tmp");

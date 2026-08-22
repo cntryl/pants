@@ -4,10 +4,7 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
 {
     private Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>>? _entriesFactory;
     private readonly Func<ValueTask> _releaseSnapshot;
-    private readonly byte[]? _startInclusive;
-    private readonly byte[]? _endExclusive;
-    private readonly byte[]? _prefix;
-    private readonly int _limit;
+    private readonly PantsScanBounds _bounds;
     private IEnumerator<PantsEntry>? _entries;
     private CancellationToken _cancellationToken;
     private Exception? _failure;
@@ -23,28 +20,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
     {
         _entriesFactory = entriesFactory ?? throw new ArgumentNullException(nameof(entriesFactory));
         _releaseSnapshot = releaseSnapshot ?? throw new ArgumentNullException(nameof(releaseSnapshot));
-        Direction = query.Direction;
-        _prefix = Copy(query.Prefix);
-        _startInclusive = Maximum(Copy(query.StartInclusive), _prefix);
-        _endExclusive = Minimum(Copy(query.EndExclusive), PrefixSuccessor(_prefix));
-        _limit = query.Limit ?? int.MaxValue;
-        if (!Enum.IsDefined(Direction))
-        {
-            throw PantsException.InvalidArgument("Scan direction is invalid.");
-        }
-
-        if (_limit < 0)
-        {
-            throw PantsException.InvalidArgument("Scan limit must not be negative.");
-        }
-
-        if (query.StartInclusive is { } start &&
-            query.EndExclusive is { } end &&
-            start.Span.SequenceCompareTo(end.Span) > 0)
-        {
-            throw PantsException.InvalidArgument(
-                "Scan requires StartInclusive to be less than or equal to EndExclusive.");
-        }
+        _bounds = new PantsScanBounds(query);
+        Direction = _bounds.Direction;
     }
 
     public PantsScanDirection Direction { get; }
@@ -108,7 +85,7 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         try
         {
             _cancellationToken.ThrowIfCancellationRequested();
-            if (_emitted >= _limit)
+            if (_emitted >= _bounds.Limit)
             {
                 await ExhaustAsync().ConfigureAwait(false);
                 return false;
@@ -119,7 +96,7 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
             {
                 PantsEntry candidate = _entries.Current;
                 ReadOnlySpan<byte> key = candidate.Key.Span;
-                if (!MatchesBounds(key) || !MatchesPrefix(key))
+                if (!_bounds.Matches(key))
                 {
                     continue;
                 }
@@ -161,13 +138,6 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         _entriesFactory = null;
     }
 
-    private bool MatchesBounds(ReadOnlySpan<byte> key) =>
-        (_startInclusive is null || key.SequenceCompareTo(_startInclusive) >= 0) &&
-        (_endExclusive is null || key.SequenceCompareTo(_endExclusive) < 0);
-
-    private bool MatchesPrefix(ReadOnlySpan<byte> key) =>
-        _prefix is null || key.StartsWith(_prefix);
-
     private async ValueTask ExhaustAsync()
     {
         State = PantsIteratorState.Exhausted;
@@ -191,58 +161,4 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
             ? _releaseSnapshot()
             : ValueTask.CompletedTask;
 
-    private static byte[]? Maximum(byte[]? left, byte[]? right)
-    {
-        if (left is null)
-        {
-            return right;
-        }
-
-        if (right is null)
-        {
-            return left;
-        }
-
-        return left.AsSpan().SequenceCompareTo(right) >= 0 ? left : right;
-    }
-
-    private static byte[]? Minimum(byte[]? left, byte[]? right)
-    {
-        if (left is null)
-        {
-            return right;
-        }
-
-        if (right is null)
-        {
-            return left;
-        }
-
-        return left.AsSpan().SequenceCompareTo(right) <= 0 ? left : right;
-    }
-
-    private static byte[]? PrefixSuccessor(byte[]? prefix)
-    {
-        if (prefix is null || prefix.Length == 0)
-        {
-            return null;
-        }
-
-        byte[] successor = prefix.ToArray();
-        for (int index = successor.Length - 1; index >= 0; index--)
-        {
-            if (successor[index] == byte.MaxValue)
-            {
-                continue;
-            }
-
-            successor[index]++;
-            return successor[..(index + 1)];
-        }
-
-        return null;
-    }
-
-    private static byte[]? Copy(ReadOnlyMemory<byte>? value) =>
-        value.HasValue ? value.Value.ToArray() : null;
 }

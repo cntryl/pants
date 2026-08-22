@@ -38,6 +38,10 @@ public interface IPantsDatabase : IAsyncDisposable
 
     ValueTask CompactAllAsync(CancellationToken cancellationToken = default);
 
+    ValueTask SetBackgroundCompactionAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default);
+
     ValueTask<bool> WaitForWriteStallClearAsync(
         IPantsColumnFamily columnFamily,
         TimeSpan timeout,

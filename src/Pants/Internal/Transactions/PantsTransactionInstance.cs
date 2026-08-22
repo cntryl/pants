@@ -184,6 +184,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
+        var bounds = new PantsScanBounds(query);
         TransactionIntentOperation[] operations;
         lock (_gate)
         {
@@ -200,10 +201,26 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             return new PantsScanInstance(
                 async scanCancellationToken =>
                 {
-                    await _database.ValidateScanReadAsync(
+                    IScanReadValidator? validator = await _database.CreateScanReadValidatorAsync(
                         _columnFamily.Identity,
+                        bounds,
                         scanCancellationToken).ConfigureAwait(false);
-                    return EnumerateVisibleSnapshot(operations, query.Direction).GetEnumerator();
+                    try
+                    {
+                        IEnumerator<PantsEntry> entries = EnumerateVisibleSnapshot(
+                                operations,
+                                query.Direction)
+                            .Where(entry => bounds.Matches(entry.Key.Span))
+                            .GetEnumerator();
+                        return validator is null
+                            ? entries
+                            : new ValidatingScanEnumerator(entries, validator);
+                    }
+                    catch
+                    {
+                        validator?.Dispose();
+                        throw;
+                    }
                 },
                 query,
                 () => _database.ReleaseScanSnapshotAsync(snapshotId));

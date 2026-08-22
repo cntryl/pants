@@ -110,6 +110,21 @@ public sealed class SstBlockCacheTests
         Assert.Equal([1, 2, 3, 4], Assert.IsType<SstBlockCacheEntry>(cached).Content.ToArray());
     }
 
+    [Fact]
+    public void ShouldHandleZeroCapacityAndRapidManagedLifecycle()
+    {
+        for (var iteration = 0; iteration < 50; iteration++)
+        {
+            var cache = new SstBlockCache(
+                PantsBlockCachePolicy.Lru,
+                capacityBytes: 0,
+                shardCount: 1);
+            Assert.False(cache.Add(new SstBlockCacheKey("sst", iteration), [1]));
+            Assert.Equal(0, cache.Count);
+            Assert.Equal(0, cache.UsedBytes);
+        }
+    }
+
     private static int CountHotSurvivors(PantsBlockCachePolicy policy)
     {
         var cache = new SstBlockCache(policy, capacityBytes: 4, shardCount: 1);
