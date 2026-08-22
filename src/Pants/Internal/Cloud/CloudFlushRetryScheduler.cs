@@ -8,7 +8,10 @@ sealed class CloudFlushRetryScheduler : IAsyncDisposable
     readonly Lock _gate = new();
     readonly Dictionary<ColumnFamilyIdentity, Task> _retries = [];
     readonly CancellationTokenSource _lifetimeCancellation = new();
+    long _retryAttempts;
     bool _disposed;
+
+    public long RetryAttempts => Volatile.Read(ref _retryAttempts);
 
     public void Schedule(
         ColumnFamilyIdentity identity,
@@ -57,6 +60,7 @@ sealed class CloudFlushRetryScheduler : IAsyncDisposable
             while (true)
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                Interlocked.Increment(ref _retryAttempts);
                 try
                 {
                     await operation(cancellationToken).ConfigureAwait(false);

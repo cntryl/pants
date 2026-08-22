@@ -3,6 +3,119 @@ namespace Pants.Tests;
 public sealed class PantsTelemetryContractTests
 {
     [Fact]
+    public async Task ShouldReportSyncedWalFrontierAfterSyncCommit()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using (var transaction = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("synced"u8.ToArray(), "value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        var metrics = await database.GetRuntimeMetricsAsync();
+
+        Assert.True(metrics.CurrentSequence > 0);
+        Assert.Equal(metrics.CurrentSequence, metrics.WalLastSyncedSequence);
+        Assert.True(metrics.WalLocalDurableSequence >= metrics.WalLastSyncedSequence);
+    }
+
+    [Fact]
+    public async Task ShouldReportCloudAsyncWalLifecycle()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "telemetry-cloud-wal/")
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                EventualFlushSegmentGap: long.MaxValue,
+                WalSealMinimumSegmentBytes: long.MaxValue,
+                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
+                WalSealMaximumPendingWrites: 1))
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenAsync(options);
+
+        await CommitAsync(database, "cloud-async", PantsWriteOptions.CloudAsync);
+        var metrics = await WaitForMetricsAsync(
+            database,
+            static candidate =>
+                candidate.CurrentSequence > 0 &&
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+
+        Assert.Equal(metrics.CurrentSequence, metrics.WalLastSyncedSequence);
+        Assert.Equal(metrics.CurrentSequence, metrics.WalCloudDurableSequence);
+        Assert.Equal(1, metrics.CloudAsyncWalSegmentsSealed);
+        Assert.True(metrics.CloudAsyncWalBytesSealed > 0);
+        Assert.Equal(1, metrics.CloudAsyncWalUploadsStarted);
+        Assert.Equal(1, metrics.CloudAsyncWalUploadsCompleted);
+        Assert.Equal(0, metrics.CloudAsyncWalUploadsFailed);
+    }
+
+    [Fact]
+    public async Task ShouldReportCloudAsyncWalUploadFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new CloudCompactionFailpointHandler();
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "telemetry-cloud-wal-failure/")
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                EventualFlushSegmentGap: long.MaxValue,
+                WalSealMinimumSegmentBytes: long.MaxValue,
+                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
+                WalSealMaximumPendingWrites: 1))
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new PantsRuntimeDependencies(failpoints));
+        failpoints.Arm(PantsFailpoint.BeforeCloudWalUpload);
+
+        await CommitAsync(database, "cloud-async-failure", PantsWriteOptions.CloudAsync);
+        var metrics = await WaitForMetricsAsync(
+            database,
+            static candidate => candidate.CloudAsyncWalUploadsFailed >= 1);
+
+        Assert.Equal(1, metrics.CloudAsyncWalSegmentsSealed);
+        Assert.Equal(1, metrics.CloudAsyncWalUploadsStarted);
+        Assert.Equal(0, metrics.CloudAsyncWalUploadsCompleted);
+        Assert.Equal(1, metrics.CloudAsyncWalUploadsFailed);
+        Assert.Equal(0, metrics.WalCloudDurableSequence);
+    }
+
+    [Fact]
+    public async Task ShouldReportFlushRetryAfterTransientCloudPublicationFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new CloudCompactionFailpointHandler();
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "telemetry-flush-retry/")
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                EventualFlushSegmentGap: long.MaxValue,
+                WalSealMinimumSegmentBytes: long.MaxValue,
+                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
+                WalSealMaximumPendingWrites: int.MaxValue))
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new PantsRuntimeDependencies(failpoints));
+        await CommitAsync(database, "retry", PantsWriteOptions.CloudAsync);
+        failpoints.Arm(PantsFailpoint.BeforeCloudUpload);
+
+        await Assert.ThrowsAsync<PantsIOException>(
+            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await WaitForAsync(() => Directory
+            .EnumerateFiles(
+                Path.Combine(directory.Path, "cloud_store", "sst"),
+                "*.sst",
+                SearchOption.TopDirectoryOnly)
+            .Any());
+        var metrics = await database.GetRuntimeMetricsAsync();
+
+        Assert.True(metrics.FlushRetriesTotal >= 1);
+    }
+
+    [Fact]
     public async Task ShouldReportPerDatabaseReadPathActivity()
     {
         await using IPantsDatabase first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
@@ -253,5 +366,43 @@ public sealed class PantsTelemetryContractTests
             metrics.BloomTruePositivesTotal +
             metrics.BloomFalsePositivesTotal +
             metrics.BloomTrueNegativesTotal);
+    }
+
+    static async ValueTask CommitAsync(
+        IPantsDatabase database,
+        string key,
+        PantsWriteOptions writeOptions)
+    {
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+        await transaction.CommitAsync(writeOptions);
+    }
+
+    static async ValueTask<PantsRuntimeMetrics> WaitForMetricsAsync(
+        IPantsDatabase database,
+        Func<PantsRuntimeMetrics, bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
+            if (predicate(metrics))
+            {
+                return metrics;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+    }
+
+    static async ValueTask WaitForAsync(Func<bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!predicate())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
     }
 }

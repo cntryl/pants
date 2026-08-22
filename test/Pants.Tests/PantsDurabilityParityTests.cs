@@ -201,7 +201,13 @@ public sealed class PantsDurabilityParityTests
         }
 
         Assert.Null(await ReadAsync(database, "rejected"));
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).NoSpaceEvents);
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(1, metrics.NoSpaceEvents);
+        Assert.Equal(1, metrics.WriteStallsTotal);
+        Assert.Equal(0, metrics.WriteStallsMemoryTotal);
+        Assert.Equal(0, metrics.WriteStallsCompactionTotal);
+        Assert.Equal(0, metrics.WriteStallsCloudTotal);
+        Assert.Equal(1, metrics.WriteStallsNoSpaceTotal);
         await CommitValueAsync(database, "accepted", "value");
         Assert.Equal("value", await ReadAsync(database, "accepted"));
     }

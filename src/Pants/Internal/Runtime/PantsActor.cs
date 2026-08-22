@@ -10,6 +10,7 @@ sealed class PantsActor : IAsyncDisposable
     readonly PantsRuntimeState _state;
     readonly PantsOpenOptions _options;
     readonly RuntimeTelemetry _telemetry;
+    readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
     readonly PantsStorageVerificationDelegate _storageVerifier;
     readonly IPantsFailpointHandler _failpoints;
     readonly Channel<IRuntimeCommand> _commands;
@@ -265,6 +266,17 @@ sealed class PantsActor : IAsyncDisposable
             _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
+            _runtimeMetricsSnapshotFactory = new RuntimeMetricsSnapshotFactory(
+                options,
+                telemetry,
+                _diskStore,
+                _flushWorker,
+                _compactionWorker,
+                _cloudWorker,
+                _cloudFlushRetries,
+                _cloudWalSealController,
+                _cloudMemtableSegments,
+                _hybridCache);
             _workersStarted = true;
             _commands = Channel.CreateBounded<IRuntimeCommand>(new BoundedChannelOptions(
                 options.CoordinatorQueueCapacity)
@@ -829,82 +841,9 @@ sealed class PantsActor : IAsyncDisposable
             state =>
             {
                 ApplyPendingPersistenceAnomaly(state);
-                var hybridMetrics = _hybridCache is not null && _diskStore is not null
-                    ? _hybridCache.GetMetrics(_diskStore)
-                    : null;
-                return ValueTask.FromResult(new PantsRuntimeMetrics
-                {
-                    Health = _diskStore?.GetHealth(state) ?? state.Health,
-                    CurrentSequence = state.Sequence,
-                    ManifestLastPersistedSequence = _diskStore?.LastPersistedSequence ?? 0,
-                    ManifestNextWalSequence = _diskStore?.NextWalSequence ?? 1,
-                    ActiveMemtables = state.FamilyData.Count,
-                    TotalMemtableBytes = state.ActiveMemtableBytes.Values.Sum(),
-                    MemtableSizeLimitBytes = _options.MemtableSizeLimitBytes,
-                    MemtableFlushThresholdBytes = _options.MemtableFlushThresholdBytes,
-                    MaximumMemtableWalSegmentGap = checked((long)(
-                    _cloudMemtableSegments?.MaximumGap(
-                        _diskStore?.CurrentWalSegmentId ?? 0) ?? 0)),
-                    WalCurrentSegmentId = _diskStore?.NextWalSequence ?? 0,
-                    WalPendingWrites = _cloudWalSealController?.PendingWrites ??
-                    _diskStore?.WalRecords ?? 0,
-                    WalLocalDurableSequence = _diskStore is null ? 0 : state.Sequence,
-                    WalCloudDurableSequence = Volatile.Read(ref _walCloudDurableSequence),
-                    PendingCompactions = _compactionWorker.QueueDepth,
-                    ActiveCompactions = _compactionWorker.InFlight,
-                    PendingCloudUploads = _cloudWorker.QueueDepth + _cloudWorker.InFlight,
-                    ActiveSnapshots = state.ActiveSnapshotCount,
-                    PinnedSsts = state.ActiveSnapshotCount == 0 ? 0 : _diskStore?.SstCount ?? 0,
-                    OldestSnapshotAgeSeconds = GetOldestSnapshotAgeSeconds(state),
-                    SstCount = _diskStore?.SstCount ?? 0,
-                    SstBytes = _diskStore?.SstBytes ?? 0,
-                    SalvageModeOpens = state.SalvageModeOpens,
-                    NoSpaceEvents = state.NoSpaceEvents,
-                    CompactionsRun = _telemetry.CompactionsRun,
-                    CompactionBytesRewritten = _telemetry.CompactionBytesRewritten,
-                    CompactionFailures = _compactionWorker.Failures,
-                    ObsoleteFileBacklog = _diskStore?.GetObsoleteFiles().Count ?? 0,
-                    WriteConflictsTotal = checked(
-                    _telemetry.WriteConflictsPointTotal + _telemetry.WriteConflictsRangeTotal),
-                    WriteConflictsPointTotal = _telemetry.WriteConflictsPointTotal,
-                    WriteConflictsRangeTotal = _telemetry.WriteConflictsRangeTotal,
-                    CacheHits = _telemetry.CacheHits,
-                    CacheMisses = _telemetry.CacheMisses,
-                    WalAppendCount = _telemetry.WalAppendCount,
-                    WalFlushCount = _telemetry.WalFlushCount,
-                    WalFsyncCount = _telemetry.WalFsyncCount,
-                    WalAppendNanosecondsTotal = _telemetry.WalAppendNanosecondsTotal,
-                    WalFsyncNanosecondsTotal = _telemetry.WalFsyncNanosecondsTotal,
-                    WalFsyncNanosecondsMaximum = _telemetry.WalFsyncNanosecondsMaximum,
-                    DurabilityWaitersFannedOutTotal = _telemetry.DurabilityWaitersFannedOut,
-                    SstBloomRejectsTotal = _telemetry.SstBloomRejects,
-                    SstBloomChecksTotal = _telemetry.SstBloomChecks,
-                    SstBloomTruePositivesTotal = _telemetry.SstBloomTruePositives,
-                    SstBloomFalsePositivesTotal = _telemetry.SstBloomFalsePositives,
-                    SstKeyRangeRejectsTotal = _telemetry.SstKeyRangeRejects,
-                    SstDataBlocksReadTotal = _telemetry.SstDataBlocksRead,
-                    ReadAmplificationCompactionTriggersTotal =
-                    _telemetry.ReadAmplificationCompactionTriggers,
-                    WalRecoveryRecordsReplayed = _diskStore?.WalRecoveryRecordsReplayed ?? 0,
-                    WalRecoveryBytesReplayed = _diskStore?.WalRecoveryBytesReplayed ?? 0,
-                    IntentLogReplayRuns = state.IntentLogReplayRuns,
-                    IntentLogEntriesReplayed = state.IntentLogEntriesReplayed,
-                    FlushQueueDepth = _flushWorker.QueueDepth,
-                    FlushInFlight = _flushWorker.InFlight,
-                    FlushEnqueuedTotal = _flushWorker.Enqueued,
-                    FlushBuildCount = _telemetry.FlushBuildCount,
-                    FlushBuildNanosecondsTotal = _telemetry.FlushBuildNanosecondsTotal,
-                    FlushBuildNanosecondsMaximum = _telemetry.FlushBuildNanosecondsMaximum,
-                    FlushPublishCount = _telemetry.FlushPublishCount,
-                    FlushPublishNanosecondsTotal = _telemetry.FlushPublishNanosecondsTotal,
-                    FlushPublishNanosecondsMaximum = _telemetry.FlushPublishNanosecondsMaximum,
-                    FlushFailuresTotal = _flushWorker.Failures,
-                    HybridMaximumLocalBytes = hybridMetrics?.MaximumLocalBytes ?? 0,
-                    HybridTotalCommittedBytes = hybridMetrics?.TotalCommittedBytes ?? 0,
-                    HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,
-                    HybridUsagePercent = hybridMetrics?.UsagePercent ?? 0,
-                    HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0
-                });
+                return ValueTask.FromResult(_runtimeMetricsSnapshotFactory.Create(
+                    state,
+                    Volatile.Read(ref _walCloudDurableSequence)));
             },
             cancellationToken);
 
@@ -1072,8 +1011,7 @@ sealed class PantsActor : IAsyncDisposable
                         .ConfigureAwait(false);
                     if (_cloudPersistence is not null && (_cloudLease?.IsHealthy ?? true))
                     {
-                        SealedWalSegment? segment = null;
-                        await _walWorker.ExecuteAsync(() => segment = _diskStore.SealActiveWal())
+                        var segment = await SealWalForCloudAsync(_diskStore)
                             .ConfigureAwait(false);
                         if (segment is not null)
                         {
@@ -1196,6 +1134,11 @@ sealed class PantsActor : IAsyncDisposable
             PantsDiagnostics.CommandsRejected.Add(1);
             throw;
         }
+        catch (PantsNoSpaceException)
+        {
+            _telemetry.RecordWriteStallNoSpace();
+            throw;
+        }
         catch (ChannelClosedException exception)
         {
             throw PantsException.Create(
@@ -1235,6 +1178,11 @@ sealed class PantsActor : IAsyncDisposable
         catch (OperationCanceledException)
         {
             PantsDiagnostics.CommandsRejected.Add(1);
+            throw;
+        }
+        catch (PantsNoSpaceException)
+        {
+            _telemetry.RecordWriteStallNoSpace();
             throw;
         }
         catch (ChannelClosedException exception)
@@ -1325,7 +1273,8 @@ sealed class PantsActor : IAsyncDisposable
                     .ConfigureAwait(false);
                 _telemetry.RecordWalAppend(
                     Stopwatch.GetElapsedTime(started),
-                    PantsDurability.Buffered);
+                    PantsDurability.Buffered,
+                    state.Sequence);
                 ApplyCommittedOperations(state, command.Payload);
                 accepted.Add(command);
             }
@@ -1361,7 +1310,8 @@ sealed class PantsActor : IAsyncDisposable
             await _walWorker.ExecuteAsync(diskStore.FlushDurabilityBoundary).ConfigureAwait(false);
             _telemetry.RecordCoalescedWalFsync(
                 Stopwatch.GetElapsedTime(started),
-                accepted.Count);
+                accepted.Count,
+                state.Sequence);
             foreach (var command in accepted)
             {
                 await FlushAtConfiguredThresholdAsync(state, command.Payload).ConfigureAwait(false);
@@ -1491,7 +1441,10 @@ sealed class PantsActor : IAsyncDisposable
             .ConfigureAwait(false);
         if (durability != PantsDurability.BestEffort)
         {
-            _telemetry.RecordWalAppend(Stopwatch.GetElapsedTime(started), durability);
+            _telemetry.RecordWalAppend(
+                Stopwatch.GetElapsedTime(started),
+                durability,
+                state.Sequence);
         }
         if (_options.FlushAfterWalRecords > 0 && diskStore.WalRecords >= _options.FlushAfterWalRecords)
         {
@@ -1520,8 +1473,7 @@ sealed class PantsActor : IAsyncDisposable
         }
         else if (_cloudPersistence is not null && durability == PantsDurability.CloudStrict)
         {
-            SealedWalSegment? segment = null;
-            await _walWorker.ExecuteAsync(() => segment = diskStore.SealActiveWal())
+            var segment = await SealWalForCloudAsync(diskStore)
                 .ConfigureAwait(false);
             if (segment is not null)
             {
@@ -1547,9 +1499,7 @@ sealed class PantsActor : IAsyncDisposable
     async ValueTask SealCloudAsyncWalAsync(LocalDiskStore diskStore)
     {
         EnsureCloudWriteAuthorityValid();
-        SealedWalSegment? segment = null;
-        await _walWorker.ExecuteAsync(() => segment = diskStore.SealActiveWal())
-            .ConfigureAwait(false);
+        var segment = await SealWalForCloudAsync(diskStore).ConfigureAwait(false);
         if (segment is null)
         {
             return;
@@ -1558,6 +1508,24 @@ sealed class PantsActor : IAsyncDisposable
         _cloudWalSealController?.RecordSeal();
         CancelCloudWalSealDeadline();
         await EnqueueCloudWalBacklogDrainAsync().ConfigureAwait(false);
+    }
+
+    async ValueTask<SealedWalSegment?> SealWalForCloudAsync(LocalDiskStore diskStore)
+    {
+        SealedWalSegment? segment = null;
+        var started = Stopwatch.GetTimestamp();
+        await _walWorker.ExecuteAsync(() => segment = diskStore.SealActiveWal())
+            .ConfigureAwait(false);
+        if (segment is not null)
+        {
+            _telemetry.RecordWalDurabilityBoundary(checked((long)segment.MaximumSequence));
+            _telemetry.RecordCloudAsyncWalSegmentSealed(
+                segment.SegmentId,
+                segment.Bytes.LongLength,
+                Stopwatch.GetElapsedTime(started));
+        }
+
+        return segment;
     }
 
     ValueTask EnqueueCloudWalBacklogDrainAsync() =>
@@ -1632,9 +1600,25 @@ sealed class PantsActor : IAsyncDisposable
         EnsureCloudWriteAuthorityValid();
         var persistence = _cloudPersistence ??
             throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
-        _failpoints.Hit(PantsFailpoint.BeforeCloudWalUpload);
-        await persistence.PublishWalAsync(segment, cancellationToken).ConfigureAwait(false);
-        _failpoints.Hit(PantsFailpoint.AfterCloudWalUpload);
+        var started = Stopwatch.GetTimestamp();
+        _telemetry.RecordCloudAsyncWalUploadStarted();
+        try
+        {
+            _failpoints.Hit(PantsFailpoint.BeforeCloudWalUpload);
+            await persistence.PublishWalAsync(segment, cancellationToken).ConfigureAwait(false);
+            _failpoints.Hit(PantsFailpoint.AfterCloudWalUpload);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            _telemetry.RecordCloudAsyncWalUploadFailed();
+            throw;
+        }
+
+        _telemetry.RecordCloudAsyncWalUploadCompleted(Stopwatch.GetElapsedTime(started));
         EnsureCloudWriteAuthorityValid();
         Volatile.Write(
             ref _walCloudDurableSequence,
@@ -1655,6 +1639,8 @@ sealed class PantsActor : IAsyncDisposable
                 _diskStore.DeleteCloudDurableWalSegment(segment);
             }
         }
+
+        _telemetry.RecordCloudAsyncWalAcknowledged(segment.SegmentId);
     }
 
     async ValueTask DrainCloudWalBacklogAsync(CancellationToken cancellationToken)
@@ -1736,10 +1722,13 @@ sealed class PantsActor : IAsyncDisposable
             return;
         }
 
-        await _walWorker.ExecuteAsync(() =>
+        SealedWalSegment? segment = null;
+        await _walWorker.ExecuteAsync(() => segment = diskStore.SealActiveWal())
+            .ConfigureAwait(false);
+        if (segment is not null)
         {
-            _ = diskStore.SealActiveWal();
-        }).ConfigureAwait(false);
+            _telemetry.RecordWalDurabilityBoundary(checked((long)segment.MaximumSequence));
+        }
     }
 
     static void ApplyOperations(PantsRuntimeState state, CommitPayload payload, long sequence)
@@ -2097,14 +2086,6 @@ sealed class PantsActor : IAsyncDisposable
         0,
         [],
         []);
-
-    static long GetOldestSnapshotAgeSeconds(PantsRuntimeState state) =>
-        state.ActiveSnapshotCount == 0
-            ? 0
-            : checked((long)state.ActiveSnapshots
-                .Max(snapshot => GetSnapshotAge(
-                    state.Clock.UtcNow,
-                    snapshot.StartedAtUtc).TotalSeconds));
 
     static TimeSpan GetSnapshotAge(DateTimeOffset now, DateTimeOffset startedAtUtc) =>
         now <= startedAtUtc ? TimeSpan.Zero : now - startedAtUtc;

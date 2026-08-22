@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace Pants;
@@ -46,6 +47,17 @@ internal sealed class RuntimeTelemetry
     private long _flushPublishCount;
     private long _flushPublishNanosecondsTotal;
     private long _flushPublishNanosecondsMaximum;
+    readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
+    long _walLastSyncedSequence;
+    long _writeStallsNoSpace;
+    long _cloudAsyncWalSegmentsSealed;
+    long _cloudAsyncWalBytesSealed;
+    long _cloudAsyncWalSealLatencyMicroseconds;
+    long _cloudAsyncWalUploadsStarted;
+    long _cloudAsyncWalUploadsCompleted;
+    long _cloudAsyncWalUploadsFailed;
+    long _cloudAsyncWalUploadLatencyMicroseconds;
+    long _cloudAsyncWalAcknowledgementLatencyMicroseconds;
 
     public long WriteConflictsPointTotal => Volatile.Read(ref _writeConflictsPoint);
 
@@ -67,6 +79,8 @@ internal sealed class RuntimeTelemetry
 
     public long WalFsyncNanosecondsMaximum => Volatile.Read(ref _walFsyncNanosecondsMaximum);
 
+    public long WalLastSyncedSequence => Volatile.Read(ref _walLastSyncedSequence);
+
     public long DurabilityWaitersFannedOut => Volatile.Read(ref _durabilityWaitersFannedOut);
 
     public long FlushBuildCount => Volatile.Read(ref _flushBuildCount);
@@ -80,6 +94,27 @@ internal sealed class RuntimeTelemetry
     public long FlushPublishNanosecondsTotal => Volatile.Read(ref _flushPublishNanosecondsTotal);
 
     public long FlushPublishNanosecondsMaximum => Volatile.Read(ref _flushPublishNanosecondsMaximum);
+
+    public long WriteStallsNoSpaceTotal => Volatile.Read(ref _writeStallsNoSpace);
+
+    public long CloudAsyncWalSegmentsSealed => Volatile.Read(ref _cloudAsyncWalSegmentsSealed);
+
+    public long CloudAsyncWalBytesSealed => Volatile.Read(ref _cloudAsyncWalBytesSealed);
+
+    public long CloudAsyncWalSealLatencyMicroseconds =>
+        Volatile.Read(ref _cloudAsyncWalSealLatencyMicroseconds);
+
+    public long CloudAsyncWalUploadsStarted => Volatile.Read(ref _cloudAsyncWalUploadsStarted);
+
+    public long CloudAsyncWalUploadsCompleted => Volatile.Read(ref _cloudAsyncWalUploadsCompleted);
+
+    public long CloudAsyncWalUploadsFailed => Volatile.Read(ref _cloudAsyncWalUploadsFailed);
+
+    public long CloudAsyncWalUploadLatencyMicroseconds =>
+        Volatile.Read(ref _cloudAsyncWalUploadLatencyMicroseconds);
+
+    public long CloudAsyncWalAcknowledgementLatencyMicroseconds =>
+        Volatile.Read(ref _cloudAsyncWalAcknowledgementLatencyMicroseconds);
 
     public long CacheHits => Volatile.Read(ref _sstBlockCacheHits);
 
@@ -186,7 +221,10 @@ internal sealed class RuntimeTelemetry
         Interlocked.Add(ref _compactionBytesRewritten, bytesRewritten);
     }
 
-    public void RecordWalAppend(TimeSpan elapsed, PantsDurability durability)
+    public void RecordWalAppend(
+        TimeSpan elapsed,
+        PantsDurability durability,
+        long sequence)
     {
         Interlocked.Increment(ref _walAppendCount);
         Interlocked.Increment(ref _walFlushCount);
@@ -197,16 +235,66 @@ internal sealed class RuntimeTelemetry
             long nanoseconds = ToNanoseconds(elapsed);
             Interlocked.Add(ref _walFsyncNanosecondsTotal, nanoseconds);
             SetMaximum(ref _walFsyncNanosecondsMaximum, nanoseconds);
+            SetMaximum(ref _walLastSyncedSequence, sequence);
         }
     }
 
-    public void RecordCoalescedWalFsync(TimeSpan elapsed, int waiterCount)
+    public void RecordCoalescedWalFsync(
+        TimeSpan elapsed,
+        int waiterCount,
+        long sequence)
     {
         long nanoseconds = ToNanoseconds(elapsed);
         Interlocked.Increment(ref _walFsyncCount);
         Interlocked.Add(ref _walFsyncNanosecondsTotal, nanoseconds);
         SetMaximum(ref _walFsyncNanosecondsMaximum, nanoseconds);
         Interlocked.Add(ref _durabilityWaitersFannedOut, waiterCount);
+        SetMaximum(ref _walLastSyncedSequence, sequence);
+    }
+
+    public void RecordWalDurabilityBoundary(long sequence) =>
+        SetMaximum(ref _walLastSyncedSequence, sequence);
+
+    public void RecordWriteStallNoSpace()
+    {
+        Interlocked.Increment(ref _writeStallsNoSpace);
+    }
+
+    public void RecordCloudAsyncWalSegmentSealed(
+        ulong segmentId,
+        long bytes,
+        TimeSpan elapsed)
+    {
+        Interlocked.Increment(ref _cloudAsyncWalSegmentsSealed);
+        Interlocked.Add(ref _cloudAsyncWalBytesSealed, bytes);
+        Interlocked.Add(
+            ref _cloudAsyncWalSealLatencyMicroseconds,
+            ToMicroseconds(elapsed));
+        _cloudWalAcknowledgementStarts.TryAdd(segmentId, Stopwatch.GetTimestamp());
+    }
+
+    public void RecordCloudAsyncWalUploadStarted() =>
+        Interlocked.Increment(ref _cloudAsyncWalUploadsStarted);
+
+    public void RecordCloudAsyncWalUploadCompleted(TimeSpan elapsed)
+    {
+        Interlocked.Increment(ref _cloudAsyncWalUploadsCompleted);
+        Interlocked.Add(
+            ref _cloudAsyncWalUploadLatencyMicroseconds,
+            ToMicroseconds(elapsed));
+    }
+
+    public void RecordCloudAsyncWalUploadFailed() =>
+        Interlocked.Increment(ref _cloudAsyncWalUploadsFailed);
+
+    public void RecordCloudAsyncWalAcknowledged(ulong segmentId)
+    {
+        if (_cloudWalAcknowledgementStarts.TryRemove(segmentId, out var started))
+        {
+            Interlocked.Add(
+                ref _cloudAsyncWalAcknowledgementLatencyMicroseconds,
+                ToMicroseconds(Stopwatch.GetElapsedTime(started)));
+        }
     }
 
     public void RecordFlush(TimeSpan elapsed)
@@ -284,6 +372,9 @@ internal sealed class RuntimeTelemetry
 
     private static long ToNanoseconds(TimeSpan elapsed) =>
         checked((long)(elapsed.TotalMilliseconds * 1_000_000));
+
+    static long ToMicroseconds(TimeSpan elapsed) =>
+        checked((long)(elapsed.TotalMilliseconds * 1_000));
 
     private static void SetMaximum(ref long target, long value)
     {
