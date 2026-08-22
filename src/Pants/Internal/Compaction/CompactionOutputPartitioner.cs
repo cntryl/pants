@@ -14,7 +14,7 @@ internal static class CompactionOutputPartitioner
             return merged.RangeTombstones.Count == 0 ? [] : [merged];
         }
 
-        var partitions = new List<CompactionMergeResult>();
+        var entryPartitions = new List<List<MidgeSstEntry>>();
         var entries = new List<MidgeSstEntry>();
         long estimatedBytes = 0;
         foreach (MidgeSstEntry entry in merged.Entries)
@@ -22,7 +22,7 @@ internal static class CompactionOutputPartitioner
             long entryBytes = checked(entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes);
             if (entries.Count > 0 && estimatedBytes + entryBytes > targetSizeBytes)
             {
-                partitions.Add(CreatePartition(entries, merged.RangeTombstones));
+                entryPartitions.Add(entries);
                 entries = [];
                 estimatedBytes = 0;
             }
@@ -31,20 +31,32 @@ internal static class CompactionOutputPartitioner
             estimatedBytes = checked(estimatedBytes + entryBytes);
         }
 
-        partitions.Add(CreatePartition(entries, merged.RangeTombstones));
-        return partitions;
+        entryPartitions.Add(entries);
+        return entryPartitions.Select((partition, index) => CreatePartition(
+            partition,
+            merged.RangeTombstones,
+            index == 0 ? null : partition[0].Key,
+            index + 1 == entryPartitions.Count ? null : entryPartitions[index + 1][0].Key)).ToArray();
     }
 
     private static CompactionMergeResult CreatePartition(
         List<MidgeSstEntry> entries,
-        IReadOnlyList<MidgeRangeTombstone> ranges)
+        IReadOnlyList<MidgeRangeTombstone> ranges,
+        byte[]? regionStart,
+        byte[]? regionEnd)
     {
-        byte[] smallest = entries[0].Key;
-        byte[] largest = entries[^1].Key;
         MidgeRangeTombstone[] overlappingRanges = ranges
             .Where(range =>
-                ByteArrayComparer.Instance.Compare(range.Start, largest) <= 0 &&
-                ByteArrayComparer.Instance.Compare(range.End, smallest) > 0)
+                (regionEnd is null || ByteArrayComparer.Instance.Compare(range.Start, regionEnd) < 0) &&
+                (regionStart is null || ByteArrayComparer.Instance.Compare(range.End, regionStart) > 0))
+            .Select(range => new MidgeRangeTombstone(
+                regionStart is null || ByteArrayComparer.Instance.Compare(range.Start, regionStart) >= 0
+                    ? range.Start.ToArray()
+                    : regionStart.ToArray(),
+                regionEnd is null || ByteArrayComparer.Instance.Compare(range.End, regionEnd) <= 0
+                    ? range.End.ToArray()
+                    : regionEnd.ToArray(),
+                range.Sequence))
             .ToArray();
         return new CompactionMergeResult(entries.ToArray(), overlappingRanges);
     }
