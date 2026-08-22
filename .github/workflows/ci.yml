@@ -15,16 +15,42 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: ${{ matrix.os }} / Release
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - name: ubuntu-latest / Release
+            os: ubuntu-latest
+            run-crash-recovery: true
+            remaining-filter: FullyQualifiedName!~PantsCloudCrashRecoveryTests
+            max-parallel-threads: 0
+          - name: macos-latest / Release
+            os: macos-latest
+            run-crash-recovery: true
+            remaining-filter: FullyQualifiedName!~PantsCloudCrashRecoveryTests
+            max-parallel-threads: 0
+          - name: windows-latest / Release
+            os: windows-latest
+            run-crash-recovery: false
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
+              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
+              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
+              FullyQualifiedName!~RuntimeWorkerTests
+            max-parallel-threads: 2
+          - name: windows-latest / Release (runtime races)
+            os: windows-latest
+            run-crash-recovery: true
+            remaining-filter: >-
+              FullyQualifiedName~PantsBackgroundFlushPipelineTests|
+              FullyQualifiedName~PantsStorageVerificationHardeningTests|
+              FullyQualifiedName~PantsColumnFamilyReclamationTests|
+              FullyQualifiedName~RuntimeWorkerTests
+            max-parallel-threads: 1
 
     steps:
       - name: Check out repository
@@ -45,6 +71,7 @@ jobs:
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
       - name: Test crash recovery
+        if: ${{ matrix.run-crash-recovery }}
         run: >-
           dotnet test Pants.slnx
           --configuration Release
@@ -59,11 +86,14 @@ jobs:
           dotnet test Pants.slnx
           --configuration Release
           --no-build
-          --filter "FullyQualifiedName!~PantsCloudCrashRecoveryTests"
+          --filter "${{ matrix.remaining-filter }}"
           --logger "trx;LogFileName=remaining.trx"
           --results-directory TestResults
           --blame-hang-timeout 3m
           --blame-hang-dump-type none
+          --
+          xUnit.MaxParallelThreads=${{ matrix.max-parallel-threads }}
+          xUnit.ParallelAlgorithm=conservative
 
       - name: Report slowest tests
         if: ${{ always() }}
