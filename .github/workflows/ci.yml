@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: ${{ matrix.os }} / Release
@@ -40,10 +44,21 @@ jobs:
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
-      - name: Test
+      - name: Test crash recovery
         run: >-
           dotnet test Pants.slnx
           --configuration Release
           --no-build
+          --filter "FullyQualifiedName~PantsCloudCrashRecoveryTests"
+          --logger "console;verbosity=detailed"
+          --blame-hang-timeout 2m
+          --blame-hang-dump-type none
+
+      - name: Test remaining suite
+        run: >-
+          dotnet test Pants.slnx
+          --configuration Release
+          --no-build
+          --filter "FullyQualifiedName!~PantsCloudCrashRecoveryTests"
           --blame-hang-timeout 3m
           --blame-hang-dump-type none
