@@ -4,7 +4,7 @@ sealed class ProviderCloudCompactionPublisher
 {
     const string IntentFileName = "intent_log.json";
     readonly ICloudObjectStore _controlStore;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
     readonly CloudLeaseCoordinator _lease;
 
     readonly string _localRoot;
@@ -15,7 +15,7 @@ sealed class ProviderCloudCompactionPublisher
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _sstStore = sstStore;
@@ -32,13 +32,13 @@ sealed class ProviderCloudCompactionPublisher
         cancellationToken.ThrowIfCancellationRequested();
         _lease.EnsureValid();
         await PublishIntentAsync(cancellationToken).ConfigureAwait(false);
-        _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+        _failpoints.Hit(Failpoint.BeforeCloudUpload);
         foreach (var name in outputNames)
         {
             await PublishOutputAsync(name, cancellationToken).ConfigureAwait(false);
         }
 
-        _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
+        _failpoints.Hit(Failpoint.AfterCloudUpload);
     }
 
     async ValueTask PublishIntentAsync(CancellationToken cancellationToken)

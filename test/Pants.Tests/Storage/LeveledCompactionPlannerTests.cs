@@ -5,7 +5,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldPickBoundedL0InputsAndEveryOverlappingL1File()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l0-1.sst", 0, 1, "a", "c"),
             File("l0-2.sst", 0, 2, "d", "f"),
@@ -35,7 +35,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldFailClosedWhenOverlapClosureExceedsInputLimit()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l0-1.sst", 0, 1, "a", "z"),
             File("l0-2.sst", 0, 2, "a", "z"),
@@ -58,7 +58,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldTriggerL0CompactionByBytesIndependentlyOfFileCount()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l0-1.sst", 0, 1, "a", "z", 1025)
         ];
@@ -76,7 +76,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldTriggerInnerLevelByConfiguredSizeRatio()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l1-1.sst", 1, 1, "a", "m", 1025),
             File("l2-1.sst", 2, 2, "n", "z")
@@ -97,7 +97,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldMakePointAndRangeTombstoneEligibilityDistinct()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l0-1.sst", 0, 1, "a", "c"),
             File("l0-unselected.sst", 0, 2, "x", "z")
@@ -134,7 +134,7 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldProduceTheSamePlanForTheSameMetadataSnapshot()
     {
-        MidgeFileMeta[] files =
+        FileMeta[] files =
         [
             File("l0-2.sst", 0, 2, "d", "f"),
             File("l0-1.sst", 0, 1, "a", "c"),
@@ -166,7 +166,7 @@ public sealed class LeveledCompactionPlannerTests
         levelMultiplier,
         l1TargetSizeBytes);
 
-    static MidgeFileMeta File(
+    static FileMeta File(
         string name,
         uint level,
         ulong sequence,

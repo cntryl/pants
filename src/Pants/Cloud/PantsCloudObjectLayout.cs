@@ -11,10 +11,10 @@ public static class PantsCloudObjectLayout
 
     public static string WalSegmentObjectKey(ulong writerEpoch, ulong segmentId)
     {
-        if (writerEpoch == 0 || segmentId == 0)
+        if (writerEpoch == 0)
         {
             throw PantsException.InvalidArgument(
-                "Cloud WAL writer epochs and segment IDs must be greater than zero.");
+                "Cloud WAL writer epochs must be greater than zero.");
         }
 
         return $"wal/epochs/{writerEpoch:00000000000000000000}/{segmentId:00000000000000000000}.wal";

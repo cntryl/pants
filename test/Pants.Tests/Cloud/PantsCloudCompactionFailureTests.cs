@@ -10,7 +10,7 @@ public sealed class PantsCloudCompactionFailureTests
         await using var database = await OpenAsync(directory.Path, failpoints);
         await SeedCompactionInputsAsync(database, database.DefaultColumnFamily, "intent-first");
         var initialRemoteCount = RemoteSsts(directory.Path).Length;
-        failpoints.Arm(PantsFailpoint.BeforeIntentLogReplace);
+        failpoints.Arm(Failpoint.BeforeIntentLogReplace);
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
@@ -30,7 +30,7 @@ public sealed class PantsCloudCompactionFailureTests
         {
             await SeedCompactionInputsAsync(database, database.DefaultColumnFamily, "remote-orphan");
             initialRemoteCount = RemoteSsts(directory.Path).Length;
-            failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
+            failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
 
             await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
@@ -58,7 +58,7 @@ public sealed class PantsCloudCompactionFailureTests
             var initialRemoteNames = RemoteSsts(directory.Path)
                 .Select(Path.GetFileName)
                 .ToHashSet(StringComparer.Ordinal);
-            failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
+            failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
             await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
             orphanPath = Assert.Single(
                 RemoteSsts(directory.Path),
@@ -96,7 +96,7 @@ public sealed class PantsCloudCompactionFailureTests
             .OfType<string>()
             .ToHashSet(StringComparer.Ordinal);
         var publicationFailure = new CloudCompactionFailpointHandler();
-        publicationFailure.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
+        publicationFailure.Arm(Failpoint.BeforeCompactionManifestPublish);
         await using (var failingDatabase = await OpenAsync(options, publicationFailure))
         {
             await Assert.ThrowsAsync<PantsIOException>(() => failingDatabase.CompactAllAsync().AsTask());
@@ -109,7 +109,7 @@ public sealed class PantsCloudCompactionFailureTests
         var replacement = "replacement must survive stale cleanup proof"u8.ToArray();
         var cleanupFailure = new CloudCompactionFailpointHandler();
         cleanupFailure.ArmCallback(
-            PantsFailpoint.BeforeCloudSstGarbageCollectionDelete,
+            Failpoint.BeforeCloudSstGarbageCollectionDelete,
             () => File.WriteAllBytes(orphanPath, replacement));
 
         await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => OpenAsync(options, cleanupFailure).AsTask());
@@ -129,7 +129,7 @@ public sealed class PantsCloudCompactionFailureTests
         var failpoints = new CloudCompactionFailpointHandler();
         await using var database = await OpenAsync(directory.Path, failpoints);
         await SeedWritesAsync(database, database.DefaultColumnFamily, "cloud-retry");
-        failpoints.Arm(PantsFailpoint.BeforeCloudUpload);
+        failpoints.Arm(Failpoint.BeforeCloudUpload);
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
@@ -219,7 +219,7 @@ public sealed class PantsCloudCompactionFailureTests
         CloudCompactionFailpointHandler failpoints) =>
         PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
     static PantsOpenOptions CreateOptions(string path) =>
         PantsOpenOptions.SimulatedCloud(path, "pants-tests", "compaction-failures/")

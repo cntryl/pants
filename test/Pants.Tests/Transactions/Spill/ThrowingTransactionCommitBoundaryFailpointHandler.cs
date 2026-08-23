@@ -1,11 +1,11 @@
 namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 sealed class ThrowingTransactionCommitBoundaryFailpointHandler(
-    PantsFailpoint target) : IPantsFailpointHandler
+    Failpoint target) : IFailpointHandler
 {
     int _armed = 1;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint == target && Interlocked.Exchange(ref _armed, 0) == 1)
         {

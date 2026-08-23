@@ -7,7 +7,7 @@ public sealed class PantsScanFailureTests
     {
         var expected = new InvalidDataException("terminal read failure");
         var releases = 0;
-        await using var scan = new PantsScanInstance(
+        await using var scan = new ScanInstance(
             _ => ValueTask.FromResult(ThrowAfterFirst(expected).GetEnumerator()),
             new PantsScanQuery(),
             () =>
@@ -50,8 +50,8 @@ public sealed class PantsScanFailureTests
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
 
-        var first = await Assert.ThrowsAsync<PantsStorageException>(() => enumerator.MoveNextAsync().AsTask());
-        var second = await Assert.ThrowsAsync<PantsStorageException>(() => enumerator.MoveNextAsync().AsTask());
+        var first = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
+        var second = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
 
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);

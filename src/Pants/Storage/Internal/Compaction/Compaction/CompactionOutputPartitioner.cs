@@ -14,8 +14,8 @@ static class CompactionOutputPartitioner
             return merged.RangeTombstones.Count == 0 ? [] : [merged];
         }
 
-        var entryPartitions = new List<List<MidgeSstEntry>>();
-        var entries = new List<MidgeSstEntry>();
+        var entryPartitions = new List<List<SstEntry>>();
+        var entries = new List<SstEntry>();
         long estimatedBytes = 0;
         foreach (var entry in merged.Entries)
         {
@@ -40,8 +40,8 @@ static class CompactionOutputPartitioner
     }
 
     static CompactionMergeResult CreatePartition(
-        List<MidgeSstEntry> entries,
-        IReadOnlyList<MidgeRangeTombstone> ranges,
+        List<SstEntry> entries,
+        IReadOnlyList<RangeTombstone> ranges,
         byte[]? regionStart,
         byte[]? regionEnd)
     {
@@ -49,7 +49,7 @@ static class CompactionOutputPartitioner
             .Where(range =>
                 (regionEnd is null || ByteArrayComparer.Instance.Compare(range.Start, regionEnd) < 0) &&
                 (regionStart is null || ByteArrayComparer.Instance.Compare(range.End, regionStart) > 0))
-            .Select(range => new MidgeRangeTombstone(
+            .Select(range => new RangeTombstone(
                 regionStart is null || ByteArrayComparer.Instance.Compare(range.Start, regionStart) >= 0
                     ? range.Start.ToArray()
                     : regionStart.ToArray(),

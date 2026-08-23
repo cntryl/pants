@@ -11,7 +11,7 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         using var failpoints = new CoalescedCommitFailureFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         const int commitCount = 16;
         var transactions = new List<IPantsTransaction>(commitCount);
         for (var index = 0; index < commitCount; index++)

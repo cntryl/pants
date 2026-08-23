@@ -48,7 +48,7 @@ public sealed class CloudSstGarbageCollectionTests
         {
             await PrepareTwoSstsAsync(database, "successor-adoption");
             initialNames.UnionWith(handler.GetObjectPaths("/sst/"));
-            failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
+            failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
 
             await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
@@ -211,11 +211,11 @@ public sealed class CloudSstGarbageCollectionTests
     static ValueTask<IPantsDatabase> OpenProviderAsync(
         string path,
         HttpClient client,
-        IPantsFailpointHandler failpoints) =>
+        IFailpointHandler failpoints) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoints,
                 cloudHttpClient: client));
 

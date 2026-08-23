@@ -6,8 +6,8 @@ sealed class CloudControlMetadataSnapshot
 {
     CloudControlMetadataSnapshot(
         FrozenDictionary<string, ReadOnlyMemory<byte>> files,
-        MidgeManifest[] manifests,
-        MidgeManifest? authoritativeManifest)
+        ManifestState[] manifests,
+        ManifestState? authoritativeManifest)
     {
         Files = files;
         Manifests = manifests;
@@ -23,11 +23,11 @@ sealed class CloudControlMetadataSnapshot
 
     public FrozenDictionary<string, ReadOnlyMemory<byte>> Files { get; }
 
-    public MidgeManifest[] Manifests { get; }
+    public ManifestState[] Manifests { get; }
 
-    public MidgeManifest? AuthoritativeManifest { get; }
+    public ManifestState? AuthoritativeManifest { get; }
 
-    public MidgeFileMeta[] ReferencedSsts { get; }
+    public FileMeta[] ReferencedSsts { get; }
 
     public ulong MaximumManifestSequence { get; }
 
@@ -43,7 +43,7 @@ sealed class CloudControlMetadataSnapshot
             }
         }
 
-        var manifests = new List<MidgeManifest>(2);
+        var manifests = new List<ManifestState>(2);
         var referencedNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
         {

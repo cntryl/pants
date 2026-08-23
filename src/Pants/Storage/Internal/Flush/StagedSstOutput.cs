@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Storage.Internal.Flush;
 
 sealed record StagedSstOutput(
-    MidgeFileMeta Metadata,
+    FileMeta Metadata,
     string StagingPath,
     string FinalPath);

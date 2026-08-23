@@ -14,7 +14,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithCoordinatorQueueCapacityForTesting(1),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var blockedMetrics = database.GetRuntimeMetricsAsync().AsTask();
 
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
@@ -70,7 +70,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(new EngineCancellationFailpointHandler()));
+            new RuntimeDependencies(new EngineCancellationFailpointHandler()));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))

@@ -27,7 +27,7 @@ public sealed class PantsCompactionPublicationMetricsTests
         var failpoint = new NthCompactionPublicationFailpointHandler(2);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await SeedTwoL0FilesAsync(database);
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());

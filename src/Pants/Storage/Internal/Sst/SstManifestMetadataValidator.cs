@@ -3,8 +3,8 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 static class SstManifestMetadataValidator
 {
     public static void Validate(
-        MidgeSstContents contents,
-        MidgeFileMeta file,
+        SstContents contents,
+        FileMeta file,
         string storageKind)
     {
         var keys = contents.Entries.Select(static entry => entry.Key)

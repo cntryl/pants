@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class WriteAdmissionRaceFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -25,16 +25,16 @@ sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDispo
         _walRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeFlushPublication &&
+        if (failpoint == Failpoint.BeforeFlushPublication &&
             Interlocked.CompareExchange(ref _flushHit, 1, 0) == 0)
         {
             Block(_flushEntered, _flushRelease, failpoint);
             return;
         }
 
-        if (failpoint == PantsFailpoint.BeforeWalAppend &&
+        if (failpoint == Failpoint.BeforeWalAppend &&
             Volatile.Read(ref _walArmed) != 0 &&
             Interlocked.CompareExchange(ref _walHit, 1, 0) == 0)
         {
@@ -57,7 +57,7 @@ sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDispo
     static void Block(
         TaskCompletionSource entered,
         ManualResetEventSlim release,
-        PantsFailpoint failpoint)
+        Failpoint failpoint)
     {
         entered.TrySetResult();
         if (!release.Wait(MaximumBlockTime))

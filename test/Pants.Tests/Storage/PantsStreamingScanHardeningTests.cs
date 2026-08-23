@@ -40,7 +40,7 @@ public sealed class PantsStreamingScanHardeningTests
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
         var emitted = 0;
-        PantsStorageException? first = null;
+        StorageException? first = null;
         while (first is null)
         {
             try
@@ -52,7 +52,7 @@ public sealed class PantsStreamingScanHardeningTests
 
                 emitted++;
             }
-            catch (PantsStorageException exception)
+            catch (StorageException exception)
             {
                 first = exception;
             }
@@ -60,7 +60,7 @@ public sealed class PantsStreamingScanHardeningTests
 
         Assert.True(emitted > 0);
         Assert.NotNull(first);
-        var second = await Assert.ThrowsAsync<PantsStorageException>(() => enumerator.MoveNextAsync().AsTask());
+        var second = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);
     }
@@ -130,8 +130,8 @@ public sealed class PantsStreamingScanHardeningTests
     static void CorruptDataBlock(string path, int blockIndex)
     {
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"));
-        MidgeSstBlockHandle handle;
-        using (var reader = MidgeSstReader.Open(sstPath))
+        SstBlockHandle handle;
+        using (var reader = SstReader.Open(sstPath))
         {
             Assert.True(reader.DataBlockCount > blockIndex);
             handle = reader.GetDataBlockHandle(blockIndex);

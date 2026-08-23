@@ -12,7 +12,7 @@ sealed class RuntimeMetricsSnapshotFactory(
     int _storageHealth = (int)PantsEngineHealth.Healthy;
 
     public PantsRuntimeMetrics Create(
-        PantsRuntimeState state,
+        RuntimeState state,
         long walCloudDurableSequence)
     {
         var hybridMetrics = hybridCache is not null && diskStore is not null
@@ -36,7 +36,7 @@ sealed class RuntimeMetricsSnapshotFactory(
 
     public PantsRuntimeMetrics RefreshPublished(
         PantsRuntimeMetrics snapshot,
-        PantsRuntimeState state,
+        RuntimeState state,
         long walCloudDurableSequence)
     {
         if (state.Health != PantsEngineHealth.Healthy)
@@ -205,7 +205,7 @@ sealed class RuntimeMetricsSnapshotFactory(
         };
     }
 
-    static long GetOldestSnapshotAgeSeconds(PantsRuntimeState state) =>
+    static long GetOldestSnapshotAgeSeconds(RuntimeState state) =>
         state.ActiveSnapshotCount == 0
             ? 0
             : checked((long)state.ActiveSnapshots

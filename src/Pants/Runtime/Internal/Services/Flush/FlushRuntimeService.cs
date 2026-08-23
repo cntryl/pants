@@ -9,13 +9,13 @@ sealed class FlushRuntimeService(
     : ChannelRuntimeService<FlushRuntimeRequest, FlushRuntimeResult>(capacity)
 {
     public async ValueTask FlushAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         CancellationToken cancellationToken = default) =>
         _ = await ExecuteAsync(new FlushAllRuntimeRequest(state), cancellationToken)
             .ConfigureAwait(false);
 
     public async ValueTask FlushAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         ColumnFamilyIdentity columnFamily,
         CancellationToken cancellationToken = default) =>
         _ = await ExecuteAsync(

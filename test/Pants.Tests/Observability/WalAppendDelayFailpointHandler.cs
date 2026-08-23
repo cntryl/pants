@@ -1,10 +1,10 @@
 namespace Cntryl.Pants.Tests.Observability;
 
-sealed class WalAppendDelayFailpointHandler(TimeSpan delay) : IPantsFailpointHandler
+sealed class WalAppendDelayFailpointHandler(TimeSpan delay) : IFailpointHandler
 {
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.MidWalAppend)
+        if (failpoint == Failpoint.MidWalAppend)
         {
             Thread.Sleep(delay);
         }

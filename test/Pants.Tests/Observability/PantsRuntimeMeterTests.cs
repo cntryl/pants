@@ -108,13 +108,13 @@ public sealed class PantsRuntimeMeterTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
         await using (var local = await PantsDatabase.OpenForTestingAsync(
                          localOptions,
-                         new PantsRuntimeDependencies(compactionFailure)))
+                         new RuntimeDependencies(compactionFailure)))
         {
             await CommitAsync(local, "first", PantsWriteOptions.Buffered);
             await local.FlushAsync(local.DefaultColumnFamily);
             await CommitAsync(local, "second", PantsWriteOptions.Buffered);
             await local.FlushAsync(local.DefaultColumnFamily);
-            compactionFailure.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
+            compactionFailure.Arm(Failpoint.BeforeCompactionManifestPublish);
 
             await Assert.ThrowsAsync<PantsIOException>(() => local.CompactAllAsync().AsTask());
 
@@ -128,9 +128,9 @@ public sealed class PantsRuntimeMeterTests
             .WithBackgroundCompaction(false);
         await using var cloud = await PantsDatabase.OpenForTestingAsync(
             cloudOptions,
-            new PantsRuntimeDependencies(cloudFailure));
+            new RuntimeDependencies(cloudFailure));
         await CommitAsync(cloud, "retry", PantsWriteOptions.CloudAsync);
-        cloudFailure.Arm(PantsFailpoint.BeforeCloudUpload);
+        cloudFailure.Arm(Failpoint.BeforeCloudUpload);
 
         await Assert.ThrowsAsync<PantsIOException>(() => cloud.FlushAsync(cloud.DefaultColumnFamily).AsTask());
 

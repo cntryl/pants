@@ -103,13 +103,13 @@ public sealed class PantsHybridReadCancellationContractTests
 
     static async ValueTask<IPantsDatabase> CreateDatabaseWithEvictedSstAsync(
         string path,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(path, "pants-tests", "hybrid-cancellation/")
                 .WithSimulatedCloudLocalStorageBudget(LocalBudgetBytes)
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         try
         {
             await using var writer = await database.BeginTransactionAsync(
@@ -141,7 +141,7 @@ public sealed class PantsHybridReadCancellationContractTests
             "hybrid-cancellation");
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(path, location).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         try
         {
             await using var writer = await database.BeginTransactionAsync(

@@ -16,15 +16,15 @@ public class CompressionSubsystemBenchmarks : Tier2Benchmark
     public void Setup()
     {
         _blocks = Enumerable.Range(0, BlockCount).Select(index => Tier2Data.Value(BlockSize, index)).ToArray();
-        _lz4Blocks = Compress(_blocks, MidgeCompressionAlgorithm.Lz4);
-        _zstd3Blocks = Compress(_blocks, MidgeCompressionAlgorithm.Zstd3);
+        _lz4Blocks = Compress(_blocks, CompressionAlgorithm.Lz4);
+        _zstd3Blocks = Compress(_blocks, CompressionAlgorithm.Zstd3);
     }
 
     [Benchmark(OperationsPerInvoke = BlockCount)]
-    public byte[][] CompressLz4Batch() => Compress(_blocks, MidgeCompressionAlgorithm.Lz4);
+    public byte[][] CompressLz4Batch() => Compress(_blocks, CompressionAlgorithm.Lz4);
 
     [Benchmark(OperationsPerInvoke = BlockCount)]
-    public byte[][] CompressZstd3Batch() => Compress(_blocks, MidgeCompressionAlgorithm.Zstd3);
+    public byte[][] CompressZstd3Batch() => Compress(_blocks, CompressionAlgorithm.Zstd3);
 
     [Benchmark(OperationsPerInvoke = BlockCount)]
     public byte[][] DecompressLz4Batch() => Decompress(_lz4Blocks);
@@ -32,11 +32,11 @@ public class CompressionSubsystemBenchmarks : Tier2Benchmark
     [Benchmark(OperationsPerInvoke = BlockCount)]
     public byte[][] DecompressZstd3Batch() => Decompress(_zstd3Blocks);
 
-    static byte[][] Compress(byte[][] blocks, MidgeCompressionAlgorithm algorithm) => blocks
-        .Select(block => MidgeSstBlockCodec.CompressWithTrailer(block, algorithm))
+    static byte[][] Compress(byte[][] blocks, CompressionAlgorithm algorithm) => blocks
+        .Select(block => SstBlockCodec.CompressWithTrailer(block, algorithm))
         .ToArray();
 
     static byte[][] Decompress(byte[][] blocks) => blocks
-        .Select(block => MidgeSstBlockCodec.DecompressWithTrailer(block))
+        .Select(block => SstBlockCodec.DecompressWithTrailer(block))
         .ToArray();
 }

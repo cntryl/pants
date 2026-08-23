@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Runtime.Internal.Transactions;
 static class CoalescedCommitApplyPreflight
 {
     public static IReadOnlyList<PreparedCoalescedCommit> Create(
-        PantsRuntimeState state,
+        RuntimeState state,
         IReadOnlyList<CommitRuntimeCommand> commands)
     {
         var prepared = new List<PreparedCoalescedCommit>(commands.Count);
@@ -78,14 +78,14 @@ static class CoalescedCommitApplyPreflight
         }
         catch (OverflowException exception)
         {
-            throw new PantsStorageException(
+            throw new StorageException(
                 "The transaction sequence range is exhausted.",
                 exception);
         }
     }
 
     static void ValidateOperation(
-        PantsRuntimeState state,
+        RuntimeState state,
         TransactionIntentOperation operation)
     {
         if (!state.ActiveFamilyVersions.TryGetValue(

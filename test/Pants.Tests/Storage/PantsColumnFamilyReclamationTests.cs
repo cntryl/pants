@@ -59,7 +59,7 @@ public sealed class PantsColumnFamilyReclamationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseVerifier = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             verifierStarted.SetResult();
             await releaseVerifier.Task;
@@ -79,7 +79,7 @@ public sealed class PantsColumnFamilyReclamationTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, simulatedCloud),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var family = await CreateFlushedFamilyAsync(database, "verification-reclamation");
         await using var snapshot = await database.BeginTransactionAsync(
             family,
@@ -114,7 +114,7 @@ public sealed class PantsColumnFamilyReclamationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseVerifier = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             verifierStarted.SetResult();
             await releaseVerifier.Task;
@@ -134,7 +134,7 @@ public sealed class PantsColumnFamilyReclamationTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, true),
-            new PantsRuntimeDependencies(failpoint, verifier));
+            new RuntimeDependencies(failpoint, verifier));
         var family = await CreateFlushedFamilyAsync(database, "failed-reclamation");
         await using var snapshot = await database.BeginTransactionAsync(
             family,
@@ -146,7 +146,7 @@ public sealed class PantsColumnFamilyReclamationTests
         {
             await verifierStarted.Task.WaitAsync(AssertionTimeout);
             await snapshot.RollbackAsync();
-            failpoint.Arm(PantsFailpoint.BeforeCloudSstGarbageCollectionDelete);
+            failpoint.Arm(Failpoint.BeforeCloudSstGarbageCollectionDelete);
         }
         finally
         {
@@ -173,7 +173,7 @@ public sealed class PantsColumnFamilyReclamationTests
         var familyId = 0u;
         var filesSeenBySecondVerifier = -1;
         var invocations = 0;
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             if (Interlocked.Increment(ref invocations) == 1)
             {
@@ -203,7 +203,7 @@ public sealed class PantsColumnFamilyReclamationTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, false),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var family = await CreateFlushedFamilyAsync(database, "ordered-reclamation");
         familyId = family.Id;
         await using var snapshot = await database.BeginTransactionAsync(

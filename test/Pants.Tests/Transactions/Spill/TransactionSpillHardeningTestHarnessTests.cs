@@ -13,12 +13,12 @@ public sealed class TransactionSpillHardeningTestHarnessTests
         var payload = CreateWalPayloadWithUnsupportedCompression();
         using (var stream = File.Create(Path.Combine(walDirectory, "wal.log")))
         {
-            MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
 
-        Assert.Throws<PantsStorageException>(() => TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
+        Assert.Throws<PantsCorruptionException>(() => TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
     }
 
     static byte[] CreateWalPayloadWithUnsupportedCompression()
@@ -53,7 +53,7 @@ public sealed class TransactionSpillHardeningTestHarnessTests
     static void WriteTlv(Stream stream, byte tag, ReadOnlySpan<byte> value)
     {
         stream.WriteByte(tag);
-        MidgeDiskFormat.WriteUInt32(stream, checked((uint)value.Length));
+        DiskFormat.WriteUInt32(stream, checked((uint)value.Length));
         stream.Write(value);
     }
 }

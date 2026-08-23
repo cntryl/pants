@@ -1,8 +1,8 @@
 namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 sealed class TransactionCommitBoundaryFailpointHandler(
-    PantsFailpoint directBoundary,
-    PantsFailpoint spilledBoundary) : IPantsFailpointHandler
+    Failpoint directBoundary,
+    Failpoint spilledBoundary) : IFailpointHandler
 {
     int _directHits;
     int _spilledHits;
@@ -11,7 +11,7 @@ sealed class TransactionCommitBoundaryFailpointHandler(
 
     public int SpilledHits => Volatile.Read(ref _spilledHits);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint == directBoundary)
         {

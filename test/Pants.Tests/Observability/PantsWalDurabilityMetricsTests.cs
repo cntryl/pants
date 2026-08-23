@@ -65,18 +65,18 @@ public sealed class PantsWalDurabilityMetricsTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.AfterWalAppend))]
-    [InlineData(nameof(PantsFailpoint.BeforeWalFlush))]
+    [InlineData(nameof(Failpoint.AfterWalAppend))]
+    [InlineData(nameof(Failpoint.BeforeWalFlush))]
     public async Task ShouldCountAppendBeforeLaterBufferedWalFailure(string failureName)
     {
         using var directory = new TemporaryDirectory();
-        var failure = Enum.Parse<PantsFailpoint>(failureName);
+        var failure = Enum.Parse<Failpoint>(failureName);
         var failpoints = new WalBoundaryMetricsFailpointHandler(
             failure,
             TimeSpan.FromMilliseconds(50));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var before = await database.GetRuntimeMetricsAsync();
 
         await using var transaction = await database.BeginTransactionAsync(
@@ -227,7 +227,7 @@ public sealed class PantsWalDurabilityMetricsTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var before = await database.GetRuntimeMetricsAsync();
 
         try
@@ -281,7 +281,7 @@ public sealed class PantsWalDurabilityMetricsTests
         var failpoints = new WalAppendDelayFailpointHandler(TimeSpan.FromMilliseconds(100));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         await CommitAsync(database, "timed", PantsWriteOptions.Sync);
 

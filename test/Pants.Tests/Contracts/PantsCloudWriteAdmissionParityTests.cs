@@ -9,11 +9,11 @@ public sealed class PantsCloudWriteAdmissionParityTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.AfterCloudWalUpload);
+            Failpoint.AfterCloudWalUpload);
         var options = CreateSaturatedQueueOptions(directory.Path, "non-writing/");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitWriteAsync(database, "occupy-upload-queue");
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 
@@ -44,11 +44,11 @@ public sealed class PantsCloudWriteAdmissionParityTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.AfterCloudWalUpload);
+            Failpoint.AfterCloudWalUpload);
         var options = CreateSaturatedQueueOptions(directory.Path, "assertion-only/");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitWriteAsync(database, "occupy-upload-queue");
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 

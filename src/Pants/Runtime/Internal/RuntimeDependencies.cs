@@ -1,0 +1,42 @@
+namespace Cntryl.Pants.Runtime.Internal;
+
+sealed class RuntimeDependencies
+{
+    public RuntimeDependencies(
+        IFailpointHandler? failpoints = null,
+        StorageVerificationDelegate? storageVerifier = null,
+        TimeSpan? leaseHeartbeatInterval = null,
+        HttpClient? cloudHttpClient = null,
+        VerificationBarrierResponseDelegate? verificationBarrierResponse = null,
+        TimeProvider? runtimeTimeProvider = null)
+    {
+        Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
+        StorageVerifier = storageVerifier ?? Cntryl.Pants.Storage.Internal.StorageVerifier.VerifyPathAsync;
+        LeaseHeartbeatInterval = leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10);
+        CloudHttpClient = cloudHttpClient;
+        VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;
+        RuntimeTimeProvider = runtimeTimeProvider ?? TimeProvider.System;
+        if (LeaseHeartbeatInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(leaseHeartbeatInterval),
+                "The lease heartbeat interval must be greater than zero.");
+        }
+    }
+
+    public IFailpointHandler Failpoints { get; }
+
+    public StorageVerificationDelegate StorageVerifier { get; }
+
+    public TimeSpan LeaseHeartbeatInterval { get; }
+
+    public HttpClient? CloudHttpClient { get; }
+
+    public VerificationBarrierResponseDelegate VerificationBarrierResponse { get; }
+
+    public TimeProvider RuntimeTimeProvider { get; }
+
+    public static RuntimeDependencies Default { get; } = new();
+
+    static ValueTask NoopVerificationBarrierResponse() => ValueTask.CompletedTask;
+}

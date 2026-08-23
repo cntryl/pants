@@ -74,7 +74,7 @@ public sealed class PantsTelemetryContractTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         try
         {
@@ -127,9 +127,9 @@ public sealed class PantsTelemetryContractTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await CommitAsync(database, "retry", PantsWriteOptions.CloudAsync);
-        failpoints.Arm(PantsFailpoint.BeforeCloudUpload);
+        failpoints.Arm(Failpoint.BeforeCloudUpload);
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
         await WaitForAsync(() => Directory
@@ -154,7 +154,7 @@ public sealed class PantsTelemetryContractTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         await Assert.ThrowsAnyAsync<PantsException>(() =>
             database.CreateColumnFamilyAsync("failed-ddl").AsTask());

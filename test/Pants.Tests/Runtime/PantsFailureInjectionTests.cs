@@ -6,10 +6,10 @@ public sealed class PantsFailureInjectionTests
     public async Task ShouldFailBeforeWalAppendWithoutPublishingTransaction()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new TestFailpointHandler(PantsFailpoint.BeforeWalAppend);
+        var failpoints = new TestFailpointHandler(Failpoint.BeforeWalAppend);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -18,7 +18,7 @@ public sealed class PantsFailureInjectionTests
         var error = await Assert.ThrowsAsync<PantsIOException>(() =>
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
-        Assert.Contains(nameof(PantsFailpoint.BeforeWalAppend), error.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(Failpoint.BeforeWalAppend), error.Message, StringComparison.Ordinal);
         await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
@@ -31,11 +31,11 @@ public sealed class PantsFailureInjectionTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new TestFailpointHandler(
-            PantsFailpoint.AfterFlushOutputDurable,
+            Failpoint.AfterFlushOutputDurable,
             true);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -65,10 +65,10 @@ public sealed class PantsFailureInjectionTests
     public async Task ShouldRecoverFullyAbsentTransactionGivenPartialWalFrame()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new TestFailpointHandler(PantsFailpoint.MidWalAppend);
+        var failpoints = new TestFailpointHandler(Failpoint.MidWalAppend);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             await using var transaction = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
@@ -89,14 +89,14 @@ public sealed class PantsFailureInjectionTests
     }
 
     sealed class TestFailpointHandler(
-        PantsFailpoint target,
-        bool oneShot = false) : IPantsFailpointHandler
+        Failpoint target,
+        bool oneShot = false) : IFailpointHandler
     {
         int _hitCount;
 
         public int HitCount => Volatile.Read(ref _hitCount);
 
-        public void Hit(PantsFailpoint failpoint)
+        public void Hit(Failpoint failpoint)
         {
             if (failpoint == target && (!oneShot || HitCount == 0))
             {

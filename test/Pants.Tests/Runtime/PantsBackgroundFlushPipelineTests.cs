@@ -15,7 +15,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushBuild);
+            Failpoint.BeforeFlushBuild);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("background-build");
         await SeedVisibleValuesAsync(database, family);
@@ -59,7 +59,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("background-publish");
         await SeedVisibleValuesAsync(database, family);
@@ -104,7 +104,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         const int keyAndEntryOverheadBytes = 65;
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("bounded-pipeline");
         var value = new byte[flushThresholdBytes - keyAndEntryOverheadBytes];
@@ -209,7 +209,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var recoveryDirectory = new TemporaryDirectory();
         using var failpoint = new BlockingThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("staged-publication");
         try
@@ -264,7 +264,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new BlockingThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeFlushDirectorySync);
+            Failpoint.BeforeFlushDirectorySync);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("directory-sync");
         await CommitAsync(
@@ -350,13 +350,13 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var leaseLost = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var options = CreateOptions(directory.Path).WithLeaseLossCallback(leaseLost.SetResult);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1)));
         var family = await database.CreateColumnFamilyAsync("fenced-publication");
@@ -397,11 +397,11 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         var options = CreateOptions(directory.Path).WithFlushAfterWalRecordsForTesting(1);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var family = await database.CreateColumnFamilyAsync("wal-record-flush");
         try
         {
@@ -441,7 +441,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new PersistentThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeFlushBuild);
+            Failpoint.BeforeFlushBuild);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("worker-failure");
 
@@ -500,7 +500,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushBuild,
+            Failpoint.BeforeFlushBuild,
             true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("automatic-flush-retry");
@@ -532,7 +532,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish,
+            Failpoint.BeforeFlushManifestPublish,
             true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("retained-flush-build");
@@ -562,7 +562,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var recoveryDirectory = new TemporaryDirectory();
         using var failpoint = new BlockingThrowingFlushFailpointHandler(
-            PantsFailpoint.AfterFlushFinalizationBeforeIntent);
+            Failpoint.AfterFlushFinalizationBeforeIntent);
         var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("finalized-before-intent");
         try
@@ -617,11 +617,11 @@ public sealed class PantsBackgroundFlushPipelineTests
         var orphan = Path.Combine(directory.Path, "sst", "orphan.sst");
         File.Copy(canonical, orphan);
         var failpoint = new PersistentThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeStartupResidueDelete);
+            Failpoint.BeforeStartupResidueDelete);
 
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         failpoint.Release();
         var metrics = await reopened.GetRuntimeMetricsAsync();
 
@@ -718,7 +718,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var recoveryDirectory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("recovered-auto-flush");
         try
@@ -782,10 +782,10 @@ public sealed class PantsBackgroundFlushPipelineTests
         Directory.CreateDirectory(Path.GetDirectoryName(residue)!);
         await File.WriteAllTextAsync(residue, "stale");
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeStartupResidueDelete);
+            Failpoint.BeforeStartupResidueDelete);
         var opening = PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1))).AsTask();
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
@@ -876,11 +876,11 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         var options = CreateOptions(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         try
         {
             var family = await database.CreateColumnFamilyAsync("shutdown-fence");
@@ -922,11 +922,11 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new PersistentThrowingFlushFailpointHandler(
-            PantsFailpoint.BeforeFlushBuild);
+            Failpoint.BeforeFlushBuild);
         var options = CreateOptions(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var shutdownCompleted = false;
         try
         {
@@ -972,11 +972,11 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var options = CreateOptions(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var shutdownCompleted = false;
         try
         {
@@ -1063,7 +1063,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var options = CreateOptions(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -1094,11 +1094,11 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeShutdownWalDurabilityBoundary);
+            Failpoint.BeforeShutdownWalDurabilityBoundary);
         var options = CreateOptions(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var shutdownCompleted = false;
         var firstShutdown = Task.CompletedTask;
         try
@@ -1157,12 +1157,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var options = CreateOptions(directory.Path)
             .WithShutdownTimeout(TimeSpan.FromMilliseconds(100));
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1)));
         var shutdownCompleted = false;
@@ -1232,7 +1232,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushBuild);
+            Failpoint.BeforeFlushBuild);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("drop-after-flush");
         await CommitAsync(
@@ -1275,7 +1275,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("compact-after-flush");
         try
@@ -1320,7 +1320,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionAdmission);
+            Failpoint.BeforeCompactionAdmission);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("compact-admission-race");
         try
@@ -1406,13 +1406,13 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionAdmission);
+            Failpoint.BeforeCompactionAdmission);
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(true)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var family = await database.CreateColumnFamilyAsync("deferred-compact-race");
         try
         {
@@ -1458,7 +1458,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.AfterFlushManifestPublish,
+            Failpoint.AfterFlushManifestPublish,
             true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("published-retry-intent");
@@ -1544,10 +1544,10 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushPublication);
+            Failpoint.BeforeFlushPublication);
         var verifierStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = (_, _) =>
+        StorageVerificationDelegate verifier = (_, _) =>
         {
             verifierStarted.TrySetResult();
             return ValueTask.FromResult(new PantsStorageVerificationReport(
@@ -1566,7 +1566,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
-            new PantsRuntimeDependencies(failpoint, verifier));
+            new RuntimeDependencies(failpoint, verifier));
         var family = await database.CreateColumnFamilyAsync("verify-after-flush");
         try
         {
@@ -1606,7 +1606,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var family = await database.CreateColumnFamilyAsync("compaction-signal-race");
         try
         {
@@ -1657,7 +1657,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseVerifier = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, cancellationToken) =>
+        StorageVerificationDelegate verifier = async (_, cancellationToken) =>
         {
             verifierEntered.TrySetResult();
             await releaseVerifier.Task.WaitAsync(cancellationToken);
@@ -1668,7 +1668,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint, verifier));
+            new RuntimeDependencies(failpoint, verifier));
         var family = await database.CreateColumnFamilyAsync("verification-compaction-race");
         Task<PantsStorageVerificationReport>? verification = null;
         try
@@ -1713,12 +1713,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushCompactionAdmission);
+            Failpoint.BeforeFlushCompactionAdmission);
         var verifierEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseVerifier = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, cancellationToken) =>
+        StorageVerificationDelegate verifier = async (_, cancellationToken) =>
         {
             verifierEntered.TrySetResult();
             await releaseVerifier.Task.WaitAsync(cancellationToken);
@@ -1728,7 +1728,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint, verifier));
+            new RuntimeDependencies(failpoint, verifier));
         var family = await database.CreateColumnFamilyAsync("flush-verification-race");
         Task<PantsStorageVerificationReport>? verification = null;
         try
@@ -1775,7 +1775,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseVerifier = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, cancellationToken) =>
+        StorageVerificationDelegate verifier = async (_, cancellationToken) =>
         {
             verifierEntered.TrySetResult();
             await releaseVerifier.Task.WaitAsync(cancellationToken);
@@ -1787,7 +1787,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         for (var generation = 0; generation < 6; generation++)
         {
             await CommitAsync(
@@ -1870,12 +1870,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionManifestPublish);
+            Failpoint.BeforeCompactionManifestPublish);
         var options = CreateOptions(directory.Path)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1)));
         var family = await database.CreateColumnFamilyAsync("fenced-compaction");
@@ -1967,7 +1967,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         string? publishedName = null;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoint)))
+                         new RuntimeDependencies(failpoint)))
         {
             for (var index = 0; index < 2; index++)
             {
@@ -2045,14 +2045,14 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionManifestPublish,
+            Failpoint.BeforeCompactionManifestPublish,
             true);
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoint)))
+                         new RuntimeDependencies(failpoint)))
         {
             for (var index = 0; index < 2; index++)
             {
@@ -2105,12 +2105,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionDirectorySync);
+            Failpoint.BeforeCompactionDirectorySync);
         var options = CreateOptions(directory.Path)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var family = await database.CreateColumnFamilyAsync("compaction-directory-sync");
         for (var generation = 0; generation < 2; generation++)
         {
@@ -2155,12 +2155,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.AfterCompactionManifestPublish);
+            Failpoint.AfterCompactionManifestPublish);
         var options = CreateOptions(directory.Path)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1)));
         var family = await database.CreateColumnFamilyAsync("compaction-recovery-evidence");
@@ -2283,7 +2283,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new BlockingThrowingFlushFailpointHandler(
-            PantsFailpoint.AfterFlushManifestPublish);
+            Failpoint.AfterFlushManifestPublish);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var flushed = await database.CreateColumnFamilyAsync("retry-frontier-flushed");
         var pending = await database.CreateColumnFamilyAsync("retry-frontier-pending");
@@ -2326,14 +2326,14 @@ public sealed class PantsBackgroundFlushPipelineTests
         string? publishedName = null;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoint)))
+                         new RuntimeDependencies(failpoint)))
         {
             await CommitBestEffortAsync(
                 database,
                 database.DefaultColumnFamily,
                 "journal-authoritative"u8.ToArray(),
                 "value"u8.ToArray());
-            failpoint.Arm(PantsFailpoint.BeforeManifestCheckpointReplace);
+            failpoint.Arm(Failpoint.BeforeManifestCheckpointReplace);
 
             await database.FlushAsync(database.DefaultColumnFamily);
 
@@ -2423,7 +2423,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var committedSequence = 0L;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoint)))
+                         new RuntimeDependencies(failpoint)))
         {
             await CommitAsync(
                 database,
@@ -2431,7 +2431,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 "durable"u8.ToArray(),
                 "value"u8.ToArray());
             committedSequence = (await database.GetRuntimeMetricsAsync()).CurrentSequence;
-            failpoint.Arm(PantsFailpoint.BeforeManifestCheckpointReplace);
+            failpoint.Arm(Failpoint.BeforeManifestCheckpointReplace);
 
             await database.FlushAsync(database.DefaultColumnFamily);
 
@@ -2539,10 +2539,10 @@ public sealed class PantsBackgroundFlushPipelineTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        IPantsFailpointHandler failpoints) =>
+        IFailpointHandler failpoints) =>
         PantsDatabase.OpenForTestingAsync(
             CreateOptions(path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
     static async ValueTask SeedVisibleValuesAsync(
         IPantsDatabase database,

@@ -23,11 +23,11 @@ sealed class TransactionIntentOperation
         TimeToLive = timeToLive;
         ExpirationUnixMilliseconds = expirationUnixMilliseconds ??
                                      (expiryUtc is { } expiration
-                                         ? PantsUnixTimestamp.FromDateTimeOffset(expiration)
+                                         ? UnixTimestamp.FromDateTimeOffset(expiration)
                                          : null);
         ExpiryUtc = expiryUtc ??
                     (expirationUnixMilliseconds is { } rawExpiration
-                        ? PantsUnixTimestamp.ToDateTimeOffsetSaturating(rawExpiration)
+                        ? UnixTimestamp.ToDateTimeOffsetSaturating(rawExpiration)
                         : null);
         InsertOnly = insertOnly;
     }

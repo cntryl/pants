@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class OrderedFlushRetryFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class OrderedFlushRetryFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -23,9 +23,9 @@ sealed class OrderedFlushRetryFailpointHandler : IPantsFailpointHandler, IDispos
         _releaseSecond.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeFlushManifestPublish)
+        if (failpoint != Failpoint.BeforeFlushManifestPublish)
         {
             return;
         }

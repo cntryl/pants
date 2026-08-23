@@ -24,15 +24,15 @@ public sealed class CloudWalSalvageTests
     }
 
     static byte[] CreateSplitWalBytes() => Frame(
-        MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionBegin,
+        WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionBegin,
             1,
             1,
             7),
-        MidgeWalCodec.EncodeTransactionMutation(
-            new MidgeWalMutation(
+        WalCodec.EncodeTransactionMutation(
+            new WalMutation(
                 0,
-                MidgeWalOperation.Put,
+                WalOperation.Put,
                 "alpha"u8.ToArray(),
                 "value"u8.ToArray(),
                 2,
@@ -40,8 +40,8 @@ public sealed class CloudWalSalvageTests
                 null),
             1,
             7),
-        MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionCommit,
+        WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionCommit,
             1,
             3,
             7));
@@ -51,8 +51,8 @@ public sealed class CloudWalSalvageTests
         using var stream = new MemoryStream();
         foreach (var payload in payloads)
         {
-            MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
 

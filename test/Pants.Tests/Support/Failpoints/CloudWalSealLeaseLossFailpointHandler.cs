@@ -1,10 +1,10 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CloudWalSealLeaseLossFailpointHandler(string root) : IPantsFailpointHandler
+sealed class CloudWalSealLeaseLossFailpointHandler(string root) : IFailpointHandler
 {
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.AfterCloudWalSealFlush)
+        if (failpoint != Failpoint.AfterCloudWalSealFlush)
         {
             return;
         }

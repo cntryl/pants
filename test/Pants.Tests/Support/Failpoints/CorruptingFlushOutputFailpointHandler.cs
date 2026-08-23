@@ -1,12 +1,12 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CorruptingFlushOutputFailpointHandler(string databasePath) : IPantsFailpointHandler
+sealed class CorruptingFlushOutputFailpointHandler(string databasePath) : IFailpointHandler
 {
     int _hit;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.AfterFlushOutputDurable ||
+        if (failpoint != Failpoint.AfterFlushOutputDurable ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;

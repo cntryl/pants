@@ -1,8 +1,8 @@
 namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class OneShotCloudWalSealFailureHandler(
-    PantsFailpoint failure = PantsFailpoint.BeforeWalRotation,
-    Func<Exception>? createFailure = null) : IPantsFailpointHandler
+    Failpoint failure = Failpoint.BeforeWalRotation,
+    Func<Exception>? createFailure = null) : IFailpointHandler
 {
     readonly TaskCompletionSource _failureInjected = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -14,7 +14,7 @@ sealed class OneShotCloudWalSealFailureHandler(
 
     public int Attempts => Volatile.Read(ref _attempts);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint != failure)
         {

@@ -1,11 +1,11 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class DdlFailpointHandler(params string[] targets) : IPantsFailpointHandler
+sealed class DdlFailpointHandler(params string[] targets) : IFailpointHandler
 {
     readonly Lock _gate = new();
     readonly HashSet<string> _remaining = new(targets, StringComparer.Ordinal);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         lock (_gate)
         {

@@ -8,8 +8,8 @@ public sealed class PantsSstIndexTuningTests
     [Fact]
     public void ShouldKeepMidgeIndexKindDiscriminantsStable()
     {
-        Assert.Equal(0, (byte)MidgeSstIndexKind.Sparse);
-        Assert.Equal(1, (byte)MidgeSstIndexKind.Trie);
+        Assert.Equal(0, (byte)SstIndexKind.Sparse);
+        Assert.Equal(1, (byte)SstIndexKind.Trie);
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class PantsSstIndexTuningTests
             [],
             192);
 
-        Assert.Equal(MidgeSstIndexKind.Trie, MidgeSstIndexTuner.Decide(profile));
+        Assert.Equal(SstIndexKind.Trie, SstIndexTuner.Decide(profile));
     }
 
     [Fact]
@@ -59,8 +59,8 @@ public sealed class PantsSstIndexTuningTests
         Assert.True(hashLike.Entropy > 7.9F);
         Assert.True(hashLike.AverageSharedPrefix < 1.0F);
         Assert.Equal(0, hashLike.CommonPrefixLength);
-        Assert.Equal(MidgeSstIndexKind.Trie, MidgeSstIndexTuner.Decide(structured));
-        Assert.Equal(MidgeSstIndexKind.Sparse, MidgeSstIndexTuner.Decide(hashLike));
+        Assert.Equal(SstIndexKind.Trie, SstIndexTuner.Decide(structured));
+        Assert.Equal(SstIndexKind.Sparse, SstIndexTuner.Decide(hashLike));
     }
 
     [Theory]
@@ -82,7 +82,7 @@ public sealed class PantsSstIndexTuningTests
             [],
             keyCount);
 
-        Assert.Equal(MidgeSstIndexKind.Sparse, MidgeSstIndexTuner.Decide(profile));
+        Assert.Equal(SstIndexKind.Sparse, SstIndexTuner.Decide(profile));
     }
 
     [Fact]
@@ -95,8 +95,8 @@ public sealed class PantsSstIndexTuningTests
             "tenant/shared/0200"u8.ToArray()
         ];
 
-        var encoded = MidgeTrieIndex.Encode(keys);
-        var index = MidgeTrieIndex.Decode(encoded, keys);
+        var encoded = TrieIndex.Encode(keys);
+        var index = TrieIndex.Decode(encoded, keys);
 
         Assert.Equal(-1, index.FindFloorBlock("a"u8));
         Assert.Equal(0, index.FindFloorBlock("tenant/shared/0050"u8));
@@ -108,7 +108,7 @@ public sealed class PantsSstIndexTuningTests
     public void ShouldPersistTrieIndexGivenStructuredKeys()
     {
         var entries = Enumerable.Range(0, 192)
-            .Select(index => new MidgeSstEntry(
+            .Select(index => new SstEntry(
                 Encoding.UTF8.GetBytes($"tenant/shared/static-segment/{index:0000}"),
                 new byte[1024],
                 checked((ulong)index + 1),
@@ -116,19 +116,19 @@ public sealed class PantsSstIndexTuningTests
                 false))
             .ToArray();
 
-        var bytes = MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
-        var contents = MidgeSstCodec.Decode(bytes);
+        var bytes = SstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
+        var contents = SstCodec.Decode(bytes);
 
-        Assert.Equal(MidgeSstIndexKind.Trie, MidgeSstCodec.GetIndexKind(bytes));
+        Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(bytes));
         Assert.Equal(entries.Select(static entry => entry.Key), contents.Entries.Select(static entry => entry.Key));
-        Assert.True(MidgeSstCodec.GetPointReadDecision(bytes, entries[100].Key).CandidateBlockIndex >= 0);
+        Assert.True(SstCodec.GetPointReadDecision(bytes, entries[100].Key).CandidateBlockIndex >= 0);
     }
 
     [Fact]
     public void ShouldPersistSparseIndexGivenSmallSst()
     {
         var entries = Enumerable.Range(0, 64)
-            .Select(index => new MidgeSstEntry(
+            .Select(index => new SstEntry(
                 Encoding.UTF8.GetBytes($"random-key-{index:0000}"),
                 "value"u8.ToArray(),
                 checked((ulong)index + 1),
@@ -136,10 +136,10 @@ public sealed class PantsSstIndexTuningTests
                 false))
             .ToArray();
 
-        var bytes = MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
-        var contents = MidgeSstCodec.Decode(bytes);
+        var bytes = SstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
+        var contents = SstCodec.Decode(bytes);
 
-        Assert.Equal(MidgeSstIndexKind.Sparse, MidgeSstCodec.GetIndexKind(bytes));
+        Assert.Equal(SstIndexKind.Sparse, SstCodec.GetIndexKind(bytes));
         Assert.Equal(entries.Select(static entry => entry.Key), contents.Entries.Select(static entry => entry.Key));
     }
 
@@ -147,7 +147,7 @@ public sealed class PantsSstIndexTuningTests
     public void ShouldReadTrieGivenRepeatedFirstKeysAcrossDataBlocks()
     {
         var entries = Enumerable.Range(0, 192)
-            .Select(index => new MidgeSstEntry(
+            .Select(index => new SstEntry(
                 "aaaa"u8.ToArray(),
                 new byte[1024],
                 checked((ulong)index + 1),
@@ -155,10 +155,10 @@ public sealed class PantsSstIndexTuningTests
                 false))
             .ToArray();
 
-        var bytes = MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
-        var contents = MidgeSstCodec.Decode(bytes);
+        var bytes = SstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
+        var contents = SstCodec.Decode(bytes);
 
-        Assert.Equal(MidgeSstIndexKind.Trie, MidgeSstCodec.GetIndexKind(bytes));
+        Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(bytes));
         Assert.Equal(entries.Length, contents.Entries.Count);
     }
 }

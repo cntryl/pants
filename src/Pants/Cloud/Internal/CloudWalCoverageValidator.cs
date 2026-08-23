@@ -6,7 +6,7 @@ static class CloudWalCoverageValidator
         ReadOnlySpan<byte> bytes,
         ulong expectedMaximumSequence,
         ulong expectedWriterEpoch,
-        MidgeManifest manifest)
+        ManifestState manifest)
     {
         if (!ValidateAndIsCovered(
                 bytes,
@@ -23,7 +23,7 @@ static class CloudWalCoverageValidator
         ReadOnlySpan<byte> bytes,
         ulong expectedMaximumSequence,
         ulong expectedWriterEpoch,
-        MidgeManifest manifest)
+        ManifestState manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (bytes.IsEmpty)
@@ -33,17 +33,17 @@ static class CloudWalCoverageValidator
 
         var observedMaximumSequence = 0UL;
         ulong? observedWriterEpoch = null;
-        var mutations = new List<MidgeWalMutation>();
+        var mutations = new List<WalMutation>();
         try
         {
-            MidgeWalFrameReader.Visit(
+            WalFrameReader.Visit(
                 bytes,
                 (record, _) =>
                 {
                     if (observedWriterEpoch.HasValue &&
                         observedWriterEpoch.Value != record.WriterEpoch)
                     {
-                        throw new PantsStorageException(
+                        throw new StorageException(
                             "A published cloud WAL segment mixes writer epochs.");
                     }
 
@@ -51,16 +51,16 @@ static class CloudWalCoverageValidator
                     observedMaximumSequence = Math.Max(
                         observedMaximumSequence,
                         record.Sequence);
-                    if (record.Operation == MidgeWalOperation.TransactionBatch)
+                    if (record.Operation == WalOperation.TransactionBatch)
                     {
-                        mutations.AddRange(MidgeWalCodec.DecodeTransactionBatch(
+                        mutations.AddRange(WalCodec.DecodeTransactionBatch(
                             record,
                             out var commitSequence,
                             out var writerEpoch));
                     }
-                    else if (MidgeWalCodec.IsMutation(record.Operation))
+                    else if (WalCodec.IsMutation(record.Operation))
                     {
-                        mutations.Add(MidgeWalCodec.DecodeMutation(record));
+                        mutations.Add(WalCodec.DecodeMutation(record));
                     }
                 });
         }
@@ -86,7 +86,7 @@ static class CloudWalCoverageValidator
         return mutations.All(mutation => manifest.Files.Any(file => Covers(file, mutation)));
     }
 
-    static bool Covers(MidgeFileMeta file, MidgeWalMutation mutation)
+    static bool Covers(FileMeta file, WalMutation mutation)
     {
         if (file.ColumnFamilyId != mutation.ColumnFamilyId ||
             !file.SmallestSequence.HasValue ||
@@ -106,7 +106,7 @@ static class CloudWalCoverageValidator
             return false;
         }
 
-        return mutation.Operation == MidgeWalOperation.DeleteRange
+        return mutation.Operation == WalOperation.DeleteRange
             ? mutation.RangeEnd is not null &&
               mutation.RangeEnd.AsSpan().SequenceCompareTo(largestKey) <= 0
             : mutation.Key.AsSpan().SequenceCompareTo(largestKey) <= 0;

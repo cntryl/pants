@@ -31,7 +31,7 @@ public sealed class TransactionOperationSourceTests
         Assert.True(source.IsSpilled);
         Assert.Equal(3UL, source.Count);
         Assert.Equal([0UL, 1UL, 2UL], firstPass.Select(static operation => operation.Ordinal));
-        var expectedExpiration = PantsUnixTimestamp.ExpirationFromTimeToLive(
+        var expectedExpiration = UnixTimestamp.ExpirationFromTimeToLive(
             commitTime,
             TimeSpan.FromSeconds(30));
         Assert.Equal(expectedExpiration, firstPass[0].ExpirationUnixMilliseconds);
@@ -312,7 +312,7 @@ public sealed class TransactionOperationSourceTests
         var payload = bytes.AsSpan(frameOffset + 8, payloadLength);
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes.AsSpan(frameOffset + 4),
-            MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.Crc32C(payload));
     }
 
     static int GetRangeNodeOffset(byte[] bytes, int nodeIndex) =>

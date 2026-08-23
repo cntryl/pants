@@ -10,7 +10,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using (var database = await OpenAsync(
                          initialCache.Path,
                          location,
@@ -47,7 +47,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
         };
         using var client = new HttpClient(handler);
         var location = CreateLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         var options = PantsOpenOptions.Cloud(cache.Path, location)
             .WithBackgroundCompaction(false);
 
@@ -64,7 +64,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
     static ValueTask<IPantsDatabase> OpenAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        PantsRuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location)
                 .WithBackgroundCompaction(false),

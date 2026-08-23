@@ -62,7 +62,7 @@ public sealed class CommitCoalescerTests
             state,
             prepared,
             PantsDurability.Sync,
-            PantsFailpoint.BeforeCoalescedWalDurabilityBoundary);
+            Failpoint.BeforeCoalescedWalDurabilityBoundary);
 
         Assert.Equal(1, appendCalls);
         Assert.Equal([3L, 6L], Assert.IsAssignableFrom<IReadOnlyList<WalCommitGroupEntry>>(appended)
@@ -127,7 +127,7 @@ public sealed class CommitCoalescerTests
             state,
             prepared,
             PantsDurability.Buffered,
-            PantsFailpoint.BeforeCoalescedWalDurabilityBoundary);
+            Failpoint.BeforeCoalescedWalDurabilityBoundary);
 
         Assert.Equal(PantsDurability.Buffered, appendedDurability);
         Assert.Equal(0, telemetry.DurabilityWaitersFannedOut);
@@ -143,7 +143,7 @@ public sealed class CommitCoalescerTests
             static (_, _, _, _) => throw new InvalidOperationException("Append was not expected."),
             static (_, _, _) => { });
 
-    static PantsRuntimeState CreateState() =>
+    static RuntimeState CreateState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
 
     static CommitRuntimeCommand CreateCommand(

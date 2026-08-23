@@ -72,7 +72,7 @@ static class CloudDdlEdit
     }
 
     public static bool Matches(
-        IReadOnlyList<MidgeColumnFamilyMeta> columnFamilies,
+        IReadOnlyList<ColumnFamilyMeta> columnFamilies,
         JsonElement edit)
     {
         Validate(edit);

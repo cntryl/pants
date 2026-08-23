@@ -1,15 +1,15 @@
 namespace Cntryl.Pants.Tests.Observability;
 
 sealed class WalBoundaryMetricsFailpointHandler(
-    PantsFailpoint failure,
-    TimeSpan appendDelay) : IPantsFailpointHandler
+    Failpoint failure,
+    TimeSpan appendDelay) : IFailpointHandler
 {
     int _delayArmed = 1;
     int _failureArmed = 1;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.MidWalAppend &&
+        if (failpoint == Failpoint.MidWalAppend &&
             Interlocked.Exchange(ref _delayArmed, 0) == 1)
         {
             Thread.Sleep(appendDelay);

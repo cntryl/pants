@@ -1,8 +1,8 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CoalescedCommitFailureFailpointHandler(
-    PantsFailpoint? failure = null,
-    int failAtHit = 1) : IPantsFailpointHandler, IDisposable
+    Failpoint? failure = null,
+    int failAtHit = 1) : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -19,16 +19,16 @@ sealed class CoalescedCommitFailureFailpointHandler(
         _runtimeBarrierRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeRuntimeMetricsResponse &&
+        if (failpoint == Failpoint.BeforeRuntimeMetricsResponse &&
             Interlocked.Exchange(ref _runtimeBarrierArmed, 0) == 1)
         {
             _runtimeBarrierEntered.TrySetResult();
             if (!_runtimeBarrierRelease.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException(
-                    $"Timed out waiting to release {PantsFailpoint.BeforeRuntimeMetricsResponse}.");
+                    $"Timed out waiting to release {Failpoint.BeforeRuntimeMetricsResponse}.");
             }
 
             return;

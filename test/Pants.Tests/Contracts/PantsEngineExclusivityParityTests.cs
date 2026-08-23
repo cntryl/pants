@@ -61,7 +61,7 @@ public sealed class PantsEngineExclusivityParityTests
             .WithLeaseLossCallback(() => leaseLost.TrySetResult());
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromSeconds(1)));
+            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromSeconds(1)));
         await using (var mutationLock = await AcquireLeaseMutationLockAsync(
                          Path.Combine(directory.Path, ".midge_leader.lock")))
         {
@@ -87,7 +87,7 @@ public sealed class PantsEngineExclusivityParityTests
             .WithLeaseLossCallback(() => Interlocked.Increment(ref leaseLossCount));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromHours(1)));
+            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromHours(1)));
         var leasePath = Path.Combine(directory.Path, ".midge_leader");
         var original = await File.ReadAllTextAsync(leasePath);
         await File.WriteAllTextAsync(leasePath, original + "epoch: 999\n");

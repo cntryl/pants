@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CoalescedCommitSyncFailureFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class CoalescedCommitSyncFailureFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -17,26 +17,26 @@ sealed class CoalescedCommitSyncFailureFailpointHandler : IPantsFailpointHandler
         _runtimeBarrierRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeRuntimeMetricsResponse &&
+        if (failpoint == Failpoint.BeforeRuntimeMetricsResponse &&
             Interlocked.Exchange(ref _runtimeBarrierArmed, 0) == 1)
         {
             _runtimeBarrierEntered.TrySetResult();
             if (!_runtimeBarrierRelease.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException(
-                    $"Timed out waiting to release {PantsFailpoint.BeforeRuntimeMetricsResponse}.");
+                    $"Timed out waiting to release {Failpoint.BeforeRuntimeMetricsResponse}.");
             }
 
             return;
         }
 
-        if (failpoint == PantsFailpoint.BeforeCoalescedWalDurabilityBoundary &&
+        if (failpoint == Failpoint.BeforeCoalescedWalDurabilityBoundary &&
             Interlocked.Exchange(ref _syncFailureArmed, 0) == 1)
         {
             throw new PantsNoSpaceException(
-                $"Injected failure at {PantsFailpoint.BeforeCoalescedWalDurabilityBoundary}.");
+                $"Injected failure at {Failpoint.BeforeCoalescedWalDurabilityBoundary}.");
         }
     }
 

@@ -96,7 +96,7 @@ public sealed class PantsCloudEventualFlushTests
             TimeSpan.FromMilliseconds(25));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var before = await database.GetRuntimeMetricsAsync();
 
         await CommitAsync(
@@ -132,7 +132,7 @@ public sealed class PantsCloudEventualFlushTests
             TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var before = await database.GetRuntimeMetricsAsync();
 
         await CommitAsync(
@@ -162,14 +162,14 @@ public sealed class PantsCloudEventualFlushTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new OneShotCloudWalSealFailureHandler(
-            PantsFailpoint.AfterWalRotation);
+            Failpoint.AfterWalRotation);
         var policy = CreatePolicy(
             128,
             1,
             TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var before = await database.GetRuntimeMetricsAsync();
 
         await CommitAsync(
@@ -203,7 +203,7 @@ public sealed class PantsCloudEventualFlushTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new OneShotCloudWalSealFailureHandler(
-            PantsFailpoint.AfterCloudWalSealFlush,
+            Failpoint.AfterCloudWalSealFlush,
             static () => new PantsFencedException("Injected cloud authority loss."));
         var policy = CreatePolicy(
             128,
@@ -211,7 +211,7 @@ public sealed class PantsCloudEventualFlushTests
             TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         await CommitAsync(
             database,
@@ -236,14 +236,14 @@ public sealed class PantsCloudEventualFlushTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new OneShotCloudWalSealFailureHandler(
-            PantsFailpoint.AfterWalRotation);
+            Failpoint.AfterWalRotation);
         var policy = CreatePolicy(
             128,
             1,
             TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
             database,
@@ -284,7 +284,7 @@ public sealed class PantsCloudEventualFlushTests
             TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         try
         {

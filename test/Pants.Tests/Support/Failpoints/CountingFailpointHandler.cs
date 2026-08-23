@@ -1,12 +1,12 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CountingFailpointHandler(PantsFailpoint target) : IPantsFailpointHandler
+sealed class CountingFailpointHandler(Failpoint target) : IFailpointHandler
 {
     int _hitCount;
 
     public int HitCount => Volatile.Read(ref _hitCount);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint == target)
         {

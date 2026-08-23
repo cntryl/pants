@@ -2,20 +2,20 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 static class CloudSstValidator
 {
-    public static void Validate(ReadOnlyMemory<byte> data, MidgeFileMeta file)
+    public static void Validate(ReadOnlyMemory<byte> data, FileMeta file)
     {
         if ((file.SizeBytes != 0 && checked((ulong)data.Length) != file.SizeBytes) ||
             (file.ContentCrc32C.HasValue &&
-             MidgeDiskFormat.Crc32C(data.Span) != file.ContentCrc32C.Value))
+             DiskFormat.Crc32C(data.Span) != file.ContentCrc32C.Value))
         {
             throw new PantsCorruptionException(
                 $"Cloud SST '{file.Name}' differs from its manifest publication proof.");
         }
 
-        MidgeSstContents contents;
+        SstContents contents;
         try
         {
-            contents = MidgeSstCodec.Decode(data.ToArray());
+            contents = SstCodec.Decode(data.ToArray());
         }
         catch (PantsException exception)
         {

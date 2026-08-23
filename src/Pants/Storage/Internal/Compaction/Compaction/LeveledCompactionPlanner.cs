@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 static class LeveledCompactionPlanner
 {
     public static CompactionPlan? Pick(
-        IReadOnlyList<MidgeFileMeta> files,
+        IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
         long? snapshotHorizon,
@@ -55,9 +55,9 @@ static class LeveledCompactionPlanner
     }
 
     static CompactionPlan CreatePlan(
-        MidgeFileMeta[] familyFiles,
-        IReadOnlyList<MidgeFileMeta> sourceFiles,
-        IReadOnlyList<MidgeFileMeta> targetFiles,
+        FileMeta[] familyFiles,
+        IReadOnlyList<FileMeta> sourceFiles,
+        IReadOnlyList<FileMeta> targetFiles,
         uint sourceLevel,
         uint targetLevel,
         uint columnFamilyId,
@@ -107,7 +107,7 @@ static class LeveledCompactionPlanner
                 .ToArray());
     }
 
-    static MidgeFileMeta[] FilesAtLevel(IEnumerable<MidgeFileMeta> files, uint level) =>
+    static FileMeta[] FilesAtLevel(IEnumerable<FileMeta> files, uint level) =>
         files.Where(file => file.Level == level).ToArray();
 
     static void ValidateConfiguration(PantsCompactionConfiguration configuration)
@@ -121,7 +121,7 @@ static class LeveledCompactionPlanner
         }
     }
 
-    static void ValidateMetadata(IEnumerable<MidgeFileMeta> files, uint columnFamilyId,
+    static void ValidateMetadata(IEnumerable<FileMeta> files, uint columnFamilyId,
         int maximumLevels)
     {
         foreach (var file in files)
@@ -138,10 +138,10 @@ static class LeveledCompactionPlanner
     static ulong SaturatingMultiply(ulong value, ulong multiplier) =>
         value > ulong.MaxValue / multiplier ? ulong.MaxValue : value * multiplier;
 
-    static byte[] GetSmallestKey(MidgeFileMeta file) =>
+    static byte[] GetSmallestKey(FileMeta file) =>
         file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
 
-    static byte[] GetLargestKey(MidgeFileMeta file) =>
+    static byte[] GetLargestKey(FileMeta file) =>
         file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
 
     static bool Overlaps(byte[] leftSmallest, byte[] leftLargest, byte[] rightSmallest,

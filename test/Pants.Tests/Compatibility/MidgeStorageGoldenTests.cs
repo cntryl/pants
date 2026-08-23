@@ -20,9 +20,9 @@ public sealed class MidgeStorageGoldenTests
     [InlineData("wal/sealed/00000000000000000001.wal")]
     public void ShouldDecodeEveryFrameGivenPinnedMidgeWalSegmentGolden(string relativePath)
     {
-        var records = new List<MidgeWalRecord>();
+        var records = new List<WalRecord>();
 
-        MidgeWalFrameReader.Visit(
+        WalFrameReader.Visit(
             ReadStorageFixture(relativePath),
             (record, _) => records.Add(record));
 
@@ -40,14 +40,14 @@ public sealed class MidgeStorageGoldenTests
         var path = StorageFixturePath("sst/structured-v4.sst");
         var bytes = File.ReadAllBytes(path);
 
-        var contents = MidgeSstCodec.Decode(bytes);
-        using var reader = MidgeSstReader.Open(path);
+        var contents = SstCodec.Decode(bytes);
+        using var reader = SstReader.Open(path);
 
         Assert.True(contents.Entries.Count >= 192);
         Assert.Single(contents.RangeTombstones);
         Assert.True(contents.DataBlockCount > 0);
         Assert.Equal(contents.DataBlockCount, reader.DataBlockCount);
-        Assert.Equal(MidgeSstIndexKind.Trie, MidgeSstCodec.GetIndexKind(bytes));
+        Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(bytes));
         var decision = reader.GetPointReadDecision(
             "tenant/shared/static-segment/0000"u8);
         Assert.Equal(1, decision.CandidateBlocks);

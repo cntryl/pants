@@ -402,7 +402,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             .WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             await using var transaction = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,

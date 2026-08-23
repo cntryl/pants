@@ -1,7 +1,7 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class PublishedFlushRetryValidationFailpointHandler :
-    IPantsFailpointHandler,
+    IFailpointHandler,
     IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
@@ -19,15 +19,15 @@ sealed class PublishedFlushRetryValidationFailpointHandler :
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.AfterFlushManifestPublish &&
+        if (failpoint == Failpoint.AfterFlushManifestPublish &&
             Interlocked.CompareExchange(ref _publicationFailureInjected, 1, 0) == 0)
         {
             throw new IOException($"Injected failure at {failpoint}.");
         }
 
-        if (failpoint != PantsFailpoint.BeforePublishedFlushRetryValidation ||
+        if (failpoint != Failpoint.BeforePublishedFlushRetryValidation ||
             Interlocked.CompareExchange(ref _retryValidationBlocked, 1, 0) != 0)
         {
             return;

@@ -14,11 +14,11 @@ static class TransactionSpillHardeningTestHarness
 
     internal static ValueTask<IPantsDatabase> OpenLocalForTestingAsync(
         string path,
-        IPantsFailpointHandler failpoints,
+        IFailpointHandler failpoints,
         long transactionMemoryPoolBytes = DefaultPoolBytes) =>
         PantsDatabase.OpenForTestingAsync(
             CreateLocalOptions(path, transactionMemoryPoolBytes),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
     internal static PantsOpenOptions CreateLocalOptions(
         string path,
@@ -34,10 +34,10 @@ static class TransactionSpillHardeningTestHarness
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(64 * 1_024 * 1_024))
             .WithTransactionMemoryPool(8 * 1_024);
 
-    internal static PantsFailpoint GetRequiredFailpoint(string name)
+    internal static Failpoint GetRequiredFailpoint(string name)
     {
         Assert.True(
-            Enum.TryParse(name, out PantsFailpoint failpoint),
+            Enum.TryParse(name, out Failpoint failpoint),
             $"Pants does not expose the Midge-equivalent '{name}' persistence boundary.");
         return failpoint;
     }
@@ -71,7 +71,7 @@ static class TransactionSpillHardeningTestHarness
         return value is null ? null : TestBytes.ToText(value.Value);
     }
 
-    internal static IReadOnlyList<MidgeWalTestRecord> ReadWalFrames(
+    internal static IReadOnlyList<WalTestRecord> ReadWalFrames(
         string databasePath)
     {
         var path = Path.Combine(databasePath, "wal", "wal.log");
@@ -80,7 +80,7 @@ static class TransactionSpillHardeningTestHarness
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        var frames = new List<MidgeWalTestRecord>();
+        var frames = new List<WalTestRecord>();
         Span<byte> header = stackalloc byte[8];
         while (stream.Position < stream.Length)
         {
@@ -90,20 +90,20 @@ static class TransactionSpillHardeningTestHarness
             stream.ReadExactly(header);
             var encodedPayloadLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
             Assert.True(
-                encodedPayloadLength <= MidgeDiskFormat.WalMaximumRecordBytes,
+                encodedPayloadLength <= DiskFormat.WalMaximumRecordBytes,
                 "The WAL frame exceeds Midge's 64 MiB limit.");
             var payloadLength = checked((int)encodedPayloadLength);
             var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
             var payload = GC.AllocateUninitializedArray<byte>(payloadLength);
             stream.ReadExactly(payload);
-            Assert.Equal(expectedChecksum, MidgeDiskFormat.Crc32C(payload));
+            Assert.Equal(expectedChecksum, DiskFormat.Crc32C(payload));
             frames.Add(DecodeWalRecord(payload, payloadLength));
         }
 
         return frames;
     }
 
-    static MidgeWalTestRecord DecodeWalRecord(ReadOnlySpan<byte> payload, int payloadLength)
+    static WalTestRecord DecodeWalRecord(ReadOnlySpan<byte> payload, int payloadLength)
     {
         Assert.True(
             payload.Length >= 3 && payload[..2].SequenceEqual("MW"u8) && payload[2] == 1,
@@ -181,7 +181,7 @@ static class TransactionSpillHardeningTestHarness
         Assert.True(writerEpoch.HasValue, "The WAL record does not contain a writer-epoch tag.");
         if (value is not null)
         {
-            value = MidgeDiskFormat.Decompress(value, compression ?? 0);
+            value = DiskFormat.Decompress(value, compression ?? 0);
         }
 
         switch (operation.Value)
@@ -203,7 +203,7 @@ static class TransactionSpillHardeningTestHarness
                 break;
         }
 
-        return new MidgeWalTestRecord(
+        return new WalTestRecord(
             operation.Value,
             columnFamilyId.Value,
             sequence.Value,

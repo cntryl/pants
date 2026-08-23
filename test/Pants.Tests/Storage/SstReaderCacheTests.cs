@@ -8,7 +8,7 @@ public sealed class SstReaderCacheTests
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "reader.sst");
         var entries = Enumerable.Range(0, 128)
-            .Select(index => new MidgeSstEntry(
+            .Select(index => new SstEntry(
                 TestBytes.FromString($"key-{index:0000}"),
                 new byte[1024],
                 checked((ulong)index + 1),
@@ -17,7 +17,7 @@ public sealed class SstReaderCacheTests
             .ToArray();
         File.WriteAllBytes(
             path,
-            MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency));
+            SstCodec.Encode(entries, [], PantsPerformanceGoal.Latency));
         using var cache = new SstReaderCache();
 
         var first = cache.GetOrAdd("reader.sst", path, out var firstHit);
@@ -28,7 +28,7 @@ public sealed class SstReaderCacheTests
         Assert.False(firstHit);
         Assert.True(secondHit);
         Assert.Same(first, second);
-        Assert.True(MidgeSstCodec.DataBlockContainsKey(block, entries[64].Key));
+        Assert.True(SstCodec.DataBlockContainsKey(block, entries[64].Key));
         Assert.Equal(["reader.sst"], cache.SnapshotFiles());
 
         cache.RemoveFile("reader.sst");

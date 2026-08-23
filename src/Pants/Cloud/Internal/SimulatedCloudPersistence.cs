@@ -26,7 +26,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     readonly WalPublicationCatalog _catalog;
     readonly string _cloudRoot;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
 
     readonly string _localRoot;
     readonly ulong _writerEpoch;
@@ -35,7 +35,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     public SimulatedCloudPersistence(
         string localRoot,
         ulong writerEpoch,
-        IPantsFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
@@ -258,7 +258,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
             var bytes = File.ReadAllBytes(remotePath);
             if (checked((ulong)bytes.Length) != publication.SizeBytes ||
-                MidgeDiskFormat.Crc32C(bytes) != publication.ContentCrc32C)
+                DiskFormat.Crc32C(bytes) != publication.ContentCrc32C)
             {
                 if (recoveryPolicy == PantsRecoveryPolicy.Strict)
                 {
@@ -298,7 +298,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             WriterEpoch = segment.WriterEpoch,
             MaximumSequence = segment.MaximumSequence,
             SizeBytes = checked((ulong)segment.Bytes.Length),
-            ContentCrc32C = MidgeDiskFormat.Crc32C(segment.Bytes),
+            ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
             ObjectKey = objectKey
         };
 
@@ -370,13 +370,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         if (pendingSsts.Count > 0)
         {
-            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+            _failpoints.Hit(Failpoint.BeforeCloudUpload);
             foreach (var (remotePath, bytes) in pendingSsts)
             {
                 AtomicStagedFile.Write(remotePath, bytes);
             }
 
-            _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
+            _failpoints.Hit(Failpoint.AfterCloudUpload);
         }
 
         ValidateCapturedSsts(metadata);
@@ -547,7 +547,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
             var bytes = File.ReadAllBytes(path);
             if (checked((ulong)bytes.Length) != segment.SizeBytes ||
-                MidgeDiskFormat.Crc32C(bytes) != segment.ContentCrc32C)
+                DiskFormat.Crc32C(bytes) != segment.ContentCrc32C)
             {
                 throw new PantsCorruptionException(
                     $"Published simulated-cloud WAL '{segment.ObjectKey}' differs from its catalog proof.");
@@ -557,7 +557,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     bytes,
                     segment.MaximumSequence,
                     segment.WriterEpoch,
-                    (MidgeManifest)manifest))
+                    (ManifestState)manifest))
             {
                 continue;
             }
@@ -574,7 +574,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return;
         }
 
-        var dependencyGuards = ValidateManifestDependencies((MidgeManifest)manifest, metadata);
+        var dependencyGuards = ValidateManifestDependencies((ManifestState)manifest, metadata);
         VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
         foreach (var segment in retired)
         {
@@ -582,7 +582,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 walBytes[segment.SegmentId],
                 segment.MaximumSequence,
                 segment.WriterEpoch,
-                (MidgeManifest)manifest);
+                (ManifestState)manifest);
         }
 
         foreach (var segment in retired)
@@ -605,7 +605,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     }
 
     List<SimulatedCloudObjectGuard> ValidateManifestDependencies(
-        MidgeManifest manifest,
+        ManifestState manifest,
         CloudControlMetadataSnapshot metadata)
     {
         var guards = new List<SimulatedCloudObjectGuard>(

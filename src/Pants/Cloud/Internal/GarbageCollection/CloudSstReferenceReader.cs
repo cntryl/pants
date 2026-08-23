@@ -10,7 +10,7 @@ static class CloudSstReferenceReader
         var manifest = CloudManifestReader.ReadManifest(localRoot);
         if (manifest is not null)
         {
-            AddManifestNames((MidgeManifest)manifest, names);
+            AddManifestNames((ManifestState)manifest, names);
         }
 
         var sstDirectory = Path.Combine(localRoot, "sst");
@@ -35,7 +35,7 @@ static class CloudSstReferenceReader
     }
 
     public static void AddManifestNames(
-        MidgeManifest manifest,
+        ManifestState manifest,
         ISet<string> names)
     {
         ArgumentNullException.ThrowIfNull(manifest);

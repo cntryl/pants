@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class DegradedWriteStallFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class DegradedWriteStallFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -19,16 +19,16 @@ sealed class DegradedWriteStallFailpointHandler : IPantsFailpointHandler, IDispo
         _flushRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeManifestCheckpointReplace &&
+        if (failpoint == Failpoint.BeforeManifestCheckpointReplace &&
             Volatile.Read(ref _checkpointArmed) != 0 &&
             Interlocked.CompareExchange(ref _checkpointHit, 1, 0) == 0)
         {
             throw new IOException($"Injected failure at {failpoint}.");
         }
 
-        if (failpoint != PantsFailpoint.BeforeFlushManifestPublish ||
+        if (failpoint != Failpoint.BeforeFlushManifestPublish ||
             Volatile.Read(ref _flushArmed) == 0 ||
             Interlocked.CompareExchange(ref _flushHit, 1, 0) != 0)
         {

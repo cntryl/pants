@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class RetryingCloudWalSealFailpointHandler : IPantsFailpointHandler
+sealed class RetryingCloudWalSealFailpointHandler : IFailpointHandler
 {
     readonly TaskCompletionSource _failureObserved = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -13,9 +13,9 @@ sealed class RetryingCloudWalSealFailpointHandler : IPantsFailpointHandler
 
     public int Attempts => Volatile.Read(ref _attempts);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeWalRotation)
+        if (failpoint != Failpoint.BeforeWalRotation)
         {
             return;
         }

@@ -7,7 +7,7 @@ sealed class CloudDdlCoordinator
     const string PrepareFileName = "ddl.prepare.json";
     readonly ICloudDdlAuthority _authority;
     readonly LocalDiskStore _diskStore;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
 
     readonly string _preparePath;
     bool _authorityAmbiguous;
@@ -16,7 +16,7 @@ sealed class CloudDdlCoordinator
         string localRoot,
         ICloudDdlAuthority authority,
         LocalDiskStore diskStore,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         _preparePath = Path.Combine(Path.GetFullPath(localRoot), PrepareFileName);
         _authority = authority;
@@ -34,7 +34,7 @@ sealed class CloudDdlCoordinator
     }
 
     public async ValueTask ReconcileStartupAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         CancellationToken cancellationToken)
     {
         await _authority.FenceDdlRegistryAsync(
@@ -75,12 +75,12 @@ sealed class CloudDdlCoordinator
     }
 
     public ValueTask ReconcilePendingAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         CancellationToken cancellationToken) =>
         ReconcilePreparedAsync(state, cancellationToken);
 
     public async ValueTask ExecuteAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         JsonElement edit,
         CancellationToken cancellationToken)
     {
@@ -114,7 +114,7 @@ sealed class CloudDdlCoordinator
 
         try
         {
-            _failpoints.Hit(PantsFailpoint.BeforeDdlRemoteCas);
+            _failpoints.Hit(Failpoint.BeforeDdlRemoteCas);
             var published = await _authority.CompareExchangeDdlRegistryAsync(
                 registry,
                 remote?.Version,
@@ -125,13 +125,13 @@ sealed class CloudDdlCoordinator
                     "Cloud DDL registry publication lost its authority race.");
             }
 
-            _failpoints.Hit(PantsFailpoint.AfterDdlRemoteCas);
+            _failpoints.Hit(Failpoint.AfterDdlRemoteCas);
         }
         catch (Exception publicationError)
         {
             try
             {
-                _failpoints.Hit(PantsFailpoint.BeforeDdlAuthorityReadback);
+                _failpoints.Hit(Failpoint.BeforeDdlAuthorityReadback);
                 var readback = await _authority.ReadDdlRegistryAsync(cancellationToken)
                     .ConfigureAwait(false);
                 if (readback?.Registry.Operations.Any(operation =>
@@ -170,7 +170,7 @@ sealed class CloudDdlCoordinator
     }
 
     async ValueTask ReconcilePreparedAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         CancellationToken cancellationToken)
     {
         var prepare = ReadPrepare();
@@ -257,9 +257,9 @@ sealed class CloudDdlCoordinator
 
     void WritePrepare(CloudDdlPrepare prepare)
     {
-        _failpoints.Hit(PantsFailpoint.BeforeDdlPrepare);
+        _failpoints.Hit(Failpoint.BeforeDdlPrepare);
         AtomicStagedFile.Write(_preparePath, CloudDdlJson.SerializePrepare(prepare));
-        _failpoints.Hit(PantsFailpoint.AfterDdlPrepare);
+        _failpoints.Hit(Failpoint.AfterDdlPrepare);
     }
 
     void TryClearPrepare()
@@ -280,13 +280,13 @@ sealed class CloudDdlCoordinator
 
     void ClearPrepare() => AtomicStagedFile.Delete(_preparePath);
 
-    void ApplyRemoteCommittedVisibility(PantsRuntimeState state, JsonElement edit)
+    void ApplyRemoteCommittedVisibility(RuntimeState state, JsonElement edit)
     {
         _diskStore.AdoptRemoteCommittedColumnFamilyEdit(state, edit);
         MarkPersistenceAnomaly(state);
     }
 
-    static void MarkPersistenceAnomaly(PantsRuntimeState state)
+    static void MarkPersistenceAnomaly(RuntimeState state)
     {
         if (state.Health == PantsEngineHealth.Healthy)
         {

@@ -13,7 +13,7 @@ static class SimulatedCloudSstGarbageCollector
     public static bool Collect(
         string localRoot,
         string cloudRoot,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         try
         {
@@ -44,7 +44,7 @@ static class SimulatedCloudSstGarbageCollector
                     return false;
                 }
 
-                failpoints.Hit(PantsFailpoint.BeforeCloudSstGarbageCollectionDelete);
+                failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
                 if (!QuarantineAndDelete(path, expectedVersion))
                 {
                     return false;

@@ -78,31 +78,31 @@ public sealed class PantsWalWriterEpochRecoveryTests
         const ulong transactionId = 1;
         await WriteWalAsync(
             directory.Path,
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionBegin,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
                 transactionId,
                 1,
                 11),
-            MidgeWalCodec.EncodeTransactionMutation(
+            WalCodec.EncodeTransactionMutation(
                 CreateMutation("orphaned", "hidden", 2),
                 transactionId,
                 11),
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionBegin,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
                 transactionId,
                 3,
                 12),
-            MidgeWalCodec.EncodeTransactionMutation(
+            WalCodec.EncodeTransactionMutation(
                 CreateMutation("committed", "visible", 4),
                 transactionId,
                 12),
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionCommit,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionCommit,
                 transactionId,
                 5,
                 12),
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionCommit,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionCommit,
                 transactionId,
                 6,
                 11));
@@ -217,7 +217,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await WriteWalAsync(
             directory.Path,
             CreateDelete("duplicate", 7, 1),
-            MidgeWalCodec.EncodeTransactionBatch(
+            WalCodec.EncodeTransactionBatch(
                 9,
                 6,
                 1,
@@ -383,9 +383,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
         ulong sequence,
         ulong writerEpoch,
         uint columnFamilyId = 0) =>
-        MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
+        WalCodec.EncodeRecord(new WalRecord(
             columnFamilyId,
-            MidgeWalOperation.Put,
+            WalOperation.Put,
             TestBytes.FromString(key),
             TestBytes.FromString(value),
             sequence,
@@ -394,13 +394,13 @@ public sealed class PantsWalWriterEpochRecoveryTests
             null,
             writerEpoch));
 
-    static MidgeWalMutation CreateMutation(
+    static WalMutation CreateMutation(
         string key,
         string value,
         ulong sequence,
         uint columnFamilyId = 0) => new(
         columnFamilyId,
-        MidgeWalOperation.Put,
+        WalOperation.Put,
         TestBytes.FromString(key),
         TestBytes.FromString(value),
         sequence,
@@ -408,9 +408,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
         null);
 
     static byte[] CreateDelete(string key, ulong sequence, ulong writerEpoch) =>
-        MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
+        WalCodec.EncodeRecord(new WalRecord(
             0,
-            MidgeWalOperation.Delete,
+            WalOperation.Delete,
             TestBytes.FromString(key),
             null,
             sequence,
@@ -419,9 +419,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
             null,
             writerEpoch));
 
-    static MidgeWalMutation CreateDeleteMutation(string key, ulong sequence) => new(
+    static WalMutation CreateDeleteMutation(string key, ulong sequence) => new(
         0,
-        MidgeWalOperation.Delete,
+        WalOperation.Delete,
         TestBytes.FromString(key),
         null,
         sequence,
@@ -440,8 +440,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         var corruptPayload = CreatePut("corrupt", "tail", 11, 2);
         using var stream = new MemoryStream(bytes.Length + corruptPayload.Length + 8);
         stream.Write(bytes);
-        MidgeDiskFormat.WriteUInt32(stream, checked((uint)corruptPayload.Length));
-        MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(corruptPayload) ^ uint.MaxValue);
+        DiskFormat.WriteUInt32(stream, checked((uint)corruptPayload.Length));
+        DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(corruptPayload) ^ uint.MaxValue);
         stream.Write(corruptPayload);
         await File.WriteAllBytesAsync(Path.Combine(path, "wal", "wal.log"), stream.ToArray());
     }
@@ -479,7 +479,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
                 7,
                 1,
                 columnFamilyId),
-            MidgeWalCodec.EncodeTransactionBatch(
+            WalCodec.EncodeTransactionBatch(
                 9,
                 6,
                 1,
@@ -521,8 +521,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         using var stream = new MemoryStream();
         foreach (var payload in payloads)
         {
-            MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
 

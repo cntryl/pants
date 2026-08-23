@@ -10,7 +10,7 @@ public sealed class PantsCoverageManifestTests
             Enum.GetNames<PantsDurability>());
         Assert.Equal(["Strict", "Salvage"], Enum.GetNames<PantsRecoveryPolicy>());
         Assert.Equal(["Latency", "Throughput", "Economy"], Enum.GetNames<PantsPerformanceGoal>());
-        Assert.Equal(["None", "Lz4", "Zstd3", "Zstd9"], Enum.GetNames<MidgeCompressionAlgorithm>());
+        Assert.Equal(["None", "Lz4", "Zstd3", "Zstd9"], Enum.GetNames<CompressionAlgorithm>());
         Assert.Equal(
             ["AwsDefaultChain", "Environment", "SharedProfile", "StaticCredentials"],
             CredentialSourceNames<PantsS3CredentialSource>());

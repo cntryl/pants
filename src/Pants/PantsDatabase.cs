@@ -12,25 +12,25 @@ public static class PantsDatabase
         // The current local-format implementation performs a bounded set of
         // synchronous filesystem calls. Keep those off an async caller's thread.
         return await Task.Run(
-            () => new PantsDatabaseInstance(options, PantsRuntimeDependencies.Default),
+            () => new DatabaseInstance(options, RuntimeDependencies.Default),
             cancellationToken).ConfigureAwait(false);
     }
 
     internal static async ValueTask<IPantsDatabase> OpenForTestingAsync(
         PantsOpenOptions options,
-        PantsRuntimeDependencies dependencies,
+        RuntimeDependencies dependencies,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(dependencies);
         cancellationToken.ThrowIfCancellationRequested();
         return await Task.Run(
-            () => new PantsDatabaseInstance(options, dependencies),
+            () => new DatabaseInstance(options, dependencies),
             cancellationToken).ConfigureAwait(false);
     }
 
     public static ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
         string path,
         CancellationToken cancellationToken = default) =>
-        PantsStorageVerifier.VerifyPathAsync(path, cancellationToken);
+        StorageVerifier.VerifyPathAsync(path, cancellationToken);
 }

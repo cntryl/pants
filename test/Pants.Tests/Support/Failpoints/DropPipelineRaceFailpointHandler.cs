@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class DropPipelineRaceFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -24,15 +24,15 @@ sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposa
         _flushPublicationRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         switch (failpoint)
         {
-            case PantsFailpoint.BeforeDropAdmission
+            case Failpoint.BeforeDropAdmission
                 when Interlocked.CompareExchange(ref _dropAdmissionHit, 1, 0) == 0:
                 Block(_dropAdmissionEntered, _dropAdmissionRelease, failpoint);
                 break;
-            case PantsFailpoint.BeforeFlushPublication
+            case Failpoint.BeforeFlushPublication
                 when Interlocked.CompareExchange(ref _flushPublicationHit, 1, 0) == 0:
                 Block(_flushPublicationEntered, _flushPublicationRelease, failpoint);
                 break;
@@ -52,7 +52,7 @@ sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposa
     static void Block(
         TaskCompletionSource entered,
         ManualResetEventSlim release,
-        PantsFailpoint failpoint)
+        Failpoint failpoint)
     {
         entered.TrySetResult();
         if (!release.Wait(MaximumBlockTime))

@@ -1,7 +1,7 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class BlockingThrowingFlushFailpointHandler(PantsFailpoint target) :
-    IPantsFailpointHandler,
+sealed class BlockingThrowingFlushFailpointHandler(Failpoint target) :
+    IFailpointHandler,
     IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
@@ -18,7 +18,7 @@ sealed class BlockingThrowingFlushFailpointHandler(PantsFailpoint target) :
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint != target || Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {

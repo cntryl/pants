@@ -88,7 +88,7 @@ public sealed class PantsWalVerificationTailParityTests
         var bytes = await File.ReadAllBytesAsync(walPath);
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes,
-            MidgeDiskFormat.WalMaximumRecordBytes + 1U);
+            DiskFormat.WalMaximumRecordBytes + 1U);
         await File.WriteAllBytesAsync(walPath, bytes[..^3]);
 
         var exception =

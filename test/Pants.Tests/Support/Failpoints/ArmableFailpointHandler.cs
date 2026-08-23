@@ -1,11 +1,11 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class ArmableFailpointHandler : IPantsFailpointHandler
+sealed class ArmableFailpointHandler : IFailpointHandler
 {
     readonly Lock _gate = new();
-    PantsFailpoint? _target;
+    Failpoint? _target;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         lock (_gate)
         {
@@ -20,7 +20,7 @@ sealed class ArmableFailpointHandler : IPantsFailpointHandler
         throw new IOException($"Injected failure at {failpoint}.");
     }
 
-    public void Arm(PantsFailpoint target)
+    public void Arm(Failpoint target)
     {
         lock (_gate)
         {

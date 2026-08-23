@@ -5,14 +5,14 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     static readonly ColumnFamilyIdentity DefaultFamily = new(
         0,
         "default",
-        PantsRuntimeState.DefaultFamilyVersion);
+        RuntimeState.DefaultFamilyVersion);
 
     [Fact]
     public async Task ShouldFenceLayoutAndRecoverDurableCommitGivenRotationReopenFails()
     {
         using var directory = new TemporaryDirectory();
         var telemetry = new RuntimeTelemetry();
-        var state = new PantsRuntimeState(
+        var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             telemetry);
         var failpoints = new WalRotationRecoveryFailureFailpointHandler();
@@ -52,7 +52,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         var telemetry = new RuntimeTelemetry();
-        var state = new PantsRuntimeState(
+        var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             telemetry);
         var failpoints = new OneShotCloudWalSealFailureHandler();
@@ -80,7 +80,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         var telemetry = new RuntimeTelemetry();
-        var state = new PantsRuntimeState(
+        var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             telemetry);
         var failpoints = new CloudWalSealLeaseLossFailpointHandler(directory.Path);
@@ -109,7 +109,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         var telemetry = new RuntimeTelemetry();
-        var state = new PantsRuntimeState(
+        var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             telemetry);
         using var store = LocalDiskStore.Open(directory.Path, state);
@@ -140,7 +140,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             SearchOption.TopDirectoryOnly));
     }
 
-    static CommitPayload CreateCommitPayload(PantsRuntimeState state)
+    static CommitPayload CreateCommitPayload(RuntimeState state)
     {
         var operation = new TransactionIntentOperation(
             0,

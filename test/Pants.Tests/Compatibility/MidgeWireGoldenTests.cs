@@ -23,16 +23,16 @@ public sealed class MidgeWireGoldenTests
         string fixtureName,
         byte expectedOperationCode)
     {
-        var expectedOperation = (MidgeWalOperation)expectedOperationCode;
+        var expectedOperation = (WalOperation)expectedOperationCode;
         var bytes = ReadFixture(fixtureName);
-        var record = MidgeWalCodec.DecodeRecord(bytes);
+        var record = WalCodec.DecodeRecord(bytes);
 
-        Assert.Equal(bytes, MidgeWalCodec.EncodeRecord(record));
+        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
         Assert.Equal(expectedOperation, record.Operation);
         Assert.NotEmpty(record.Key);
         Assert.True(record.Sequence > 0);
         Assert.True(record.WriterEpoch > 0);
-        if (expectedOperation is MidgeWalOperation.Put or MidgeWalOperation.Insert)
+        if (expectedOperation is WalOperation.Put or WalOperation.Insert)
         {
             _ = Assert.IsType<byte[]>(record.Value);
         }
@@ -41,7 +41,7 @@ public sealed class MidgeWireGoldenTests
             Assert.Null(record.Value);
         }
 
-        if (expectedOperation == MidgeWalOperation.DeleteRange)
+        if (expectedOperation == WalOperation.DeleteRange)
         {
             Assert.NotEmpty(Assert.IsType<byte[]>(record.RangeEnd));
         }
@@ -54,7 +54,7 @@ public sealed class MidgeWireGoldenTests
     [Fact]
     public void ShouldPreserveTtlGivenPinnedMidgePutTlvGolden()
     {
-        var record = MidgeWalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
+        var record = WalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
 
         Assert.True(record.Expiration is > 0);
     }
@@ -63,10 +63,10 @@ public sealed class MidgeWireGoldenTests
     public void ShouldPreservePresentEmptyValueGivenPinnedMidgeWalTlvGolden()
     {
         var bytes = ReadFixture("wal-tlv-empty-value-v1.bin");
-        var record = MidgeWalCodec.DecodeRecord(bytes);
+        var record = WalCodec.DecodeRecord(bytes);
 
-        Assert.Equal(bytes, MidgeWalCodec.EncodeRecord(record));
-        Assert.Equal(MidgeWalOperation.Put, record.Operation);
+        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
+        Assert.Equal(WalOperation.Put, record.Operation);
         Assert.Empty(Assert.IsType<byte[]>(record.Value));
     }
 
@@ -74,14 +74,14 @@ public sealed class MidgeWireGoldenTests
     public void ShouldDecodeFrameGivenPinnedMidgeWalFrameGolden()
     {
         var bytes = ReadFixture("wal-frame-put-v1.bin");
-        var records = new List<MidgeWalRecord>();
+        var records = new List<WalRecord>();
 
-        MidgeWalFrameReader.Visit(
+        WalFrameReader.Visit(
             bytes,
             (record, _) => records.Add(record));
 
         var record = Assert.Single(records);
-        var expected = MidgeWalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
+        var expected = WalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
         Assert.Equal(expected.ColumnFamilyId, record.ColumnFamilyId);
         Assert.Equal(expected.Operation, record.Operation);
         Assert.Equal(expected.Key, record.Key);
@@ -99,7 +99,7 @@ public sealed class MidgeWireGoldenTests
                    FileMode.CreateNew,
                    FileAccess.Write))
         {
-            MidgeWalCodec.AppendFrame(handle, 0, MidgeWalCodec.EncodeRecord(record));
+            WalCodec.AppendFrame(handle, 0, WalCodec.EncodeRecord(record));
         }
 
         Assert.Equal(bytes, File.ReadAllBytes(path));
@@ -109,28 +109,28 @@ public sealed class MidgeWireGoldenTests
     public void ShouldDecodeAtomicBatchGivenPinnedMidgeWalGolden()
     {
         var bytes = ReadFixture("wal-txn-batch-v1.bin");
-        var record = MidgeWalCodec.DecodeRecord(bytes);
+        var record = WalCodec.DecodeRecord(bytes);
 
-        var mutations = MidgeWalCodec.DecodeTransactionBatch(
+        var mutations = WalCodec.DecodeTransactionBatch(
             record,
             out var commitSequence,
             out var writerEpoch);
 
-        Assert.Equal(bytes, MidgeWalCodec.EncodeRecord(record));
-        Assert.Equal(MidgeWalOperation.TransactionBatch, record.Operation);
+        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
+        Assert.Equal(WalOperation.TransactionBatch, record.Operation);
         Assert.Equal(record.Sequence, commitSequence);
         Assert.Equal(record.WriterEpoch, writerEpoch);
         Assert.Collection(
             mutations,
             mutation =>
             {
-                Assert.Equal(MidgeWalOperation.Put, mutation.Operation);
+                Assert.Equal(WalOperation.Put, mutation.Operation);
                 _ = Assert.IsType<byte[]>(mutation.Value);
                 Assert.True(mutation.Expiration is > 0);
             },
             mutation =>
             {
-                Assert.Equal(MidgeWalOperation.DeleteRange, mutation.Operation);
+                Assert.Equal(WalOperation.DeleteRange, mutation.Operation);
                 Assert.NotEmpty(Assert.IsType<byte[]>(mutation.RangeEnd));
             });
     }
@@ -147,10 +147,10 @@ public sealed class MidgeWireGoldenTests
         var input = ReadFixture("sst-block-input-v1.bin");
         var block = ReadFixture(fixtureName);
 
-        var decoded = MidgeSstBlockCodec.DecompressWithTrailer(block);
+        var decoded = SstBlockCodec.DecompressWithTrailer(block);
 
         Assert.Equal(16 * 1024, input.Length);
-        Assert.Equal(expectedAlgorithmCode, block[^MidgeSstBlockCodec.TrailerSize]);
+        Assert.Equal(expectedAlgorithmCode, block[^SstBlockCodec.TrailerSize]);
         Assert.Equal(input, decoded);
     }
 

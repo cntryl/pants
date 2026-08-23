@@ -15,20 +15,29 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var expected = new[]
         {
-            (MidgeCompressionAlgorithm.None, (byte)0),
-            (MidgeCompressionAlgorithm.Lz4, (byte)1),
-            (MidgeCompressionAlgorithm.Zstd3, (byte)2),
-            (MidgeCompressionAlgorithm.Zstd9, (byte)3)
+            (CompressionAlgorithm.None, (byte)0),
+            (CompressionAlgorithm.Lz4, (byte)1),
+            (CompressionAlgorithm.Zstd3, (byte)2),
+            (CompressionAlgorithm.Zstd9, (byte)3)
         };
 
         foreach (var (algorithm, code) in expected)
         {
             Assert.Equal(code, (byte)algorithm);
-            Assert.Equal(algorithm, MidgeSstBlockCodec.ParseAlgorithm(code));
+            Assert.Equal(algorithm, SstBlockCodec.ParseAlgorithm(code));
         }
 
-        Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.ParseAlgorithm(4));
-        Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.ParseAlgorithm(byte.MaxValue));
+        Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.ParseAlgorithm(4));
+        Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.ParseAlgorithm(byte.MaxValue));
+    }
+
+    [Fact]
+    public void ShouldRejectUnrecognizedCompressionAlgorithmAsCorruption()
+    {
+        var exception = Assert.Throws<PantsCorruptionException>(
+            () => DiskFormat.Decompress("payload"u8.ToArray(), 99));
+
+        Assert.Contains("compression", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -36,15 +45,15 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var data = "trailer-format-fixture"u8.ToArray();
 
-        var block = MidgeSstBlockCodec.CompressWithTrailer(data, MidgeCompressionAlgorithm.None);
+        var block = SstBlockCodec.CompressWithTrailer(data, CompressionAlgorithm.None);
         var algorithmOffset = block.Length - SstBlockTrailerSize;
         var crcOffset = block.Length - sizeof(uint);
         var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(crcOffset));
 
-        Assert.Equal(5, MidgeSstBlockCodec.TrailerSize);
+        Assert.Equal(5, SstBlockCodec.TrailerSize);
         Assert.Equal(data, block.AsSpan(0, algorithmOffset).ToArray());
-        Assert.Equal((byte)MidgeCompressionAlgorithm.None, block[algorithmOffset]);
-        Assert.Equal(MidgeDiskFormat.Crc32C(block.AsSpan(0, crcOffset)), storedCrc);
+        Assert.Equal((byte)CompressionAlgorithm.None, block[algorithmOffset]);
+        Assert.Equal(DiskFormat.Crc32C(block.AsSpan(0, crcOffset)), storedCrc);
     }
 
     [Fact]
@@ -53,14 +62,14 @@ public sealed class PantsCompressionCompatibilityTests
         var data = StructuredBlock(16 * 1024);
         var cases = new[]
         {
-            (MidgeCompressionAlgorithm.Lz4, 0xf8ab_776d_208c_bd15UL),
-            (MidgeCompressionAlgorithm.Zstd3, 0x4e7b_d7fc_d9a0_d5c5UL),
-            (MidgeCompressionAlgorithm.Zstd9, 0xe2b7_653b_ded1_b28eUL)
+            (CompressionAlgorithm.Lz4, 0xf8ab_776d_208c_bd15UL),
+            (CompressionAlgorithm.Zstd3, 0x4e7b_d7fc_d9a0_d5c5UL),
+            (CompressionAlgorithm.Zstd9, 0xe2b7_653b_ded1_b28eUL)
         };
 
         foreach (var (algorithm, expectedDigest) in cases)
         {
-            var block = MidgeSstBlockCodec.CompressWithTrailer(data, algorithm);
+            var block = SstBlockCodec.CompressWithTrailer(data, algorithm);
 
             Assert.Equal((byte)algorithm, block[^SstBlockTrailerSize]);
             Assert.Equal(expectedDigest, XxHash3.HashToUInt64(block));
@@ -73,47 +82,47 @@ public sealed class PantsCompressionCompatibilityTests
         var data = StructuredBlock(16 * 1024);
         var fixedAlgorithms = new[]
         {
-            MidgeCompressionAlgorithm.None,
-            MidgeCompressionAlgorithm.Lz4,
-            MidgeCompressionAlgorithm.Zstd3,
-            MidgeCompressionAlgorithm.Zstd9
+            CompressionAlgorithm.None,
+            CompressionAlgorithm.Lz4,
+            CompressionAlgorithm.Zstd3,
+            CompressionAlgorithm.Zstd9
         };
 
         foreach (var algorithm in fixedAlgorithms)
         {
-            var first = MidgeSstBlockCodec.CompressWithTrailer(data, algorithm);
-            var second = MidgeSstBlockCodec.CompressWithTrailer(data, algorithm);
+            var first = SstBlockCodec.CompressWithTrailer(data, algorithm);
+            var second = SstBlockCodec.CompressWithTrailer(data, algorithm);
 
             Assert.Equal(first, second);
-            Assert.Equal(data, MidgeSstBlockCodec.DecompressWithTrailer(first));
+            Assert.Equal(data, SstBlockCodec.DecompressWithTrailer(first));
         }
 
-        var firstAdaptive = MidgeSstBlockCodec.CompressWithTrailer(data, PantsPerformanceGoal.Throughput);
-        var secondAdaptive = MidgeSstBlockCodec.CompressWithTrailer(data, PantsPerformanceGoal.Throughput);
+        var firstAdaptive = SstBlockCodec.CompressWithTrailer(data, PantsPerformanceGoal.Throughput);
+        var secondAdaptive = SstBlockCodec.CompressWithTrailer(data, PantsPerformanceGoal.Throughput);
 
         Assert.Equal(firstAdaptive, secondAdaptive);
-        Assert.Equal(data, MidgeSstBlockCodec.DecompressWithTrailer(firstAdaptive));
+        Assert.Equal(data, SstBlockCodec.DecompressWithTrailer(firstAdaptive));
     }
 
     [Fact]
     public void ShouldRejectInvalidSstBlockTrailers()
     {
         var data = StructuredBlock(1024);
-        var valid = MidgeSstBlockCodec.CompressWithTrailer(data, MidgeCompressionAlgorithm.None);
+        var valid = SstBlockCodec.CompressWithTrailer(data, CompressionAlgorithm.None);
         var corrupt = valid.ToArray();
         corrupt[^1] ^= 0x01;
         var unknown = data.Concat(new[] { byte.MaxValue }).ToArray();
         Array.Resize(ref unknown, unknown.Length + sizeof(uint));
         BinaryPrimitives.WriteUInt32LittleEndian(
             unknown.AsSpan(unknown.Length - sizeof(uint)),
-            MidgeDiskFormat.Crc32C(unknown.AsSpan(0, unknown.Length - sizeof(uint))));
+            DiskFormat.Crc32C(unknown.AsSpan(0, unknown.Length - sizeof(uint))));
 
         var corruptError =
-            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(corrupt));
+            Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.DecompressWithTrailer(corrupt));
         var truncatedError =
-            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(valid.AsSpan(0, 4)));
+            Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.DecompressWithTrailer(valid.AsSpan(0, 4)));
         var unknownError =
-            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(unknown));
+            Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.DecompressWithTrailer(unknown));
 
         Assert.Contains("CRC32C mismatch", corruptError.Message, StringComparison.Ordinal);
         Assert.Contains("too small for trailer", truncatedError.Message, StringComparison.Ordinal);
@@ -128,22 +137,22 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var block = WithTrailer("payload"u8, code);
 
-        var error = Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(block));
+        var error = Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.DecompressWithTrailer(block));
 
         Assert.Equal(PantsErrorCode.Corruption, error.Code);
         Assert.Contains("unknown compression algorithm code", error.Message, StringComparison.Ordinal);
     }
 
     [Theory]
-    [InlineData((byte)MidgeCompressionAlgorithm.Lz4)]
-    [InlineData((byte)MidgeCompressionAlgorithm.Zstd9)]
+    [InlineData((byte)CompressionAlgorithm.Lz4)]
+    [InlineData((byte)CompressionAlgorithm.Zstd9)]
     public void ShouldRejectCorruptCompressedPayloadForEveryShippingCodec(byte algorithmCode)
     {
-        var algorithm = (MidgeCompressionAlgorithm)algorithmCode;
-        var block = MidgeSstBlockCodec
+        var algorithm = (CompressionAlgorithm)algorithmCode;
+        var block = SstBlockCodec
             .CompressWithTrailer(StructuredBlock(16 * 1024), algorithm)
             .ToArray();
-        if (algorithm == MidgeCompressionAlgorithm.Lz4)
+        if (algorithm == CompressionAlgorithm.Lz4)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(block, 64 * 1024 * 1024U + 1);
         }
@@ -154,7 +163,7 @@ public sealed class PantsCompressionCompatibilityTests
 
         RewriteTrailerCrc(block);
 
-        var error = Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(block));
+        var error = Assert.Throws<PantsCorruptionException>(() => SstBlockCodec.DecompressWithTrailer(block));
 
         Assert.Equal(PantsErrorCode.Corruption, error.Code);
     }
@@ -233,7 +242,7 @@ public sealed class PantsCompressionCompatibilityTests
 
         Assert.Contains(
             SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
-            algorithm => algorithm == (byte)MidgeCompressionAlgorithm.Lz4);
+            algorithm => algorithm == (byte)CompressionAlgorithm.Lz4);
 
         await using (var economy =
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy)))
@@ -243,7 +252,7 @@ public sealed class PantsCompressionCompatibilityTests
             await WriteRecordsAndFlushAsync(economy, family, batches[3]);
             Assert.Contains(
                 SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
-                algorithm => algorithm == (byte)MidgeCompressionAlgorithm.Zstd9);
+                algorithm => algorithm == (byte)CompressionAlgorithm.Zstd9);
             await economy.CompactAllAsync();
         }
 
@@ -251,7 +260,7 @@ public sealed class PantsCompressionCompatibilityTests
         Assert.True(report.Authoritative);
         Assert.Contains(
             SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
-            algorithm => algorithm == (byte)MidgeCompressionAlgorithm.Zstd9);
+            algorithm => algorithm == (byte)CompressionAlgorithm.Zstd9);
 
         await using var reopened =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
@@ -273,7 +282,7 @@ public sealed class PantsCompressionCompatibilityTests
         await WriteFreshAdaptiveDatabaseAsync(directory.Path, AdaptiveRecords("footer", 32));
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         var bytes = await File.ReadAllBytesAsync(sstPath);
-        bytes[bytes.Length - MidgeDiskFormat.SstFooterSize + 8] ^= 0x01;
+        bytes[bytes.Length - DiskFormat.SstFooterSize + 8] ^= 0x01;
         await File.WriteAllBytesAsync(sstPath, bytes);
 
         var error = await Assert.ThrowsAsync<PantsCorruptionException>(() =>
@@ -453,7 +462,7 @@ public sealed class PantsCompressionCompatibilityTests
         block[payload.Length] = algorithm;
         BinaryPrimitives.WriteUInt32LittleEndian(
             block.AsSpan(payload.Length + 1),
-            MidgeDiskFormat.Crc32C(block.AsSpan(0, payload.Length + 1)));
+            DiskFormat.Crc32C(block.AsSpan(0, payload.Length + 1)));
         return block;
     }
 
@@ -462,7 +471,7 @@ public sealed class PantsCompressionCompatibilityTests
         var crcOffset = block.Length - sizeof(uint);
         BinaryPrimitives.WriteUInt32LittleEndian(
             block.AsSpan(crcOffset),
-            MidgeDiskFormat.Crc32C(block.AsSpan(0, crcOffset)));
+            DiskFormat.Crc32C(block.AsSpan(0, crcOffset)));
     }
 
     static (string Name, byte[] Bytes)[] SortedSstFiles(string path) =>
@@ -473,7 +482,7 @@ public sealed class PantsCompressionCompatibilityTests
 
     static List<byte> SstBlockAlgorithms(byte[] bytes)
     {
-        var footerStart = bytes.Length - MidgeDiskFormat.SstFooterSize;
+        var footerStart = bytes.Length - DiskFormat.SstFooterSize;
         var algorithms = new List<byte>();
         var cursor = 0;
         while (cursor < footerStart)

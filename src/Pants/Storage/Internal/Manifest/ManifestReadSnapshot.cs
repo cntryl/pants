@@ -4,10 +4,10 @@ sealed record ManifestReadSnapshot(
     ulong LastPersistedSequence,
     ulong NextWalSequence,
     IReadOnlyDictionary<uint, ulong> NextSstSequences,
-    IReadOnlyList<MidgeFileMeta> Files,
-    IReadOnlyList<MidgeColumnFamilyMeta> ColumnFamilies)
+    IReadOnlyList<FileMeta> Files,
+    IReadOnlyList<ColumnFamilyMeta> ColumnFamilies)
 {
-    public static ManifestReadSnapshot Create(MidgeManifest manifest) => new(
+    public static ManifestReadSnapshot Create(ManifestState manifest) => new(
         manifest.LastPersistedSequence,
         manifest.NextWalSeq,
         new Dictionary<uint, ulong>(manifest.NextSstSeqs),

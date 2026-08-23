@@ -22,7 +22,7 @@ static class CloudManifestReader
     public static ulong ReadLastPersistedSequence(string root) =>
         ReadManifest(root)?.LastPersistedSequence ?? 0;
 
-    public static MidgeManifest? ReadManifest(string root)
+    public static ManifestState? ReadManifest(string root)
     {
         var snapshotPath = Path.Combine(root, "manifest.snapshot.json");
         var manifestPath = Path.Combine(root, "manifest.json");
@@ -42,11 +42,11 @@ static class CloudManifestReader
         }
     }
 
-    public static MidgeManifest DecodeManifest(ReadOnlySpan<byte> bytes)
+    public static ManifestState DecodeManifest(ReadOnlySpan<byte> bytes)
     {
         try
         {
-            return JsonSerializer.Deserialize<MidgeManifest>(bytes, JsonOptions) ??
+            return JsonSerializer.Deserialize<ManifestState>(bytes, JsonOptions) ??
                    throw new JsonException("Cloud manifest is empty.");
         }
         catch (JsonException exception)

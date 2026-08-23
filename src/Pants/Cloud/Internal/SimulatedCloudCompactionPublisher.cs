@@ -4,13 +4,13 @@ sealed class SimulatedCloudCompactionPublisher
 {
     const string IntentFileName = "intent_log.json";
     readonly string _cloudRoot;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
 
     readonly string _localRoot;
 
     public SimulatedCloudCompactionPublisher(
         string localRoot,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
@@ -26,14 +26,14 @@ sealed class SimulatedCloudCompactionPublisher
         AtomicStagedFile.Write(
             Path.Combine(_cloudRoot, "metadata", IntentFileName),
             File.ReadAllBytes(Path.Combine(_localRoot, IntentFileName)));
-        _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+        _failpoints.Hit(Failpoint.BeforeCloudUpload);
         foreach (var name in outputNames)
         {
             cancellationToken.ThrowIfCancellationRequested();
             PublishOutput(name);
         }
 
-        _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
+        _failpoints.Hit(Failpoint.AfterCloudUpload);
         return ValueTask.CompletedTask;
     }
 

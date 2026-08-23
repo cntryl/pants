@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 
 sealed class SstReaderCache : IDisposable
 {
-    readonly ConcurrentDictionary<string, MidgeSstReader> _readers =
+    readonly ConcurrentDictionary<string, SstReader> _readers =
         new(StringComparer.Ordinal);
 
     int _disposed;
@@ -22,7 +22,7 @@ sealed class SstReaderCache : IDisposable
         }
     }
 
-    public MidgeSstReader GetOrAdd(string fileName, string path, out bool cacheHit)
+    public SstReader GetOrAdd(string fileName, string path, out bool cacheHit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -33,7 +33,7 @@ sealed class SstReaderCache : IDisposable
             return cached;
         }
 
-        var created = MidgeSstReader.Open(path);
+        var created = SstReader.Open(path);
         if (_readers.TryAdd(fileName, created))
         {
             cacheHit = false;

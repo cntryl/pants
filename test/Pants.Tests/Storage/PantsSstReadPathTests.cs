@@ -6,18 +6,18 @@ public sealed class PantsSstReadPathTests
     public void ShouldBuildBlockBloomsWithoutFalseNegativesAndRejectAbsentKeys()
     {
         var entries = Enumerable.Range(0, 256)
-            .Select(index => new MidgeSstEntry(
+            .Select(index => new SstEntry(
                 TestBytes.FromString($"key-{index:D4}"),
                 new byte[1024],
                 checked((ulong)index + 1),
                 null,
                 false))
             .ToArray();
-        var bytes = MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
+        var bytes = SstCodec.Encode(entries, [], PantsPerformanceGoal.Latency);
 
         Assert.All(entries, entry =>
         {
-            var decision = MidgeSstCodec.GetPointReadDecision(bytes, entry.Key);
+            var decision = SstCodec.GetPointReadDecision(bytes, entry.Key);
             Assert.Equal(1, decision.BloomChecks);
             Assert.Equal(1, decision.CandidateBlocks);
             Assert.Equal(1, decision.BlocksRead);
@@ -26,7 +26,7 @@ public sealed class PantsSstReadPathTests
 
         Assert.Contains(
             Enumerable.Range(0, 256),
-            index => MidgeSstCodec
+            index => SstCodec
                 .GetPointReadDecision(bytes, TestBytes.FromString($"key-{index:D4}-absent"))
                 .Rejected);
     }

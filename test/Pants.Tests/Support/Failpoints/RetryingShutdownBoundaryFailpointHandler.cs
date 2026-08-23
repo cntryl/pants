@@ -1,14 +1,14 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class RetryingShutdownBoundaryFailpointHandler : IPantsFailpointHandler
+sealed class RetryingShutdownBoundaryFailpointHandler : IFailpointHandler
 {
     int _hits;
 
     public int HitCount => Volatile.Read(ref _hits);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeShutdownWalDurabilityBoundary)
+        if (failpoint != Failpoint.BeforeShutdownWalDurabilityBoundary)
         {
             return;
         }

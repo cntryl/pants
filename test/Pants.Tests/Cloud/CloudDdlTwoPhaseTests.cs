@@ -61,7 +61,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlRemoteCas");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 
         await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-retry").AsTask());
         Assert.Null(await database.GetColumnFamilyAsync("cas-retry"));
@@ -84,7 +84,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlRemoteCas");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-reopen").AsTask());
             Assert.Null(await database.GetColumnFamilyAsync("cas-reopen"));
@@ -111,7 +111,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlRemoteCas");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
                 database.CreateColumnFamilyAsync("torn-prepare").AsTask());
@@ -131,7 +131,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var created = await database.CreateColumnFamilyAsync("local-retry");
 
@@ -157,7 +157,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var created = await database.CreateColumnFamilyAsync("live-local-retry");
             await using (var transaction = await database.BeginTransactionAsync(
@@ -192,7 +192,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var created = await database.CreateColumnFamilyAsync("wal-local-retry");
             await using var transaction = await database.BeginTransactionAsync(
@@ -228,7 +228,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
                 await database.GetColumnFamilyAsync("drop-local-failure"));
@@ -255,7 +255,7 @@ public sealed class CloudDdlTwoPhaseTests
         using var client = new HttpClient(handler);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateProviderOptions(directory.Path),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         handler.FailMetadataWrites = true;
 
         var created = await database.CreateColumnFamilyAsync("mirror-failure");
@@ -280,7 +280,7 @@ public sealed class CloudDdlTwoPhaseTests
         using var client = new HttpClient(handler);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateProviderOptions(directory.Path),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         var created = await database.CreateColumnFamilyAsync("drop-mirror-failure");
         handler.FailMetadataWrites = true;
 
@@ -299,7 +299,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             _ = await database.CreateColumnFamilyAsync("history-replay");
         }
@@ -323,7 +323,7 @@ public sealed class CloudDdlTwoPhaseTests
         var failpoints = new DdlFailpointHandler("AfterDdlRemoteCas");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await database.GetColumnFamilyAsync(family.Name));
 
@@ -356,7 +356,7 @@ public sealed class CloudDdlTwoPhaseTests
             "BeforeDdlAuthorityReadback");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await database.GetColumnFamilyAsync(family.Name));
 
@@ -403,7 +403,7 @@ public sealed class CloudDdlTwoPhaseTests
             "BeforeDdlAuthorityReadback");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await database.GetColumnFamilyAsync(family.Name));
         await Assert.ThrowsAsync<PantsFencedException>(() =>

@@ -3,16 +3,16 @@ namespace Cntryl.Pants.Tests.Contracts;
 public sealed class PantsPersistenceBoundaryParityTests
 {
     [Theory]
-    [InlineData(nameof(PantsFailpoint.AfterCompactionOutputDurable))]
-    [InlineData(nameof(PantsFailpoint.BeforeCompactionManifestPublish))]
-    [InlineData(nameof(PantsFailpoint.AfterCompactionManifestPublish))]
+    [InlineData(nameof(Failpoint.AfterCompactionOutputDurable))]
+    [InlineData(nameof(Failpoint.BeforeCompactionManifestPublish))]
+    [InlineData(nameof(Failpoint.AfterCompactionManifestPublish))]
     public async Task ShouldRecoverAllDataAtEveryCompactionPublicationBoundary(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
+        var handler = new OneShotFailpointHandler(Enum.Parse<Failpoint>(failpointName));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             for (var index = 0; index < 3; index++)
             {
@@ -35,17 +35,17 @@ public sealed class PantsPersistenceBoundaryParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.BeforeIntentLogReplace))]
-    [InlineData(nameof(PantsFailpoint.AfterIntentLogReplace))]
-    [InlineData(nameof(PantsFailpoint.BeforeWalRotation))]
-    [InlineData(nameof(PantsFailpoint.AfterWalRotation))]
+    [InlineData(nameof(Failpoint.BeforeIntentLogReplace))]
+    [InlineData(nameof(Failpoint.AfterIntentLogReplace))]
+    [InlineData(nameof(Failpoint.BeforeWalRotation))]
+    [InlineData(nameof(Failpoint.AfterWalRotation))]
     public async Task ShouldRecoverFlushAtIntentAndWalRotationBoundaries(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
+        var handler = new OneShotFailpointHandler(Enum.Parse<Failpoint>(failpointName));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await PutAsync(database, "key", "value");
             await Assert.ThrowsAnyAsync<PantsException>(() =>
@@ -62,10 +62,10 @@ public sealed class PantsPersistenceBoundaryParityTests
     public async Task ShouldKeepDdlStateAbsentWhenManifestAppendFails()
     {
         using var directory = new TemporaryDirectory();
-        var createHandler = new OneShotFailpointHandler(PantsFailpoint.BeforeManifestJournalAppend);
+        var createHandler = new OneShotFailpointHandler(Failpoint.BeforeManifestJournalAppend);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(createHandler)))
+                         new RuntimeDependencies(createHandler)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
                 database.CreateColumnFamilyAsync("failed-create").AsTask());
@@ -80,16 +80,16 @@ public sealed class PantsPersistenceBoundaryParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.AfterManifestJournalAppend))]
-    [InlineData(nameof(PantsFailpoint.BeforeManifestJournalSync))]
-    [InlineData(nameof(PantsFailpoint.AfterManifestJournalSync))]
+    [InlineData(nameof(Failpoint.AfterManifestJournalAppend))]
+    [InlineData(nameof(Failpoint.BeforeManifestJournalSync))]
+    [InlineData(nameof(Failpoint.AfterManifestJournalSync))]
     public async Task ShouldRecoverCompleteDdlWhenFailureOccursAfterJournalAppend(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
+        var handler = new OneShotFailpointHandler(Enum.Parse<Failpoint>(failpointName));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
                 database.CreateColumnFamilyAsync("recovered-create").AsTask());
@@ -118,10 +118,10 @@ public sealed class PantsPersistenceBoundaryParityTests
         await seed.FlushAsync(seeded);
         await seed.DisposeAsync();
 
-        var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeManifestJournalAppend);
+        var handler = new OneShotFailpointHandler(Failpoint.BeforeManifestJournalAppend);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
                 await database.GetColumnFamilyAsync("retained"));
@@ -138,8 +138,8 @@ public sealed class PantsPersistenceBoundaryParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.BeforeManifestCheckpointReplace))]
-    [InlineData(nameof(PantsFailpoint.AfterManifestCheckpointReplace))]
+    [InlineData(nameof(Failpoint.BeforeManifestCheckpointReplace))]
+    [InlineData(nameof(Failpoint.AfterManifestCheckpointReplace))]
     public async Task ShouldRecoverWhenManifestCheckpointPublicationFails(string failpointName)
     {
         using var directory = new TemporaryDirectory();
@@ -149,10 +149,10 @@ public sealed class PantsPersistenceBoundaryParityTests
             await PutAsync(seed, "key", "value");
         }
 
-        var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
+        var handler = new OneShotFailpointHandler(Enum.Parse<Failpoint>(failpointName));
         await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(handler)).AsTask());
+            new RuntimeDependencies(handler)).AsTask());
 
         await using var recovered = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
@@ -194,11 +194,11 @@ public sealed class PantsPersistenceBoundaryParityTests
         return value is null ? null : TestBytes.ToText(value.Value);
     }
 
-    sealed class OneShotFailpointHandler(PantsFailpoint target) : IPantsFailpointHandler
+    sealed class OneShotFailpointHandler(Failpoint target) : IFailpointHandler
     {
         int _triggered;
 
-        public void Hit(PantsFailpoint failpoint)
+        public void Hit(Failpoint failpoint)
         {
             if (failpoint == target && Interlocked.Exchange(ref _triggered, 1) == 0)
             {

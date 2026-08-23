@@ -1,13 +1,13 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CloudCompactionFailpointHandler : IPantsFailpointHandler
+sealed class CloudCompactionFailpointHandler : IFailpointHandler
 {
     readonly Lock _gate = new();
     Action? _beforeFailure;
     bool _shouldThrow;
-    PantsFailpoint? _target;
+    Failpoint? _target;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         Action? beforeFailure;
         bool shouldThrow;
@@ -32,7 +32,7 @@ sealed class CloudCompactionFailpointHandler : IPantsFailpointHandler
         }
     }
 
-    public void Arm(PantsFailpoint target, Action? beforeFailure = null)
+    public void Arm(Failpoint target, Action? beforeFailure = null)
     {
         lock (_gate)
         {
@@ -42,7 +42,7 @@ sealed class CloudCompactionFailpointHandler : IPantsFailpointHandler
         }
     }
 
-    public void ArmCallback(PantsFailpoint target, Action callback)
+    public void ArmCallback(Failpoint target, Action callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
         lock (_gate)
