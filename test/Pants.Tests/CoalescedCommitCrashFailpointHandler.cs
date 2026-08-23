@@ -58,15 +58,7 @@ sealed class CoalescedCommitCrashFailpointHandler(
         var parent = Path.GetDirectoryName(sentinelPath) ??
             throw new InvalidOperationException(
                 "The coalesced-commit crash sentinel has no parent directory.");
-        if (OperatingSystem.IsLinux())
-        {
-            using var directory = File.OpenHandle(
-                parent,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            RandomAccess.FlushToDisk(directory);
-        }
+        AtomicStagedFile.FlushDirectory(parent);
 
         Environment.FailFast(
             $"Injected crash at {PantsFailpoint.AfterCoalescedWalDurabilityBoundary}.");

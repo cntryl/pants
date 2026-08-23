@@ -32,15 +32,7 @@ internal sealed class TransactionSpillCrashFailpointHandler(
 
         var parent = Path.GetDirectoryName(sentinelPath) ??
             throw new InvalidOperationException("The crash-trigger sentinel has no parent directory.");
-        if (OperatingSystem.IsLinux())
-        {
-            using var directory = File.OpenHandle(
-                parent,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            RandomAccess.FlushToDisk(directory);
-        }
+        AtomicStagedFile.FlushDirectory(parent);
 
         Environment.FailFast($"Injected crash at {trigger} for scenario {scenario}.");
     }
