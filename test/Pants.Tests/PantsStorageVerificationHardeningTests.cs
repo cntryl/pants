@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Pants.Tests;
 
+[Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsStorageVerificationHardeningTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);

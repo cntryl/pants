@@ -42,7 +42,9 @@ public sealed class PantsTelemetryContractTests
             database,
             static candidate =>
                 candidate.CurrentSequence > 0 &&
-                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence &&
+                candidate.PendingCloudUploads == 0 &&
+                candidate.CloudAsyncWalAcknowledgementLatencyMicroseconds > 0);
 
         Assert.Equal(metrics.CurrentSequence, metrics.WalLastSyncedSequence);
         Assert.Equal(metrics.CurrentSequence, metrics.WalCloudDurableSequence);

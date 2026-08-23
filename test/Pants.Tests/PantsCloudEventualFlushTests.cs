@@ -94,28 +94,28 @@ public sealed class PantsCloudEventualFlushTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
+        var before = await database.GetRuntimeMetricsAsync();
 
         await CommitAsync(
             database,
             database.DefaultColumnFamily,
             "deadline-retry",
             PantsWriteOptions.CloudAsync);
-        var committed = await database.GetRuntimeMetricsAsync();
 
         await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
         await failpoints.WaitUntilRetryAttemptedAsync(AssertionTimeout);
         var published = await WaitForMetricsAsync(
             database,
             candidate =>
-                candidate.WalCurrentSegmentId > committed.WalCurrentSegmentId &&
+                candidate.WalCurrentSegmentId > before.WalCurrentSegmentId &&
                 candidate.WalPendingWrites == 0 &&
-                candidate.WalCloudDurableSequence >= committed.CurrentSequence);
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
 
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "cloud_store", "wal"),
             "*.wal",
             SearchOption.AllDirectories));
-        Assert.True(published.WalCloudDurableSequence >= committed.CurrentSequence);
+        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
     }
 
     [Fact]
@@ -144,13 +144,14 @@ public sealed class PantsCloudEventualFlushTests
             candidate =>
                 candidate.WalCurrentSegmentId > before.WalCurrentSegmentId &&
                 candidate.WalPendingWrites == 0 &&
-                candidate.WalCloudDurableSequence > before.WalCloudDurableSequence);
+                candidate.PendingCloudUploads == 0 &&
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
 
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "cloud_store", "wal"),
             "*.wal",
             SearchOption.AllDirectories));
-        Assert.True(published.WalCloudDurableSequence > before.WalCloudDurableSequence);
+        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
     }
 
     [Fact]
@@ -179,7 +180,8 @@ public sealed class PantsCloudEventualFlushTests
             candidate =>
                 candidate.WalCurrentSegmentId > before.WalCurrentSegmentId &&
                 candidate.WalPendingWrites == 0 &&
-                candidate.WalCloudDurableSequence > before.WalCloudDurableSequence);
+                candidate.PendingCloudUploads == 0 &&
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
 
         Assert.Empty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "wal"),
@@ -190,7 +192,7 @@ public sealed class PantsCloudEventualFlushTests
             "*.wal",
             SearchOption.AllDirectories));
         Assert.Equal(1, failpoints.Attempts);
-        Assert.True(published.WalCloudDurableSequence > before.WalCloudDurableSequence);
+        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
     }
 
     [Fact]
@@ -446,17 +448,31 @@ public sealed class PantsCloudEventualFlushTests
         IPantsDatabase database,
         Func<PantsRuntimeMetrics, bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (true)
+        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        PantsRuntimeMetrics? last = null;
+        try
         {
-            timeout.Token.ThrowIfCancellationRequested();
-            var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
-            if (predicate(metrics))
+            while (true)
             {
-                return metrics;
-            }
+                timeout.Token.ThrowIfCancellationRequested();
+                var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
+                last = metrics;
+                if (predicate(metrics))
+                {
+                    return metrics;
+                }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"Cloud metrics did not converge: sequence={last?.CurrentSequence}, " +
+                $"segment={last?.WalCurrentSegmentId}, pending={last?.WalPendingWrites}, " +
+                $"cloud={last?.WalCloudDurableSequence}, uploads={last?.PendingCloudUploads}, " +
+                $"health={last?.Health}.",
+                exception);
         }
     }
 

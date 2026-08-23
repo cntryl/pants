@@ -1,5 +1,6 @@
 namespace Pants.Tests;
 
+[Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class RuntimeWorkerTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);

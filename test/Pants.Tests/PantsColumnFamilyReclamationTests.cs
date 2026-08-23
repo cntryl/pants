@@ -1,5 +1,6 @@
 namespace Pants.Tests;
 
+[Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsColumnFamilyReclamationTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);

@@ -3,6 +3,7 @@ using System.Text.Json;
 
 namespace Pants.Tests;
 
+[Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsBackgroundFlushPipelineTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(2);
