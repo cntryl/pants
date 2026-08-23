@@ -4,8 +4,8 @@ interface ICloudPersistence : ICloudDdlAuthority
 {
     bool HasPersistenceAnomaly { get; }
 
-    ValueTask PublishWalAsync(
-        SealedWalSegment segment,
+    ValueTask PublishWalBatchAsync(
+        IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken);
 
     ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken);

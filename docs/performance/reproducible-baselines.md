@@ -11,7 +11,7 @@ dotnet run --project bench/Pants.Benches/Cntryl.Pants.Benches.csproj \
   --configuration Release --no-restore -- practical BenchmarkDotNet.Artifacts/practical
 ```
 
-This command fails unless discovery contains exactly 155 unique scenarios and every BenchmarkDotNet report succeeds. It writes source and machine metadata plus the scenario inventory beside the CSV reports. The `Dry` job is a cold lifecycle validation, not statistical performance evidence.
+This command fails unless discovery contains exactly 157 unique scenarios and every BenchmarkDotNet report succeeds. It writes source and machine metadata plus the scenario inventory beside the CSV reports. The `Dry` job is a cold lifecycle validation, not statistical performance evidence.
 
 Before promoting an optimization, rerun the affected types with the normal BenchmarkDotNet job at least three times on the same machine. Use the tier-specific regression thresholds documented in the other performance guides. For example:
 
