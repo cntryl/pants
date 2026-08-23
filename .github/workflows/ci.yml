@@ -48,6 +48,34 @@ jobs:
               FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
               FullyQualifiedName!~PantsStorageVerificationHardeningTests&
               FullyQualifiedName!~PantsColumnFamilyReclamationTests&
+              FullyQualifiedName!~RuntimeWorkerTests&
+              FullyQualifiedName!~Cloud&
+              FullyQualifiedName!~PantsHybrid&
+              FullyQualifiedName!~PantsMemoryManagementContractTests&
+              FullyQualifiedName!~PantsDurabilityParityTests&
+              FullyQualifiedName!~PantsReadAmplificationContractTests&
+              FullyQualifiedName!~PantsLeveledCompactionTests&
+              FullyQualifiedName!~PantsCompressionCompatibilityTests&
+              FullyQualifiedName!~PantsTransactionSpillReadMemoryTests&
+              FullyQualifiedName!~PantsTransactionSpillBehaviorTests
+            max-parallel-threads: 2
+          - name: windows-latest / Release (cloud and storage)
+            os: windows-latest
+            run-crash-recovery: false
+            remaining-filter: >-
+              (FullyQualifiedName~Cloud|
+              FullyQualifiedName~PantsHybrid|
+              FullyQualifiedName~PantsMemoryManagementContractTests|
+              FullyQualifiedName~PantsDurabilityParityTests|
+              FullyQualifiedName~PantsReadAmplificationContractTests|
+              FullyQualifiedName~PantsLeveledCompactionTests|
+              FullyQualifiedName~PantsCompressionCompatibilityTests|
+              FullyQualifiedName~PantsTransactionSpillReadMemoryTests|
+              FullyQualifiedName~PantsTransactionSpillBehaviorTests)&
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
+              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
+              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
               FullyQualifiedName!~RuntimeWorkerTests
             max-parallel-threads: 2
           - name: windows-latest / Release (runtime races)
