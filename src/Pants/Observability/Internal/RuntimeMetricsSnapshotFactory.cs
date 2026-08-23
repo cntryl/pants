@@ -205,13 +205,29 @@ sealed class RuntimeMetricsSnapshotFactory(
         };
     }
 
-    static long GetOldestSnapshotAgeSeconds(RuntimeState state) =>
-        state.ActiveSnapshotCount == 0
-            ? 0
-            : checked((long)state.ActiveSnapshots
-                .Max(snapshot => GetSnapshotAge(
-                    state.Clock.UtcNow,
-                    snapshot.StartedAtUtc).TotalSeconds));
+    static long GetOldestSnapshotAgeSeconds(RuntimeState state)
+    {
+        var now = state.Clock.UtcNow;
+        var oldestAge = TimeSpan.Zero;
+        foreach (var snapshot in state.ActiveTransactions)
+        {
+            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
+        }
+
+        foreach (var snapshot in state.DirectReadOnlyTransactions)
+        {
+            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
+        }
+
+        foreach (var snapshot in state.ActiveScanSnapshots)
+        {
+            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
+        }
+
+        return checked((long)oldestAge.TotalSeconds);
+    }
+
+    static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
     static TimeSpan GetSnapshotAge(DateTimeOffset now, DateTimeOffset startedAtUtc) =>
         now <= startedAtUtc ? TimeSpan.Zero : now - startedAtUtc;
