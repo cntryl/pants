@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class StaticS3CredentialProvider(S3Credentials credentials) : IS3CredentialProvider
 {

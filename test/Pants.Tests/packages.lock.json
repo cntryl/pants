@@ -108,7 +108,7 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "pants": {
+      "Cntryl.Pants": {
         "type": "Project",
         "dependencies": {
           "K4os.Compression.LZ4": "[1.3.8, )",
@@ -116,11 +116,11 @@
           "ZstdSharp.Port": "[0.8.8, )"
         }
       },
-      "pants.dependencyinjection": {
+      "Cntryl.Pants.DependencyInjection": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.11, )",
-          "Pants": "[1.0.0, )"
+          "Cntryl.Pants": "[1.0.0, )",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.11, )"
         }
       },
       "K4os.Compression.LZ4": {

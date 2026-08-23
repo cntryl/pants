@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed record GcsAccessToken(string Value, DateTimeOffset ExpiresAt)
 {

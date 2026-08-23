@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 /// <summary>
 /// Provides eviction hints for one cache shard. Implementations must tolerate removal and stale-key

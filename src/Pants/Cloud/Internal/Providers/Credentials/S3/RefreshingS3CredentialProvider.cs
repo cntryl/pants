@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 {

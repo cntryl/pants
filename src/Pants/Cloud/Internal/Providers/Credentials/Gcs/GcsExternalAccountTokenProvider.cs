@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class GcsExternalAccountTokenProvider(
     HttpClient httpClient,

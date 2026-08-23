@@ -4,7 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class AzureBlobObjectStore : ICloudObjectStore
 {

@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsCompressionCompatibilityTests
 {

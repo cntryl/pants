@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 /// <summary>Immutable and fully validated database-open configuration.</summary>
 public sealed class PantsOpenOptions

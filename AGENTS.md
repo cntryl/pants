@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`Pants.slnx` contains the .NET 10 projects. Core interfaces and public contracts live in `src/Pants`; implementations are internal and grouped by responsibility under `Internal/Runtime`, `Internal/Transactions`, `Internal/Storage`, and `Internal/Cloud`. Idiomatic service registration belongs in `src/Pants.DependencyInjection`. Tests are in `test/Pants.Tests`, benchmarks in `bench/Pants.Benches`, and documentation in `docs`. Keep Markdown under `docs/*`, except this root guide. Do not add CLI or standalone tooling projects without explicit agreement.
+`Pants.slnx` contains the .NET 10 projects. All projects share the `Cntryl.Pants` root namespace. Core interfaces and public contracts live in `src/Pants`, grouped by domain (`Cloud`, `Storage`, `Transactions`, `Observability`, `Runtime`, `Scan`, `Time`, `Exceptions`); each domain's implementation is internal and lives under that domain's own `Internal/` subfolder (e.g. `Cloud/Internal`, `Storage/Internal`). Idiomatic service registration belongs in `src/Pants.DependencyInjection`. Tests are in `test/Pants.Tests`, mirroring the same domain folders plus `Contracts/` (parity/contract tests), `Compatibility/` (Midge fixtures), and `Support/` (failpoint handlers and test doubles). Benchmarks are in `bench/Pants.Benches`, and documentation in `docs`. Keep Markdown under `docs/*`, except this root guide. Do not add CLI or standalone tooling projects without explicit agreement.
 
 ## Build, Test, and Development Commands
 

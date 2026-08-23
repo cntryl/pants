@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCloudCrashRecoveryTests

@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class StaticGcsTokenProvider(string token) : IGcsTokenProvider
 {

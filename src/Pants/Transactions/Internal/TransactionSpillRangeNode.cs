@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed record TransactionSpillRangeNode(
     ulong Ordinal,

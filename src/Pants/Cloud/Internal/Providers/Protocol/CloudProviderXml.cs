@@ -1,7 +1,7 @@
 using System.Xml;
 using System.Xml.Linq;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class CloudProviderXml
 {

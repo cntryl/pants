@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 delegate ValueTask CloudCompactionOutputPublisher(
     IReadOnlyList<string> outputNames,

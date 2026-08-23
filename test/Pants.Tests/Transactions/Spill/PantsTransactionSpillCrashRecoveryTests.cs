@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsTransactionSpillCrashRecoveryTests

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 public static class PantsDiagnostics
 {

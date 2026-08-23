@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class CloudObjectLeaseStore(
     ICloudObjectStore objectStore,

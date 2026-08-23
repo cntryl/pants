@@ -1,7 +1,7 @@
+using Cntryl.Pants.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
-using Pants.DependencyInjection;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsDependencyInjectionTests
 {

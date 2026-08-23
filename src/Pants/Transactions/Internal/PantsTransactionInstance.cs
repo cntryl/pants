@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class PantsTransactionInstance : IPantsTransaction
 {

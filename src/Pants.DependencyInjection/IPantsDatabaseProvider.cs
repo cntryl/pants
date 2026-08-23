@@ -1,4 +1,4 @@
-namespace Pants.DependencyInjection;
+namespace Cntryl.Pants.DependencyInjection;
 
 public interface IPantsDatabaseProvider
 {

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class CloudObjectStoreExtensions
 {

@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 internal sealed class CredentialHttpHandler(
     Func<RecordedCredentialRequest, int, HttpResponseMessage> responseFactory) : HttpMessageHandler

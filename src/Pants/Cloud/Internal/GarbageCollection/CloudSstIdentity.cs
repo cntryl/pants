@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 readonly record struct CloudSstIdentity(uint ColumnFamilyId, ulong Sequence)
 {

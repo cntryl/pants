@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed record FrozenFlushRuntimeResult(
     FlushPublicationPlan? PublicationPlan,

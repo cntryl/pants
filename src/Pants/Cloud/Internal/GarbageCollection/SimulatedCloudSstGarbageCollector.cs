@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 static class SimulatedCloudSstGarbageCollector
 {

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 // Matches lz4_flex 0.14's canonical independent-block output so Pants and Midge
 // emit identical persisted bytes. K4os remains the hardened decoder.

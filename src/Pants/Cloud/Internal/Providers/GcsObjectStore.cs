@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class GcsObjectStore : ICloudObjectStore
 {

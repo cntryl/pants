@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsWalVerificationTailParityTests
 {

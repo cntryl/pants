@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using ZstdSharp;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class MidgeSstBlockCodec
 {

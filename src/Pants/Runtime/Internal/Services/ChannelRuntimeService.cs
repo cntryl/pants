@@ -1,6 +1,6 @@
 using System.Threading.Channels;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRuntimeServiceMetrics
 {

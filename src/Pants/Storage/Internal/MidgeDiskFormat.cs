@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using K4os.Compression.LZ4;
 using ZstdSharp;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class MidgeDiskFormat
 {

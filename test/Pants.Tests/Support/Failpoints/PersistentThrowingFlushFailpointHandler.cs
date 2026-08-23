@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 sealed class PersistentThrowingFlushFailpointHandler(PantsFailpoint target) :
     IPantsFailpointHandler

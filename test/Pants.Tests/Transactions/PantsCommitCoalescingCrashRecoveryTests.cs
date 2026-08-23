@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCommitCoalescingCrashRecoveryTests

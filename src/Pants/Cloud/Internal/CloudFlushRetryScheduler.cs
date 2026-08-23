@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDisposable
 {

@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed class PantsActor : IAsyncDisposable
 {

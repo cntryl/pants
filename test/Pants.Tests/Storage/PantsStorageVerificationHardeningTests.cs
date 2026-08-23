@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsStorageVerificationHardeningTests

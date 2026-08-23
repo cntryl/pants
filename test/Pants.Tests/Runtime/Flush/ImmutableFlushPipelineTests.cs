@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class ImmutableFlushPipelineTests
 {

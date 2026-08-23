@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
 {

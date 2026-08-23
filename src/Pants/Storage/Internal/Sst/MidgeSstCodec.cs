@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Hashing;
 using Microsoft.Win32.SafeHandles;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class MidgeSstCodec
 {

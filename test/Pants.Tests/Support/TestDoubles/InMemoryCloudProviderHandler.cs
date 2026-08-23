@@ -4,7 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 sealed class InMemoryCloudProviderHandler : HttpMessageHandler
 {

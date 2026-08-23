@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal static class AtomicStagedFile
 {

@@ -2,7 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class GcsCredentialSourceTests

@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 readonly record struct WalDurabilityState(
     int PendingWrites,

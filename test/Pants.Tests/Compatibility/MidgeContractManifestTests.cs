@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class MidgeContractManifestTests
 {

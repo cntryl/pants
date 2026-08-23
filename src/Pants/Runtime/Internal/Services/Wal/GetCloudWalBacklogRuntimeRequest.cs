@@ -1,3 +1,3 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed record GetCloudWalBacklogRuntimeRequest : WalRuntimeRequest;

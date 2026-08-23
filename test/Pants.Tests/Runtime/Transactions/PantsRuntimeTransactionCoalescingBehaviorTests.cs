@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
 {

@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 sealed class RuntimeMeterMeasurements : IDisposable
 {

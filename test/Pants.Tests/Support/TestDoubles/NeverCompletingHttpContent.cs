@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 sealed class NeverCompletingHttpContent : HttpContent
 {

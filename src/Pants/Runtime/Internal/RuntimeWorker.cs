@@ -1,6 +1,6 @@
 using System.Threading.Channels;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 {

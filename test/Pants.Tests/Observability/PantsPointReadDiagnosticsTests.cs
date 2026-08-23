@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsPointReadDiagnosticsTests
 {

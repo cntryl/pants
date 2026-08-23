@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal sealed class TransactionSpillStore : IDisposable
 {

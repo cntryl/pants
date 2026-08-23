@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class RuntimeWorkerTests

@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 public readonly record struct PantsMemoryBudget
 {

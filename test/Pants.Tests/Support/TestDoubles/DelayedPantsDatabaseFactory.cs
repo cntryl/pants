@@ -1,6 +1,6 @@
-using Pants.DependencyInjection;
+using Cntryl.Pants.DependencyInjection;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 internal sealed class DelayedPantsDatabaseFactory : IPantsDatabaseFactory
 {

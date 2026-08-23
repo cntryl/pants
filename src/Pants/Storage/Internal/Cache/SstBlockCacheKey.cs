@@ -1,3 +1,3 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 internal readonly record struct SstBlockCacheKey(string FileName, int BlockIndex);

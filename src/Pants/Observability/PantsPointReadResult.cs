@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 public sealed record PantsPointReadResult(
     ReadOnlyMemory<byte>? Value,

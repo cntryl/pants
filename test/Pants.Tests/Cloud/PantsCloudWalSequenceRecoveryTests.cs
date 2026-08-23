@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsCloudWalSequenceRecoveryTests
 {

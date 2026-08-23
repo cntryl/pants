@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed class CloudControlMetadataSnapshot
 {

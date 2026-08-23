@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 public sealed record PantsPointReadTrace(
     int KeyRangeRejects,

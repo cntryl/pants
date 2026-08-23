@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class CommitValidatorInsertOnlyTests
 {

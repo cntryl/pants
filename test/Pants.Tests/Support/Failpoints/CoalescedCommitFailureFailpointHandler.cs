@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 sealed class CoalescedCommitFailureFailpointHandler(
     PantsFailpoint? failure = null,

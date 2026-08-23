@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 /// <summary>Controls leveled compaction planning.</summary>
 public sealed record PantsCompactionConfiguration(

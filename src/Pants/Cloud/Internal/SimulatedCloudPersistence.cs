@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Pants;
+namespace Cntryl.Pants;
 
 sealed class SimulatedCloudPersistence : ICloudPersistence
 {

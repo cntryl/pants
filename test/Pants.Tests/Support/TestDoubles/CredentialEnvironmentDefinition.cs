@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class CredentialEnvironmentDefinition

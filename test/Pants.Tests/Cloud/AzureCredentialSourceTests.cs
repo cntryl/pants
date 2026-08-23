@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Net;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class AzureCredentialSourceTests

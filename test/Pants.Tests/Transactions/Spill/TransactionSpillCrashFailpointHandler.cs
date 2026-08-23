@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 internal sealed class TransactionSpillCrashFailpointHandler(
     PantsFailpoint target,
