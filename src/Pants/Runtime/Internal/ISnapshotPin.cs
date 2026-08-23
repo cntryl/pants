@@ -8,5 +8,5 @@ interface ISnapshotPin
 
     DateTimeOffset StartedAtUtc { get; }
 
-    DatabaseSnapshot StartSnapshot { get; }
+    DatabaseVersion StartSnapshot { get; }
 }

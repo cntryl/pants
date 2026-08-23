@@ -102,10 +102,10 @@ public sealed class CommitValidatorInsertOnlyTests
     public void ShouldAllowInsertGivenRangeDeleteOfExistingValue()
     {
         var state = CreateState();
-        state.FamilyData[Family]["key"u8.ToArray()] = new CellState(
+        state.FamilyData[Family] = state.FamilyData[Family].SetItem("key"u8.ToArray(), new CellState(
             "existing"u8.ToArray(),
             1,
-            null);
+            null));
         var source = CreateSource(
             DeleteRange(0, Family, "a", "z"),
             Put(1, Family, "key", true));
@@ -166,7 +166,7 @@ public sealed class CommitValidatorInsertOnlyTests
             PantsTransactionMode.ReadWrite,
             conflictPolicy,
             DateTimeOffset.UnixEpoch,
-            state.CreateSnapshot(),
+            state.CreateVersion(),
             operations,
             []);
 

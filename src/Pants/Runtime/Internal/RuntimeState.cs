@@ -1,8 +1,12 @@
+using System.Collections.Immutable;
+
 namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class RuntimeState
 {
     public const int DefaultFamilyVersion = 0;
+    public static ImmutableSortedDictionary<byte[], CellState> EmptyFamily { get; } =
+        ImmutableSortedDictionary.Create<byte[], CellState>(ByteArrayComparer.Instance);
     readonly RuntimeTelemetry _telemetry;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
@@ -12,9 +16,9 @@ sealed class RuntimeState
         _telemetry = telemetry;
         FamilyGeneration = new Dictionary<string, int>(StringComparer.Ordinal);
         ActiveFamilyVersions = new Dictionary<string, int>(StringComparer.Ordinal);
-        FamilyData = new Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>>(
+        FamilyData = new Dictionary<ColumnFamilyIdentity, ImmutableSortedDictionary<byte[], CellState>>(
             ColumnFamilyIdentityComparer.Instance);
-        RangeTombstones = new Dictionary<ColumnFamilyIdentity, List<CommittedRangeTombstone>>(
+        RangeTombstones = new Dictionary<ColumnFamilyIdentity, ImmutableArray<CommittedRangeTombstone>>(
             ColumnFamilyIdentityComparer.Instance);
         ActiveMemtableBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
@@ -24,7 +28,7 @@ sealed class RuntimeState
         ActiveFamilyVersions["default"] = DefaultFamilyVersion;
         FamilyGeneration["default"] = DefaultFamilyVersion;
         var defaultFamily = new ColumnFamilyIdentity(0, "default", DefaultFamilyVersion);
-        FamilyData[defaultFamily] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+        FamilyData[defaultFamily] = EmptyFamily;
         RangeTombstones[defaultFamily] = [];
         ActiveMemtableBytes[defaultFamily] = 0;
     }
@@ -41,9 +45,9 @@ sealed class RuntimeState
 
     public Dictionary<string, int> ActiveFamilyVersions { get; }
 
-    public Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>> FamilyData { get; }
+    public Dictionary<ColumnFamilyIdentity, ImmutableSortedDictionary<byte[], CellState>> FamilyData { get; }
 
-    public Dictionary<ColumnFamilyIdentity, List<CommittedRangeTombstone>> RangeTombstones { get; }
+    public Dictionary<ColumnFamilyIdentity, ImmutableArray<CommittedRangeTombstone>> RangeTombstones { get; }
 
     public Dictionary<ColumnFamilyIdentity, long> ActiveMemtableBytes { get; }
 
@@ -92,23 +96,11 @@ sealed class RuntimeState
     public void RecordIntentLogReplay(int entryCount) =>
         _telemetry.RecordIntentLogReplay(entryCount);
 
-    public DatabaseSnapshot CreateSnapshot()
-    {
-        var familyDataSnapshot =
-            new Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>>(
-                ColumnFamilyIdentityComparer.Instance);
-        foreach (var (family, data) in FamilyData)
-        {
-            familyDataSnapshot[family] = new SortedDictionary<byte[], CellState>(
-                data,
-                ByteArrayComparer.Instance);
-        }
-
-        var familyVersionsSnapshot = new Dictionary<string, int>(
-            ActiveFamilyVersions,
-            StringComparer.Ordinal);
-        return new DatabaseSnapshot(Sequence, familyDataSnapshot, familyVersionsSnapshot);
-    }
+    public DatabaseVersion CreateVersion() => new(
+        Sequence,
+        FamilyData.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),
+        RangeTombstones.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),
+        ActiveFamilyVersions.ToImmutableDictionary(StringComparer.Ordinal));
 
     static TaskCompletionSource CreateWritePressureCompletion() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

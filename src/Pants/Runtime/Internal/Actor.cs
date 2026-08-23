@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
@@ -57,7 +58,7 @@ sealed class Actor : IAsyncDisposable
     bool _backgroundCompactionPending;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
     bool _cloudWalSealPending;
-    DatabaseSnapshot _currentSnapshot;
+    DatabaseVersion _currentVersion;
     int _deferredCompactionScheduled;
     int _disposed;
     bool _garbageCollectionPending;
@@ -370,7 +371,7 @@ sealed class Actor : IAsyncDisposable
                 SingleWriter = false,
                 AllowSynchronousContinuations = false
             });
-            _currentSnapshot = _state.CreateSnapshot();
+            _currentVersion = _state.CreateVersion();
             _loopTask = Task.Run(RunLoopAsync);
             if (UsesBackgroundImmutableFlushes)
             {
@@ -564,8 +565,7 @@ sealed class Actor : IAsyncDisposable
                     state.NextColumnFamilyId = checked(id + 1);
                     state.FamilyGeneration[name] = generation;
                     state.ActiveFamilyVersions[name] = generation;
-                    state.FamilyData[created] = new SortedDictionary<byte[], CellState>(
-                        ByteArrayComparer.Instance);
+                    state.FamilyData[created] = RuntimeState.EmptyFamily;
                     state.RangeTombstones[created] = [];
                     state.ActiveMemtableBytes[created] = 0;
                 }
@@ -750,7 +750,7 @@ sealed class Actor : IAsyncDisposable
             cancellationToken);
 
     public ValueTask<long> RegisterScanSnapshotAsync(
-        DatabaseSnapshot snapshot,
+        DatabaseVersion snapshot,
         CancellationToken cancellationToken) =>
         SendAsync(
             state =>
@@ -798,7 +798,7 @@ sealed class Actor : IAsyncDisposable
                 var identity = columnFamily.Identity;
                 ValidateActiveFamily(state, identity);
                 var transactionId = checked(++state.TransactionCounter);
-                var snapshot = state.CreateSnapshot();
+                var snapshot = Volatile.Read(ref _currentVersion);
                 var transaction = new TransactionInstance(
                     database,
                     transactionId,
@@ -2691,16 +2691,18 @@ sealed class Actor : IAsyncDisposable
         switch (operation.Kind)
         {
             case CommitOperationKind.Put:
-                family[operation.Key.ToArray()] = new CellState(
+                state.FamilyData[operation.Family] = family.SetItem(operation.Key.ToArray(), new CellState(
                     operation.Value?.ToArray(),
                     sequence,
-                    operation.ExpiryUtc);
+                    operation.ExpiryUtc));
                 break;
             case CommitOperationKind.Delete:
-                family[operation.Key.ToArray()] = new CellState(null, sequence, null);
+                state.FamilyData[operation.Family] =
+                    family.SetItem(operation.Key.ToArray(), new CellState(null, sequence, null));
                 break;
             case CommitOperationKind.DeleteRange when operation.EndExclusive is not null:
-                state.RangeTombstones[operation.Family].Add(new CommittedRangeTombstone(
+                state.RangeTombstones[operation.Family] = state.RangeTombstones[operation.Family].Add(
+                    new CommittedRangeTombstone(
                     operation.Key.ToArray(),
                     operation.EndExclusive.ToArray(),
                     sequence));
@@ -2708,8 +2710,10 @@ sealed class Actor : IAsyncDisposable
                              .Where(key => IsInRange(key, operation.Key, operation.EndExclusive))
                              .ToArray())
                 {
-                    family[key] = new CellState(null, sequence, null);
+                    family = family.SetItem(key, new CellState(null, sequence, null));
                 }
+
+                state.FamilyData[operation.Family] = family;
 
                 break;
             default:
@@ -2734,7 +2738,7 @@ sealed class Actor : IAsyncDisposable
         activeGeneration == identity.Generation &&
         state.FamilyData.ContainsKey(identity);
 
-    static SortedDictionary<byte[], CellState> GetFamily(
+    static ImmutableSortedDictionary<byte[], CellState> GetFamily(
         RuntimeState state,
         ColumnFamilyIdentity identity) =>
         state.FamilyData.TryGetValue(identity, out var family)
@@ -3693,7 +3697,7 @@ sealed class Actor : IAsyncDisposable
 
     void PublishSnapshot(RuntimeState state)
     {
-        Volatile.Write(ref _currentSnapshot, state.CreateSnapshot());
+        Volatile.Write(ref _currentVersion, state.CreateVersion());
         Volatile.Write(
             ref _publishedRuntimeMetrics,
             _runtimeMetricsSnapshotFactory.RefreshPublished(

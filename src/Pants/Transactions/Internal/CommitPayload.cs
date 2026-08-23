@@ -7,7 +7,7 @@ sealed class CommitPayload
         PantsTransactionMode mode,
         PantsConflictPolicy conflictPolicy,
         DateTimeOffset snapshotTime,
-        DatabaseSnapshot startSnapshot,
+        DatabaseVersion startSnapshot,
         ITransactionOperationSource operations,
         Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> asserts)
     {
@@ -28,7 +28,7 @@ sealed class CommitPayload
 
     public DateTimeOffset SnapshotTime { get; }
 
-    public DatabaseSnapshot StartSnapshot { get; }
+    public DatabaseVersion StartSnapshot { get; }
 
     public ITransactionOperationSource Operations { get; }
 

@@ -63,7 +63,7 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
             PantsTransactionMode.ReadWrite,
             PantsConflictPolicy.LastWriteWins,
             DateTimeOffset.UnixEpoch,
-            state.CreateSnapshot(),
+            state.CreateVersion(),
             source,
             []);
     }

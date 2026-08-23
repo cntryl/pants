@@ -12,7 +12,7 @@ sealed class TransactionInstance : IPantsTransaction
     readonly List<TransactionIntentOperation> _intentLog = [];
     readonly DateTimeOffset _snapshotTime;
     readonly TransactionSpillStore? _spillStore;
-    readonly DatabaseSnapshot _startSnapshot;
+    readonly DatabaseVersion _startSnapshot;
     readonly long _transactionId;
     long _assertionBytes;
     PantsConflictPolicy _conflictPolicy = PantsConflictPolicy.LastWriteWins;
@@ -25,7 +25,7 @@ sealed class TransactionInstance : IPantsTransaction
         long transactionId,
         ColumnFamilyHandle columnFamily,
         PantsTransactionMode mode,
-        DatabaseSnapshot startSnapshot,
+        DatabaseVersion startSnapshot,
         DateTimeOffset snapshotTime,
         string? persistentDatabasePath)
     {

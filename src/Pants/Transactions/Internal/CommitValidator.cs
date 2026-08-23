@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Cntryl.Pants.Transactions.Internal;
 
 static class CommitValidator
@@ -133,7 +135,7 @@ static class CommitValidator
         }
     }
 
-    static SortedDictionary<byte[], CellState> GetFamily(
+    static ImmutableSortedDictionary<byte[], CellState> GetFamily(
         RuntimeState state,
         ColumnFamilyIdentity identity) =>
         state.FamilyData.TryGetValue(identity, out var family)
@@ -143,7 +145,7 @@ static class CommitValidator
                 $"Column family '{identity.Name}' is unavailable.");
 
     static CellState? ResolveVisibleCell(
-        SortedDictionary<byte[], CellState> family,
+        ImmutableSortedDictionary<byte[], CellState> family,
         byte[] key,
         DateTimeOffset now) =>
         family.TryGetValue(key, out var cell) && !cell.IsExpired(now) && cell.Value is not null
