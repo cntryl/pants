@@ -1442,8 +1442,9 @@ public sealed class PantsBackgroundFlushPipelineTests
                 static level => level.Level == 0);
             await Assert.ThrowsAsync<PantsBusyException>(() =>
                 database.DropColumnFamilyAsync(family).AsTask());
-            await database.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
-            await database.DropColumnFamilyAsync(family).AsTask().WaitAsync(AssertionTimeout);
+            await database.DropColumnFamilyDiscardingUnflushedAsync(family)
+                .AsTask()
+                .WaitAsync(AssertionTimeout);
         }
         finally
         {
