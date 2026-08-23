@@ -44,7 +44,7 @@ sealed class FileLease : IDisposable
     /// exclusive file handle is released but before the owner-token verification runs. Lets
     /// tests simulate another writer replacing the lock file during that window.
     /// </summary>
-    internal static Action? MutationLockDisposalInterferenceHookForTesting { get; set; }
+    internal Action? MutationLockDisposalInterferenceHookForTesting { get; set; }
 
     public void Dispose()
     {
@@ -59,7 +59,10 @@ sealed class FileLease : IDisposable
             _heartbeat.Dispose();
             try
             {
-                using var leaseLock = AcquireMutationLock(_lockPath, _holderId);
+                using var leaseLock = AcquireMutationLock(
+                    _lockPath,
+                    _holderId,
+                    MutationLockDisposalInterferenceHookForTesting);
                 var current = ReadRecord(_leaderPath);
                 if (current?.Epoch == Epoch && current.HolderId == _holderId)
                 {
@@ -228,7 +231,10 @@ sealed class FileLease : IDisposable
         }
     }
 
-    static LeaseMutationLock AcquireMutationLock(string path, string holderId)
+    static LeaseMutationLock AcquireMutationLock(
+        string path,
+        string holderId,
+        Action? disposalInterferenceHook = null)
     {
         try
         {
@@ -239,7 +245,7 @@ sealed class FileLease : IDisposable
                 $"holder_id={holderId}\nowner_token={ownerToken}\ncreated_at={DateTimeOffset.UtcNow:O}\n");
             writer.Flush();
             stream.Flush(true);
-            return new LeaseMutationLock(stream, path, ownerToken);
+            return new LeaseMutationLock(stream, path, ownerToken, disposalInterferenceHook);
         }
         catch (IOException ex)
         {
@@ -308,18 +314,24 @@ sealed class FileLease : IDisposable
         readonly string _ownerToken;
         readonly string _path;
         readonly FileStream _stream;
+        readonly Action? _disposalInterferenceHook;
 
-        public LeaseMutationLock(FileStream stream, string path, string ownerToken)
+        public LeaseMutationLock(
+            FileStream stream,
+            string path,
+            string ownerToken,
+            Action? disposalInterferenceHook)
         {
             _stream = stream;
             _path = path;
             _ownerToken = ownerToken;
+            _disposalInterferenceHook = disposalInterferenceHook;
         }
 
         public void Dispose()
         {
             _stream.Dispose();
-            MutationLockDisposalInterferenceHookForTesting?.Invoke();
+            _disposalInterferenceHook?.Invoke();
             try
             {
                 // Only delete if this is still the same lock instance this process created,

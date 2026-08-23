@@ -127,17 +127,10 @@ public sealed class FileLeaseTests
             LongHeartbeatInterval);
 
         var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
-        FileLease.MutationLockDisposalInterferenceHookForTesting = () => File.WriteAllText(
+        lease.MutationLockDisposalInterferenceHookForTesting = () => File.WriteAllText(
             lockPath,
             "holder_id=intruder\nowner_token=intruder-token\ncreated_at=2020-01-01T00:00:00.0000000+00:00\n");
-        try
-        {
-            lease.Dispose();
-        }
-        finally
-        {
-            FileLease.MutationLockDisposalInterferenceHookForTesting = null;
-        }
+        lease.Dispose();
 
         Assert.True(File.Exists(lockPath));
         Assert.Contains("intruder-token", File.ReadAllText(lockPath));
