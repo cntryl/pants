@@ -1,10 +1,25 @@
-using System.Buffers.Binary;
-
 namespace Pants;
 
 static class CloudWalCoverageValidator
 {
     internal static void ValidateAndEnsureCovered(
+        ReadOnlySpan<byte> bytes,
+        ulong expectedMaximumSequence,
+        ulong expectedWriterEpoch,
+        MidgeManifest manifest)
+    {
+        if (!ValidateAndIsCovered(
+                bytes,
+                expectedMaximumSequence,
+                expectedWriterEpoch,
+                manifest))
+        {
+            throw new PantsCorruptionException(
+                "A published cloud WAL segment contains data not covered by the committed manifest.");
+        }
+    }
+
+    internal static bool ValidateAndIsCovered(
         ReadOnlySpan<byte> bytes,
         ulong expectedMaximumSequence,
         ulong expectedWriterEpoch,
@@ -16,64 +31,44 @@ static class CloudWalCoverageValidator
             throw new PantsCorruptionException("A published cloud WAL segment is empty.");
         }
 
-        var cursor = 0;
         var observedMaximumSequence = 0UL;
         ulong? observedWriterEpoch = null;
         var mutations = new List<MidgeWalMutation>();
-        while (cursor < bytes.Length)
+        try
         {
-            if (bytes.Length - cursor < 2 * sizeof(uint))
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a torn frame header.");
-            }
+            MidgeWalFrameReader.Visit(
+                bytes,
+                (record, _) =>
+                {
+                    if (observedWriterEpoch.HasValue &&
+                        observedWriterEpoch.Value != record.WriterEpoch)
+                    {
+                        throw new PantsStorageException(
+                            "A published cloud WAL segment mixes writer epochs.");
+                    }
 
-            var payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.Slice(cursor, sizeof(uint))));
-            var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.Slice(cursor + sizeof(uint), sizeof(uint)));
-            cursor += 2 * sizeof(uint);
-            if (payloadLength > MidgeDiskFormat.WalMaximumRecordBytes ||
-                payloadLength > bytes.Length - cursor)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a torn or oversized frame payload.");
-            }
-
-            var payload = bytes.Slice(cursor, payloadLength);
-            if (MidgeDiskFormat.Crc32C(payload) != expectedCrc)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a corrupt frame checksum.");
-            }
-
-            IReadOnlyList<MidgeWalMutation> frameMutations;
-            ulong commitSequence;
-            ulong writerEpoch;
-            try
-            {
-                frameMutations = MidgeWalCodec.DecodeTransactionBatch(
-                    payload,
-                    out commitSequence,
-                    out writerEpoch);
-            }
-            catch (PantsException exception)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL transaction frame is malformed.",
-                    exception);
-            }
-
-            if (observedWriterEpoch.HasValue && observedWriterEpoch.Value != writerEpoch)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment mixes writer epochs.");
-            }
-
-            observedWriterEpoch = writerEpoch;
-            observedMaximumSequence = Math.Max(observedMaximumSequence, commitSequence);
-            mutations.AddRange(frameMutations);
-            cursor += payloadLength;
+                    observedWriterEpoch = record.WriterEpoch;
+                    observedMaximumSequence = Math.Max(
+                        observedMaximumSequence,
+                        record.Sequence);
+                    if (record.Operation == MidgeWalOperation.TransactionBatch)
+                    {
+                        mutations.AddRange(MidgeWalCodec.DecodeTransactionBatch(
+                            record,
+                            out var commitSequence,
+                            out var writerEpoch));
+                    }
+                    else if (MidgeWalCodec.IsMutation(record.Operation))
+                    {
+                        mutations.Add(MidgeWalCodec.DecodeMutation(record));
+                    }
+                });
+        }
+        catch (PantsException exception) when (exception is not PantsCorruptionException)
+        {
+            throw new PantsCorruptionException(
+                "A published cloud WAL transaction frame is malformed.",
+                exception);
         }
 
         if (observedMaximumSequence != expectedMaximumSequence)
@@ -88,14 +83,7 @@ static class CloudWalCoverageValidator
                 "A published cloud WAL segment writer epoch differs from its catalog entry.");
         }
 
-        foreach (var mutation in mutations)
-        {
-            if (!manifest.Files.Any(file => Covers(file, mutation)))
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment contains data not covered by the committed manifest.");
-            }
-        }
+        return mutations.All(mutation => manifest.Files.Any(file => Covers(file, mutation)));
     }
 
     static bool Covers(MidgeFileMeta file, MidgeWalMutation mutation)

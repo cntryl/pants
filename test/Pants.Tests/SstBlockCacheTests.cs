@@ -25,11 +25,19 @@ public sealed class SstBlockCacheTests
         Assert.True(cache.Add(second, [2]));
         policies[0].PauseAccess = true;
 
-        Task<bool> blockedRead = Task.Run(() => cache.TryGet(first, out _));
+        var blockedRead = Task.Factory.StartNew(
+            () => cache.TryGet(first, out _),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         Assert.True(policies[0].AccessEntered.Wait(TimeSpan.FromSeconds(2)));
         try
         {
-            Task<bool> independentRead = Task.Run(() => cache.TryGet(second, out _));
+            var independentRead = Task.Factory.StartNew(
+                () => cache.TryGet(second, out _),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
 
             Assert.True(await independentRead.WaitAsync(TimeSpan.FromSeconds(2)));
         }

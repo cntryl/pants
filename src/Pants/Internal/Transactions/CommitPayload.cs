@@ -8,10 +8,7 @@ internal sealed class CommitPayload
         PantsConflictPolicy conflictPolicy,
         DateTimeOffset snapshotTime,
         DatabaseSnapshot startSnapshot,
-        IReadOnlyList<TransactionIntentOperation> orderedOperations,
-        Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionPendingWrite>> writes,
-        Dictionary<ColumnFamilyIdentity, List<DeleteRange>> deleteRanges,
-        Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionReadValue>> reads,
+        ITransactionOperationSource operations,
         Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> asserts)
     {
         TransactionId = transactionId;
@@ -19,10 +16,7 @@ internal sealed class CommitPayload
         ConflictPolicy = conflictPolicy;
         SnapshotTime = snapshotTime;
         StartSnapshot = startSnapshot;
-        OrderedOperations = orderedOperations;
-        Writes = writes;
-        DeleteRanges = deleteRanges;
-        Reads = reads;
+        Operations = operations;
         Asserts = asserts;
     }
 
@@ -36,13 +30,9 @@ internal sealed class CommitPayload
 
     public DatabaseSnapshot StartSnapshot { get; }
 
-    public IReadOnlyList<TransactionIntentOperation> OrderedOperations { get; }
-
-    public Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionPendingWrite>> Writes { get; }
-
-    public Dictionary<ColumnFamilyIdentity, List<DeleteRange>> DeleteRanges { get; }
-
-    public Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionReadValue>> Reads { get; }
+    public ITransactionOperationSource Operations { get; }
 
     public Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> Asserts { get; }
+
+    public bool IsSpilled => Operations.IsSpilled;
 }

@@ -3,14 +3,13 @@
 Pants centralizes metadata replacement in `AtomicStagedFile`. The helper writes
 a uniquely named file in the target directory, flushes that file to stable
 storage, invokes any injected pre-publication failure, atomically renames it
-over the target, and flushes the parent directory on Unix. Temporary cleanup
-is best-effort; uncertain targets are never deleted.
+over the target, and flushes the parent directory. Temporary cleanup is
+best-effort; uncertain targets are never deleted.
 
-Windows does not expose a supported directory-flush handle through
-`System.IO`. On Windows, Pants uses a write-through file handle, an explicit
-file flush, and a same-volume atomic move—the strongest portable BCL
-durability boundary. Unix additionally flushes the directory entry after the
-move.
+Unix opens and syncs the directory through its native file descriptor. Windows
+opens a writable directory handle with backup semantics and calls
+`FlushFileBuffers`. Both paths preserve Midge's file-sync, atomic-rename, and
+parent-directory-sync durability boundary.
 
 The lease mutation-lock file is intentionally the one exception to staged
 replacement. Its atomic `CreateNew` at the final path is the mutual-exclusion

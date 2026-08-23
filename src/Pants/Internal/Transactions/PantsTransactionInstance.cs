@@ -158,24 +158,36 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        byte[] keyCopy;
-        byte[]? value;
-        lock (_gate)
+        var (keyCopy, value, resolvedByIntent) = PreparePointRead(key, cancellationToken);
+
+        if (!resolvedByIntent)
         {
-            EnsureActive();
-            _database.EnsureOpen();
-            keyCopy = key.ToArray();
-            value = ReadVisibleValue(keyCopy);
+            await _database.RecordPointReadAsync(
+                _columnFamily.Identity,
+                keyCopy,
+                cancellationToken).ConfigureAwait(false);
         }
 
-        await _database.RecordPointReadAsync(
+        return CopyValue(value);
+    }
+
+    public async ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken = default)
+    {
+        var (keyCopy, value, resolvedByIntent) = PreparePointRead(key, cancellationToken);
+        if (resolvedByIntent)
+        {
+            return new PantsPointReadResult(
+                CopyValue(value),
+                new PantsPointReadTrace(0, []));
+        }
+
+        var trace = await _database.RecordPointReadWithDiagnosticsAsync(
             _columnFamily.Identity,
             keyCopy,
             cancellationToken).ConfigureAwait(false);
-        return value is null
-            ? (ReadOnlyMemory<byte>?)null
-            : new ReadOnlyMemory<byte>(value.ToArray());
+        return new PantsPointReadResult(CopyValue(value), trace);
     }
 
     public async ValueTask<IPantsScan> ScanAsync(
@@ -185,17 +197,27 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
         var bounds = new PantsScanBounds(query);
-        TransactionIntentOperation[] operations;
+        TransactionIntentReadView intents;
         lock (_gate)
         {
             EnsureActive();
             _database.EnsureOpen();
-            operations = [.. LoadOrderedIntents()];
+            intents = CreateIntentReadView();
         }
 
-        long snapshotId = await _database
-            .RegisterScanSnapshotAsync(_startSnapshot, cancellationToken)
-            .ConfigureAwait(false);
+        long snapshotId;
+        try
+        {
+            snapshotId = await _database
+                .RegisterScanSnapshotAsync(_startSnapshot, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            intents.Dispose();
+            throw;
+        }
+
         try
         {
             return new PantsScanInstance(
@@ -205,30 +227,46 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                         _columnFamily.Identity,
                         bounds,
                         scanCancellationToken).ConfigureAwait(false);
+                    TransactionScanEnumerator? entries = null;
                     try
                     {
-                        IEnumerator<PantsEntry> entries = EnumerateVisibleSnapshot(
-                                operations,
-                                query.Direction)
-                            .Where(entry => bounds.Matches(entry.Key.Span))
-                            .GetEnumerator();
+                        entries = new TransactionScanEnumerator(
+                            _startSnapshot,
+                            _columnFamily.Identity,
+                            _snapshotTime,
+                            intents,
+                            bounds);
                         return validator is null
                             ? entries
                             : new ValidatingScanEnumerator(entries, validator);
                     }
                     catch
                     {
+                        entries?.Dispose();
                         validator?.Dispose();
                         throw;
                     }
                 },
                 query,
-                () => _database.ReleaseScanSnapshotAsync(snapshotId));
+                ReleaseScanAsync);
         }
         catch
         {
+            intents.Dispose();
             await _database.ReleaseScanSnapshotAsync(snapshotId).ConfigureAwait(false);
             throw;
+        }
+
+        async ValueTask ReleaseScanAsync()
+        {
+            try
+            {
+                await _database.ReleaseScanSnapshotAsync(snapshotId).ConfigureAwait(false);
+            }
+            finally
+            {
+                intents.Dispose();
+            }
         }
     }
 
@@ -328,63 +366,12 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                     "A commit payload was requested outside the commit phase.");
             }
 
-            DateTimeOffset commitTime = _database.Clock.UtcNow;
-            TransactionIntentOperation[] operations = LoadOrderedIntents()
-                .Select(operation => new TransactionIntentOperation(
-                    operation.Ordinal,
-                    operation.Kind,
-                    operation.Family,
-                    operation.Key.ToArray(),
-                    operation.EndExclusive?.ToArray(),
-                    operation.Value?.ToArray(),
-                    null,
-                    CalculateExpiration(commitTime, operation.TimeToLive),
-                    operation.InsertOnly))
-                .ToArray();
-            var familyWrites = new Dictionary<byte[], TransactionPendingWrite>(ByteArrayComparer.Instance);
-            var familyDeleteRanges = new List<DeleteRange>();
-            foreach (TransactionIntentOperation operation in operations)
-            {
-                switch (operation.Kind)
-                {
-                    case CommitOperationKind.Put:
-                        familyWrites[operation.Key.ToArray()] = new TransactionPendingWrite(
-                            operation.Value?.ToArray(),
-                            operation.ExpiryUtc,
-                            false,
-                            operation.InsertOnly,
-                            false);
-                        break;
-                    case CommitOperationKind.Delete:
-                        familyWrites[operation.Key.ToArray()] = new TransactionPendingWrite(
-                            null,
-                            null,
-                            true,
-                            false,
-                            false);
-                        break;
-                    case CommitOperationKind.DeleteRange when operation.EndExclusive is not null:
-                        familyDeleteRanges.Add(new DeleteRange(
-                            operation.Key.ToArray(),
-                            operation.EndExclusive.ToArray()));
-                        break;
-                    default:
-                        throw PantsException.Create(
-                            PantsErrorCode.Internal,
-                            "The transaction contains an invalid operation.");
-                }
-            }
-
-            var writes = new Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionPendingWrite>>(
-                ColumnFamilyIdentityComparer.Instance)
-            {
-                [_columnFamily.Identity] = familyWrites
-            };
-            var deleteRanges = new Dictionary<ColumnFamilyIdentity, List<DeleteRange>>(
-                ColumnFamilyIdentityComparer.Instance)
-            {
-                [_columnFamily.Identity] = familyDeleteRanges
-            };
+            var operations = new TransactionOperationSource(
+                _spillStore,
+                _intentLog,
+                _nextOrdinal,
+                _database.Clock.UtcNow);
+            operations.Validate();
             var assertions = new Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>>(
                 ColumnFamilyIdentityComparer.Instance)
             {
@@ -405,10 +392,6 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                 _snapshotTime,
                 _startSnapshot,
                 operations,
-                writes,
-                deleteRanges,
-                new Dictionary<ColumnFamilyIdentity, Dictionary<byte[], TransactionReadValue>>(
-                    ColumnFamilyIdentityComparer.Instance),
                 assertions);
         }
     }
@@ -439,23 +422,13 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         }
     }
 
-    private byte[]? ReadVisibleValue(byte[] key)
+    (byte[]? Value, bool ResolvedByIntent) ReadVisibleValue(byte[] key)
     {
-        List<TransactionIntentOperation> operations = LoadOrderedIntents();
-        for (int index = operations.Count - 1; index >= 0; index--)
+        using var intents = CreateIntentReadView();
+        var lookup = intents.LookupLatest(key);
+        if (lookup is not null)
         {
-            TransactionIntentOperation operation = operations[index];
-            switch (operation.Kind)
-            {
-                case CommitOperationKind.Put when ByteArrayComparer.Instance.Equals(operation.Key, key):
-                    return operation.Value?.ToArray();
-                case CommitOperationKind.Delete when ByteArrayComparer.Instance.Equals(operation.Key, key):
-                    return null;
-                case CommitOperationKind.DeleteRange when
-                    operation.EndExclusive is not null &&
-                    IsInRange(key, operation.Key, operation.EndExclusive):
-                    return null;
-            }
+            return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
         }
 
         if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) ||
@@ -463,120 +436,34 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             cell.Value is null ||
             cell.IsExpired(_snapshotTime))
         {
-            return null;
+            return (null, false);
         }
 
-        return cell.Value.ToArray();
+        return (cell.Value.ToArray(), false);
     }
 
-    private IEnumerable<PantsEntry> EnumerateVisibleSnapshot(
-        IReadOnlyList<TransactionIntentOperation> operations,
-        PantsScanDirection direction)
+    (byte[] Key, byte[]? Value, bool ResolvedByIntent) PreparePointRead(
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
     {
-        if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family))
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
         {
-            throw PantsException.Create(
-                PantsErrorCode.InvalidArgument,
-                $"Column family '{_columnFamily.Name}' is not in the transaction snapshot.");
-        }
-
-        var stagedPointKeys = new SortedSet<byte[]>(ByteArrayComparer.Instance);
-        foreach (TransactionIntentOperation operation in operations)
-        {
-            if (operation.Kind is CommitOperationKind.Put or CommitOperationKind.Delete)
-            {
-                stagedPointKeys.Add(operation.Key);
-            }
-        }
-
-        IEnumerable<byte[]> snapshotKeys = direction == PantsScanDirection.Forward
-            ? family.Keys
-            : family.Keys.Reverse();
-        IEnumerable<byte[]> pointKeys = direction == PantsScanDirection.Forward
-            ? stagedPointKeys
-            : stagedPointKeys.Reverse();
-        using IEnumerator<byte[]> snapshotEnumerator = snapshotKeys.GetEnumerator();
-        using IEnumerator<byte[]> pointEnumerator = pointKeys.GetEnumerator();
-        bool hasSnapshot = snapshotEnumerator.MoveNext();
-        bool hasPoint = pointEnumerator.MoveNext();
-        while (hasSnapshot || hasPoint)
-        {
-            byte[] key;
-            if (!hasPoint)
-            {
-                key = snapshotEnumerator.Current;
-                hasSnapshot = snapshotEnumerator.MoveNext();
-            }
-            else if (!hasSnapshot)
-            {
-                key = pointEnumerator.Current;
-                hasPoint = pointEnumerator.MoveNext();
-            }
-            else
-            {
-                int comparison = ByteArrayComparer.Instance.Compare(
-                    snapshotEnumerator.Current,
-                    pointEnumerator.Current);
-                if (direction == PantsScanDirection.Reverse)
-                {
-                    comparison = -comparison;
-                }
-
-                if (comparison < 0)
-                {
-                    key = snapshotEnumerator.Current;
-                    hasSnapshot = snapshotEnumerator.MoveNext();
-                }
-                else if (comparison > 0)
-                {
-                    key = pointEnumerator.Current;
-                    hasPoint = pointEnumerator.MoveNext();
-                }
-                else
-                {
-                    key = pointEnumerator.Current;
-                    hasSnapshot = snapshotEnumerator.MoveNext();
-                    hasPoint = pointEnumerator.MoveNext();
-                }
-            }
-
-            byte[]? value = ResolveScanValue(family, operations, key);
-            if (value is not null)
-            {
-                yield return new PantsEntry(key.ToArray(), value.ToArray());
-            }
+            EnsureActive();
+            _database.EnsureOpen();
+            var keyCopy = key.ToArray();
+            var (value, resolvedByIntent) = ReadVisibleValue(keyCopy);
+            return (keyCopy, value, resolvedByIntent);
         }
     }
 
-    private byte[]? ResolveScanValue(
-        SortedDictionary<byte[], CellState> family,
-        IReadOnlyList<TransactionIntentOperation> operations,
-        byte[] key)
-    {
-        byte[]? value = family.TryGetValue(key, out CellState? cell) &&
-            cell.Value is not null &&
-            !cell.IsExpired(_snapshotTime)
-                ? cell.Value
-                : null;
-        foreach (TransactionIntentOperation operation in operations)
-        {
-            if (operation.Kind == CommitOperationKind.Put &&
-                ByteArrayComparer.Instance.Equals(operation.Key, key))
-            {
-                value = operation.Value;
-            }
-            else if ((operation.Kind == CommitOperationKind.Delete &&
-                      ByteArrayComparer.Instance.Equals(operation.Key, key)) ||
-                     (operation.Kind == CommitOperationKind.DeleteRange &&
-                      operation.EndExclusive is not null &&
-                      IsInRange(key, operation.Key, operation.EndExclusive)))
-            {
-                value = null;
-            }
-        }
+    static ReadOnlyMemory<byte>? CopyValue(byte[]? value) =>
+        value is null
+            ? (ReadOnlyMemory<byte>?)null
+            : new ReadOnlyMemory<byte>(value.ToArray());
 
-        return value;
-    }
+    TransactionIntentReadView CreateIntentReadView() =>
+        _spillStore?.CreateReadView(_intentLog) ?? new TransactionIntentReadView(_intentLog);
 
     private void StageIntent(TransactionIntentOperation operation, long bytes)
     {
@@ -626,19 +513,6 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         }
 
         _assertionBytes = checked(_assertionBytes + bytes);
-    }
-
-    private List<TransactionIntentOperation> LoadOrderedIntents()
-    {
-        if (_spillStore is null || !_spillStore.HasRuns)
-        {
-            return _intentLog;
-        }
-
-        var operations = new List<TransactionIntentOperation>(_spillStore.ReadAll());
-        operations.AddRange(_intentLog);
-        operations.Sort(static (left, right) => left.Ordinal.CompareTo(right.Ordinal));
-        return operations;
     }
 
     private void Finish()
@@ -697,24 +571,5 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                 "TTL must be null, zero, or a non-negative whole number of seconds.");
         }
     }
-
-    private static DateTimeOffset? CalculateExpiration(
-        DateTimeOffset commitTime,
-        TimeSpan? timeToLive)
-    {
-        if (timeToLive is null)
-        {
-            return null;
-        }
-
-        long maximumDeltaTicks = DateTimeOffset.MaxValue.UtcTicks - commitTime.UtcTicks;
-        return timeToLive.Value.Ticks > maximumDeltaTicks
-            ? DateTimeOffset.MaxValue
-            : commitTime.Add(timeToLive.Value);
-    }
-
-    private static bool IsInRange(byte[] key, byte[] startInclusive, byte[] endExclusive) =>
-        ByteArrayComparer.Instance.Compare(key, startInclusive) >= 0 &&
-        ByteArrayComparer.Instance.Compare(key, endExclusive) < 0;
 
 }

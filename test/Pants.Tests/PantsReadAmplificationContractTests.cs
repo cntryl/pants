@@ -151,6 +151,7 @@ public sealed class PantsReadAmplificationContractTests
         PantsRuntimeMetrics runtime = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, amplification.SstBudgetViolationsTotal);
         Assert.Equal(1, amplification.CompactionTriggersTotal);
+        Assert.Equal(1, runtime.ReadAmplificationCompactionTriggersTotal);
         Assert.Equal(1, runtime.CompactionsRun);
     }
 

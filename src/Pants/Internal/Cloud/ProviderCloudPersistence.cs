@@ -358,53 +358,121 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     public async ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        await EnsureRemoteManifestNotAheadAsync(cancellationToken).ConfigureAwait(false);
-        var sstDirectory = Path.Combine(_localRoot, "sst");
-        if (Directory.Exists(sstDirectory))
-        {
-            foreach (var path in Directory.EnumerateFiles(sstDirectory, "*.sst"))
-            {
-                _lease.EnsureValid();
-                var objectKey = PantsCloudObjectLayout.SstPrefix + Path.GetFileName(path);
-                var data = File.ReadAllBytes(path);
-                var created = await _sstStore.PutAsync(
-                    objectKey,
-                    data,
-                    new CloudObjectWriteCondition.IfAbsent(),
-                    cancellationToken).ConfigureAwait(false);
-                var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
-                    .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
-                        $"Cloud SST upload for '{objectKey}' was acknowledged without an object.");
-                _lease.EnsureValid();
-                if (!readback.Data.Span.SequenceEqual(data))
-                {
-                    throw created
-                        ? new PantsCorruptionException(
-                            $"Cloud SST upload for '{objectKey}' read back different bytes.")
-                        : new PantsFencedException(
-                            $"Immutable cloud SST '{objectKey}' conflicts.");
-                }
-            }
-        }
+        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
+        await EnsureRemoteManifestNotAheadAsync(metadata, cancellationToken).ConfigureAwait(false);
+        await PublishCapturedSstsAsync(metadata, cancellationToken).ConfigureAwait(false);
 
         foreach (var fileName in MetadataFiles)
         {
-            var path = Path.Combine(_localRoot, fileName);
-            if (File.Exists(path))
+            if (metadata.Files.TryGetValue(fileName, out var bytes))
             {
-                await EnsureRemoteManifestNotAheadAsync(cancellationToken).ConfigureAwait(false);
                 await PutControlCasAsync(
                     PantsCloudObjectLayout.MetadataPrefix + fileName,
-                    File.ReadAllBytes(path),
+                    bytes,
                     cancellationToken).ConfigureAwait(false);
             }
         }
 
         await CollectObsoleteSstsAsync(cancellationToken).ConfigureAwait(false);
 
-        await PruneCoveredWalAsync(
-            CloudManifestReader.ReadLastPersistedSequence(_localRoot),
-            cancellationToken).ConfigureAwait(false);
+        await PruneCoveredWalAsync(metadata, cancellationToken).ConfigureAwait(false);
+    }
+
+    async ValueTask PublishCapturedSstsAsync(
+        CloudControlMetadataSnapshot metadata,
+        CancellationToken cancellationToken)
+    {
+        var publishedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var references in metadata.ReferencedSsts
+                     .GroupBy(static file => file.Name, StringComparer.Ordinal))
+        {
+            var name = ValidateSstName(references.Key);
+            var proofs = references.ToArray();
+            var path = Path.Combine(_localRoot, "sst", name);
+            var localBytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
+            if (localBytes is not null)
+            {
+                foreach (var proof in proofs)
+                {
+                    CloudSstValidator.Validate(localBytes, proof);
+                }
+            }
+
+            await PublishSstAsync(name, localBytes, proofs, cancellationToken)
+                .ConfigureAwait(false);
+            publishedNames.Add(name);
+        }
+
+        var sstDirectory = Path.Combine(_localRoot, "sst");
+        if (Directory.Exists(sstDirectory))
+        {
+            foreach (var path in Directory.EnumerateFiles(
+                         sstDirectory,
+                         "*.sst",
+                         SearchOption.TopDirectoryOnly))
+            {
+                var name = ValidateSstName(Path.GetFileName(path));
+                if (publishedNames.Add(name))
+                {
+                    await PublishSstAsync(
+                            name,
+                            File.ReadAllBytes(path),
+                            [],
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+    }
+
+    async ValueTask PublishSstAsync(
+        string name,
+        byte[]? localBytes,
+        MidgeFileMeta[] proofs,
+        CancellationToken cancellationToken)
+    {
+        _lease.EnsureValid();
+        var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+        var created = false;
+        if (localBytes is not null)
+        {
+            created = await _sstStore.PutAsync(
+                objectKey,
+                localBytes,
+                new CloudObjectWriteCondition.IfAbsent(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+                $"Manifest cloud SST '{name}' is unavailable for publication.");
+        _lease.EnsureValid();
+        if (localBytes is not null && !readback.Data.Span.SequenceEqual(localBytes))
+        {
+            throw created
+                ? new PantsCorruptionException(
+                    $"Cloud SST upload for '{objectKey}' read back different bytes.")
+                : new PantsFencedException(
+                    $"Immutable cloud SST '{objectKey}' conflicts.");
+        }
+
+        foreach (var proof in proofs)
+        {
+            CloudSstValidator.Validate(readback.Data, proof);
+        }
+    }
+
+    static string ValidateSstName(string name)
+    {
+        if (!CloudSstObjectKey.TryGetName(
+                PantsCloudObjectLayout.SstPrefix + name,
+                out var validatedName) ||
+            !StringComparer.Ordinal.Equals(name, validatedName))
+        {
+            throw new PantsCorruptionException($"Cloud SST name '{name}' is unsafe.");
+        }
+
+        return validatedName;
     }
 
     public async ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
@@ -413,6 +481,14 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
         }
+    }
+
+    public async ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
+    {
+        _lease.EnsureValid();
+        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, ManifestMetadataFiles);
+        await EnsureRemoteManifestNotAheadAsync(metadata, cancellationToken).ConfigureAwait(false);
+        _lease.EnsureValid();
     }
 
     public async ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
@@ -596,6 +672,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         var current = await _controlStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false);
         _lease.EnsureValid();
+        if (current?.Data.Span.SequenceEqual(data.Span) == true)
+        {
+            return;
+        }
+
         if (current is not null && IsManifestObjectKey(objectKey))
         {
             var currentManifest = CloudManifestReader.DecodeManifest(current.Data.Span);
@@ -630,10 +711,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
-    async ValueTask EnsureRemoteManifestNotAheadAsync(CancellationToken cancellationToken)
+    async ValueTask EnsureRemoteManifestNotAheadAsync(
+        CloudControlMetadataSnapshot metadata,
+        CancellationToken cancellationToken)
     {
-        var local = CloudManifestReader.ReadManifest(_localRoot);
-        if (local is null)
+        if (metadata.Manifests.Length == 0)
         {
             return;
         }
@@ -647,7 +729,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             _lease.EnsureValid();
             if (remote is not null &&
                 CloudManifestReader.DecodeManifest(remote.Data.Span).LastPersistedSequence >
-                local.LastPersistedSequence)
+                metadata.MaximumManifestSequence)
             {
                 throw new PantsFencedException(
                     $"Cloud manifest '{fileName}' is ahead of the local cache.");
@@ -660,25 +742,24 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         objectKey.EndsWith("/manifest.json", StringComparison.Ordinal);
 
     async ValueTask PruneCoveredWalAsync(
-        ulong coveredSequence,
+        CloudControlMetadataSnapshot metadata,
         CancellationToken cancellationToken)
     {
+        var manifest = metadata.AuthoritativeManifest;
+        if (manifest is null)
+        {
+            return;
+        }
+
+        var coveredSequence = manifest.LastPersistedSequence;
         if (coveredSequence == 0)
         {
             return;
         }
 
-        var manifest = CloudManifestReader.ReadManifest(_localRoot) ??
-            throw new PantsCorruptionException(
-                "Cloud WAL pruning requires a committed local manifest.");
-        if (manifest.LastPersistedSequence != coveredSequence)
-        {
-            throw new PantsCorruptionException(
-                "Cloud WAL pruning sequence differs from the committed local manifest.");
-        }
-
         var dependencyGuards = await ValidateManifestDependenciesAsync(
             manifest,
+            metadata,
             cancellationToken).ConfigureAwait(false);
 
         for (var attempt = 0; attempt < 8; attempt++)
@@ -699,21 +780,33 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     "The cloud WAL catalog is not fenced to this writer during pruning.");
             }
 
-            var retired = catalog.Segments.Values
+            var candidates = catalog.Segments.Values
                 .Where(segment => segment.MaximumSequence <= coveredSequence)
                 .ToArray();
-            if (retired.Length == 0)
+            if (candidates.Length == 0)
             {
                 return;
             }
 
+            var retired = new List<ProviderPublishedWalSegment>(candidates.Length);
+            var walObjects = new Dictionary<ulong, CloudObject>();
             var walGuards = new Dictionary<ulong, CloudObjectIdentityGuard>();
-            foreach (var segment in retired)
+            foreach (var segment in candidates)
             {
-                var remote = await ReadAndValidateWalForPruningAsync(
+                var remote = await ReadWalCandidateForPruningAsync(
                     segment,
-                    manifest,
                     cancellationToken).ConfigureAwait(false);
+                if (!CloudWalCoverageValidator.ValidateAndIsCovered(
+                        remote.Data.Span,
+                        segment.MaximumSequence,
+                        segment.WriterEpoch,
+                        manifest))
+                {
+                    continue;
+                }
+
+                retired.Add(segment);
+                walObjects.Add(segment.SegmentId, remote);
                 walGuards.Add(
                     segment.SegmentId,
                     new CloudObjectIdentityGuard(
@@ -722,14 +815,30 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                         remote.Version));
             }
 
+            if (retired.Count == 0)
+            {
+                return;
+            }
+
             await VerifyIdentityGuardsAsync(
                 dependencyGuards.Concat(walGuards.Values),
                 cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
+            foreach (var segment in retired)
+            {
+                CloudWalCoverageValidator.ValidateAndEnsureCovered(
+                    walObjects[segment.SegmentId].Data.Span,
+                    segment.MaximumSequence,
+                    segment.WriterEpoch,
+                    manifest);
+            }
 
+            var retiredIds = retired
+                .Select(static segment => segment.SegmentId)
+                .ToHashSet();
             var retained = new SortedDictionary<ulong, ProviderPublishedWalSegment>(
                 catalog.Segments
-                    .Where(entry => entry.Value.MaximumSequence > coveredSequence)
+                    .Where(entry => !retiredIds.Contains(entry.Key))
                     .ToDictionary());
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
                 catalog with { Segments = retained },
@@ -794,9 +903,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
-    async ValueTask<CloudObject> ReadAndValidateWalForPruningAsync(
+    async ValueTask<CloudObject> ReadWalCandidateForPruningAsync(
         ProviderPublishedWalSegment segment,
-        MidgeManifest manifest,
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
@@ -811,16 +919,12 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
         }
 
-        CloudWalCoverageValidator.ValidateAndEnsureCovered(
-            remote.Data.Span,
-            segment.MaximumSequence,
-            segment.WriterEpoch,
-            manifest);
         return remote;
     }
 
     async ValueTask<IReadOnlyList<CloudObjectIdentityGuard>> ValidateManifestDependenciesAsync(
         MidgeManifest manifest,
+        CloudControlMetadataSnapshot metadata,
         CancellationToken cancellationToken)
     {
         var guards = new List<CloudObjectIdentityGuard>(
@@ -838,25 +942,18 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             guards.Add(new CloudObjectIdentityGuard(_sstStore, objectKey, remote.Version));
         }
 
-        foreach (var fileName in MetadataFiles)
+        foreach (var (fileName, capturedBytes) in metadata.Files)
         {
-            var localPath = Path.Combine(_localRoot, fileName);
-            if (!File.Exists(localPath))
-            {
-                continue;
-            }
-
             _lease.EnsureValid();
             var objectKey = PantsCloudObjectLayout.MetadataPrefix + fileName;
-            var localBytes = File.ReadAllBytes(localPath);
             var remote = await _controlStore.GetAsync(objectKey, cancellationToken)
                 .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
                     $"Cloud metadata object '{objectKey}' is missing during WAL pruning.");
             _lease.EnsureValid();
-            if (!remote.Data.Span.SequenceEqual(localBytes))
+            if (!remote.Data.Span.SequenceEqual(capturedBytes.Span))
             {
                 throw new PantsCorruptionException(
-                    $"Cloud metadata object '{objectKey}' differs from the committed local bytes.");
+                    $"Cloud metadata object '{objectKey}' differs from the published snapshot bytes.");
             }
 
             guards.Add(new CloudObjectIdentityGuard(_controlStore, objectKey, remote.Version));

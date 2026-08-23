@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace Pants.Tests;
@@ -36,6 +37,62 @@ public sealed class PantsCloudWalPruningTests
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
         Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateObject());
+    }
+
+    [Fact]
+    public async Task ShouldPreserveProviderWalWhenUnflushedColumnFamilyStillDependsOnItGivenPartialGc()
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
+            .WithBackgroundCompaction(false);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new PantsRuntimeDependencies(cloudHttpClient: client)))
+        {
+            var other = await database.CreateColumnFamilyAsync("provider-other");
+            await CommitValueAsync(
+                database,
+                database.DefaultColumnFamily,
+                "provider-default-first"u8.ToArray(),
+                PantsWriteOptions.CloudStrict);
+            await CommitValueAsync(
+                database,
+                other,
+                "provider-other-retained"u8.ToArray(),
+                PantsWriteOptions.CloudStrict);
+            await CommitValueAsync(
+                database,
+                database.DefaultColumnFamily,
+                "provider-default-last"u8.ToArray(),
+                PantsWriteOptions.CloudStrict);
+            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+        }
+
+        ResetDirectory(Path.Combine(cache.Path, "wal"));
+        await using (var reopened = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new PantsRuntimeDependencies(cloudHttpClient: client)))
+        {
+            await reopened.FlushAsync(reopened.DefaultColumnFamily);
+            Assert.NotEmpty(ReadProviderCatalogSegments(handler));
+            await reopened.ShutdownAsync(TimeSpan.FromSeconds(5));
+        }
+
+        ResetDirectory(Path.Combine(cache.Path, "wal"));
+        await using var recovered = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new PantsRuntimeDependencies(cloudHttpClient: client));
+        var recoveredOther = Assert.IsAssignableFrom<IPantsColumnFamily>(
+            await recovered.GetColumnFamilyAsync("provider-other"));
+        await using var reader = await recovered.BeginTransactionAsync(
+            recoveredOther,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("provider-other-retained"u8.ToArray()))));
     }
 
     [Fact]
@@ -211,11 +268,13 @@ public sealed class PantsCloudWalPruningTests
                 database.DefaultColumnFamily,
                 "default-async"u8.ToArray(),
                 PantsWriteOptions.CloudAsync);
+            await WaitForRemoteWalCountAsync(directory.Path, expectedCount: 1);
             await CommitValueAsync(
                 database,
                 other,
                 "other-async"u8.ToArray(),
                 PantsWriteOptions.CloudAsync);
+            await WaitForRemoteWalCountAsync(directory.Path, expectedCount: 2);
             await CommitValueAsync(
                 database,
                 database.DefaultColumnFamily,
@@ -373,6 +432,22 @@ public sealed class PantsCloudWalPruningTests
     static string[] RemoteWalPaths(string root) => Directory
         .EnumerateFiles(Path.Combine(CloudRoot(root), "wal"), "*.wal", SearchOption.AllDirectories)
         .ToArray();
+
+    static async Task WaitForRemoteWalCountAsync(string root, int expectedCount)
+    {
+        var timeout = TimeSpan.FromSeconds(2);
+        var started = Stopwatch.GetTimestamp();
+        while (RemoteWalPaths(root).Length < expectedCount)
+        {
+            if (Stopwatch.GetElapsedTime(started) >= timeout)
+            {
+                throw new TimeoutException(
+                    $"Timed out waiting for {expectedCount} remote WAL objects.");
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
+        }
+    }
 
     static JsonElement[] ReadCatalogSegments(string root)
     {

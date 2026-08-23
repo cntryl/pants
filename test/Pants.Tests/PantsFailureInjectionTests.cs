@@ -46,12 +46,19 @@ public sealed class PantsFailureInjectionTests
 
         await Assert.ThrowsAsync<PantsIOException>(() =>
             database.FlushAsync(database.DefaultColumnFamily).AsTask());
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
+        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
+        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        Assert.Single(Directory.GetFiles(
+            Path.Combine(directory.Path, "sst", ".flush-staging"),
+            "*.tmp"));
 
         await database.FlushAsync(database.DefaultColumnFamily);
 
         Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
         Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        Assert.Empty(Directory.GetFiles(
+            Path.Combine(directory.Path, "sst", ".flush-staging"),
+            "*.tmp"));
     }
 
     [Fact]

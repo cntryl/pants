@@ -122,6 +122,64 @@ public sealed class PantsCloudCrashRecoveryTests
     }
 
     [Fact]
+    public async Task ShouldKeepWalSegmentsEpochScopedWhenCloudStrictCommitFollowsRecoveredActiveWal()
+    {
+        using var directory = new TemporaryDirectory();
+        using var child = StartCrashChild(directory.Path, ActiveWalScenario);
+        try
+        {
+            await WaitForChildReadinessAsync(child, directory.Path);
+        }
+        finally
+        {
+            await TerminateCrashChildAsync(child, directory.Path);
+        }
+
+        await ExpireCrashedProcessLeaseAsync(directory.Path);
+
+        var activeWal = Path.Combine(directory.Path, "wal", "wal.log");
+        Assert.True(new FileInfo(activeWal).Length > 0);
+        var crashedWriterEpoch = AssertSingleWriterEpoch(activeWal);
+
+        await using (var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
+        {
+            await CommitAsync(
+                reopened,
+                "cloud-strict-after-reopen-key",
+                "cloud-strict-after-reopen-value",
+                PantsWriteOptions.CloudStrict);
+        }
+
+        await using var verified = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        await AssertValueAsync(
+            verified,
+            GetScenarioKey(ActiveWalScenario),
+            "crash-value");
+        await AssertValueAsync(
+            verified,
+            "cloud-strict-after-reopen-key",
+            "cloud-strict-after-reopen-value");
+
+        var localWalPaths = Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "wal"),
+            "*.wal",
+            SearchOption.TopDirectoryOnly);
+        var publishedWalPaths = Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories);
+        var sealedWalPaths = localWalPaths.Concat(publishedWalPaths).ToArray();
+        Assert.NotEmpty(sealedWalPaths);
+
+        var writerEpochs = sealedWalPaths
+            .Select(AssertSingleWriterEpoch)
+            .Distinct()
+            .ToArray();
+        Assert.Contains(crashedWriterEpoch, writerEpochs);
+        Assert.Equal(2, writerEpochs.Length);
+    }
+
+    [Fact]
     public async Task ShouldRecoverLocalCloudAsyncWalWhenChildAbortsBeforeUpload()
     {
         using var directory = new TemporaryDirectory();
@@ -406,15 +464,29 @@ public sealed class PantsCloudCrashRecoveryTests
         Func<PantsRuntimeMetrics, bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        while (true)
+        PantsRuntimeMetrics? last = null;
+        try
         {
-            var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
-            if (predicate(metrics))
+            while (true)
             {
-                return metrics;
-            }
+                last = await database.GetRuntimeMetricsAsync(timeout.Token);
+                if (predicate(last))
+                {
+                    return last;
+                }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"Cloud crash scenario metrics did not converge: " +
+                $"sequence={last?.CurrentSequence}, cloud={last?.WalCloudDurableSequence}, " +
+                $"sst={last?.SstCount}, persisted={last?.ManifestLastPersistedSequence}, " +
+                $"walSegment={last?.WalCurrentSegmentId}, pending={last?.WalPendingWrites}, " +
+                $"uploads={last?.PendingCloudUploads}, " +
+                $"health={last?.Health}.");
         }
     }
 
@@ -478,6 +550,20 @@ public sealed class PantsCloudCrashRecoveryTests
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync(TestBytes.FromString(key)));
+    }
+
+    static ulong AssertSingleWriterEpoch(string path)
+    {
+        var writerEpochs = new HashSet<ulong>();
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        MidgeWalFrameReader.Visit(
+            stream,
+            (record, _) => writerEpochs.Add(record.WriterEpoch));
+        return Assert.Single(writerEpochs);
     }
 
     static bool IsKnownScenario(string? scenario) =>

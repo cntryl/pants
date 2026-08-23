@@ -6,7 +6,7 @@ public sealed class PantsLeveledCompactionTests
     public async Task ShouldRunBackgroundCompactionAtL0Trigger()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithPerformanceGoal(PantsPerformanceGoal.Latency)
                 .WithBackgroundCompaction(true));
@@ -15,11 +15,13 @@ public sealed class PantsLeveledCompactionTests
             await PutAndFlushAsync(database, index);
         }
 
-        PantsStorageLayout layout = await database.GetStorageLayoutAsync();
+        var layout = await database.GetStorageLayoutAsync();
         PantsStorageLevelLayout level = Assert.Single(layout.Levels);
         Assert.Equal(1, level.Level);
         Assert.Equal(1, level.FileCount);
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).CompactionsRun);
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(1, metrics.CompactionsRun);
+        Assert.True(metrics.CompactionBytesRewritten > 0);
     }
 
     [Fact]
@@ -27,8 +29,10 @@ public sealed class PantsLeveledCompactionTests
     {
         using var directory = new TemporaryDirectory();
         await using IPantsDatabase database = await PantsDatabase.OpenAsync(
-            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        for (int index = 0; index < 65; index++)
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
+        for (var index = 0; index < 8; index++)
         {
             await PutAndFlushAsync(database, index);
         }
@@ -38,7 +42,7 @@ public sealed class PantsLeveledCompactionTests
         PantsStorageLayout layout = await database.GetStorageLayoutAsync();
         Assert.Equal([0, 1], layout.Levels.Select(static level => level.Level));
         Assert.Equal(2, layout.Levels.Single(static level => level.Level == 0).FileCount);
-        Assert.Equal(21, layout.Levels.Single(static level => level.Level == 1).FileCount);
+        Assert.Equal(2, layout.Levels.Single(static level => level.Level == 1).FileCount);
     }
 
     [Fact]

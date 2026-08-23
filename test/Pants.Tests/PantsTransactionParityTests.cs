@@ -95,7 +95,7 @@ public sealed class PantsTransactionParityTests
                          PantsTransactionMode.ReadWrite))
         {
             duplicate.Insert("existing"u8.ToArray(), "replacement"u8.ToArray());
-            await Assert.ThrowsAsync<PantsWriteConflictException>(
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(
                 () => duplicate.CommitAsync(PantsWriteOptions.Buffered).AsTask());
         }
 

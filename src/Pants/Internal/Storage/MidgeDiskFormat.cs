@@ -14,10 +14,12 @@ internal static class MidgeDiskFormat
 
     private static readonly uint[] CrcTable = CreateCrcTable();
 
-    public static uint Crc32C(ReadOnlySpan<byte> bytes)
+    public static uint Crc32C(ReadOnlySpan<byte> bytes) => Crc32CAppend(0, bytes);
+
+    public static uint Crc32CAppend(uint checksum, ReadOnlySpan<byte> bytes)
     {
-        uint crc = uint.MaxValue;
-        foreach (byte value in bytes)
+        var crc = ~checksum;
+        foreach (var value in bytes)
         {
             crc = CrcTable[(crc ^ value) & 0xff] ^ (crc >> 8);
         }

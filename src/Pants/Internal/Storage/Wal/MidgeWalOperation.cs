@@ -6,5 +6,7 @@ internal enum MidgeWalOperation : byte
     Insert = 1,
     Delete = 2,
     DeleteRange = 3,
+    TransactionBegin = 4,
+    TransactionCommit = 5,
     TransactionBatch = 6
 }

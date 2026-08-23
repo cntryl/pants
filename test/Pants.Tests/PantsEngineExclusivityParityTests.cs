@@ -78,6 +78,32 @@ public sealed class PantsEngineExclusivityParityTests
         Assert.Equal(PantsErrorCode.Fenced, error.Code);
     }
 
+    [Fact]
+    public async Task ShouldFailClosedGivenDuplicateLocalLeaseFields()
+    {
+        using var directory = new TemporaryDirectory();
+        var leaseLossCount = 0;
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithLeaseLossCallback(() => Interlocked.Increment(ref leaseLossCount));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new PantsRuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromHours(1)));
+        var leasePath = Path.Combine(directory.Path, ".midge_leader");
+        var original = await File.ReadAllTextAsync(leasePath);
+        await File.WriteAllTextAsync(leasePath, original + "epoch: 999\n");
+
+        Assert.False(database.IsPrimaryLeaseHealthy);
+        Assert.False(database.IsPrimaryLeaseHealthy);
+        Assert.Equal(1, Volatile.Read(ref leaseLossCount));
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put("fenced"u8.ToArray(), "value"u8.ToArray());
+        var fenced = await Assert.ThrowsAsync<PantsFencedException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        Assert.Equal(PantsErrorCode.Fenced, fenced.Code);
+    }
+
     private static async Task<FileStream> AcquireLeaseMutationLockAsync(string path)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));

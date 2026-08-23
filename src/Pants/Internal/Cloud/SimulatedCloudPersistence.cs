@@ -213,48 +213,118 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public void MirrorMetadataAndSsts()
     {
+        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
         var localSstDirectory = Path.Combine(_localRoot, "sst");
-        if (!Directory.Exists(localSstDirectory))
-        {
-            return;
-        }
-
-        var localSsts = Directory.EnumerateFiles(
-                localSstDirectory,
-                "*.sst",
-                SearchOption.TopDirectoryOnly)
-            .ToArray();
-        if (localSsts.Length > 0)
-        {
-            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
-        }
-
+        var localSsts = Directory.Exists(localSstDirectory)
+            ? Directory.EnumerateFiles(
+                    localSstDirectory,
+                    "*.sst",
+                    SearchOption.TopDirectoryOnly)
+                .ToArray()
+            : [];
+        var pendingSsts = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var localSst in localSsts)
         {
-            AtomicStagedFile.Write(
-                Path.Combine(_cloudRoot, "sst", Path.GetFileName(localSst)),
-                File.ReadAllBytes(localSst));
+            var name = ValidateSstName(Path.GetFileName(localSst));
+            var remotePath = Path.Combine(_cloudRoot, "sst", name);
+            var bytes = File.ReadAllBytes(localSst);
+            if (!File.Exists(remotePath))
+            {
+                pendingSsts.Add(remotePath, bytes);
+                continue;
+            }
+
+            if (!File.ReadAllBytes(remotePath).AsSpan().SequenceEqual(bytes))
+            {
+                throw new PantsFencedException(
+                    $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
+            }
         }
 
-        if (localSsts.Length > 0)
+        foreach (var references in metadata.ReferencedSsts
+                     .GroupBy(static file => file.Name, StringComparer.Ordinal))
         {
+            var name = ValidateSstName(references.Key);
+            var localPath = Path.Combine(localSstDirectory, name);
+            var remotePath = Path.Combine(_cloudRoot, "sst", name);
+            if (File.Exists(localPath) && !File.Exists(remotePath))
+            {
+                var bytes = File.ReadAllBytes(localPath);
+                foreach (var proof in references)
+                {
+                    CloudSstValidator.Validate(bytes, proof);
+                }
+
+                pendingSsts.TryAdd(remotePath, bytes);
+            }
+        }
+
+        if (pendingSsts.Count > 0)
+        {
+            _failpoints.Hit(PantsFailpoint.BeforeCloudUpload);
+            foreach (var (remotePath, bytes) in pendingSsts)
+            {
+                AtomicStagedFile.Write(remotePath, bytes);
+            }
+
             _failpoints.Hit(PantsFailpoint.AfterCloudUpload);
         }
 
+        ValidateCapturedSsts(metadata);
+
         foreach (var fileName in MetadataFiles)
         {
-            var localPath = Path.Combine(_localRoot, fileName);
-            if (File.Exists(localPath))
+            if (metadata.Files.TryGetValue(fileName, out var bytes))
             {
-                AtomicStagedFile.Write(
+                WriteIfChanged(
                     Path.Combine(_cloudRoot, "metadata", fileName),
-                    File.ReadAllBytes(localPath));
+                    bytes.Span);
             }
         }
 
         CollectObsoleteSsts();
 
-        PruneCoveredWal(CloudManifestReader.ReadLastPersistedSequence(_localRoot));
+        PruneCoveredWal(metadata);
+    }
+
+    void ValidateCapturedSsts(CloudControlMetadataSnapshot metadata)
+    {
+        foreach (var file in metadata.ReferencedSsts)
+        {
+            var name = ValidateSstName(file.Name);
+            var path = Path.Combine(_cloudRoot, "sst", name);
+            if (!File.Exists(path))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Manifest simulated-cloud SST '{name}' is unavailable for publication.");
+            }
+
+            CloudSstValidator.Validate(File.ReadAllBytes(path), file);
+        }
+    }
+
+    static string ValidateSstName(string name)
+    {
+        if (!CloudSstObjectKey.TryGetName(
+                PantsCloudObjectLayout.SstPrefix + name,
+                out var validatedName) ||
+            !StringComparer.Ordinal.Equals(name, validatedName))
+        {
+            throw new PantsCorruptionException(
+                $"Simulated-cloud SST name '{name}' is unsafe.");
+        }
+
+        return validatedName;
+    }
+
+    static void WriteIfChanged(string path, ReadOnlySpan<byte> bytes)
+    {
+        if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+        {
+            return;
+        }
+
+        AtomicStagedFile.Write(path, bytes);
     }
 
     public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
@@ -352,6 +422,18 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_catalog.FencingEpoch != _writerEpoch)
+        {
+            throw new PantsFencedException(
+                "The simulated-cloud WAL catalog is not fenced to this writer.");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
     void CollectObsoleteSsts()
     {
         if (!SimulatedCloudSstGarbageCollector.Collect(
@@ -427,33 +509,32 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         Path.Combine(_cloudRoot, "wal", "publication-catalog.v1.json"),
         JsonSerializer.SerializeToUtf8Bytes(_catalog, JsonOptions));
 
-    void PruneCoveredWal(ulong coveredSequence)
+    void PruneCoveredWal(CloudControlMetadataSnapshot metadata)
     {
+        var manifest = metadata.AuthoritativeManifest;
+        if (manifest is null)
+        {
+            return;
+        }
+
+        var coveredSequence = manifest.LastPersistedSequence;
         if (coveredSequence == 0)
         {
             return;
         }
 
-        var manifest = CloudManifestReader.ReadManifest(_localRoot) ??
-            throw new PantsCorruptionException(
-                "Simulated-cloud WAL pruning requires a committed local manifest.");
-        if (manifest.LastPersistedSequence != coveredSequence)
-        {
-            throw new PantsCorruptionException(
-                "Simulated-cloud WAL pruning sequence differs from the committed manifest.");
-        }
-
-        var retired = _catalog.Segments.Values
+        var candidates = _catalog.Segments.Values
             .Where(segment => segment.MaximumSequence <= coveredSequence)
             .ToArray();
-        if (retired.Length == 0)
+        if (candidates.Length == 0)
         {
             return;
         }
 
-        var dependencyGuards = ValidateManifestDependencies(manifest);
+        var retired = new List<PublishedWalSegment>(candidates.Length);
+        var walBytes = new Dictionary<ulong, byte[]>();
         var walGuards = new Dictionary<ulong, SimulatedCloudObjectGuard>();
-        foreach (var segment in retired)
+        foreach (var segment in candidates)
         {
             var path = ResolveObjectPath(_cloudRoot, segment.ObjectKey);
             if (!File.Exists(path))
@@ -470,17 +551,37 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Published simulated-cloud WAL '{segment.ObjectKey}' differs from its catalog proof.");
             }
 
-            CloudWalCoverageValidator.ValidateAndEnsureCovered(
-                bytes,
-                segment.MaximumSequence,
-                segment.WriterEpoch,
-                manifest);
+            if (!CloudWalCoverageValidator.ValidateAndIsCovered(
+                    bytes,
+                    segment.MaximumSequence,
+                    segment.WriterEpoch,
+                    manifest))
+            {
+                continue;
+            }
+
+            retired.Add(segment);
+            walBytes.Add(segment.SegmentId, bytes);
             walGuards.Add(
                 segment.SegmentId,
                 new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
         }
 
+        if (retired.Count == 0)
+        {
+            return;
+        }
+
+        var dependencyGuards = ValidateManifestDependencies(manifest, metadata);
         VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
+        foreach (var segment in retired)
+        {
+            CloudWalCoverageValidator.ValidateAndEnsureCovered(
+                walBytes[segment.SegmentId],
+                segment.MaximumSequence,
+                segment.WriterEpoch,
+                manifest);
+        }
 
         foreach (var segment in retired)
         {
@@ -502,7 +603,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     }
 
     List<SimulatedCloudObjectGuard> ValidateManifestDependencies(
-        MidgeManifest manifest)
+        MidgeManifest manifest,
+        CloudControlMetadataSnapshot metadata)
     {
         var guards = new List<SimulatedCloudObjectGuard>(
             manifest.Files.Count + MetadataFiles.Length);
@@ -523,14 +625,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             guards.Add(new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
         }
 
-        foreach (var fileName in MetadataFiles)
+        foreach (var (fileName, capturedBytes) in metadata.Files)
         {
-            var localPath = Path.Combine(_localRoot, fileName);
-            if (!File.Exists(localPath))
-            {
-                continue;
-            }
-
             var remotePath = Path.Combine(_cloudRoot, "metadata", fileName);
             if (!File.Exists(remotePath))
             {
@@ -538,12 +634,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Simulated-cloud metadata object '{fileName}' is missing during WAL pruning.");
             }
 
-            var localBytes = File.ReadAllBytes(localPath);
             var remoteBytes = File.ReadAllBytes(remotePath);
-            if (!remoteBytes.AsSpan().SequenceEqual(localBytes))
+            if (!remoteBytes.AsSpan().SequenceEqual(capturedBytes.Span))
             {
                 throw new PantsCorruptionException(
-                    $"Simulated-cloud metadata object '{fileName}' differs from local committed bytes.");
+                    $"Simulated-cloud metadata object '{fileName}' differs from published snapshot bytes.");
             }
 
             guards.Add(new SimulatedCloudObjectGuard(

@@ -10,5 +10,17 @@ expected Midge error when statically discoverable, the mapped Pants test, and
 coverage status. Public exports and public integration tests are canonical;
 private Rust-only tests do not override them.
 
+Runtime decomposition is intentionally compatibility-neutral: coordinator,
+WAL, flush, compaction, immutable-flush, and commit-coalescing responsibilities
+are separate internal types, but the public contracts and persisted Midge wire
+formats remain unchanged. See [`runtime.md`](../architecture/runtime.md).
+
 The inventory is intentionally static for now. Baseline refresh and executable
 compatibility tooling can be introduced later as a separately reviewed change.
+Persisted-fixture qualification remains assigned to final milestone M5. Midge
+CLI-only verification behaviors are explicitly not applicable because Pants
+exposes verification through its async database interfaces and does not ship a
+product CLI. Rust-specific module dependency checks and Midge's benchmark,
+mutation, coverage-analysis, and pull-request scripts are also not applicable:
+they govern Midge's private implementation and repository tooling rather than
+observable database behavior.

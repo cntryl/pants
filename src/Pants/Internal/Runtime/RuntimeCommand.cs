@@ -2,33 +2,40 @@ namespace Pants;
 
 internal sealed class RuntimeCommand<T> : IRuntimeCommand
 {
-    private readonly Func<PantsRuntimeState, ValueTask<T>> _operation;
-    private readonly TaskCompletionSource<T> _completion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly Func<PantsRuntimeState, ValueTask<T>> _operation;
+    readonly CancellationToken _callerCancellationToken;
+    readonly RuntimeResponseSlot<T> _response = new();
 
-    public RuntimeCommand(Func<PantsRuntimeState, ValueTask<T>> operation)
+    public RuntimeCommand(
+        Func<PantsRuntimeState, ValueTask<T>> operation,
+        CancellationToken callerCancellationToken)
     {
         _operation = operation;
+        _callerCancellationToken = callerCancellationToken;
     }
 
-    public Task<T> Task => _completion.Task;
+    public Task<T> Response => _response.Response;
+
+    public void UnregisterResponse() => _response.Unregister();
 
     public async ValueTask ExecuteAsync(PantsRuntimeState state)
     {
         try
         {
-            T result = await _operation(state).ConfigureAwait(false);
-            _completion.TrySetResult(result);
+            var result = await _operation(state).ConfigureAwait(false);
+            _response.Complete(result);
         }
         catch (Exception exception)
         {
-            Exception publicException = RuntimeExceptionMapper.ToPublicException(exception);
+            var publicException = RuntimeExceptionMapper.ToPublicException(
+                exception,
+                _callerCancellationToken);
             if (publicException is PantsNoSpaceException)
             {
-                state.NoSpaceEvents = checked(state.NoSpaceEvents + 1);
+                state.RecordNoSpaceEvent();
             }
 
-            _completion.TrySetException(publicException);
+            _response.Fail(publicException);
         }
     }
 }

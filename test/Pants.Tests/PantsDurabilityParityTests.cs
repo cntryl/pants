@@ -99,12 +99,35 @@ public sealed class PantsDurabilityParityTests
         Assert.True((await reopened.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed >= 3);
     }
 
+    [Fact]
+    public async Task ShouldRotateMixedEpochActiveWalGivenLocalReopen()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await PantsDatabase.OpenAsync(
+                         PantsOpenOptions.Local(directory.Path)))
+        {
+            await CommitValueAsync(database, "first", "first-value");
+        }
+
+        var rotatingOptions = PantsOpenOptions.Local(directory.Path)
+            .WithWalBufferSize(128);
+        await using (var database = await PantsDatabase.OpenAsync(rotatingOptions))
+        {
+            await CommitValueAsync(database, "second", new string('s', 256));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(rotatingOptions);
+
+        Assert.Equal("first-value", await ReadAsync(reopened, "first"));
+        Assert.Equal(new string('s', 256), await ReadAsync(reopened, "second"));
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
+    }
+
     [Theory]
     [InlineData(nameof(PantsFailpoint.BeforeWalAppend))]
     [InlineData(nameof(PantsFailpoint.MidWalAppend))]
     [InlineData(nameof(PantsFailpoint.AfterWalAppend))]
     [InlineData(nameof(PantsFailpoint.BeforeWalFlush))]
-    [InlineData(nameof(PantsFailpoint.AfterWalFlush))]
     public async Task ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary(string failpointName)
     {
         using var directory = new TemporaryDirectory();
@@ -133,6 +156,110 @@ public sealed class PantsDurabilityParityTests
             Assert.Equal("one", first);
             Assert.Equal("two", second);
         }
+    }
+
+    [Theory]
+    [InlineData(nameof(PantsFailpoint.BeforeWalAppend))]
+    [InlineData(nameof(PantsFailpoint.MidWalAppend))]
+    [InlineData(nameof(PantsFailpoint.AfterWalAppend))]
+    [InlineData(nameof(PantsFailpoint.BeforeWalFlush))]
+    public async Task ShouldNotRecoverRejectedCommitGivenLaterSyncSucceeds(string failpointName)
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoint = Enum.Parse<PantsFailpoint>(failpointName);
+        var handler = new OneShotFailpointHandler(failpoint);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         PantsOpenOptions.Local(directory.Path),
+                         new PantsRuntimeDependencies(handler)))
+        {
+            await using (var rejected = await database.BeginTransactionAsync(
+                             database.DefaultColumnFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                rejected.Put("rejected"u8.ToArray(), "ghost"u8.ToArray());
+                await Assert.ThrowsAnyAsync<PantsException>(
+                    () => rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            }
+
+            await CommitValueAsync(database, "accepted", "durable");
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        Assert.Null(await ReadAsync(reopened, "rejected"));
+        Assert.Equal("durable", await ReadAsync(reopened, "accepted"));
+    }
+
+    [Fact]
+    public async Task ShouldAcknowledgeSyncGivenAfterWalFlushHookFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new OneShotFailpointHandler(PantsFailpoint.AfterWalFlush);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         PantsOpenOptions.Local(directory.Path),
+                         new PantsRuntimeDependencies(handler)))
+        {
+            await CommitValueAsync(database, "durable", "value");
+
+            Assert.Equal("value", await ReadAsync(database, "durable"));
+            Assert.Equal(
+                PantsEngineHealth.Degraded,
+                (await database.GetRuntimeMetricsAsync()).Health);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        Assert.Equal("value", await ReadAsync(reopened, "durable"));
+    }
+
+    [Fact]
+    public async Task ShouldAcknowledgeSyncGivenWalRotationFailsAfterDurabilityBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeWalRotation);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         PantsOpenOptions.Local(directory.Path)
+                             .WithBackgroundCompaction(false)
+                             .WithWalBufferSize(1),
+                         new PantsRuntimeDependencies(handler)))
+        {
+            await CommitValueAsync(database, "rotation-authoritative", "first");
+
+            Assert.Equal("first", await ReadAsync(database, "rotation-authoritative"));
+            Assert.Equal(
+                PantsEngineHealth.Degraded,
+                (await database.GetRuntimeMetricsAsync()).Health);
+            await CommitValueAsync(database, "rotation-followup", "second");
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        Assert.Equal("first", await ReadAsync(reopened, "rotation-authoritative"));
+        Assert.Equal("second", await ReadAsync(reopened, "rotation-followup"));
+    }
+
+    [Fact]
+    public async Task ShouldAcknowledgeSyncGivenWalRecordThresholdFlushFailsAfterDurabilityBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeWalRecordThresholdFlush);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         PantsOpenOptions.Local(directory.Path)
+                             .WithBackgroundCompaction(false)
+                             .WithFlushAfterWalRecordsForTesting(1),
+                         new PantsRuntimeDependencies(handler)))
+        {
+            await CommitValueAsync(database, "threshold-authoritative", "value");
+
+            Assert.Equal("value", await ReadAsync(database, "threshold-authoritative"));
+            Assert.Equal(
+                PantsEngineHealth.Degraded,
+                (await database.GetRuntimeMetricsAsync()).Health);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        Assert.Equal("value", await ReadAsync(reopened, "threshold-authoritative"));
     }
 
     [Theory]
@@ -201,7 +328,13 @@ public sealed class PantsDurabilityParityTests
         }
 
         Assert.Null(await ReadAsync(database, "rejected"));
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).NoSpaceEvents);
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(1, metrics.NoSpaceEvents);
+        Assert.Equal(1, metrics.WriteStallsTotal);
+        Assert.Equal(0, metrics.WriteStallsMemoryTotal);
+        Assert.Equal(0, metrics.WriteStallsCompactionTotal);
+        Assert.Equal(0, metrics.WriteStallsCloudTotal);
+        Assert.Equal(1, metrics.WriteStallsNoSpaceTotal);
         await CommitValueAsync(database, "accepted", "value");
         Assert.Equal("value", await ReadAsync(database, "accepted"));
     }

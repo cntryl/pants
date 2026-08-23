@@ -1,8 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
-using K4os.Compression.LZ4;
 using Microsoft.Win32.SafeHandles;
-using ZstdSharp;
 
 namespace Pants;
 
@@ -10,9 +8,6 @@ internal static class MidgeSstCodec
 {
     private const int TargetBlockSize = 64 * 1024;
     private const int EntryHeaderSize = 26;
-    private const int MinimumCompressionInputSize = 256;
-    private const int AdaptiveMinimumSavings = 256;
-    private const float AdaptiveMaximumRatio = 0.95F;
     private const ulong BloomSeedOne = 0x9E37_79B1_85EB_CA87;
     private const ulong BloomSeedTwo = 0xC2B2_AE3D_27D4_EB4F;
 
@@ -309,95 +304,11 @@ internal static class MidgeSstCodec
 
     private static MidgeSstBlockHandle AppendBlock(Stream stream, byte[] raw, PantsPerformanceGoal performanceGoal)
     {
-        (byte[] payload, MidgeCompressionAlgorithm algorithm) = CompressBlock(raw, performanceGoal);
         var offset = checked((ulong)stream.Position);
-        var withTrailer = new byte[payload.Length + 5];
-        payload.CopyTo(withTrailer, 0);
-        withTrailer[payload.Length] = (byte)algorithm;
-        BinaryPrimitives.WriteUInt32LittleEndian(
-            withTrailer.AsSpan(payload.Length + 1),
-            MidgeDiskFormat.Crc32C(withTrailer.AsSpan(0, payload.Length + 1)));
+        var withTrailer = MidgeSstBlockCodec.CompressWithTrailer(raw, performanceGoal);
         MidgeDiskFormat.WriteUInt32(stream, (uint)withTrailer.Length);
         stream.Write(withTrailer);
         return new MidgeSstBlockHandle(offset, checked((ulong)withTrailer.Length + 4));
-    }
-
-    private static (byte[] Payload, MidgeCompressionAlgorithm Algorithm) CompressBlock(
-        byte[] raw,
-        PantsPerformanceGoal performanceGoal)
-    {
-        if (raw.Length < MinimumCompressionInputSize)
-        {
-            return (raw, MidgeCompressionAlgorithm.None);
-        }
-
-        return performanceGoal switch
-        {
-            PantsPerformanceGoal.Latency => CompressLz4(raw),
-            PantsPerformanceGoal.Throughput => CompressAdaptive(raw),
-            PantsPerformanceGoal.Economy => CompressZstd(raw, level: 9, MidgeCompressionAlgorithm.Zstd9),
-            _ => throw new PantsInternalException($"Unknown performance goal '{performanceGoal}'.")
-        };
-    }
-
-    private static (byte[] Payload, MidgeCompressionAlgorithm Algorithm) CompressAdaptive(byte[] raw)
-    {
-        (byte[] Payload, MidgeCompressionAlgorithm Algorithm)[] candidates =
-        [
-            CompressLz4(raw),
-            CompressZstd(raw, level: 3, MidgeCompressionAlgorithm.Zstd3)
-        ];
-
-        (byte[] Payload, MidgeCompressionAlgorithm Algorithm)? best = null;
-        foreach ((byte[] payload, MidgeCompressionAlgorithm algorithm) in candidates)
-        {
-            if (!CompressionQualifies(raw.Length, payload.Length) ||
-                best is { } current && payload.Length >= current.Payload.Length)
-            {
-                continue;
-            }
-
-            best = (payload, algorithm);
-        }
-
-        return best ?? (raw, MidgeCompressionAlgorithm.None);
-    }
-
-    private static bool CompressionQualifies(int originalSize, int compressedSize)
-    {
-        if (compressedSize >= originalSize || originalSize - compressedSize < AdaptiveMinimumSavings)
-        {
-            return false;
-        }
-
-        double threshold = AdaptiveMaximumRatio;
-        int thresholdBits = BitConverter.SingleToInt32Bits(AdaptiveMaximumRatio);
-        float next = BitConverter.Int32BitsToSingle(checked(thresholdBits + 1));
-        threshold += ((double)next - threshold) / 2D;
-        return (double)compressedSize / originalSize <= threshold;
-    }
-
-    private static (byte[] Payload, MidgeCompressionAlgorithm Algorithm) CompressLz4(byte[] raw)
-    {
-        var compressed = new byte[checked(sizeof(uint) + LZ4Codec.MaximumOutputSize(raw.Length))];
-        BinaryPrimitives.WriteUInt32LittleEndian(compressed, checked((uint)raw.Length));
-        int encodedLength = LZ4Codec.Encode(raw, compressed.AsSpan(sizeof(uint)));
-        if (encodedLength <= 0)
-        {
-            throw new PantsInternalException("LZ4 compression failed.");
-        }
-
-        Array.Resize(ref compressed, checked(sizeof(uint) + encodedLength));
-        return (compressed, MidgeCompressionAlgorithm.Lz4);
-    }
-
-    private static (byte[] Payload, MidgeCompressionAlgorithm Algorithm) CompressZstd(
-        byte[] raw,
-        int level,
-        MidgeCompressionAlgorithm algorithm)
-    {
-        using var compressor = new Compressor(level);
-        return (compressor.Wrap(raw).ToArray(), algorithm);
     }
 
     internal static byte[] ReadBlock(byte[] file, MidgeSstBlockHandle handle)
@@ -415,14 +326,14 @@ internal static class MidgeSstCodec
         }
 
         var encoded = file.AsSpan(offset + 4, encodedLength);
-        var algorithm = encoded[^5];
-        var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(encoded[^4..]);
-        if (MidgeDiskFormat.Crc32C(encoded[..^4]) != storedCrc)
+        try
         {
-            throw new PantsStorageException("SST block checksum mismatch.");
+            return MidgeSstBlockCodec.DecompressWithTrailer(encoded);
         }
-
-        return MidgeDiskFormat.Decompress(encoded[..^5], algorithm);
+        catch (PantsCorruptionException exception)
+        {
+            throw new PantsStorageException(exception.Message, exception);
+        }
     }
 
     internal static byte[] ReadBlock(

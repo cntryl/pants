@@ -2,9 +2,13 @@ namespace Pants;
 
 internal sealed class PantsRuntimeState
 {
-    public PantsRuntimeState(IPantsClock clock)
+    readonly RuntimeTelemetry _telemetry;
+    TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
+
+    public PantsRuntimeState(IPantsClock clock, RuntimeTelemetry telemetry)
     {
         Clock = clock;
+        _telemetry = telemetry;
         FamilyGeneration = new Dictionary<string, int>(StringComparer.Ordinal);
         ActiveFamilyVersions = new Dictionary<string, int>(StringComparer.Ordinal);
         FamilyData = new Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>>(
@@ -15,6 +19,7 @@ internal sealed class PantsRuntimeState
             ColumnFamilyIdentityComparer.Instance);
         ActiveTransactions = [];
         ActiveScanSnapshots = [];
+        ImmutableMemtableFlushes = [];
         ActiveFamilyVersions["default"] = DefaultFamilyVersion;
         FamilyGeneration["default"] = DefaultFamilyVersion;
         var defaultFamily = new ColumnFamilyIdentity(0, "default", DefaultFamilyVersion);
@@ -47,35 +52,46 @@ internal sealed class PantsRuntimeState
 
     public Dictionary<long, ScanSnapshotPin> ActiveScanSnapshots { get; }
 
+    public Dictionary<long, ImmutableMemtableFlush> ImmutableMemtableFlushes { get; }
+
     public int ActiveSnapshotCount => ActiveTransactions.Count + ActiveScanSnapshots.Count;
 
     public IEnumerable<ISnapshotPin> ActiveSnapshots =>
         ActiveTransactions.Values.Cast<ISnapshotPin>().Concat(ActiveScanSnapshots.Values);
+
+    public Task WritePressureChanged => _writePressureChanged.Task;
 
     public HashSet<ColumnFamilyIdentity> UnflushedFamilies { get; } =
         new(ColumnFamilyIdentityComparer.Instance);
 
     public PantsEngineHealth Health { get; set; } = PantsEngineHealth.Healthy;
 
-    public long SalvageModeOpens { get; set; }
-
-    public long IntentLogReplayRuns { get; set; }
-
-    public long IntentLogEntriesReplayed { get; set; }
-
-    public long NoSpaceEvents { get; set; }
-
     public bool IsShuttingDown { get; set; }
+
+    public void SignalWritePressureChanged()
+    {
+        var completed = _writePressureChanged;
+        _writePressureChanged = CreateWritePressureCompletion();
+        completed.TrySetResult();
+    }
 
     public void MarkSalvageMode()
     {
         if (Health != PantsEngineHealth.SalvageMode)
         {
-            SalvageModeOpens++;
+            _telemetry.RecordSalvageModeOpen();
         }
 
         Health = PantsEngineHealth.SalvageMode;
     }
+
+    public void RecordNoSpaceEvent() => _telemetry.RecordNoSpaceEvent();
+
+    public void RecordWalRecovery(int payloadBytes) =>
+        _telemetry.RecordWalRecovery(payloadBytes);
+
+    public void RecordIntentLogReplay(int entryCount) =>
+        _telemetry.RecordIntentLogReplay(entryCount);
 
     public DatabaseSnapshot CreateSnapshot()
     {
@@ -94,4 +110,7 @@ internal sealed class PantsRuntimeState
             StringComparer.Ordinal);
         return new DatabaseSnapshot(Sequence, familyDataSnapshot, familyVersionsSnapshot);
     }
+
+    static TaskCompletionSource CreateWritePressureCompletion() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

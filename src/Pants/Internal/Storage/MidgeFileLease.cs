@@ -84,8 +84,33 @@ internal sealed class MidgeFileLease : IDisposable
 
     public void EnsureValid()
     {
-        if (!_valid || _disposed)
+        var leaseLost = false;
+        lock (_gate)
         {
+            if (!_valid || _disposed)
+            {
+                throw new PantsFencedException("The Midge writer lease is no longer valid.");
+            }
+
+            try
+            {
+                var current = ReadRecord(_leaderPath);
+                if (current?.Epoch != Epoch || current.HolderId != _holderId)
+                {
+                    _valid = false;
+                    leaseLost = true;
+                }
+            }
+            catch (Exception exception) when (exception is PantsException or IOException)
+            {
+                _valid = false;
+                leaseLost = true;
+            }
+        }
+
+        if (leaseLost)
+        {
+            NotifyLeaseLoss();
             throw new PantsFencedException("The Midge writer lease is no longer valid.");
         }
     }
@@ -123,7 +148,15 @@ internal sealed class MidgeFileLease : IDisposable
             }
         }
 
-        if (leaseLost && Interlocked.Exchange(ref _leaseLossNotified, 1) == 0)
+        if (leaseLost)
+        {
+            NotifyLeaseLoss();
+        }
+    }
+
+    void NotifyLeaseLoss()
+    {
+        if (Interlocked.Exchange(ref _leaseLossNotified, 1) == 0)
         {
             try
             {
@@ -191,10 +224,17 @@ internal sealed class MidgeFileLease : IDisposable
             return null;
         }
 
-        var fields = File.ReadAllLines(path)
-            .Select(line => line.Split(": ", 2, StringSplitOptions.None))
-            .Where(parts => parts.Length == 2)
-            .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in File.ReadAllLines(path))
+        {
+            var parts = line.Split(": ", 2, StringSplitOptions.None);
+            if (parts.Length == 2 && !fields.TryAdd(parts[0], parts[1]))
+            {
+                throw new PantsLeaseIndeterminateException(
+                    $"Midge leader record contains duplicate field '{parts[0]}'.");
+            }
+        }
+
         return fields.TryGetValue("epoch", out var epochRaw) && ulong.TryParse(epochRaw, out var epoch) &&
                fields.TryGetValue("holder_id", out var holderId) && fields.TryGetValue("acquired_at", out var acquiredAt)
             ? new LeaseRecord(epoch, holderId, acquiredAt)

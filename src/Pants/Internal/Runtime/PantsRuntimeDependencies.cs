@@ -6,12 +6,16 @@ internal sealed class PantsRuntimeDependencies
         IPantsFailpointHandler? failpoints = null,
         PantsStorageVerificationDelegate? storageVerifier = null,
         TimeSpan? leaseHeartbeatInterval = null,
-        HttpClient? cloudHttpClient = null)
+        HttpClient? cloudHttpClient = null,
+        PantsVerificationBarrierResponseDelegate? verificationBarrierResponse = null,
+        TimeProvider? runtimeTimeProvider = null)
     {
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? PantsStorageVerifier.VerifyPathAsync;
         LeaseHeartbeatInterval = leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10);
         CloudHttpClient = cloudHttpClient;
+        VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;
+        RuntimeTimeProvider = runtimeTimeProvider ?? TimeProvider.System;
         if (LeaseHeartbeatInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
@@ -28,5 +32,11 @@ internal sealed class PantsRuntimeDependencies
 
     public HttpClient? CloudHttpClient { get; }
 
+    public PantsVerificationBarrierResponseDelegate VerificationBarrierResponse { get; }
+
+    public TimeProvider RuntimeTimeProvider { get; }
+
     public static PantsRuntimeDependencies Default { get; } = new();
+
+    static ValueTask NoopVerificationBarrierResponse() => ValueTask.CompletedTask;
 }

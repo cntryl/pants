@@ -3,12 +3,18 @@ namespace Pants;
 sealed class HybridCacheManager
 {
     readonly HybridStorageBudgetPolicy _policy;
+    readonly IPantsFailpointHandler _failpoints;
     int _pendingEvictions;
 
-    public HybridCacheManager(long maximumLocalBytes)
+    public HybridCacheManager(
+        long maximumLocalBytes,
+        IPantsFailpointHandler? failpoints = null)
     {
         _policy = new HybridStorageBudgetPolicy(maximumLocalBytes);
+        _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
     }
+
+    public int PendingEvictions => Volatile.Read(ref _pendingEvictions);
 
     public void EnsureWriteAdmitted(LocalDiskStore store, PantsRuntimeState state)
     {
@@ -17,7 +23,6 @@ sealed class HybridCacheManager
             return;
         }
 
-        state.NoSpaceEvents = checked(state.NoSpaceEvents + 1);
         throw new PantsNoSpaceException(
             "The hybrid local cache is at its emergency watermark and cannot admit writes.");
     }
@@ -34,6 +39,7 @@ sealed class HybridCacheManager
         Volatile.Write(ref _pendingEvictions, candidates.Count);
         try
         {
+            _failpoints.Hit(PantsFailpoint.BeforeHybridSstEviction);
             foreach (var candidate in candidates)
             {
                 if (_policy.GetUsagePercent(store.LocalCommittedBytes) <
@@ -81,6 +87,6 @@ sealed class HybridCacheManager
             total,
             _policy.GetFreeBytes(total),
             _policy.GetUsagePercent(total),
-            Volatile.Read(ref _pendingEvictions));
+            PendingEvictions);
     }
 }

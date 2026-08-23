@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -96,7 +95,14 @@ internal static class PantsStorageVerifier
                     $"Manifest SST '{safeName}' has an unexpected length.");
             }
 
-            if (file.ContentCrc32C is { } expectedCrc && MidgeDiskFormat.Crc32C(bytes) != expectedCrc)
+            if (file.ContentCrc32C is not { } expectedCrc)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"Manifest SST '{safeName}' is missing its content checksum.");
+            }
+
+            if (MidgeDiskFormat.Crc32C(bytes) != expectedCrc)
             {
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
@@ -107,6 +113,7 @@ internal static class PantsStorageVerifier
             try
             {
                 contents = MidgeSstCodec.Decode(bytes);
+                SstManifestMetadataValidator.Validate(contents, file, "Manifest SST");
             }
             catch (PantsException exception)
             {
@@ -199,7 +206,7 @@ internal static class PantsStorageVerifier
             : PantsEngineHealth.Degraded;
         return new PantsStorageVerificationReport(
             checked((long)manifest.EditCheckpointId),
-            1,
+            manifest.Files.Count,
             sstFilesVerified,
             bytesVerified,
             dataBlocksVerified,
@@ -222,29 +229,50 @@ internal static class PantsStorageVerifier
             return (0, 0, null);
         }
 
-        long records = 0;
-        long decodedBytes = 0;
+        var records = 0L;
+        var decodedBytes = 0L;
         long? boundary = null;
-        foreach (string sealedPath in Directory
-                     .EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
-                     .OrderBy(static candidate => Path.GetFileName(candidate), StringComparer.Ordinal))
+        var sealedPaths = Directory
+            .EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+            .OrderBy(static candidate => Path.GetFileName(candidate), StringComparer.Ordinal)
+            .ToArray();
+        var walPath = Path.Combine(root, "wal", "wal.log");
+        var replayPaths = File.Exists(walPath)
+            ? [.. sealedPaths, walPath]
+            : sealedPaths;
+        var writerEpochFrontiers = DiscoverWriterEpochFrontiers(
+            replayPaths,
+            cancellationToken);
+        var replayOrdinal = 0UL;
+        using var recovery = new MidgeWalRecoveryStateMachine();
+        var recoveredVersions = new MidgeWalRecoveredVersionTracker();
+        foreach (var sealedPath in sealedPaths)
         {
             ValidateSealedWalName(Path.GetFileName(sealedPath));
-            (long fileRecords, long fileBytes, long? fileBoundary) = VerifyWalFile(
+            var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
                 sealedPath,
+                MidgeWalTailPolicy.Strict,
                 boundary,
+                recovery,
+                recoveredVersions,
+                writerEpochFrontiers,
+                ref replayOrdinal,
                 cancellationToken);
             records = checked(records + fileRecords);
             decodedBytes = checked(decodedBytes + fileBytes);
             boundary = fileBoundary ?? boundary;
         }
 
-        string walPath = Path.Combine(root, "wal", "wal.log");
         if (File.Exists(walPath))
         {
-            (long fileRecords, long fileBytes, long? fileBoundary) = VerifyWalFile(
+            var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
                 walPath,
+                MidgeWalTailPolicy.AllowIncompleteFinalTail,
                 boundary,
+                recovery,
+                recoveredVersions,
+                writerEpochFrontiers,
+                ref replayOrdinal,
                 cancellationToken);
             records = checked(records + fileRecords);
             decodedBytes = checked(decodedBytes + fileBytes);
@@ -254,9 +282,63 @@ internal static class PantsStorageVerifier
         return (records, decodedBytes, boundary);
     }
 
-    private static (long Records, long Bytes, long? Boundary) VerifyWalFile(
+    static MidgeWalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
+        IReadOnlyList<string> replayPaths,
+        CancellationToken cancellationToken)
+    {
+        var frontiers = new MidgeWalWriterEpochFrontiers();
+        var ordinal = 0UL;
+        foreach (var replayPath in replayPaths)
+        {
+            using var stream = new FileStream(
+                replayPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            try
+            {
+                MidgeWalFrameReader.Visit(
+                    stream,
+                    (record, _) =>
+                    {
+                        frontiers.Record(record, ordinal);
+                        if (ordinal != ulong.MaxValue)
+                        {
+                            ordinal++;
+                        }
+                    },
+                    StringComparer.Ordinal.Equals(Path.GetFileName(replayPath), "wal.log")
+                        ? MidgeWalTailPolicy.AllowIncompleteFinalTail
+                        : MidgeWalTailPolicy.Strict,
+                    cancellationToken);
+            }
+            catch (PantsException exception) when (exception.Code != PantsErrorCode.Corruption)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"WAL '{Path.GetFileName(replayPath)}' is malformed.",
+                    exception);
+            }
+            catch (OverflowException exception)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"WAL '{Path.GetFileName(replayPath)}' contains values outside supported limits.",
+                    exception);
+            }
+        }
+
+        return frontiers;
+    }
+
+    static (long Records, long Bytes, long? Boundary) VerifyWalFile(
         string walPath,
+        MidgeWalTailPolicy tailPolicy,
         long? precedingBoundary,
+        MidgeWalRecoveryStateMachine recovery,
+        MidgeWalRecoveredVersionTracker recoveredVersions,
+        MidgeWalWriterEpochFrontiers writerEpochFrontiers,
+        ref ulong replayOrdinal,
         CancellationToken cancellationToken)
     {
         using var stream = new FileStream(
@@ -264,47 +346,63 @@ internal static class PantsStorageVerifier
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        long records = 0;
-        long decodedBytes = 0;
-        long? boundary = precedingBoundary;
-        Span<byte> header = stackalloc byte[8];
-        while (stream.Position < stream.Length)
+        var records = 0L;
+        var decodedBytes = 0L;
+        var boundary = precedingBoundary;
+        var currentOrdinal = replayOrdinal;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!MidgeDiskFormat.ReadExactly(stream, header))
-            {
-                throw PantsException.Create(PantsErrorCode.Corruption, "The WAL has a torn frame header.");
-            }
+            MidgeWalFrameReader.Visit(
+                stream,
+                (record, _) =>
+                {
+                    var recordOrdinal = currentOrdinal;
+                    if (currentOrdinal != ulong.MaxValue)
+                    {
+                        currentOrdinal++;
+                    }
 
-            uint length = BinaryPrimitives.ReadUInt32LittleEndian(header);
-            if (length > MidgeDiskFormat.WalMaximumRecordBytes)
-            {
-                throw PantsException.Create(PantsErrorCode.Corruption, "A WAL frame exceeds the 64 MiB limit.");
-            }
+                    if (writerEpochFrontiers.IsStale(record, recordOrdinal))
+                    {
+                        return;
+                    }
 
-            byte[] payload = new byte[length];
-            if (!MidgeDiskFormat.ReadExactly(stream, payload))
-            {
-                throw PantsException.Create(PantsErrorCode.Corruption, "The WAL has a torn frame payload.");
-            }
+                    if (record.Sequence > long.MaxValue)
+                    {
+                        throw new PantsStorageException(
+                            "A WAL sequence exceeds Pants' supported range.");
+                    }
 
-            if (MidgeDiskFormat.Crc32C(payload) != BinaryPrimitives.ReadUInt32LittleEndian(header[4..]))
-            {
-                throw PantsException.Create(PantsErrorCode.Corruption, "A WAL frame checksum does not match.");
-            }
-
-            _ = MidgeWalCodec.DecodeTransactionBatch(payload, out ulong commitSequence);
-            long decodedBoundary = checked((long)commitSequence);
-            if (boundary.HasValue && decodedBoundary <= boundary.Value)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "WAL commit sequence boundaries are not strictly increasing.");
-            }
-
-            boundary = decodedBoundary;
-            records++;
-            decodedBytes = checked(decodedBytes + payload.Length);
+                    var decodedBoundary = (long)record.Sequence;
+                    var applicableMutations = new List<MidgeWalMutation>();
+                    recovery.Accept(
+                        record,
+                        (mutation, _) => applicableMutations.Add(mutation));
+                    recoveredVersions.ValidateAndRecord(applicableMutations);
+                    boundary = boundary.HasValue
+                        ? Math.Max(boundary.Value, decodedBoundary)
+                        : decodedBoundary;
+                    records++;
+                    decodedBytes = checked(
+                        decodedBytes + MidgeWalRecordMetrics.GetLogicalByteCount(record));
+                },
+                tailPolicy,
+                cancellationToken);
+            replayOrdinal = currentOrdinal;
+        }
+        catch (PantsException exception) when (exception.Code != PantsErrorCode.Corruption)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                $"WAL '{Path.GetFileName(walPath)}' is malformed.",
+                exception);
+        }
+        catch (OverflowException exception)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                $"WAL '{Path.GetFileName(walPath)}' contains values outside supported limits.",
+                exception);
         }
 
         return (records, decodedBytes, boundary);
@@ -326,7 +424,7 @@ internal static class PantsStorageVerifier
         if (string.IsNullOrEmpty(name) ||
             name != Path.GetFileName(name) ||
             !name.EndsWith(".sst", StringComparison.Ordinal) ||
-            name.Contains(':'))
+            name.IndexOfAny(['/', '\\', ':', '\0']) >= 0)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,

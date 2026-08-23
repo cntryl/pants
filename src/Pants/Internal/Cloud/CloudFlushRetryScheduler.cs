@@ -1,6 +1,6 @@
 namespace Pants;
 
-sealed class CloudFlushRetryScheduler : IAsyncDisposable
+sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDisposable
 {
     static readonly TimeSpan InitialDelay = TimeSpan.FromMilliseconds(10);
     static readonly TimeSpan MaximumDelay = TimeSpan.FromMilliseconds(250);
@@ -57,6 +57,7 @@ sealed class CloudFlushRetryScheduler : IAsyncDisposable
             while (true)
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                telemetry.RecordCloudFlushRetry();
                 try
                 {
                     await operation(cancellationToken).ConfigureAwait(false);
