@@ -2730,19 +2730,28 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
-    async ValueTask PublishCloudWalAsync(
-        SealedWalSegment segment,
+    async ValueTask PublishCloudWalBatchAsync(
+        SealedWalSegment[] segments,
         CancellationToken cancellationToken)
     {
+        if (segments.Length == 0)
+        {
+            return;
+        }
+
         EnsureCloudWriteAuthorityValid();
         var persistence = _cloudPersistence ??
                           throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
         var started = Stopwatch.GetTimestamp();
-        _telemetry.RecordCloudAsyncWalUploadStarted();
+        foreach (var _ in segments)
+        {
+            _telemetry.RecordCloudAsyncWalUploadStarted();
+        }
+
         try
         {
             _failpoints.Hit(Failpoint.BeforeCloudWalUpload);
-            await persistence.PublishWalAsync(segment, cancellationToken).ConfigureAwait(false);
+            await persistence.PublishWalBatchAsync(segments, cancellationToken).ConfigureAwait(false);
             _failpoints.Hit(Failpoint.AfterCloudWalUpload);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -2751,32 +2760,40 @@ sealed class Actor : IAsyncDisposable
         }
         catch (Exception)
         {
-            _telemetry.RecordCloudAsyncWalUploadFailed();
+            foreach (var _ in segments)
+            {
+                _telemetry.RecordCloudAsyncWalUploadFailed();
+            }
+
             throw;
         }
 
-        _telemetry.RecordCloudAsyncWalUploadCompleted(Stopwatch.GetElapsedTime(started));
-        EnsureCloudWriteAuthorityValid();
-        Volatile.Write(
-            ref _walCloudDurableSequence,
-            Math.Max(
-                Volatile.Read(ref _walCloudDurableSequence),
-                checked((long)segment.MaximumSequence)));
-        if (_diskStore is not null)
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        foreach (var segment in segments)
         {
-            if (_workersStarted)
+            _telemetry.RecordCloudAsyncWalUploadCompleted(elapsed);
+            EnsureCloudWriteAuthorityValid();
+            Volatile.Write(
+                ref _walCloudDurableSequence,
+                Math.Max(
+                    Volatile.Read(ref _walCloudDurableSequence),
+                    checked((long)segment.MaximumSequence)));
+            if (_diskStore is not null)
             {
-                await _walRuntime.DeleteCloudDurableSegmentAsync(segment, cancellationToken)
-                    .ConfigureAwait(false);
+                if (_workersStarted)
+                {
+                    await _walRuntime.DeleteCloudDurableSegmentAsync(segment, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    _diskStore.DeleteCloudDurableWalSegment(segment);
+                }
             }
-            else
-            {
-                _diskStore.DeleteCloudDurableWalSegment(segment);
-            }
-        }
 
-        _telemetry.RecordCloudAsyncWalAcknowledged(segment.SegmentId);
-        _cloudWalUploads.Complete(segment);
+            _telemetry.RecordCloudAsyncWalAcknowledged(segment.SegmentId);
+            _cloudWalUploads.Complete(segment);
+        }
     }
 
     async ValueTask DrainCloudWalBacklogAsync(CancellationToken cancellationToken)
@@ -2798,11 +2815,16 @@ sealed class Actor : IAsyncDisposable
             segments = _diskStore.GetSealedWalSegmentsForCloudPublication();
         }
 
-        foreach (var segment in segments)
+        foreach (var epochBatch in segments.GroupBy(static segment => segment.WriterEpoch))
         {
-            _cloudWalUploads.Admit(segment);
+            var batch = epochBatch.ToArray();
+            foreach (var segment in batch)
+            {
+                _cloudWalUploads.Admit(segment);
+            }
+
             EnsureCloudWriteAuthorityValid();
-            await PublishCloudWalAsync(segment, cancellationToken).ConfigureAwait(false);
+            await PublishCloudWalBatchAsync(batch, cancellationToken).ConfigureAwait(false);
         }
     }
 

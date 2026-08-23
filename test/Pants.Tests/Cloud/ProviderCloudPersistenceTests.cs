@@ -11,6 +11,81 @@ public sealed class ProviderCloudPersistenceTests
     };
 
     [Fact]
+    public async Task ShouldPublishOneCatalogTransitionGivenEpochCompatibleWalBatch()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+        var segments = Enumerable.Range(1, 3)
+            .Select(index => new SealedWalSegment(
+                checked((ulong)index),
+                epoch,
+                checked((ulong)index),
+                $"{index}.wal",
+                [(byte)index]))
+            .ToArray();
+
+        await persistence.PublishWalBatchAsync(segments, CancellationToken.None);
+
+        Assert.Equal(4, walStore.PutCount);
+        Assert.Equal(5, walStore.GetCount);
+        Assert.True(walStore.PayloadBytesCopied > 3);
+        var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            PantsRecoveryPolicy.Strict,
+            CancellationToken.None);
+        Assert.Equal([1UL, 2UL, 3UL], hydrated.PublishedWalSegments.Keys);
+    }
+
+    [Fact]
+    public async Task ShouldRejectWalBatchGivenWriterEpochChangesWithinBatch()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => persistence.PublishWalBatchAsync(
+            [
+                new SealedWalSegment(1, epoch, 1, "1.wal", [1]),
+                new SealedWalSegment(2, epoch + 1, 2, "2.wal", [2])
+            ],
+            CancellationToken.None).AsTask());
+
+        Assert.Equal(0, walStore.PutCount);
+    }
+
+    [Fact]
     public async Task ShouldHydrateSegmentGivenCatalogEntryHasSegmentIdZero()
     {
         using var cache = new TemporaryDirectory();

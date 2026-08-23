@@ -72,35 +72,62 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         return value?.Data;
     }
 
-    public async ValueTask PublishWalAsync(
-        SealedWalSegment segment,
+    public async ValueTask PublishWalBatchAsync(
+        IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken)
     {
+        if (segments.Count == 0)
+        {
+            return;
+        }
+
         _lease.EnsureValid();
-        if (segment.WriterEpoch > _writerEpoch)
+        var batchEpoch = segments[0].WriterEpoch;
+        if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
+        {
+            throw PantsException.InvalidArgument("A cloud WAL batch cannot cross writer epochs.");
+        }
+
+        if (batchEpoch > _writerEpoch)
         {
             throw new PantsFencedException("A WAL segment from a future cloud lease cannot be published.");
         }
 
-        var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
-            segment.WriterEpoch,
-            segment.SegmentId);
-        var created = await _walStore.PutAsync(
-            objectKey,
-            segment.Bytes,
-            new CloudObjectWriteCondition.IfAbsent(),
-            cancellationToken).ConfigureAwait(false);
-        var remoteSegment = await _walStore.GetAsync(objectKey, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
-            "The immutable WAL upload was acknowledged without an authoritative object.");
-        _lease.EnsureValid();
-        if (!remoteSegment.Data.Span.SequenceEqual(segment.Bytes))
+        var publications = new ProviderPublishedWalSegment[segments.Count];
+        for (var index = 0; index < segments.Count; index++)
         {
-            throw created
-                ? new PantsCorruptionException(
-                    "The immutable WAL upload read back different bytes.")
-                : new PantsFencedException(
-                    "The cloud WAL object conflicts with this writer epoch.");
+            _lease.EnsureValid();
+            var segment = segments[index];
+            var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+                segment.WriterEpoch,
+                segment.SegmentId);
+            var created = await _walStore.PutAsync(
+                objectKey,
+                segment.Bytes,
+                new CloudObjectWriteCondition.IfAbsent(),
+                cancellationToken).ConfigureAwait(false);
+            var remoteSegment = await _walStore.GetAsync(objectKey, cancellationToken)
+                .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
+                "The immutable WAL upload was acknowledged without an authoritative object.");
+            _lease.EnsureValid();
+            if (!remoteSegment.Data.Span.SequenceEqual(segment.Bytes))
+            {
+                throw created
+                    ? new PantsCorruptionException(
+                        "The immutable WAL upload read back different bytes.")
+                    : new PantsFencedException(
+                        "The cloud WAL object conflicts with this writer epoch.");
+            }
+
+            publications[index] = new ProviderPublishedWalSegment
+            {
+                SegmentId = segment.SegmentId,
+                WriterEpoch = segment.WriterEpoch,
+                MaximumSequence = segment.MaximumSequence,
+                SizeBytes = checked((ulong)segment.Bytes.Length),
+                ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
+                ObjectKey = objectKey
+            };
         }
 
         for (var attempt = 0; attempt < 8; attempt++)
@@ -117,36 +144,33 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 throw new PantsFencedException("The cloud WAL catalog is not fenced to this writer.");
             }
 
-            if (catalog.Segments.TryGetValue(segment.SegmentId, out var publishedSegment))
+            var updatedSegments = new SortedDictionary<ulong, ProviderPublishedWalSegment>(catalog.Segments);
+            var changed = false;
+            foreach (var publication in publications)
             {
-                if (publishedSegment.WriterEpoch == segment.WriterEpoch &&
-                    publishedSegment.MaximumSequence == segment.MaximumSequence &&
-                    publishedSegment.SizeBytes == checked((ulong)segment.Bytes.Length) &&
-                    publishedSegment.ContentCrc32C == DiskFormat.Crc32C(segment.Bytes) &&
-                    StringComparer.Ordinal.Equals(publishedSegment.ObjectKey, objectKey))
+                if (catalog.Segments.TryGetValue(publication.SegmentId, out var publishedSegment))
                 {
-                    _lease.EnsureValid();
-                    return;
+                    if (publishedSegment != publication)
+                    {
+                        throw new PantsCorruptionException(
+                            $"Cloud WAL catalog segment {publication.SegmentId} conflicts with recovered bytes.");
+                    }
+
+                    continue;
                 }
 
-                throw new PantsCorruptionException(
-                    $"Cloud WAL catalog segment {segment.SegmentId} conflicts with recovered bytes.");
+                updatedSegments.Add(publication.SegmentId, publication);
+                changed = true;
             }
 
-            var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>(catalog.Segments)
+            if (!changed)
             {
-                [segment.SegmentId] = new()
-                {
-                    SegmentId = segment.SegmentId,
-                    WriterEpoch = segment.WriterEpoch,
-                    MaximumSequence = segment.MaximumSequence,
-                    SizeBytes = checked((ulong)segment.Bytes.Length),
-                    ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
-                    ObjectKey = objectKey
-                }
-            };
+                _lease.EnsureValid();
+                return;
+            }
+
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
-                catalog with { FencingEpoch = _writerEpoch, Segments = segments },
+                catalog with { FencingEpoch = _writerEpoch, Segments = updatedSegments },
                 JsonOptions);
             var published = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,

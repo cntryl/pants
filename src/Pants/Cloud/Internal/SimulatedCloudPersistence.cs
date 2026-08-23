@@ -24,7 +24,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    readonly WalPublicationCatalog _catalog;
+    WalPublicationCatalog _catalog;
     readonly string _cloudRoot;
     readonly IFailpointHandler _failpoints;
 
@@ -129,12 +129,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.FromResult(true);
     }
 
-    public ValueTask PublishWalAsync(
-        SealedWalSegment segment,
+    public ValueTask PublishWalBatchAsync(
+        IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        PublishWal(segment);
+        PublishWalBatch(segments);
         return ValueTask.CompletedTask;
     }
 
@@ -280,43 +280,81 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             requiresSalvage);
     }
 
-    public void PublishWal(SealedWalSegment segment)
+    public void PublishWal(SealedWalSegment segment) => PublishWalBatch([segment]);
+
+    public void PublishWalBatch(IReadOnlyList<SealedWalSegment> segments)
     {
-        if (segment.WriterEpoch > _writerEpoch)
+        if (segments.Count == 0)
+        {
+            return;
+        }
+
+        var batchEpoch = segments[0].WriterEpoch;
+        if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
+        {
+            throw PantsException.InvalidArgument("A cloud WAL batch cannot cross writer epochs.");
+        }
+
+        if (batchEpoch > _writerEpoch)
         {
             throw PantsException.Create(
                 PantsErrorCode.Fenced,
                 "A WAL segment from a future writer epoch cannot be published.");
         }
 
-        var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
-            segment.WriterEpoch,
-            segment.SegmentId);
-        var publication = new PublishedWalSegment
+        var publications = segments.Select(segment => new PublishedWalSegment
         {
             SegmentId = segment.SegmentId,
             WriterEpoch = segment.WriterEpoch,
             MaximumSequence = segment.MaximumSequence,
             SizeBytes = checked((ulong)segment.Bytes.Length),
             ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
-            ObjectKey = objectKey
-        };
+            ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+                segment.WriterEpoch,
+                segment.SegmentId)
+        }).ToArray();
 
-        if (_catalog.Segments.TryGetValue(segment.SegmentId, out var existing))
+        var changed = false;
+        for (var index = 0; index < publications.Length; index++)
         {
-            if (!existing.Equals(publication))
+            var publication = publications[index];
+            if (_catalog.Segments.TryGetValue(publication.SegmentId, out var existing))
             {
-                throw PantsException.Create(
-                    PantsErrorCode.Fenced,
-                    $"Cloud WAL segment {segment.SegmentId} conflicts with its publication catalog entry.");
+                if (!existing.Equals(publication))
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Fenced,
+                        $"Cloud WAL segment {publication.SegmentId} conflicts with its publication catalog entry.");
+                }
+
+                continue;
             }
 
+            AtomicStagedFile.Write(
+                ResolveObjectPath(_cloudRoot, publication.ObjectKey),
+                segments[index].Bytes);
+            changed = true;
+        }
+
+        if (!changed)
+        {
             return;
         }
 
-        AtomicStagedFile.Write(ResolveObjectPath(_cloudRoot, objectKey), segment.Bytes);
-        _catalog.Segments.Add(segment.SegmentId, publication);
-        SaveCatalog();
+        var updatedSegments = new SortedDictionary<ulong, PublishedWalSegment>(_catalog.Segments);
+        foreach (var publication in publications)
+        {
+            updatedSegments[publication.SegmentId] = publication;
+        }
+
+        var updatedCatalog = new WalPublicationCatalog
+        {
+            FormatVersion = _catalog.FormatVersion,
+            FencingEpoch = _catalog.FencingEpoch,
+            Segments = updatedSegments
+        };
+        SaveCatalog(updatedCatalog);
+        _catalog = updatedCatalog;
         MirrorMetadataAndSsts();
     }
 
@@ -507,9 +545,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
     }
 
-    void SaveCatalog() => AtomicStagedFile.Write(
+    void SaveCatalog() => SaveCatalog(_catalog);
+
+    void SaveCatalog(WalPublicationCatalog catalog) => AtomicStagedFile.Write(
         Path.Combine(_cloudRoot, "wal", "publication-catalog.v1.json"),
-        JsonSerializer.SerializeToUtf8Bytes(_catalog, JsonOptions));
+        JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions));
 
     void PruneCoveredWal(CloudControlMetadataSnapshot metadata)
     {
