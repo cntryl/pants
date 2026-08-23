@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Tests.Cloud;
 public sealed class CloudProviderEngineQualificationTests
 {
     [Fact]
-    public async Task ShouldRecoverEngineFromSqrzlS3AfterLocalCacheLoss()
+    public async Task ShouldRecoverEngineFromS3CompatibleProtocolAfterLocalCacheLoss()
     {
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);
@@ -43,7 +43,7 @@ public sealed class CloudProviderEngineQualificationTests
     }
 
     [Fact]
-    public async Task ShouldRecoverEngineFromSqrzlGcsJsonAfterLocalCacheLoss()
+    public async Task ShouldRecoverEngineFromGcsJsonProtocolAfterLocalCacheLoss()
     {
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);
@@ -81,7 +81,7 @@ public sealed class CloudProviderEngineQualificationTests
     }
 
     [Fact]
-    public async Task ShouldRouteThreeLocationTopologyThroughSqrzl()
+    public async Task ShouldRouteThreeLocationTopologyThroughProviderProtocols()
     {
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);
@@ -99,7 +99,7 @@ public sealed class CloudProviderEngineQualificationTests
     }
 
     [Fact]
-    public async Task ShouldRouteTwoLocationTopologyThroughSqrzl()
+    public async Task ShouldRouteTwoLocationTopologyThroughProviderProtocols()
     {
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);

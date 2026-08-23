@@ -269,6 +269,7 @@ public sealed class GcsObjectStoreTests
 
         Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
         Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, static request => Assert.Equal(0, request.ContentLength));
         Assert.Contains(
             "marker=database%2Fsst%2F0001.sst",
             handler.Requests[1].Uri.Query,
@@ -409,7 +410,8 @@ public sealed class GcsObjectStoreTests
                 request.Headers.IfNoneMatch.SingleOrDefault()?.Tag,
                 request.Headers.TryGetValues("x-goog-if-generation-match", out var generations)
                     ? generations.Single()
-                    : null));
+                    : null,
+                request.Content?.Headers.ContentLength));
             return Task.FromResult(responseFactory(request));
         }
     }
@@ -419,5 +421,6 @@ public sealed class GcsObjectStoreTests
         Uri Uri,
         string? Authorization,
         string? IfNoneMatch,
-        string? GenerationMatch);
+        string? GenerationMatch,
+        long? ContentLength);
 }

@@ -7,11 +7,17 @@ static class CloudObjectStoreFactory
     static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
+        ConnectTimeout = TimeSpan.FromSeconds(10),
+        EnableMultipleHttp2Connections = true,
+        MaxResponseHeadersLength = 64,
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-        MaxConnectionsPerServer = 64
+        MaxConnectionsPerServer = 64,
+        UseCookies = false
     })
     {
+        DefaultRequestVersion = HttpVersion.Version20,
+        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         Timeout = Timeout.InfiniteTimeSpan
     };
 
