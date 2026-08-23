@@ -1,0 +1,16 @@
+wal_prefix=wal/
+wal_catalog_object_key=wal/publication-catalog.v1.json
+wal_segment_file_name=00000000000000000011.wal
+wal_segment_object_key=wal/epochs/00000000000000000007/00000000000000000011.wal
+sst_prefix=sst/
+sst_file_name=000007_02_00000000000000000042.sst
+sst_object_key=sst/000007_02_00000000000000000042.sst
+sst_temp_object_key=sst/000007_02_00000000000000000042.sst.tmp
+metadata_prefix=metadata/
+metadata_format_object_key=metadata/FORMAT
+metadata_manifest_snapshot_object_key=metadata/manifest.snapshot.json
+metadata_manifest_object_key=metadata/manifest.json
+metadata_manifest_journal_object_key=metadata/manifest.journal
+metadata_intent_log_object_key=metadata/intent_log.json
+metadata_ddl_registry_object_key=metadata/ddl.registry.json
+lease_object_key=midge_primary_lease.json

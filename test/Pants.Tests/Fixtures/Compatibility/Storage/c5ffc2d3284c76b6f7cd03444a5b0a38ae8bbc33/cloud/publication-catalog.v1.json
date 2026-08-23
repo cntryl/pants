@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "fencing_epoch": 1,
+  "segments": {
+    "1": {
+      "segment_id": 1,
+      "writer_epoch": 1,
+      "max_sequence": 3,
+      "size_bytes": 164,
+      "content_crc32c": 2748793644,
+      "object_key": "wal/epochs/00000000000000000001/00000000000000000001.wal"
+    }
+  }
+}

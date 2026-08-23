@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "midgeSha": "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33",
+  "sourceTreeSha256": "1f0c8ef7c47246c74412dbea4d51273b8ea72a6219f53d6c89ec695d6954e984",
   "sourcePriority": "Public exports and public integration tests outrank documentation and private unit tests.",
   "entries": [
     {

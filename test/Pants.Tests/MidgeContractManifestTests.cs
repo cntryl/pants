@@ -18,6 +18,10 @@ public sealed class MidgeContractManifestTests
 
         Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(PinnedSha, root.GetProperty("midgeSha").GetString());
+        var sourceTreeSha = Assert.IsType<string>(
+            root.GetProperty("sourceTreeSha256").GetString());
+        Assert.Equal(64, sourceTreeSha.Length);
+        Assert.All(sourceTreeSha, static value => Assert.True(char.IsAsciiHexDigitLower(value)));
         Assert.True(entries.GetArrayLength() > 900);
         Assert.All(entries.EnumerateArray(), static entry =>
         {
