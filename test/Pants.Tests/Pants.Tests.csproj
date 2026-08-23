@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\bench\Pants.Benches\Cntryl.Pants.Benches.csproj"/>
     <ProjectReference Include="..\..\src\Pants.DependencyInjection\Pants.DependencyInjection.csproj"/>
     <ProjectReference Include="..\..\src\Pants\Pants.csproj"/>
   </ItemGroup>

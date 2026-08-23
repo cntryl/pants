@@ -11,4 +11,8 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
+  </ItemGroup>
+
 </Project>
