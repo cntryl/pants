@@ -14,6 +14,7 @@ sealed class TransactionInstance : IPantsTransaction
     readonly TransactionSpillStore? _spillStore;
     readonly DatabaseVersion _startSnapshot;
     readonly long _transactionId;
+    readonly bool _coordinatorRegistered;
     long _assertionBytes;
     PantsConflictPolicy _conflictPolicy = PantsConflictPolicy.LastWriteWins;
     ulong _nextOrdinal;
@@ -27,7 +28,8 @@ sealed class TransactionInstance : IPantsTransaction
         PantsTransactionMode mode,
         DatabaseVersion startSnapshot,
         DateTimeOffset snapshotTime,
-        string? persistentDatabasePath)
+        string? persistentDatabasePath,
+        bool coordinatorRegistered = true)
     {
         _database = database;
         _transactionId = transactionId;
@@ -35,7 +37,8 @@ sealed class TransactionInstance : IPantsTransaction
         Mode = mode;
         _startSnapshot = startSnapshot;
         _snapshotTime = snapshotTime;
-        _spillStore = persistentDatabasePath is null
+        _coordinatorRegistered = coordinatorRegistered;
+        _spillStore = mode == PantsTransactionMode.ReadOnly || persistentDatabasePath is null
             ? null
             : new TransactionSpillStore(persistentDatabasePath, transactionId, columnFamily.Identity);
     }
@@ -291,13 +294,29 @@ sealed class TransactionInstance : IPantsTransaction
         using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Commit");
         try
         {
-            await _database.CommitTransactionAsync(this, options, cancellationToken)
-                .ConfigureAwait(false);
+            if (_coordinatorRegistered)
+            {
+                await _database.CommitTransactionAsync(this, options, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _database.RecordReadOnlyTransactionCommitAsync(_transactionId)
+                    .ConfigureAwait(false);
+            }
         }
         catch
         {
-            await _database.RollbackTransactionAsync(_transactionId, CancellationToken.None)
-                .ConfigureAwait(false);
+            if (_coordinatorRegistered)
+            {
+                await _database.RollbackTransactionAsync(_transactionId, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _database.RecordReadOnlyTransactionRollbackAsync(_transactionId)
+                    .ConfigureAwait(false);
+            }
             throw;
         }
         finally
@@ -329,13 +348,29 @@ sealed class TransactionInstance : IPantsTransaction
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await _database.RollbackTransactionAsync(_transactionId, cancellationToken)
-                .ConfigureAwait(false);
+            if (_coordinatorRegistered)
+            {
+                await _database.RollbackTransactionAsync(_transactionId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _database.RecordReadOnlyTransactionRollbackAsync(_transactionId)
+                    .ConfigureAwait(false);
+            }
         }
         catch
         {
-            await _database.RollbackTransactionAsync(_transactionId, CancellationToken.None)
-                .ConfigureAwait(false);
+            if (_coordinatorRegistered)
+            {
+                await _database.RollbackTransactionAsync(_transactionId, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _database.RecordReadOnlyTransactionRollbackAsync(_transactionId)
+                    .ConfigureAwait(false);
+            }
             throw;
         }
         finally

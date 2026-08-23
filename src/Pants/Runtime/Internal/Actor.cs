@@ -30,6 +30,7 @@ sealed class Actor : IAsyncDisposable
     readonly Channel<IRuntimeCommand> _commands;
     readonly CompactionRuntimeService _compactionRuntime;
     readonly LocalDiskStore? _diskStore;
+    readonly Lock _directReadAdmissionGate = new();
     readonly IFailpointHandler _failpoints;
     readonly FlushRuntimeService _flushRuntime;
     readonly RuntimeWorker _garbageCollectionWorker;
@@ -58,6 +59,7 @@ sealed class Actor : IAsyncDisposable
     bool _backgroundCompactionPending;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
     bool _cloudWalSealPending;
+    long _commandsEnqueued;
     DatabaseVersion _currentVersion;
     int _deferredCompactionScheduled;
     int _disposed;
@@ -68,6 +70,7 @@ sealed class Actor : IAsyncDisposable
     int _queuedCommands;
     bool _readAmplificationCompactionPending;
     bool _recoveredMemtableFlushPending;
+    int _snapshotReleaseCollectionRequired;
     bool _shutdownPreparationCompleted;
     bool _shutdownRequested;
     OnlineVerificationBarrier? _verificationBarrier;
@@ -400,6 +403,8 @@ sealed class Actor : IAsyncDisposable
     public bool IsPrimaryLeaseHealthy =>
         (_diskStore?.IsLeaseHealthy ?? true) && (_cloudLease?.IsHealthy ?? true);
 
+    internal long CommandsEnqueued => Volatile.Read(ref _commandsEnqueued);
+
     bool UsesBackgroundImmutableFlushes =>
         _diskStore is not null && _options.Storage is PantsStorageConfiguration.Local;
 
@@ -686,6 +691,8 @@ sealed class Actor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
+                        DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
+
                         var storageChanged = false;
                         await _garbageCollectionWorker
                             .ExecuteAsync(() =>
@@ -817,6 +824,101 @@ sealed class Actor : IAsyncDisposable
                 return ValueTask.FromResult<IPantsTransaction>(transaction);
             },
             cancellationToken);
+
+    public IPantsTransaction BeginReadOnlyTransaction(
+        DatabaseInstance database,
+        ColumnFamilyHandle columnFamily,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        lock (_directReadAdmissionGate)
+        {
+            if (Volatile.Read(ref _shutdownRequested))
+            {
+                throw new PantsBusyException("The runtime is shutting down.");
+            }
+
+            var version = Volatile.Read(ref _currentVersion);
+            var identity = columnFamily.Identity;
+            if (!version.ActiveColumnFamilyVersions.TryGetValue(identity.Name, out var generation) ||
+                generation != identity.Generation ||
+                !version.Families.ContainsKey(identity))
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.InvalidArgument,
+                    $"Column-family handle '{identity.Name}#{identity.Id}' is stale.");
+            }
+
+            var transactionId = Interlocked.Decrement(ref _state.DirectReadOnlyTransactionCounter);
+            var startedAt = _state.Clock.UtcNow;
+            var transaction = new TransactionInstance(
+                database,
+                transactionId,
+                columnFamily,
+                PantsTransactionMode.ReadOnly,
+                version,
+                startedAt,
+                null,
+                false);
+            if (!_state.DirectReadOnlyTransactions.TryAdd(
+                    transactionId,
+                    new TransactionInfo(
+                        transactionId,
+                        PantsTransactionMode.ReadOnly,
+                        version.Sequence,
+                        startedAt,
+                        version)))
+            {
+                throw new PantsInternalException("A direct read-only transaction identifier collided.");
+            }
+
+            _telemetry.RecordTransactionBegin(PantsTransactionMode.ReadOnly);
+            return transaction;
+        }
+    }
+
+    public ValueTask RecordReadOnlyTransactionCommitAsync(long transactionId) =>
+        CompleteReadOnlyTransactionAsync(transactionId, true);
+
+    public ValueTask RecordReadOnlyTransactionRollbackAsync(long transactionId) =>
+        CompleteReadOnlyTransactionAsync(transactionId, false);
+
+    async ValueTask CompleteReadOnlyTransactionAsync(long transactionId, bool committed)
+    {
+        if (!_state.DirectReadOnlyTransactions.TryRemove(transactionId, out _))
+        {
+            return;
+        }
+
+        _telemetry.RecordSnapshotUnregister();
+        if (committed)
+        {
+            _telemetry.RecordTransactionCommit();
+        }
+        else
+        {
+            _telemetry.RecordTransactionRollback();
+        }
+        if (Volatile.Read(ref _snapshotReleaseCollectionRequired) == 0 ||
+            _state.ActiveSnapshotCount != 0)
+        {
+            return;
+        }
+
+        await SendAsync(
+            async state =>
+            {
+                if (state.ActiveSnapshotCount == 0)
+                {
+                    Volatile.Write(ref _snapshotReleaseCollectionRequired, 0);
+                    await CollectObsoleteFilesAfterSnapshotReleaseAsync(state).ConfigureAwait(false);
+                }
+
+                return true;
+            },
+            CancellationToken.None).ConfigureAwait(false);
+    }
 
     public async ValueTask CommitAsync(
         PantsWriteOptions writeOptions,
@@ -1165,6 +1267,27 @@ sealed class Actor : IAsyncDisposable
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_hybridCache is null)
+        {
+            var exceedsBudget = _diskStore is null
+                ? _telemetry.RecordSstRead(default)
+                : _diskStore.RecordPointRead(_telemetry, columnFamily, key.Span);
+            if (!exceedsBudget || !_backgroundCompactionEnabled || _diskStore is null)
+            {
+                return;
+            }
+
+            _ = await SendAsync(
+                async state =>
+                {
+                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         _ = await RecordPointReadCoreAsync(
             columnFamily,
             key,
@@ -1534,25 +1657,29 @@ sealed class Actor : IAsyncDisposable
         var admission = SendAsync<Task>(
             state =>
             {
-                if (!_shutdownRequested)
+                lock (_directReadAdmissionGate)
                 {
-                    if (state.ActiveSnapshotCount != 0)
+                    if (!_shutdownRequested)
                     {
-                        throw PantsException.Create(
-                            PantsErrorCode.Busy,
-                            "Database shutdown is blocked by active transactions or scans.");
-                    }
+                        if (state.ActiveSnapshotCount != 0)
+                        {
+                            throw PantsException.Create(
+                                PantsErrorCode.Busy,
+                                "Database shutdown is blocked by active transactions or scans.");
+                        }
 
-                    Volatile.Write(ref _shutdownRequested, true);
-                    state.IsShuttingDown = true;
-                    state.ActiveTransactions.Clear();
-                    state.ActiveScanSnapshots.Clear();
-                    foreach (var flush in state.ImmutableMemtableFlushes.Values)
-                    {
-                        flush.FailWaiterForShutdown();
-                    }
+                        Volatile.Write(ref _shutdownRequested, true);
+                        state.IsShuttingDown = true;
+                        state.ActiveTransactions.Clear();
+                        state.DirectReadOnlyTransactions.Clear();
+                        state.ActiveScanSnapshots.Clear();
+                        foreach (var flush in state.ImmutableMemtableFlushes.Values)
+                        {
+                            flush.FailWaiterForShutdown();
+                        }
 
-                    state.SignalWritePressureChanged();
+                        state.SignalWritePressureChanged();
+                    }
                 }
 
                 return ValueTask.FromResult(
@@ -1670,6 +1797,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         var command = new RuntimeCommand<T>(operation, cancellationToken);
+        Interlocked.Increment(ref _commandsEnqueued);
         var response = command.Response;
         var admitted = false;
         Interlocked.Increment(ref _queuedCommands);
@@ -2156,6 +2284,7 @@ sealed class Actor : IAsyncDisposable
         _telemetry.RecordSnapshotUnregister();
         if (_diskStore is not null)
         {
+            DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
             if (payload.Operations.Count != 0)
             {
                 _hybridCache?.EnsureWriteAdmitted(_diskStore, state);
@@ -3759,6 +3888,8 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
+        DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
+
         if (_verificationBarrier is not null)
         {
             _garbageCollectionPending = true;
@@ -3773,6 +3904,14 @@ sealed class Actor : IAsyncDisposable
             (storageChanged || _cloudPersistence.HasPersistenceAnomaly))
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
+    }
+
+    void DeferObsoleteFileCollectionUntilSnapshotsRelease(RuntimeState state)
+    {
+        if (state.ActiveSnapshotCount != 0)
+        {
+            Volatile.Write(ref _snapshotReleaseCollectionRequired, 1);
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 
 namespace Cntryl.Pants.Runtime.Internal;
@@ -23,6 +24,7 @@ sealed class RuntimeState
         ActiveMemtableBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
         ActiveTransactions = [];
+        DirectReadOnlyTransactions = [];
         ActiveScanSnapshots = [];
         ImmutableMemtableFlushes = [];
         ActiveFamilyVersions["default"] = DefaultFamilyVersion;
@@ -39,6 +41,8 @@ sealed class RuntimeState
 
     public long TransactionCounter { get; set; }
 
+    public long DirectReadOnlyTransactionCounter;
+
     public uint NextColumnFamilyId { get; set; } = 1;
 
     public Dictionary<string, int> FamilyGeneration { get; }
@@ -53,14 +57,19 @@ sealed class RuntimeState
 
     public Dictionary<long, TransactionInfo> ActiveTransactions { get; }
 
+    public ConcurrentDictionary<long, TransactionInfo> DirectReadOnlyTransactions { get; }
+
     public Dictionary<long, ScanSnapshotPin> ActiveScanSnapshots { get; }
 
     public Dictionary<long, ImmutableMemtableFlush> ImmutableMemtableFlushes { get; }
 
-    public int ActiveSnapshotCount => ActiveTransactions.Count + ActiveScanSnapshots.Count;
+    public int ActiveSnapshotCount =>
+        ActiveTransactions.Count + DirectReadOnlyTransactions.Count + ActiveScanSnapshots.Count;
 
     public IEnumerable<ISnapshotPin> ActiveSnapshots =>
-        ActiveTransactions.Values.Cast<ISnapshotPin>().Concat(ActiveScanSnapshots.Values);
+        ActiveTransactions.Values.Cast<ISnapshotPin>()
+            .Concat(DirectReadOnlyTransactions.Values)
+            .Concat(ActiveScanSnapshots.Values);
 
     public Task WritePressureChanged => _writePressureChanged.Task;
 
