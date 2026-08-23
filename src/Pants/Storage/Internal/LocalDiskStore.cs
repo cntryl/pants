@@ -1210,10 +1210,12 @@ sealed class LocalDiskStore : IDisposable
             throw new PantsInternalException("A WAL commit group must not be empty.");
         }
 
-        if (durability is not (PantsDurability.Sync or PantsDurability.Buffered))
+        if (durability is not (PantsDurability.Sync or
+            PantsDurability.Buffered or
+            PantsDurability.BestEffort))
         {
             throw new PantsInternalException(
-                "A WAL commit group must use Sync or Buffered durability.");
+                "A WAL commit group must use Sync, Buffered, or BestEffort durability.");
         }
 
         lock (_walStateGate)
@@ -1238,7 +1240,9 @@ sealed class LocalDiskStore : IDisposable
                 var prepared = new List<PreparedWalCommit>(commits.Count);
                 foreach (var commit in commits)
                 {
-                    prepared.Add(PrepareResidentWalCommit(commit.Payload, state));
+                    prepared.Add(durability == PantsDurability.BestEffort
+                        ? PrepareBestEffortResidentCommit(commit.Payload, state)
+                        : PrepareResidentWalCommit(commit.Payload, state));
                     if (state.Sequence != commit.ExpectedSequence)
                     {
                         throw new PantsInternalException(
@@ -1246,19 +1250,27 @@ sealed class LocalDiskStore : IDisposable
                     }
                 }
 
-                var appendStarted = Stopwatch.GetTimestamp();
-                WalCodec.AppendFrames(
-                    _walStream.SafeFileHandle,
-                    walLength,
-                    prepared.Select(static commit => commit.Payload).ToArray(),
-                    () => _failpoints.Hit(Failpoint.MidWalAppend));
-                var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
-                metrics?.RecordAppend(appendElapsed);
-                _walRecords = checked(_walRecords + prepared.Count);
-                RecordWalAppend(state.Sequence, prepared.Count);
+                if (durability != PantsDurability.BestEffort)
+                {
+                    var appendStarted = Stopwatch.GetTimestamp();
+                    WalCodec.AppendFrames(
+                        _walStream.SafeFileHandle,
+                        walLength,
+                        prepared.Select(static commit => commit.Payload).ToArray(),
+                        () => _failpoints.Hit(Failpoint.MidWalAppend));
+                    var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
+                    metrics?.RecordAppend(appendElapsed);
+                    _walRecords = checked(_walRecords + prepared.Count);
+                    RecordWalAppend(state.Sequence, prepared.Count);
+                }
+
                 foreach (var commit in prepared)
                 {
-                    _failpoints.Hit(Failpoint.AfterWalAppend);
+                    if (durability != PantsDurability.BestEffort)
+                    {
+                        _failpoints.Hit(Failpoint.AfterWalAppend);
+                    }
+
                     _mutableOperations.AddRange(commit.Mutations);
                     _unflushedCommitSequence = checked((ulong)commit.Sequence);
                 }
@@ -1318,6 +1330,37 @@ sealed class LocalDiskStore : IDisposable
         }
 
         payload.Operations.Validate();
+        var (beginSequence, sequence) = ReserveResidentCommitSequence(payload, state);
+        _failpoints.Hit(Failpoint.BeforeWalAppend);
+        var mutations = ReadMutations(payload, beginSequence);
+        _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
+        var walPayload = WalCodec.EncodeTransactionBatch(
+            checked((ulong)payload.TransactionId),
+            beginSequence,
+            _lease.Epoch,
+            mutations);
+        return new PreparedWalCommit(sequence, walPayload, mutations);
+    }
+
+    PreparedWalCommit PrepareBestEffortResidentCommit(
+        CommitPayload payload,
+        RuntimeState state)
+    {
+        if (payload.IsSpilled)
+        {
+            throw new PantsInternalException(
+                "A spilled transaction cannot enter resident commit coalescing.");
+        }
+
+        payload.Operations.Validate();
+        var (beginSequence, sequence) = ReserveResidentCommitSequence(payload, state);
+        return new PreparedWalCommit(sequence, [], ReadMutations(payload, beginSequence));
+    }
+
+    (ulong BeginSequence, long CommitSequence) ReserveResidentCommitSequence(
+        CommitPayload payload,
+        RuntimeState state)
+    {
         var beginSequence = checked(_nextSequence + 1);
         if (payload.Operations.Count == 0 ||
             payload.Operations.Count == ulong.MaxValue ||
@@ -1330,15 +1373,7 @@ sealed class LocalDiskStore : IDisposable
         var sequence = checked((long)commitSequence);
         _nextSequence = commitSequence;
         state.Sequence = sequence;
-        _failpoints.Hit(Failpoint.BeforeWalAppend);
-        var mutations = ReadMutations(payload, beginSequence);
-        _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
-        var walPayload = WalCodec.EncodeTransactionBatch(
-            checked((ulong)payload.TransactionId),
-            beginSequence,
-            _lease.Epoch,
-            mutations);
-        return new PreparedWalCommit(sequence, walPayload, mutations);
+        return (beginSequence, sequence);
     }
 
     WalCommitResult AppendCommitCore(
