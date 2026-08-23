@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsCompactionPublicationMetricsTests
 {
@@ -24,7 +24,7 @@ public sealed class PantsCompactionPublicationMetricsTests
     public async Task ShouldPreserveCompletedPublicationMetricsGivenSecondPublicationFails()
     {
         using var directory = new TemporaryDirectory();
-        var failpoint = new NthCompactionPublicationFailpointHandler(failAtHit: 2);
+        var failpoint = new NthCompactionPublicationFailpointHandler(2);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
             new PantsRuntimeDependencies(failpoint));

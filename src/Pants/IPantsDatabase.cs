@@ -1,4 +1,4 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 public interface IPantsDatabase : IAsyncDisposable
 {

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal static class QualificationRunner
 {

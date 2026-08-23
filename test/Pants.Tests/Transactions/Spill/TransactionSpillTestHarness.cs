@@ -1,6 +1,6 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal static class TransactionSpillTestHarness
+static class TransactionSpillTestHarness
 {
     internal static ValueTask<IPantsDatabase> OpenAsync(
         SpillStorageMode mode,

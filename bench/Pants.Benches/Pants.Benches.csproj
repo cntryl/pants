@@ -1,10 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Pants\Pants.csproj" />
+    <ProjectReference Include="..\..\src\Pants\Pants.csproj"/>
   </ItemGroup>
 
   <PropertyGroup>
+    <AssemblyName>Cntryl.Pants.Benches</AssemblyName>
+    <RootNamespace>Cntryl.Pants.Benches</RootNamespace>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
 

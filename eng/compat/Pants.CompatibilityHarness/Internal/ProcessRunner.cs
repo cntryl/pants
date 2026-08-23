@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal static class ProcessRunner
 {

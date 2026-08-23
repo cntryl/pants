@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Pants.CompatibilityHarness.Internal;
+using Cntryl.Pants.CompatibilityHarness.Internal;
 
-namespace Pants.CompatibilityHarness.Tests;
+namespace Cntryl.Pants.CompatibilityHarness.Tests;
 
 public sealed class CompatibilityBaselineComparerTests
 {

@@ -1,8 +1,8 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 public sealed class PantsWriteOptions
 {
-    private PantsWriteOptions(PantsDurability durability)
+    PantsWriteOptions(PantsDurability durability)
     {
         Durability = durability;
     }

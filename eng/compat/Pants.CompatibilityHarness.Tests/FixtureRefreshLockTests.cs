@@ -1,6 +1,6 @@
-using Pants.CompatibilityHarness.Internal;
+using Cntryl.Pants.CompatibilityHarness.Internal;
 
-namespace Pants.CompatibilityHarness.Tests;
+namespace Cntryl.Pants.CompatibilityHarness.Tests;
 
 public sealed class FixtureRefreshLockTests
 {

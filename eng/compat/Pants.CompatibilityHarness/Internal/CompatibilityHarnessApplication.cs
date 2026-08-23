@@ -1,6 +1,8 @@
 using System.Text;
+using Cntryl.Pants.Observability;
+using Cntryl.Pants.Transactions;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal static class CompatibilityHarnessApplication
 {

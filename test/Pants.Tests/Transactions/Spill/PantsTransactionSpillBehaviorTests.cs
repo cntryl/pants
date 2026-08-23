@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 public sealed class PantsTransactionSpillBehaviorTests
 {
@@ -391,7 +391,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path,
-            transactionMemoryPoolBytes: 512);
+            512);
         var expected = Enumerable.Repeat((byte)'v', 400).ToArray();
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
@@ -423,7 +423,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path,
-            transactionMemoryPoolBytes: 512);
+            512);
         var expected = new Dictionary<string, byte[]>
         {
             ["mixed-0000"] = "tiny"u8.ToArray(),

@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 sealed class TestRuntimeService(
     int capacity,

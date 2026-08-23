@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime.Flush;
 
 public sealed class ImmutableFlushPipelineTests
 {
@@ -9,9 +9,9 @@ public sealed class ImmutableFlushPipelineTests
     [Fact]
     public async Task ShouldSerializeAttemptsInFrontierOrder()
     {
-        var first = CreateFlush(id: 30, frontierSequence: 20);
-        var second = CreateFlush(id: 20, frontierSequence: 10);
-        var third = CreateFlush(id: 10, frontierSequence: 10);
+        var first = CreateFlush(30, 20);
+        var second = CreateFlush(20, 10);
+        var third = CreateFlush(10, 10);
         var flushes = new List<ImmutableMemtableFlush> { first, second, third };
         var scheduled = new List<long>();
         var workers = flushes.ToDictionary(
@@ -42,20 +42,20 @@ public sealed class ImmutableFlushPipelineTests
             static (_, _) => ValueTask.CompletedTask,
             static () => false);
 
-        await pipeline.ScheduleNextAsync(flushes, retryFailure: false);
+        await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10], scheduled);
 
-        await pipeline.ScheduleNextAsync(flushes, retryFailure: false);
+        await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10], scheduled);
 
         workers[third.Frozen.Id].SetResult(SuccessfulResult());
         await completed[third.Frozen.Id].Task.WaitAsync(AssertionTimeout);
-        await pipeline.ScheduleNextAsync(flushes, retryFailure: false);
+        await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10, 20], scheduled);
 
         workers[second.Frozen.Id].SetResult(SuccessfulResult());
         await completed[second.Frozen.Id].Task.WaitAsync(AssertionTimeout);
-        await pipeline.ScheduleNextAsync(flushes, retryFailure: false);
+        await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10, 20, 30], scheduled);
 
         workers[first.Frozen.Id].SetResult(SuccessfulResult());
@@ -67,7 +67,7 @@ public sealed class ImmutableFlushPipelineTests
     public async Task ShouldRetryFailedAttemptAfterBackoff()
     {
         var telemetry = new RuntimeTelemetry();
-        var flush = CreateFlush(id: 1, frontierSequence: 1);
+        var flush = CreateFlush(1, 1);
         var flushes = new List<ImmutableMemtableFlush> { flush };
         var succeeded = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -97,11 +97,11 @@ public sealed class ImmutableFlushPipelineTests
             },
             (expected, _) => pipeline!.ScheduleNextAsync(
                 flushes,
-                retryFailure: expected.HasFailed),
+                expected.HasFailed),
             static () => false);
         var firstAttempt = flush.AttemptTask;
 
-        await pipeline.ScheduleNextAsync(flushes, retryFailure: false);
+        await pipeline.ScheduleNextAsync(flushes, false);
         var firstFailure = await firstAttempt.WaitAsync(AssertionTimeout);
         await succeeded.Task.WaitAsync(AssertionTimeout);
 
@@ -132,18 +132,18 @@ public sealed class ImmutableFlushPipelineTests
         var columnFamily = new ColumnFamilyIdentity(
             checked((uint)id),
             $"family-{id}",
-            Generation: 0);
+            0);
         return new ImmutableMemtableFlush(new FrozenMemtableFlush(
             id,
             columnFamily,
             columnFamily.Id,
-            Operations: [],
-            SstSequence: checked((ulong)id),
+            [],
+            checked((ulong)id),
             frontierSequence,
-            SizeBytes: 1));
+            1));
     }
 
     static FrozenFlushRuntimeResult SuccessfulResult() => new(
-        PublicationPlan: null,
-        PersistenceAnomaly: false);
+        null,
+        false);
 }

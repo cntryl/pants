@@ -1,11 +1,11 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests;
 
 public sealed class PantsPublicApiTests
 {
     [Fact]
     public void ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts()
     {
-        Type[] publicTypes = typeof(PantsDatabase).Assembly
+        var publicTypes = typeof(PantsDatabase).Assembly
             .GetExportedTypes();
 
         Assert.Contains(typeof(IPantsDatabase), publicTypes);
@@ -23,7 +23,7 @@ public sealed class PantsPublicApiTests
     [Fact]
     public void DatabaseFactoryReturnsPublicAbstraction()
     {
-        Type returnType = typeof(PantsDatabase)
+        var returnType = typeof(PantsDatabase)
             .GetMethod(nameof(PantsDatabase.OpenAsync))!
             .ReturnType;
 
@@ -34,13 +34,12 @@ public sealed class PantsPublicApiTests
     [Fact]
     public async Task DatabaseRejectsColumnFamilyHandleOwnedByAnotherInstance()
     {
-        await using IPantsDatabase first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsDatabase second = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var second = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        PantsInvalidArgumentException exception = await Assert.ThrowsAsync<PantsInvalidArgumentException>(
-            () => second.BeginTransactionAsync(
-                first.DefaultColumnFamily,
-                PantsTransactionMode.ReadOnly).AsTask());
+        var exception = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => second.BeginTransactionAsync(
+            first.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly).AsTask());
 
         Assert.Equal(PantsErrorCode.InvalidArgument, exception.Code);
     }

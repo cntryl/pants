@@ -1,39 +1,39 @@
-namespace Pants;
+namespace Cntryl.Pants;
 
 /// <summary>Immutable and fully validated database-open configuration.</summary>
 public sealed class PantsOpenOptions
 {
-    private const long FallbackMemoryBudgetBytes = 512L * 1024 * 1024;
-    private readonly Configuration _configuration;
+    const long FallbackMemoryBudgetBytes = 512L * 1024 * 1024;
+    readonly Configuration _configuration;
 
-    private PantsOpenOptions(Configuration configuration)
+    PantsOpenOptions(Configuration configuration)
     {
         _configuration = configuration;
         MemoryBudgetBytes = ResolveMemoryBudget(configuration.MemoryBudget);
         TransactionMemoryPoolBytes = configuration.TransactionMemoryPoolBytes ??
-            Math.Max(1, MemoryBudgetBytes / 10);
+                                     Math.Max(1, MemoryBudgetBytes / 10);
 
-        long maximumMemtable = (MemoryBudgetBytes - TransactionMemoryPoolBytes) / 2;
-        long baseMemtable = configuration.PerformanceGoal switch
+        var maximumMemtable = (MemoryBudgetBytes - TransactionMemoryPoolBytes) / 2;
+        var baseMemtable = configuration.PerformanceGoal switch
         {
             PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
             PantsPerformanceGoal.Throughput => 256L * 1024 * 1024,
             PantsPerformanceGoal.Economy => 32L * 1024 * 1024,
             _ => throw PantsException.InvalidArgument("Unknown performance goal.")
         };
-        long desiredMemtable = configuration.WorkloadProfile switch
+        var desiredMemtable = configuration.WorkloadProfile switch
         {
             PantsWorkloadProfile.WriteHeavy => baseMemtable * 2,
             PantsWorkloadProfile.ReadMostly => baseMemtable / 2,
             _ => baseMemtable
         };
         MemtableSizeLimitBytes = configuration.MemtableSizeLimitBytes ??
-            Math.Max(1, Math.Min(desiredMemtable, maximumMemtable));
+                                 Math.Max(1, Math.Min(desiredMemtable, maximumMemtable));
         MemtableFlushThresholdBytes = configuration.MemtableFlushThresholdBytes ??
-            MemtableSizeLimitBytes;
+                                      MemtableSizeLimitBytes;
         BlockCacheBytes = Math.Max(
             0,
-            MemoryBudgetBytes - TransactionMemoryPoolBytes - (2 * MemtableSizeLimitBytes));
+            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2 * MemtableSizeLimitBytes);
         if (configuration.PerformanceGoal == PantsPerformanceGoal.Economy)
         {
             BlockCacheBytes = Math.Min(BlockCacheBytes, 256L * 1024 * 1024);
@@ -53,15 +53,15 @@ public sealed class PantsOpenOptions
             _ => 256L * 1024 * 1024
         };
         WalBufferSizeBytes = configuration.WalBufferSizeBytes ??
-            checked((int)Math.Clamp(
-                configuration.PerformanceGoal switch
-                {
-                    PantsPerformanceGoal.Latency => 128L * 1024,
-                    PantsPerformanceGoal.Throughput => 1024L * 1024,
-                    _ => 256L * 1024
-                },
-                1,
-                MemoryBudgetBytes));
+                             checked((int)Math.Clamp(
+                                 configuration.PerformanceGoal switch
+                                 {
+                                     PantsPerformanceGoal.Latency => 128L * 1024,
+                                     PantsPerformanceGoal.Throughput => 1024L * 1024,
+                                     _ => 256L * 1024
+                                 },
+                                 1,
+                                 MemoryBudgetBytes));
         L0CompactionTrigger = (configuration.PerformanceGoal, configuration.WorkloadProfile) switch
         {
             (PantsPerformanceGoal.Latency, _) => 3,
@@ -239,9 +239,9 @@ public sealed class PantsOpenOptions
     internal PantsOpenOptions WithFlushAfterWalRecordsForTesting(int count) =>
         With(_configuration with { FlushAfterWalRecords = count });
 
-    private static PantsOpenOptions With(Configuration configuration) => new(configuration);
+    static PantsOpenOptions With(Configuration configuration) => new(configuration);
 
-    private void Validate()
+    void Validate()
     {
         ValidateEnum(PerformanceGoal, nameof(PerformanceGoal));
         ValidateEnum(WorkloadProfile, nameof(WorkloadProfile));
@@ -279,7 +279,7 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
         }
 
-        if ((2 * MemtableSizeLimitBytes) + TransactionMemoryPoolBytes > MemoryBudgetBytes)
+        if (2 * MemtableSizeLimitBytes + TransactionMemoryPoolBytes > MemoryBudgetBytes)
         {
             throw PantsException.ResourceLimit(
                 "Two memtables and the transaction pool exceed the total memory budget.");
@@ -332,7 +332,7 @@ public sealed class PantsOpenOptions
         ValidateStorage(Storage);
     }
 
-    private static void ValidateStorage(PantsStorageConfiguration storage)
+    static void ValidateStorage(PantsStorageConfiguration storage)
     {
         switch (storage)
         {
@@ -350,7 +350,7 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static void ValidateCloudLocation(PantsCloudStorageLocation? location, string objectClass)
+    static void ValidateCloudLocation(PantsCloudStorageLocation? location, string objectClass)
     {
         if (location?.Provider is null)
         {
@@ -395,7 +395,7 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static void ValidateProviderText(string? value, string description)
+    static void ValidateProviderText(string? value, string description)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -403,7 +403,7 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static void ValidateOptionalHttpEndpoint(Uri? endpoint, string description)
+    static void ValidateOptionalHttpEndpoint(Uri? endpoint, string description)
     {
         if (endpoint is not null)
         {
@@ -411,7 +411,7 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static void ValidateHttpEndpoint(Uri? endpoint, string description)
+    static void ValidateHttpEndpoint(Uri? endpoint, string description)
     {
         if (endpoint is null ||
             !endpoint.IsAbsoluteUri ||
@@ -422,7 +422,7 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static void ValidateEnum<TEnum>(TEnum value, string description)
+    static void ValidateEnum<TEnum>(TEnum value, string description)
         where TEnum : struct, Enum
     {
         if (!Enum.IsDefined(value))
@@ -431,30 +431,30 @@ public sealed class PantsOpenOptions
         }
     }
 
-    private static long ResolveMemoryBudget(PantsMemoryBudget budget)
+    static long ResolveMemoryBudget(PantsMemoryBudget budget)
     {
         if (budget.Bytes is { } bytes)
         {
             return bytes;
         }
 
-        long available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+        var available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
         return available > 0 ? Math.Max(3, available / 2) : FallbackMemoryBudgetBytes;
     }
 
-    private static string ValidatePath(string value, string parameterName)
+    static string ValidatePath(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
         return value;
     }
 
-    private static string ValidateNonEmpty(string value, string parameterName)
+    static string ValidateNonEmpty(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
         return value;
     }
 
-    private sealed record Configuration(
+    sealed record Configuration(
         PantsStorageConfiguration Storage,
         PantsPerformanceGoal PerformanceGoal,
         PantsMemoryBudget MemoryBudget,

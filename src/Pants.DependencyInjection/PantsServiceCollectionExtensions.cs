@@ -1,6 +1,6 @@
+using Cntryl.Pants;
+using Cntryl.Pants.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Pants;
-using Pants.DependencyInjection;
 
 namespace Microsoft.Extensions.DependencyInjection;
 

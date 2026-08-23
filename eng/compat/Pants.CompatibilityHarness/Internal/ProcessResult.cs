@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal sealed record ProcessResult(
     string DisplayCommand,

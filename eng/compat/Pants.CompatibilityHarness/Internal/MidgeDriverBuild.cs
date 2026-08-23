@@ -1,4 +1,4 @@
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal sealed record MidgeDriverBuild(
     string CheckoutPath,

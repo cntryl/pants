@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime.Transactions;
 
 public sealed class CommitCoalescerTests
 {
@@ -7,8 +7,8 @@ public sealed class CommitCoalescerTests
     [Fact]
     public void ShouldAttemptOnlyConfiguredMultiCommitBatch()
     {
-        var enabled = CreateCoalescer(enabled: true);
-        var disabled = CreateCoalescer(enabled: false);
+        var enabled = CreateCoalescer(true);
+        var disabled = CreateCoalescer(false);
         var commits = new[] { CreateCommand(1), CreateCommand(2) };
 
         Assert.False(enabled.CanAttempt(commits[..1]));
@@ -20,7 +20,7 @@ public sealed class CommitCoalescerTests
     public void ShouldStageEligibleResidentCommitWithoutMutatingRuntimeAccounting()
     {
         var state = CreateState();
-        var coalescer = CreateCoalescer(enabled: true, memtableSizeLimitBytes: 1_024);
+        var coalescer = CreateCoalescer(true);
         var stagedBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
         var command = CreateCommand(1);
@@ -28,7 +28,7 @@ public sealed class CommitCoalescerTests
         var staged = coalescer.TryStage(
             state,
             command,
-            groupDurability: null,
+            null,
             stagedBytes);
 
         Assert.True(staged);
@@ -44,8 +44,8 @@ public sealed class CommitCoalescerTests
         var appendCalls = 0;
         IReadOnlyList<WalCommitGroupEntry>? appended = null;
         var coalescer = new CommitCoalescer(
-            enabled: true,
-            memtableSizeLimitBytes: 1_024,
+            true,
+            1_024,
             telemetry,
             (commits, _, _, _) =>
             {
@@ -78,14 +78,14 @@ public sealed class CommitCoalescerTests
     public void ShouldStageOnlyHomogeneousBufferedGroup()
     {
         var state = CreateState();
-        var coalescer = CreateCoalescer(enabled: true);
+        var coalescer = CreateCoalescer(true);
         var stagedBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
 
         Assert.True(coalescer.TryStage(
             state,
             CreateCommand(1, PantsDurability.Buffered),
-            groupDurability: null,
+            null,
             stagedBytes));
         Assert.True(coalescer.TryStage(
             state,
@@ -94,7 +94,7 @@ public sealed class CommitCoalescerTests
             stagedBytes));
         Assert.False(coalescer.TryStage(
             state,
-            CreateCommand(3, PantsDurability.Sync),
+            CreateCommand(3),
             PantsDurability.Buffered,
             stagedBytes));
         Assert.Equal(136, stagedBytes[Family]);
@@ -107,8 +107,8 @@ public sealed class CommitCoalescerTests
         var telemetry = new RuntimeTelemetry();
         PantsDurability? appendedDurability = null;
         var coalescer = new CommitCoalescer(
-            enabled: true,
-            memtableSizeLimitBytes: 1_024,
+            true,
+            1_024,
             telemetry,
             (commits, _, durability, _) =>
             {
@@ -152,19 +152,19 @@ public sealed class CommitCoalescerTests
     {
         var state = CreateState();
         var operation = new TransactionIntentOperation(
-            ordinal: 0,
+            0,
             CommitOperationKind.Put,
             Family,
             "key"u8.ToArray(),
-            endExclusive: null,
+            null,
             "v"u8.ToArray(),
-            timeToLive: null,
-            expiryUtc: null,
-            insertOnly: false);
+            null,
+            null,
+            false);
         var source = new TransactionOperationSource(
-            spillStore: null,
+            null,
             [operation],
-            count: 1,
+            1,
             DateTimeOffset.UnixEpoch);
         var payload = new CommitPayload(
             transactionId,

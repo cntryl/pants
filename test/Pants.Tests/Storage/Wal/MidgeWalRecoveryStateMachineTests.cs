@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class MidgeWalRecoveryStateMachineTests
 {
@@ -7,20 +7,20 @@ public sealed class MidgeWalRecoveryStateMachineTests
     {
         using var recovery = new MidgeWalRecoveryStateMachine();
         var applied = new List<(MidgeWalMutation Mutation, ulong CommitSequence)>();
-        var mutation = CreatePut("alpha", "one", sequence: 2);
+        var mutation = CreatePut("alpha", "one", 2);
 
         Visit(
             recovery,
             applied,
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
-                transactionId: 9,
-                sequence: 1,
-                writerEpoch: 7),
+                9,
+                1,
+                7),
             MidgeWalCodec.EncodeTransactionMutation(
                 mutation,
-                transactionId: 9,
-                writerEpoch: 7));
+                9,
+                7));
 
         Assert.Empty(applied);
 
@@ -29,9 +29,9 @@ public sealed class MidgeWalRecoveryStateMachineTests
             applied,
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
-                transactionId: 9,
-                sequence: 3,
-                writerEpoch: 7));
+                9,
+                3,
+                7));
 
         var result = Assert.Single(applied);
         Assert.Equal("alpha"u8.ToArray(), result.Mutation.Key);
@@ -51,13 +51,13 @@ public sealed class MidgeWalRecoveryStateMachineTests
                 applied,
                 MidgeWalCodec.EncodeTransactionMarker(
                     MidgeWalOperation.TransactionBegin,
-                    transactionId: 9,
-                    sequence: 1,
-                    writerEpoch: 7),
+                    9,
+                    1,
+                    7),
                 MidgeWalCodec.EncodeTransactionMutation(
-                    CreatePut("alpha", "one", sequence: 2),
-                    transactionId: 9,
-                    writerEpoch: 7));
+                    CreatePut("alpha", "one", 2),
+                    9,
+                    7));
         }
 
         Assert.Empty(applied);
@@ -70,9 +70,9 @@ public sealed class MidgeWalRecoveryStateMachineTests
         var applied = new List<(MidgeWalMutation Mutation, ulong CommitSequence)>();
         var begin = MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionBegin,
-            transactionId: 9,
-            sequence: 1,
-            writerEpoch: 7);
+            9,
+            1,
+            7);
         Visit(recovery, applied, begin);
 
         Assert.Throws<PantsStorageException>(() => Visit(recovery, applied, begin));
@@ -89,22 +89,22 @@ public sealed class MidgeWalRecoveryStateMachineTests
             applied,
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
-                transactionId: 9,
-                sequence: 1,
-                writerEpoch: 7),
+                9,
+                1,
+                7),
             MidgeWalCodec.EncodeTransactionMutation(
-                CreatePut("epoch-seven", "one", sequence: 2),
-                transactionId: 9,
-                writerEpoch: 7),
+                CreatePut("epoch-seven", "one", 2),
+                9,
+                7),
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
-                transactionId: 9,
-                sequence: 10,
-                writerEpoch: 8),
+                9,
+                10,
+                8),
             MidgeWalCodec.EncodeTransactionMutation(
-                CreatePut("epoch-eight", "two", sequence: 11),
-                transactionId: 9,
-                writerEpoch: 8));
+                CreatePut("epoch-eight", "two", 11),
+                9,
+                8));
 
         Assert.Empty(applied);
 
@@ -113,9 +113,9 @@ public sealed class MidgeWalRecoveryStateMachineTests
             applied,
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
-                transactionId: 9,
-                sequence: 12,
-                writerEpoch: 8));
+                9,
+                12,
+                8));
 
         var first = Assert.Single(applied);
         Assert.Equal("epoch-eight"u8.ToArray(), first.Mutation.Key);
@@ -126,9 +126,9 @@ public sealed class MidgeWalRecoveryStateMachineTests
             applied,
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
-                transactionId: 9,
-                sequence: 3,
-                writerEpoch: 7));
+                9,
+                3,
+                7));
 
         Assert.Equal(2, applied.Count);
         Assert.Equal("epoch-seven"u8.ToArray(), applied[1].Mutation.Key);
@@ -145,9 +145,9 @@ public sealed class MidgeWalRecoveryStateMachineTests
             recovery,
             applied,
             MidgeWalCodec.EncodeTransactionMutation(
-                CreatePut("standalone", "value", sequence: 14),
-                transactionId: 9,
-                writerEpoch: 7));
+                CreatePut("standalone", "value", 14),
+                9,
+                7));
 
         var result = Assert.Single(applied);
         Assert.Equal("standalone"u8.ToArray(), result.Mutation.Key);
@@ -160,12 +160,12 @@ public sealed class MidgeWalRecoveryStateMachineTests
         using var recovery = new MidgeWalRecoveryStateMachine();
         var applied = new List<(MidgeWalMutation Mutation, ulong CommitSequence)>();
         var batch = MidgeWalCodec.EncodeTransactionBatch(
-            transactionId: 9,
-            beginSequence: 20,
-            writerEpoch: 7,
+            9,
+            20,
+            7,
             [
-                CreatePut("alpha", "one", sequence: 0),
-                CreatePut("bravo", "two", sequence: 0)
+                CreatePut("alpha", "one", 0),
+                CreatePut("bravo", "two", 0)
             ]);
 
         Visit(recovery, applied, batch);
@@ -187,13 +187,13 @@ public sealed class MidgeWalRecoveryStateMachineTests
     }
 
     static MidgeWalMutation CreatePut(string key, string value, ulong sequence) => new(
-        ColumnFamilyId: 0,
+        0,
         MidgeWalOperation.Put,
         TestBytes.FromString(key),
         TestBytes.FromString(value),
         sequence,
-        Expiration: null,
-        RangeEnd: null);
+        null,
+        null);
 
     static void Visit(
         MidgeWalRecoveryStateMachine recovery,

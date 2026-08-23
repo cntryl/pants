@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal static class MidgeCheckoutBuilder
 {

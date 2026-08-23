@@ -1,37 +1,33 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed class CountingTransactionOperationSource(ITransactionOperationSource inner)
+sealed class CountingTransactionOperationSource(ITransactionOperationSource inner)
     : ITransactionOperationSource
 {
-    int _traversalCount;
-    long _visitCount;
-    int _latestBeforeCount;
+    public int TraversalCount { get; private set; }
+
+    public long VisitCount { get; private set; }
+
+    public int LatestBeforeCount { get; private set; }
 
     public ulong Count => inner.Count;
 
     public bool IsSpilled => inner.IsSpilled;
 
-    public int TraversalCount => _traversalCount;
-
-    public long VisitCount => _visitCount;
-
-    public int LatestBeforeCount => _latestBeforeCount;
-
     public void Validate() => inner.Validate();
 
     public void ForEach(Action<TransactionIntentOperation> visitor)
     {
-        _traversalCount++;
+        TraversalCount++;
         inner.ForEach(operation =>
         {
-            _visitCount++;
+            VisitCount++;
             visitor(operation);
         });
     }
 
     public TransactionIntentLookup? LatestBefore(ulong ordinal, ReadOnlySpan<byte> key)
     {
-        _latestBeforeCount++;
+        LatestBeforeCount++;
         return inner.LatestBefore(ordinal, key);
     }
 }

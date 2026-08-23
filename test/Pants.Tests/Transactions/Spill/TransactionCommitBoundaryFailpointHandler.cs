@@ -1,6 +1,6 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed class TransactionCommitBoundaryFailpointHandler(
+sealed class TransactionCommitBoundaryFailpointHandler(
     PantsFailpoint directBoundary,
     PantsFailpoint spilledBoundary) : IPantsFailpointHandler
 {

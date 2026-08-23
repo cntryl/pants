@@ -1,6 +1,6 @@
 using System.Diagnostics.Metrics;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeCommandCancellationContractTests
@@ -76,8 +76,9 @@ public sealed class PantsRuntimeCommandCancellationContractTests
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("engine-canceled"u8.ToArray(), "value"u8.ToArray());
-            var exception = await Assert.ThrowsAsync<PantsAbortedException>(
-                () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            var exception =
+                await Assert.ThrowsAsync<PantsAbortedException>(() =>
+                    transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
             Assert.IsAssignableFrom<OperationCanceledException>(exception.InnerException);
         }

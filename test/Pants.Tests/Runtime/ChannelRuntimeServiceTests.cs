@@ -1,4 +1,4 @@
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 public sealed class ChannelRuntimeServiceTests
 {
@@ -11,13 +11,13 @@ public sealed class ChannelRuntimeServiceTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var service = new TestRuntimeService(capacity: 1, started, release);
+        await using var service = new TestRuntimeService(1, started, release);
 
-        var first = await service.ScheduleAsync(new TestRuntimeRequest(1, ShouldWait: true));
+        var first = await service.ScheduleAsync(new TestRuntimeRequest(1, true));
         await started.Task.WaitAsync(AssertionTimeout);
-        var second = await service.ScheduleAsync(new TestRuntimeRequest(2, ShouldWait: false));
+        var second = await service.ScheduleAsync(new TestRuntimeRequest(2, false));
         var thirdAdmission = service
-            .ScheduleAsync(new TestRuntimeRequest(3, ShouldWait: false))
+            .ScheduleAsync(new TestRuntimeRequest(3, false))
             .AsTask();
 
         Assert.False(thirdAdmission.IsCompleted);
@@ -34,10 +34,10 @@ public sealed class ChannelRuntimeServiceTests
     [Fact]
     public async Task ShouldPropagateTypedDispatchFailureToCaller()
     {
-        await using var service = new TestRuntimeService(capacity: 1);
+        await using var service = new TestRuntimeService(1);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.ExecuteAsync(new TestRuntimeRequest(7, ShouldWait: false, ShouldFail: true))
+            service.ExecuteAsync(new TestRuntimeRequest(7, false, true))
                 .AsTask());
 
         Assert.Equal("Request 7 failed.", exception.Message);
@@ -52,10 +52,10 @@ public sealed class ChannelRuntimeServiceTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var service = new TestRuntimeService(capacity: 1, started, release);
-        var first = await service.ScheduleAsync(new TestRuntimeRequest(1, ShouldWait: true));
+        var service = new TestRuntimeService(1, started, release);
+        var first = await service.ScheduleAsync(new TestRuntimeRequest(1, true));
         await started.Task.WaitAsync(AssertionTimeout);
-        var second = await service.ScheduleAsync(new TestRuntimeRequest(2, ShouldWait: false));
+        var second = await service.ScheduleAsync(new TestRuntimeRequest(2, false));
 
         var shutdown = service.DisposeAsync().AsTask();
         Assert.False(shutdown.IsCompleted);
@@ -66,6 +66,6 @@ public sealed class ChannelRuntimeServiceTests
         var results = await Task.WhenAll(first, second);
         Assert.Equal([1, 2], results);
         await Assert.ThrowsAsync<ObjectDisposedException>(() =>
-            service.ExecuteAsync(new TestRuntimeRequest(3, ShouldWait: false)).AsTask());
+            service.ExecuteAsync(new TestRuntimeRequest(3, false)).AsTask());
     }
 }

@@ -1,30 +1,32 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <AssemblyName>Cntryl.Pants.Tests</AssemblyName>
+    <RootNamespace>Cntryl.Pants.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector"/>
+    <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
+    <PackageReference Include="xunit"/>
+    <PackageReference Include="xunit.runner.visualstudio"/>
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit" />
+    <Using Include="Xunit"/>
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Pants.DependencyInjection\Pants.DependencyInjection.csproj" />
-    <ProjectReference Include="..\..\src\Pants\Pants.csproj" />
+    <ProjectReference Include="..\..\src\Pants.DependencyInjection\Pants.DependencyInjection.csproj"/>
+    <ProjectReference Include="..\..\src\Pants\Pants.csproj"/>
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Fixtures/Compatibility/**/*" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="MidgeContractManifest.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/Compatibility/**/*" CopyToOutputDirectory="PreserveNewest"/>
+    <None Update="MidgeContractManifest.json" CopyToOutputDirectory="PreserveNewest"/>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest"/>
   </ItemGroup>
 
 </Project>

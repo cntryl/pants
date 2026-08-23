@@ -1,18 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AssemblyName>Pants.Core</AssemblyName>
-    <PackageId>Pants</PackageId>
+    <AssemblyName>Cntryl.Pants.Core</AssemblyName>
+    <RootNamespace>Cntryl.Pants</RootNamespace>
+    <PackageId>Cntryl.Pants</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="K4os.Compression.LZ4" />
-    <PackageReference Include="System.IO.Hashing" />
-    <PackageReference Include="ZstdSharp.Port" />
+    <PackageReference Include="K4os.Compression.LZ4"/>
+    <PackageReference Include="System.IO.Hashing"/>
+    <PackageReference Include="ZstdSharp.Port"/>
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Pants.Tests" />
+    <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
   </ItemGroup>
 
 </Project>

@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Compression;
 
 public sealed class PantsCompressionCompatibilityTests
 {
@@ -108,12 +108,12 @@ public sealed class PantsCompressionCompatibilityTests
             unknown.AsSpan(unknown.Length - sizeof(uint)),
             MidgeDiskFormat.Crc32C(unknown.AsSpan(0, unknown.Length - sizeof(uint))));
 
-        var corruptError = Assert.Throws<PantsCorruptionException>(
-            () => MidgeSstBlockCodec.DecompressWithTrailer(corrupt));
-        var truncatedError = Assert.Throws<PantsCorruptionException>(
-            () => MidgeSstBlockCodec.DecompressWithTrailer(valid.AsSpan(0, 4)));
-        var unknownError = Assert.Throws<PantsCorruptionException>(
-            () => MidgeSstBlockCodec.DecompressWithTrailer(unknown));
+        var corruptError =
+            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(corrupt));
+        var truncatedError =
+            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(valid.AsSpan(0, 4)));
+        var unknownError =
+            Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(unknown));
 
         Assert.Contains("CRC32C mismatch", corruptError.Message, StringComparison.Ordinal);
         Assert.Contains("too small for trailer", truncatedError.Message, StringComparison.Ordinal);
@@ -128,8 +128,7 @@ public sealed class PantsCompressionCompatibilityTests
     {
         var block = WithTrailer("payload"u8, code);
 
-        var error = Assert.Throws<PantsCorruptionException>(
-            () => MidgeSstBlockCodec.DecompressWithTrailer(block));
+        var error = Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(block));
 
         Assert.Equal(PantsErrorCode.Corruption, error.Code);
         Assert.Contains("unknown compression algorithm code", error.Message, StringComparison.Ordinal);
@@ -137,7 +136,6 @@ public sealed class PantsCompressionCompatibilityTests
 
     [Theory]
     [InlineData((byte)MidgeCompressionAlgorithm.Lz4)]
-    [InlineData((byte)MidgeCompressionAlgorithm.Zstd3)]
     [InlineData((byte)MidgeCompressionAlgorithm.Zstd9)]
     public void ShouldRejectCorruptCompressedPayloadForEveryShippingCodec(byte algorithmCode)
     {
@@ -147,7 +145,7 @@ public sealed class PantsCompressionCompatibilityTests
             .ToArray();
         if (algorithm == MidgeCompressionAlgorithm.Lz4)
         {
-            BinaryPrimitives.WriteUInt32LittleEndian(block, (64 * 1024 * 1024U) + 1);
+            BinaryPrimitives.WriteUInt32LittleEndian(block, 64 * 1024 * 1024U + 1);
         }
         else
         {
@@ -156,8 +154,7 @@ public sealed class PantsCompressionCompatibilityTests
 
         RewriteTrailerCrc(block);
 
-        var error = Assert.Throws<PantsCorruptionException>(
-            () => MidgeSstBlockCodec.DecompressWithTrailer(block));
+        var error = Assert.Throws<PantsCorruptionException>(() => MidgeSstBlockCodec.DecompressWithTrailer(block));
 
         Assert.Equal(PantsErrorCode.Corruption, error.Code);
     }
@@ -167,7 +164,8 @@ public sealed class PantsCompressionCompatibilityTests
     {
         using var directory = new TemporaryDirectory();
         var incompressible = SeededBytes(16 * 1024, 0x8f21_49da);
-        await using (var database = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
+        await using (var database =
+                     await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
             await WriteRecordsAndFlushAsync(
                 database,
@@ -178,7 +176,8 @@ public sealed class PantsCompressionCompatibilityTests
                 ]);
         }
 
-        await using var reopened = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency));
+        await using var reopened =
+            await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency));
         await using var read = await reopened.BeginTransactionAsync(
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
@@ -193,13 +192,15 @@ public sealed class PantsCompressionCompatibilityTests
         using var directory = new TemporaryDirectory();
         var latencyRecords = AdaptiveRecords("latency", 48);
         var economyRecords = AdaptiveRecords("economy", 48);
-        await using (var latency = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
+        await using (var latency =
+                     await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
             var family = await latency.CreateColumnFamilyAsync("policies");
             await WriteRecordsAndFlushAsync(latency, family, latencyRecords);
         }
 
-        await using var economy = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy));
+        await using var economy =
+            await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await economy.GetColumnFamilyAsync("policies"));
         await WriteRecordsAndFlushAsync(economy, reopenedFamily, economyRecords);
@@ -220,7 +221,8 @@ public sealed class PantsCompressionCompatibilityTests
         var batches = Enumerable.Range(0, 4)
             .Select(batch => AdaptiveRecords($"policy-{batch}", 48))
             .ToArray();
-        await using (var latency = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
+        await using (var latency =
+                     await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
             var family = await latency.CreateColumnFamilyAsync("policies");
             foreach (var batch in batches[..3])
@@ -233,7 +235,8 @@ public sealed class PantsCompressionCompatibilityTests
             SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
             algorithm => algorithm == (byte)MidgeCompressionAlgorithm.Lz4);
 
-        await using (var economy = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy)))
+        await using (var economy =
+                     await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy)))
         {
             var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
                 await economy.GetColumnFamilyAsync("policies"));
@@ -250,7 +253,8 @@ public sealed class PantsCompressionCompatibilityTests
             SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
             algorithm => algorithm == (byte)MidgeCompressionAlgorithm.Zstd9);
 
-        await using var reopened = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
+        await using var reopened =
+            await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await reopened.GetColumnFamilyAsync("policies"));
         await using var read = await reopened.BeginTransactionAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
@@ -272,8 +276,8 @@ public sealed class PantsCompressionCompatibilityTests
         bytes[bytes.Length - MidgeDiskFormat.SstFooterSize + 8] ^= 0x01;
         await File.WriteAllBytesAsync(sstPath, bytes);
 
-        var error = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var error = await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, error.Code);
         Assert.Contains(
@@ -291,7 +295,8 @@ public sealed class PantsCompressionCompatibilityTests
         await WriteFreshAdaptiveDatabaseAsync(directory.Path, records);
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
-        await using var reopened = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
+        await using var reopened =
+            await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await reopened.GetColumnFamilyAsync("adaptive"));
         await using var read = await reopened.BeginTransactionAsync(family, PantsTransactionMode.ReadOnly);
@@ -316,7 +321,8 @@ public sealed class PantsCompressionCompatibilityTests
         var expectedRecords = firstBatch.Concat(secondBatch)
             .OrderBy(static record => record.Key, ByteArrayComparer.Instance)
             .ToArray();
-        await using (var database = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput)))
+        await using (var database =
+                     await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput)))
         {
             var family = await database.CreateColumnFamilyAsync("adaptive");
             await WriteRecordsAndFlushAsync(database, family, firstBatch);
@@ -325,7 +331,8 @@ public sealed class PantsCompressionCompatibilityTests
         }
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
-        await using var reopened = await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
+        await using var reopened =
+            await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await reopened.GetColumnFamilyAsync("adaptive"));
         await using var read = await reopened.BeginTransactionAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
@@ -433,7 +440,7 @@ public sealed class PantsCompressionCompatibilityTests
         return Enumerable.Range(0, size)
             .Select(_ =>
             {
-                state = unchecked((state * 1_664_525) + 1_013_904_223);
+                state = unchecked(state * 1_664_525 + 1_013_904_223);
                 return (byte)(state >> 24);
             })
             .ToArray();

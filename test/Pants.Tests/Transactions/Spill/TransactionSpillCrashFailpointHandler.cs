@@ -1,8 +1,8 @@
 using System.Text;
 
-namespace Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed class TransactionSpillCrashFailpointHandler(
+sealed class TransactionSpillCrashFailpointHandler(
     PantsFailpoint target,
     string sentinelPath,
     string scenario,
@@ -23,15 +23,15 @@ internal sealed class TransactionSpillCrashFailpointHandler(
                    FileMode.CreateNew,
                    FileAccess.Write,
                    FileShare.Read,
-                   bufferSize: 4_096,
+                   4_096,
                    FileOptions.WriteThrough))
         {
             stream.Write(sentinel);
-            stream.Flush(flushToDisk: true);
+            stream.Flush(true);
         }
 
         var parent = Path.GetDirectoryName(sentinelPath) ??
-            throw new InvalidOperationException("The crash-trigger sentinel has no parent directory.");
+                     throw new InvalidOperationException("The crash-trigger sentinel has no parent directory.");
         AtomicStagedFile.FlushDirectory(parent);
 
         Environment.FailFast($"Injected crash at {trigger} for scenario {scenario}.");

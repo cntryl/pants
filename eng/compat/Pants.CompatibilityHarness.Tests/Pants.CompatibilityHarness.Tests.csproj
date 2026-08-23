@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <AssemblyName>Cntryl.Pants.CompatibilityHarness.Tests</AssemblyName>
+    <RootNamespace>Cntryl.Pants.CompatibilityHarness.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
