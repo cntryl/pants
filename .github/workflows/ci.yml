@@ -204,7 +204,7 @@ jobs:
           dotnet test Pants.slnx
           --configuration ${{ matrix.configuration }}
           --no-build
-          --filter "${{ matrix.remaining-filter }}"
+          --filter "(${{ matrix.remaining-filter }})&Category!=Sqrzl"
           --logger "trx;LogFileName=remaining.trx"
           --results-directory TestResults
           --blame-hang-timeout 3m
@@ -238,3 +238,57 @@ jobs:
             ForEach-Object {
               Write-Host ("{0,12}  {1,-10}  {2}" -f $_.duration, $_.outcome, $_.testName)
             }
+
+  sqrzl:
+    name: Sqrzl cloud providers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore locked dependencies
+        run: dotnet restore Pants.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build Pants.slnx --configuration Release --no-restore
+
+      - name: Start Sqrzl emulator
+        run: docker compose up -d sqrzl
+
+      - name: Wait for Sqrzl health
+        run: >-
+          curl --fail
+          --retry 30
+          --retry-delay 1
+          --retry-all-errors
+          http://127.0.0.1:9001/healthz
+
+      - name: Test every cloud provider
+        run: >-
+          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=Sqrzl"
+          --logger "console;verbosity=detailed"
+          --blame-hang-timeout 3m
+          --blame-hang-dump-type none
+          --
+          xUnit.MaxParallelThreads=1
+          xUnit.ParallelAlgorithm=conservative
+
+      - name: Report Sqrzl logs
+        if: ${{ failure() }}
+        run: docker compose logs --no-color sqrzl
+
+      - name: Stop Sqrzl emulator
+        if: ${{ always() }}
+        run: docker compose down --volumes

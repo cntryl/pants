@@ -325,6 +325,12 @@ sealed class GcsObjectStore : ICloudObjectStore
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken)
     {
+        if (_configuration.ApiStyle == PantsGcsApiStyle.Xml && request.Content is null)
+        {
+            // GCS XML requires explicit request framing even for bodyless reads and deletes.
+            request.Content = new ByteArrayContent([]);
+        }
+
         if (_credential.TokenProvider is { } tokenProvider)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue(
