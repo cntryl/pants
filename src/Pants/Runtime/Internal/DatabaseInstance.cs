@@ -322,7 +322,7 @@ sealed class DatabaseInstance : IPantsDatabase
     }
 
     internal ValueTask<long> RegisterScanSnapshotAsync(
-        DatabaseSnapshot snapshot,
+        DatabaseVersion snapshot,
         CancellationToken cancellationToken) =>
         _actor.RegisterScanSnapshotAsync(snapshot, cancellationToken);
 

@@ -171,7 +171,7 @@ public sealed class CommitCoalescerTests
             PantsTransactionMode.ReadWrite,
             PantsConflictPolicy.LastWriteWins,
             DateTimeOffset.UnixEpoch,
-            state.CreateSnapshot(),
+            state.CreateVersion(),
             source,
             []);
         var writeOptions = durability switch

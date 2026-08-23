@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Benches.Tier3;
 
 public class MvccSystemBenchmarks : Tier3Benchmark
 {
-    const int KeyCount = 1_000;
+    const int KeyCount = 50_000;
     const int ReadBatchSize = 64;
     string _path = null!;
     IPantsDatabase _database = null!;
@@ -58,5 +58,13 @@ public class MvccSystemBenchmarks : Tier3Benchmark
         }
 
         return validated;
+    }
+
+    [Benchmark]
+    public async Task BeginReadOnlyTransactionAsync()
+    {
+        await using var transaction = await _database.BeginTransactionAsync(
+            _database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
     }
 }

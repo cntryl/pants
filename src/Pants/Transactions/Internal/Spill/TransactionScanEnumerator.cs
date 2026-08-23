@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Immutable;
 
 namespace Cntryl.Pants.Transactions.Internal.Spill;
 
@@ -7,7 +8,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
     readonly PantsScanDirection _direction;
     readonly IEnumerator<byte[]> _intentKeys;
     readonly TransactionIntentReadView _intents;
-    readonly SortedDictionary<byte[], CellState> _snapshot;
+    readonly ImmutableSortedDictionary<byte[], CellState> _snapshot;
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly DateTimeOffset _snapshotTime;
     bool _advanceIntent;
@@ -18,7 +19,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
     byte[]? _snapshotHead;
 
     public TransactionScanEnumerator(
-        DatabaseSnapshot snapshot,
+        DatabaseVersion snapshot,
         ColumnFamilyIdentity family,
         DateTimeOffset snapshotTime,
         TransactionIntentReadView intents,

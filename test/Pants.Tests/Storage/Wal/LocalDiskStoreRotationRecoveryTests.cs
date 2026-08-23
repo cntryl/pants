@@ -162,7 +162,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             PantsTransactionMode.ReadWrite,
             PantsConflictPolicy.LastWriteWins,
             DateTimeOffset.UnixEpoch,
-            state.CreateSnapshot(),
+            state.CreateVersion(),
             source,
             []);
     }

@@ -1078,8 +1078,7 @@ sealed class LocalDiskStore : IDisposable
             var identity = new ColumnFamilyIdentity(id, name, generation);
             state.FamilyGeneration[name] = generation;
             state.ActiveFamilyVersions[name] = generation;
-            state.FamilyData[identity] = new SortedDictionary<byte[], CellState>(
-                ByteArrayComparer.Instance);
+            state.FamilyData[identity] = RuntimeState.EmptyFamily;
             state.RangeTombstones[identity] = [];
             state.ActiveMemtableBytes[identity] = 0;
             state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, checked(id + 1));
@@ -3053,7 +3052,7 @@ sealed class LocalDiskStore : IDisposable
             var defaultIdentity = new ColumnFamilyIdentity(0, "default", RuntimeState.DefaultFamilyVersion);
             state.FamilyGeneration["default"] = RuntimeState.DefaultFamilyVersion;
             state.ActiveFamilyVersions["default"] = RuntimeState.DefaultFamilyVersion;
-            state.FamilyData[defaultIdentity] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+            state.FamilyData[defaultIdentity] = RuntimeState.EmptyFamily;
             state.RangeTombstones[defaultIdentity] = [];
             state.ActiveMemtableBytes[defaultIdentity] = 0;
             _familyIds[defaultIdentity] = 0;
@@ -3073,7 +3072,7 @@ sealed class LocalDiskStore : IDisposable
 
                 var identity = new ColumnFamilyIdentity(family.Id, family.Name, version);
                 state.ActiveFamilyVersions[family.Name] = version;
-                state.FamilyData[identity] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+                state.FamilyData[identity] = RuntimeState.EmptyFamily;
                 state.RangeTombstones[identity] = [];
                 state.ActiveMemtableBytes[identity] = 0;
                 _familyIds[identity] = family.Id;
@@ -3105,16 +3104,17 @@ sealed class LocalDiskStore : IDisposable
             {
                 case WalOperation.Put:
                 case WalOperation.Insert:
-                    family[mutation.Key] = CellState.FromUnixMilliseconds(
+                    family = family.SetItem(mutation.Key, CellState.FromUnixMilliseconds(
                         mutation.Value?.ToArray(),
                         checked((long)mutation.Sequence),
-                        mutation.Expiration);
+                        mutation.Expiration));
                     break;
                 case WalOperation.Delete:
-                    family.Remove(mutation.Key);
+                    family = family.Remove(mutation.Key);
                     break;
                 case WalOperation.DeleteRange when mutation.RangeEnd is not null:
-                    state.RangeTombstones[identity].Add(new CommittedRangeTombstone(
+                    state.RangeTombstones[identity] = state.RangeTombstones[identity].Add(
+                        new CommittedRangeTombstone(
                         mutation.Key.ToArray(),
                         mutation.RangeEnd.ToArray(),
                         checked((long)mutation.Sequence)));
@@ -3122,11 +3122,13 @@ sealed class LocalDiskStore : IDisposable
                                  ByteArrayComparer.Instance.Compare(key, mutation.Key) >= 0 &&
                                  ByteArrayComparer.Instance.Compare(key, mutation.RangeEnd) < 0).ToList())
                     {
-                        family.Remove(key);
+                        family = family.Remove(key);
                     }
 
                     break;
             }
+
+            state.FamilyData[identity] = family;
         }
     }
 
