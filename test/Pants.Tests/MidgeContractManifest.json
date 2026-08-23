@@ -6043,8 +6043,11 @@
       "sourceSymbolOrTest": "should_not_leak_response_slots_across_repeated_timeouts",
       "observableBehavior": "not leak response slots across repeated timeouts",
       "expectedError": "Timeout",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldNotLeakResponseSlotsAcrossRepeatedTimeouts"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_reject_runtime_metrics_request_after_engine_shutdown",
@@ -6129,9 +6132,12 @@
       "source": "tests/observability_api.rs",
       "sourceSymbolOrTest": "should_return_runtime_metrics_when_stall_clears_before_deadline",
       "observableBehavior": "return runtime metrics when stall clears before deadline",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 9
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldReturnRuntimeMetricsWhenStallClearsBeforeDeadline"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/observability_api.rs:should_return_runtime_metrics_within_generous_timeout",
@@ -6164,8 +6170,11 @@
       "sourceSymbolOrTest": "should_unregister_response_slot_when_runtime_metrics_response_times_out",
       "observableBehavior": "unregister response slot when runtime metrics response times out",
       "expectedError": "Timeout",
-      "status": "planned",
-      "issue": 9
+      "status": "mapped",
+      "issue": 9,
+      "pantsTests": [
+        "Pants.Tests.PantsRuntimeMetricsCancellationContractTests.ShouldUnregisterResponseSlotWhenRuntimeMetricsResponseTimesOut"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/provider_feature_contract.rs:should_assign_each_provider_dependency_set_to_its_cargo_feature",
@@ -10848,9 +10857,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_abort_in_child_process_when_spilled_transaction_commit_is_interrupted",
       "observableBehavior": "abort in child process when spilled transaction commit is interrupted",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillCrashRecoveryTests.ShouldAbortInChildProcessWhenSpilledTransactionCommitIsInterrupted"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_bound_shared_resident_bytes_when_two_transactions_pressure_one_pool",
@@ -10858,9 +10870,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_bound_shared_resident_bytes_when_two_transactions_pressure_one_pool",
       "observableBehavior": "bound shared resident bytes when two transactions pressure one pool",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldBoundSharedResidentBytesWhenTwoTransactionsPressureOnePool"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_create_engine_private_runs_under_txn_when_durable_transaction_spills",
@@ -10868,9 +10883,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_create_engine_private_runs_under_txn_when_durable_transaction_spills",
       "observableBehavior": "create engine private runs under txn when durable transaction spills",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldCreateEnginePrivateRunsUnderTxnWhenDurableTransactionSpills"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_frame_large_transaction_with_one_commit_marker",
@@ -10878,9 +10896,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_frame_large_transaction_with_one_commit_marker",
       "observableBehavior": "frame large transaction with one commit marker",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldFrameLargeTransactionWithOneCommitMarker"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_hide_spilled_transaction_when_commit_marker_is_missing",
@@ -10888,9 +10909,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_hide_spilled_transaction_when_commit_marker_is_missing",
       "observableBehavior": "hide spilled transaction when commit marker is missing",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillCrashRecoveryTests.ShouldHideSpilledTransactionWhenCommitMarkerIsMissing"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_merge_transaction_intents_when_scanning_after_spill",
@@ -10898,9 +10922,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_merge_transaction_intents_when_scanning_after_spill",
       "observableBehavior": "merge transaction intents when scanning after spill",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldMergeTransactionIntentsWhenScanningAfterSpill"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_preserve_put_delete_insert_ordinals_across_spill_runs",
@@ -10908,9 +10935,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_preserve_put_delete_insert_ordinals_across_spill_runs",
       "observableBehavior": "preserve put delete insert ordinals across spill runs",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldPreservePutDeleteInsertOrdinalsAcrossSpillRuns"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_preserve_transaction_atomicity_given_spill_run_read_failure_when_committing",
@@ -10919,8 +10949,11 @@
       "sourceSymbolOrTest": "should_preserve_transaction_atomicity_given_spill_run_read_failure_when_committing",
       "observableBehavior": "preserve transaction atomicity given spill run read failure when committing",
       "expectedError": "Io",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldPreserveTransactionAtomicityGivenSpillRunReadFailureWhenCommitting"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_reach_only_path_specific_boundary_when_spill_and_direct_commit_race",
@@ -10928,9 +10961,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_reach_only_path_specific_boundary_when_spill_and_direct_commit_race",
       "observableBehavior": "reach only path specific boundary when spill and direct commit race",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldReachOnlyPathSpecificBoundaryWhenSpillAndDirectCommitRace"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_read_latest_point_intent_after_spilling",
@@ -10938,9 +10974,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_read_latest_point_intent_after_spilling",
       "observableBehavior": "read latest point intent after spilling",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldReadLatestPointIntentAfterSpilling"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_reject_duplicate_insert_when_duplicate_is_in_older_spill_run",
@@ -10949,8 +10988,11 @@
       "sourceSymbolOrTest": "should_reject_duplicate_insert_when_duplicate_is_in_older_spill_run",
       "observableBehavior": "reject duplicate insert when duplicate is in older spill run",
       "expectedError": "InvalidArgument",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldRejectDuplicateInsertWhenDuplicateIsInOlderSpillRun"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_remove_orphaned_spill_runs_when_engine_starts",
@@ -10958,9 +11000,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_remove_orphaned_spill_runs_when_engine_starts",
       "observableBehavior": "remove orphaned spill runs when engine starts",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldRemoveOrphanedSpillRunsWhenEngineStarts"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_remove_spill_runs_when_transaction_is_dropped",
@@ -10968,9 +11013,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_remove_spill_runs_when_transaction_is_dropped",
       "observableBehavior": "remove spill runs when transaction is dropped",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldRemoveSpillRunsWhenTransactionIsDropped"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_remove_spill_runs_when_transaction_rolls_back",
@@ -10978,9 +11026,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_remove_spill_runs_when_transaction_rolls_back",
       "observableBehavior": "remove spill runs when transaction rolls back",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldRemoveSpillRunsWhenTransactionRollsBack"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_return_resource_limit_when_memory_mode_exhausts_transaction_pool",
@@ -10989,8 +11040,11 @@
       "sourceSymbolOrTest": "should_return_resource_limit_when_memory_mode_exhausts_transaction_pool",
       "observableBehavior": "return resource limit when memory mode exhausts transaction pool",
       "expectedError": "ResourceLimit",
-      "status": "planned",
-      "issue": 10
+      "status": "mapped",
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldReturnResourceLimitWhenMemoryModeExhaustsTransactionPool"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/transaction_spill_hardening.rs:should_return_reverse_rows_in_descending_order_given_prefix_and_limit_when_scanning",
@@ -10998,9 +11052,12 @@
       "source": "tests/transaction_spill_hardening.rs",
       "sourceSymbolOrTest": "should_return_reverse_rows_in_descending_order_given_prefix_and_limit_when_scanning",
       "observableBehavior": "return reverse rows in descending order given prefix and limit when scanning",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 10
+      "issue": 10,
+      "pantsTests": [
+        "Pants.Tests.PantsTransactionSpillHardeningBehaviorTests.ShouldReturnReverseRowsInDescendingOrderGivenPrefixAndLimitWhenScanning"
+      ]
     },
     {
       "id": "public:src/cloud_layout.rs:9:CloudObjectLayout",

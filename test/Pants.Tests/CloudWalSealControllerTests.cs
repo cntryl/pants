@@ -36,6 +36,19 @@ public sealed class CloudWalSealControllerTests
     }
 
     [Fact]
+    public void ShouldCountEveryPhysicalRecordGivenSpilledTransaction()
+    {
+        var controller = new CloudWalSealController(
+            CreatePolicy(),
+            new ManualTimeProvider());
+
+        controller.RecordWrite(physicalRecords: 8);
+
+        Assert.Equal(8, controller.PendingWrites);
+        Assert.True(controller.ShouldSeal(activeWalBytes: 1));
+    }
+
+    [Fact]
     public void ShouldExposeRemainingDelayGivenSubthresholdCloudAsyncWal()
     {
         var timeProvider = new ManualTimeProvider();

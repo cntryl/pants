@@ -2,6 +2,8 @@ namespace Pants.Tests;
 
 public sealed class PantsCloudEventualFlushTests
 {
+    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public async Task ShouldBatchWritesWhenUsingCloudMode()
     {
@@ -78,6 +80,249 @@ public sealed class PantsCloudEventualFlushTests
             database,
             static candidate => candidate.WalCurrentSegmentId > 1);
         Assert.Equal(0, metrics.WalPendingWrites);
+    }
+
+    [Fact]
+    public async Task ShouldRetryDeadlineSealGivenFirstCloudWalRotationFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler();
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: int.MaxValue,
+            maximumDelay: TimeSpan.FromMilliseconds(25));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+
+        await CommitAsync(
+            database,
+            database.DefaultColumnFamily,
+            "deadline-retry",
+            PantsWriteOptions.CloudAsync);
+        var committed = await database.GetRuntimeMetricsAsync();
+
+        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        await failpoints.WaitUntilRetryAttemptedAsync(AssertionTimeout);
+        var published = await WaitForMetricsAsync(
+            database,
+            candidate =>
+                candidate.WalCurrentSegmentId > committed.WalCurrentSegmentId &&
+                candidate.WalPendingWrites == 0 &&
+                candidate.WalCloudDurableSequence >= committed.CurrentSequence);
+
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        Assert.True(published.WalCloudDurableSequence >= committed.CurrentSequence);
+    }
+
+    [Fact]
+    public async Task ShouldRetryImmediateSealGivenFirstCloudWalRotationFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler();
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: 1,
+            maximumDelay: TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+        var before = await database.GetRuntimeMetricsAsync();
+
+        await CommitAsync(
+            database,
+            database.DefaultColumnFamily,
+            "immediate-retry",
+            PantsWriteOptions.CloudAsync);
+        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        await failpoints.WaitUntilRetryAttemptedAsync(AssertionTimeout);
+        var published = await WaitForMetricsAsync(
+            database,
+            candidate =>
+                candidate.WalCurrentSegmentId > before.WalCurrentSegmentId &&
+                candidate.WalPendingWrites == 0 &&
+                candidate.WalCloudDurableSequence > before.WalCloudDurableSequence);
+
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        Assert.True(published.WalCloudDurableSequence > before.WalCloudDurableSequence);
+    }
+
+    [Fact]
+    public async Task ShouldAdmitRotatedSegmentGivenPostRotationCloudSealFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler(
+            PantsFailpoint.AfterWalRotation);
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: 1,
+            maximumDelay: TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+        var before = await database.GetRuntimeMetricsAsync();
+
+        await CommitAsync(
+            database,
+            database.DefaultColumnFamily,
+            "post-rotation-retry",
+            PantsWriteOptions.CloudAsync);
+        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        var published = await WaitForMetricsAsync(
+            database,
+            candidate =>
+                candidate.WalCurrentSegmentId > before.WalCurrentSegmentId &&
+                candidate.WalPendingWrites == 0 &&
+                candidate.WalCloudDurableSequence > before.WalCloudDurableSequence);
+
+        Assert.Empty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "wal"),
+            "*.wal",
+            SearchOption.TopDirectoryOnly));
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        Assert.Equal(1, failpoints.Attempts);
+        Assert.True(published.WalCloudDurableSequence > before.WalCloudDurableSequence);
+    }
+
+    [Fact]
+    public async Task ShouldApplyCloudAsyncCommitGivenPostAppendSealIsFenced()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler(
+            PantsFailpoint.AfterCloudWalSealFlush,
+            static () => new PantsFencedException("Injected cloud authority loss."));
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: 1,
+            maximumDelay: TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+
+        await CommitAsync(
+            database,
+            database.DefaultColumnFamily,
+            "fenced-after-append",
+            PantsWriteOptions.CloudAsync);
+
+        await using var reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        var value = await reader.GetAsync("fenced-after-append"u8.ToArray());
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(
+            "value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
+        Assert.Equal(1, metrics.WalPendingWrites);
+        Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
+    }
+
+    [Fact]
+    public async Task ShouldApplyCloudStrictCommitGivenPostRotationSealFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler(
+            PantsFailpoint.AfterWalRotation);
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: 1,
+            maximumDelay: TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+
+        await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
+            database,
+            database.DefaultColumnFamily,
+            "strict-post-rotation",
+            PantsWriteOptions.CloudStrict).AsTask());
+
+        await using var reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        var value = await reader.GetAsync("strict-post-rotation"u8.ToArray());
+        var published = await WaitForMetricsAsync(
+            database,
+            static candidate =>
+                candidate.WalPendingWrites == 0 &&
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+
+        Assert.Equal(
+            "value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
+        Assert.Equal(1, failpoints.Attempts);
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
+    }
+
+    [Fact]
+    public async Task ShouldKeepFailedCloudStrictUploadOutOfReplacementCache()
+    {
+        using var directory = new TemporaryDirectory();
+        using var replacement = new TemporaryDirectory();
+        var failpoints = new RetryingCloudWalUploadFailpointHandler();
+        var policy = CreatePolicy(
+            segmentGap: 128,
+            maximumPendingWrites: 1,
+            maximumDelay: TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new PantsRuntimeDependencies(failpoints));
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
+                database,
+                database.DefaultColumnFamily,
+                "strict-upload-failure",
+                PantsWriteOptions.CloudStrict).AsTask());
+            using var failureTimeout = new CancellationTokenSource(AssertionTimeout);
+            await failpoints.WaitForFailureAsync(failureTimeout.Token);
+
+            await using var reader = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly);
+            var value = await reader.GetAsync("strict-upload-failure"u8.ToArray());
+            Assert.Equal(
+                "value",
+                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
+            Assert.Empty(Directory.EnumerateFiles(
+                Path.Combine(directory.Path, "cloud_store", "wal"),
+                "*.wal",
+                SearchOption.AllDirectories));
+
+            CopyDirectory(
+                Path.Combine(directory.Path, "cloud_store"),
+                Path.Combine(replacement.Path, "cloud_store"));
+            await using var replacementDatabase = await PantsDatabase.OpenAsync(
+                CreateOptions(replacement.Path, policy));
+            await using var replacementReader = await replacementDatabase.BeginTransactionAsync(
+                replacementDatabase.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.Null(await replacementReader.GetAsync("strict-upload-failure"u8.ToArray()));
+        }
+        finally
+        {
+            failpoints.AllowSuccess();
+        }
+
+        var published = await WaitForMetricsAsync(
+            database,
+            static candidate =>
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
     }
 
     [Fact]
@@ -212,6 +457,22 @@ public sealed class PantsCloudEventualFlushTests
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+    }
+
+    static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            CopyDirectory(
+                directory,
+                Path.Combine(destination, Path.GetFileName(directory)));
         }
     }
 

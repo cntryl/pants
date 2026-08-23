@@ -2,8 +2,8 @@ namespace Pants;
 
 internal sealed class CommitRuntimeCommand : IRuntimeCommand
 {
-    private readonly Func<PantsRuntimeState, ValueTask<bool>> _operation;
-    private readonly TaskCompletionSource<bool> _completion =
+    readonly Func<PantsRuntimeState, ValueTask<bool>> _operation;
+    readonly TaskCompletionSource<bool> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public CommitRuntimeCommand(
@@ -36,12 +36,15 @@ internal sealed class CommitRuntimeCommand : IRuntimeCommand
 
     public void Complete(bool result) => _completion.TrySetResult(result);
 
-    public void Fail(PantsRuntimeState state, Exception exception)
+    public void Fail(
+        PantsRuntimeState state,
+        Exception exception,
+        bool recordNoSpaceEvent = true)
     {
-        Exception publicException = RuntimeExceptionMapper.ToPublicException(exception);
-        if (publicException is PantsNoSpaceException)
+        var publicException = RuntimeExceptionMapper.ToPublicException(exception);
+        if (recordNoSpaceEvent && RuntimeExceptionMapper.IsNoSpace(exception))
         {
-            state.NoSpaceEvents = checked(state.NoSpaceEvents + 1);
+            state.RecordNoSpaceEvent();
         }
 
         _completion.TrySetException(publicException);

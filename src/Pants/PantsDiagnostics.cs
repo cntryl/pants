@@ -26,4 +26,28 @@ public static class PantsDiagnostics
 
     internal static Histogram<double> CommandLatencyMilliseconds { get; } =
         Meter.CreateHistogram<double>("pants.runtime.command_latency_ms", "ms");
+
+    internal static Counter<long> WalAppends { get; } =
+        Meter.CreateCounter<long>("pants.wal.appends");
+
+    internal static Counter<long> FlushPublications { get; } =
+        Meter.CreateCounter<long>("pants.flush.publications");
+
+    internal static Counter<long> CompactionsCompleted { get; } =
+        Meter.CreateCounter<long>("pants.compactions.completed");
+
+    internal static Counter<long> CompactionsFailed { get; } =
+        Meter.CreateCounter<long>("pants.compactions.failed");
+
+    internal static Counter<long> CloudWalUploadsCompleted { get; } =
+        Meter.CreateCounter<long>("pants.cloud.wal_uploads.completed");
+
+    internal static Counter<long> CloudFlushRetries { get; } =
+        Meter.CreateCounter<long>("pants.cloud.flush_retries");
+
+    internal static Counter<long> Reads { get; } =
+        Meter.CreateCounter<long>("pants.reads");
+
+    internal static Counter<long> WalRecoveryRecords { get; } =
+        Meter.CreateCounter<long>("pants.recovery.wal_records");
 }

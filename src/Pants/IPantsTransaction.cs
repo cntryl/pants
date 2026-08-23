@@ -34,6 +34,10 @@ public interface IPantsTransaction : IAsyncDisposable
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default);
 
+    ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken = default);
+
     ValueTask<IPantsScan> ScanAsync(
         PantsScanQuery query,
         CancellationToken cancellationToken = default);

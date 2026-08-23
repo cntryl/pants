@@ -5,48 +5,54 @@ namespace Pants;
 
 internal sealed class RuntimeTelemetry
 {
-    private long _readOnlyTransactionsBegun;
-    private long _readOnlySnapshotCacheHits;
-    private long _readOnlySnapshotCacheMisses;
-    private long _snapshotsRegistered;
-    private long _snapshotsUnregistered;
-    private long _readsTotal;
-    private long _sstsTouchedTotal;
-    private long _l0SstsTouchedTotal;
-    private long _blocksReadTotal;
-    private long _sstReaderCacheHits;
-    private long _sstReaderCacheMisses;
-    private long _sstBlockCacheHits;
-    private long _sstBlockCacheMisses;
-    private long _candidateSstFilesChecked;
-    private long _candidateBlocksChecked;
-    private long _dataBlocksRead;
-    private long _keyRangeRejects;
-    private long _bloomChecks;
-    private long _bloomRejects;
-    private long _bloomTruePositives;
-    private long _bloomFalsePositives;
-    private long _rangeTombstoneScans;
-    private long _sstBudgetViolations;
-    private long _blockBudgetViolations;
-    private long _readAmplificationCompactionTriggers;
-    private long _writeConflictsPoint;
-    private long _writeConflictsRange;
-    private long _compactionsRun;
-    private long _compactionBytesRewritten;
-    private long _walAppendCount;
-    private long _walFlushCount;
-    private long _walFsyncCount;
-    private long _walAppendNanosecondsTotal;
-    private long _walFsyncNanosecondsTotal;
-    private long _walFsyncNanosecondsMaximum;
-    private long _durabilityWaitersFannedOut;
-    private long _flushBuildCount;
-    private long _flushBuildNanosecondsTotal;
-    private long _flushBuildNanosecondsMaximum;
-    private long _flushPublishCount;
-    private long _flushPublishNanosecondsTotal;
-    private long _flushPublishNanosecondsMaximum;
+    readonly TimeProvider _timeProvider;
+    long _readOnlyTransactionsBegun;
+    long _readOnlySnapshotCacheHits;
+    long _readOnlySnapshotCacheMisses;
+    long _snapshotsRegistered;
+    long _snapshotsUnregistered;
+    long _transactionsCommitted;
+    long _transactionsRolledBack;
+    long _commandsRejected;
+    long _commandLatencyNanosecondsTotal;
+    long _readsTotal;
+    long _sstsTouchedTotal;
+    long _l0SstsTouchedTotal;
+    long _blocksReadTotal;
+    long _sstReaderCacheHits;
+    long _sstReaderCacheMisses;
+    long _sstBlockCacheHits;
+    long _sstBlockCacheMisses;
+    long _candidateSstFilesChecked;
+    long _candidateBlocksChecked;
+    long _dataBlocksRead;
+    long _keyRangeRejects;
+    long _bloomChecks;
+    long _bloomRejects;
+    long _bloomTruePositives;
+    long _bloomFalsePositives;
+    long _rangeTombstoneScans;
+    long _sstBudgetViolations;
+    long _blockBudgetViolations;
+    long _readAmplificationCompactionTriggers;
+    long _writeConflictsPoint;
+    long _writeConflictsRange;
+    long _compactionsRun;
+    long _compactionBytesRewritten;
+    long _compactionFailures;
+    long _walAppendCount;
+    long _walFlushCount;
+    long _walFsyncCount;
+    long _walAppendNanosecondsTotal;
+    long _walFsyncNanosecondsTotal;
+    long _walFsyncNanosecondsMaximum;
+    long _durabilityWaitersFannedOut;
+    long _flushBuildCount;
+    long _flushBuildNanosecondsTotal;
+    long _flushBuildNanosecondsMaximum;
+    long _flushPublishCount;
+    long _flushPublishNanosecondsTotal;
+    long _flushPublishNanosecondsMaximum;
     long _flushEnqueued;
     long _flushFailures;
     long _flushRetries;
@@ -54,7 +60,14 @@ internal sealed class RuntimeTelemetry
     readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
     long _walLastSyncedSequence;
     long _writeStallsMemory;
+    long _writeStallsCompaction;
+    long _writeStallsCloud;
     long _writeStallsNoSpace;
+    readonly object _writeStallTimingGate = new();
+    long? _writeStallStartedAt;
+    long _writeStallActiveNanoseconds;
+    long _writeStallNanosecondsTotal;
+    long _writeStallNanosecondsMaximum;
     long _cloudAsyncWalSegmentsSealed;
     long _cloudAsyncWalBytesSealed;
     long _cloudAsyncWalSealLatencyMicroseconds;
@@ -63,6 +76,17 @@ internal sealed class RuntimeTelemetry
     long _cloudAsyncWalUploadsFailed;
     long _cloudAsyncWalUploadLatencyMicroseconds;
     long _cloudAsyncWalAcknowledgementLatencyMicroseconds;
+    long _salvageModeOpens;
+    long _noSpaceEvents;
+    long _walRecoveryRecordsReplayed;
+    long _walRecoveryBytesReplayed;
+    long _intentLogReplayRuns;
+    long _intentLogEntriesReplayed;
+
+    public RuntimeTelemetry(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public long WriteConflictsPointTotal => Volatile.Read(ref _writeConflictsPoint);
 
@@ -71,6 +95,8 @@ internal sealed class RuntimeTelemetry
     public long CompactionsRun => Volatile.Read(ref _compactionsRun);
 
     public long CompactionBytesRewritten => Volatile.Read(ref _compactionBytesRewritten);
+
+    public long CompactionFailures => Volatile.Read(ref _compactionFailures);
 
     public long WalAppendCount => Volatile.Read(ref _walAppendCount);
 
@@ -109,6 +135,10 @@ internal sealed class RuntimeTelemetry
     public int PendingCloudUploads => Volatile.Read(ref _pendingCloudUploads);
 
     public long WriteStallsMemoryTotal => Volatile.Read(ref _writeStallsMemory);
+
+    public long WriteStallsCompactionTotal => Volatile.Read(ref _writeStallsCompaction);
+
+    public long WriteStallsCloudTotal => Volatile.Read(ref _writeStallsCloud);
 
     public long WriteStallsNoSpaceTotal => Volatile.Read(ref _writeStallsNoSpace);
 
@@ -150,9 +180,22 @@ internal sealed class RuntimeTelemetry
 
     public long SstDataBlocksRead => Volatile.Read(ref _dataBlocksRead);
 
+    public long SalvageModeOpens => Volatile.Read(ref _salvageModeOpens);
+
+    public long NoSpaceEvents => Volatile.Read(ref _noSpaceEvents);
+
+    public long WalRecoveryRecordsReplayed => Volatile.Read(ref _walRecoveryRecordsReplayed);
+
+    public long WalRecoveryBytesReplayed => Volatile.Read(ref _walRecoveryBytesReplayed);
+
+    public long IntentLogReplayRuns => Volatile.Read(ref _intentLogReplayRuns);
+
+    public long IntentLogEntriesReplayed => Volatile.Read(ref _intentLogEntriesReplayed);
+
     public void RecordTransactionBegin(PantsTransactionMode mode)
     {
         Interlocked.Increment(ref _snapshotsRegistered);
+        PantsDiagnostics.TransactionsStarted.Add(1);
         if (mode == PantsTransactionMode.ReadOnly)
         {
             Interlocked.Increment(ref _readOnlyTransactionsBegun);
@@ -167,9 +210,34 @@ internal sealed class RuntimeTelemetry
 
     public void RecordSnapshotUnregister() => Interlocked.Increment(ref _snapshotsUnregistered);
 
+    public void RecordTransactionCommit()
+    {
+        Interlocked.Increment(ref _transactionsCommitted);
+        PantsDiagnostics.TransactionsCommitted.Add(1);
+    }
+
+    public void RecordTransactionRollback()
+    {
+        Interlocked.Increment(ref _transactionsRolledBack);
+        PantsDiagnostics.TransactionsRolledBack.Add(1);
+    }
+
+    public void RecordCommandRejected()
+    {
+        Interlocked.Increment(ref _commandsRejected);
+        PantsDiagnostics.CommandsRejected.Add(1);
+    }
+
+    public void RecordCommandLatency(TimeSpan elapsed)
+    {
+        Interlocked.Add(ref _commandLatencyNanosecondsTotal, ToNanoseconds(elapsed));
+        PantsDiagnostics.CommandLatencyMilliseconds.Record(elapsed.TotalMilliseconds);
+    }
+
     public bool RecordSstRead(SstReadSample sample)
     {
         Interlocked.Increment(ref _readsTotal);
+        PantsDiagnostics.Reads.Add(1);
         Interlocked.Add(ref _sstsTouchedTotal, sample.SstsTouched);
         Interlocked.Add(ref _l0SstsTouchedTotal, sample.L0SstsTouched);
         Interlocked.Add(ref _blocksReadTotal, sample.AmplificationBlocksRead);
@@ -204,6 +272,7 @@ internal sealed class RuntimeTelemetry
 
     public void RecordWriteConflict(bool rangeConflict)
     {
+        PantsDiagnostics.TransactionsConflicted.Add(1);
         if (rangeConflict)
         {
             Interlocked.Increment(ref _writeConflictsRange);
@@ -234,38 +303,26 @@ internal sealed class RuntimeTelemetry
     {
         Interlocked.Increment(ref _compactionsRun);
         Interlocked.Add(ref _compactionBytesRewritten, bytesRewritten);
+        PantsDiagnostics.CompactionsCompleted.Add(1);
     }
 
-    public void RecordWalAppend(
-        TimeSpan elapsed,
-        PantsDurability durability,
-        long sequence)
+    public void RecordCompactionFailure()
+    {
+        Interlocked.Increment(ref _compactionFailures);
+        PantsDiagnostics.CompactionsFailed.Add(1);
+    }
+
+    public void RecordWalAppend(TimeSpan appendElapsed)
     {
         Interlocked.Increment(ref _walAppendCount);
-        Interlocked.Increment(ref _walFlushCount);
-        Interlocked.Add(ref _walAppendNanosecondsTotal, ToNanoseconds(elapsed));
-        if (durability == PantsDurability.Sync)
-        {
-            Interlocked.Increment(ref _walFsyncCount);
-            long nanoseconds = ToNanoseconds(elapsed);
-            Interlocked.Add(ref _walFsyncNanosecondsTotal, nanoseconds);
-            SetMaximum(ref _walFsyncNanosecondsMaximum, nanoseconds);
-            SetMaximum(ref _walLastSyncedSequence, sequence);
-        }
+        Interlocked.Add(ref _walAppendNanosecondsTotal, ToNanoseconds(appendElapsed));
+        PantsDiagnostics.WalAppends.Add(1);
     }
 
-    public void RecordCoalescedWalFsync(
-        TimeSpan elapsed,
-        int waiterCount,
-        long sequence)
-    {
-        long nanoseconds = ToNanoseconds(elapsed);
-        Interlocked.Increment(ref _walFsyncCount);
-        Interlocked.Add(ref _walFsyncNanosecondsTotal, nanoseconds);
-        SetMaximum(ref _walFsyncNanosecondsMaximum, nanoseconds);
+    public void RecordWalFlush() => Interlocked.Increment(ref _walFlushCount);
+
+    public void RecordDurabilityWaitersFannedOut(int waiterCount) =>
         Interlocked.Add(ref _durabilityWaitersFannedOut, waiterCount);
-        SetMaximum(ref _walLastSyncedSequence, sequence);
-    }
 
     public void RecordWalFsyncBoundary(TimeSpan elapsed, long sequence)
     {
@@ -276,15 +333,52 @@ internal sealed class RuntimeTelemetry
         SetMaximum(ref _walLastSyncedSequence, sequence);
     }
 
-    public void RecordWalDurabilityBoundary(long sequence) =>
-        SetMaximum(ref _walLastSyncedSequence, sequence);
-
     public void RecordWriteStallNoSpace()
     {
         Interlocked.Increment(ref _writeStallsNoSpace);
     }
 
     public void RecordWriteStallMemory() => Interlocked.Increment(ref _writeStallsMemory);
+
+    public void RecordWriteStallCompaction() => Interlocked.Increment(ref _writeStallsCompaction);
+
+    public void RecordWriteStallCloud() => Interlocked.Increment(ref _writeStallsCloud);
+
+    public WriteStallTimingSnapshot ObserveWriteStall(bool isStalled)
+    {
+        lock (_writeStallTimingGate)
+        {
+            var observedAt = _timeProvider.GetTimestamp();
+            if (isStalled && _writeStallStartedAt is null)
+            {
+                _writeStallStartedAt = observedAt;
+                _writeStallActiveNanoseconds = 0;
+            }
+            else if (_writeStallStartedAt is { } startedAt)
+            {
+                _writeStallActiveNanoseconds = Math.Max(
+                    _writeStallActiveNanoseconds,
+                    GetElapsedNanoseconds(startedAt, observedAt));
+                if (!isStalled)
+                {
+                    _writeStallNanosecondsTotal = SaturatingAdd(
+                        _writeStallNanosecondsTotal,
+                        _writeStallActiveNanoseconds);
+                    _writeStallNanosecondsMaximum = Math.Max(
+                        _writeStallNanosecondsMaximum,
+                        _writeStallActiveNanoseconds);
+                    _writeStallStartedAt = null;
+                    _writeStallActiveNanoseconds = 0;
+                }
+            }
+
+            var active = _writeStallActiveNanoseconds;
+            return new WriteStallTimingSnapshot(
+                SaturatingAdd(_writeStallNanosecondsTotal, active),
+                Math.Max(_writeStallNanosecondsMaximum, active),
+                active);
+        }
+    }
 
     public void RecordCloudAsyncWalSegmentSealed(
         ulong segmentId,
@@ -308,6 +402,7 @@ internal sealed class RuntimeTelemetry
         Interlocked.Add(
             ref _cloudAsyncWalUploadLatencyMicroseconds,
             ToMicroseconds(elapsed));
+        PantsDiagnostics.CloudWalUploadsCompleted.Add(1);
     }
 
     public void RecordCloudAsyncWalUploadFailed() =>
@@ -343,17 +438,53 @@ internal sealed class RuntimeTelemetry
         Interlocked.Increment(ref _flushPublishCount);
         Interlocked.Add(ref _flushPublishNanosecondsTotal, nanoseconds);
         SetMaximum(ref _flushPublishNanosecondsMaximum, nanoseconds);
+        PantsDiagnostics.FlushPublications.Add(1);
     }
 
     public void RecordFlushEnqueued() => Interlocked.Increment(ref _flushEnqueued);
 
     public void RecordFlushRetry() => Interlocked.Increment(ref _flushRetries);
 
+    public void RecordCloudFlushRetry()
+    {
+        Interlocked.Increment(ref _flushRetries);
+        PantsDiagnostics.CloudFlushRetries.Add(1);
+    }
+
     public void RecordFlushFailure() => Interlocked.Increment(ref _flushFailures);
 
     public void RecordCloudUploadPending() => Interlocked.Increment(ref _pendingCloudUploads);
 
     public void RecordCloudUploadCompleted() => Interlocked.Decrement(ref _pendingCloudUploads);
+
+    public void RecordSalvageModeOpen()
+    {
+        Interlocked.Increment(ref _salvageModeOpens);
+    }
+
+    public void RecordNoSpaceEvent()
+    {
+        Interlocked.Increment(ref _noSpaceEvents);
+    }
+
+    public void RecordWalRecovery(int payloadBytes)
+    {
+        Interlocked.Increment(ref _walRecoveryRecordsReplayed);
+        Interlocked.Add(ref _walRecoveryBytesReplayed, payloadBytes);
+        PantsDiagnostics.WalRecoveryRecords.Add(1);
+    }
+
+    public void RecordIntentLogReplay(int entryCount)
+    {
+        Interlocked.Increment(ref _intentLogReplayRuns);
+        Interlocked.Add(ref _intentLogEntriesReplayed, entryCount);
+    }
+
+    public PantsRecoveryMetrics GetRecoveryMetrics() => new(
+        WalRecoveryRecordsReplayed,
+        WalRecoveryBytesReplayed,
+        IntentLogReplayRuns,
+        IntentLogEntriesReplayed);
 
     public PantsReadPathDiagnostics GetReadPathDiagnostics() => new()
     {
@@ -380,12 +511,12 @@ internal sealed class RuntimeTelemetry
 
     public PantsReadAmplificationMetrics GetReadAmplificationMetrics()
     {
-        long reads = Volatile.Read(ref _readsTotal);
-        long ssts = Volatile.Read(ref _sstsTouchedTotal);
-        long l0Ssts = Volatile.Read(ref _l0SstsTouchedTotal);
-        long blocks = Volatile.Read(ref _blocksReadTotal);
-        long sstBudgetViolations = Volatile.Read(ref _sstBudgetViolations);
-        long blockBudgetViolations = Volatile.Read(ref _blockBudgetViolations);
+        var reads = Volatile.Read(ref _readsTotal);
+        var ssts = Volatile.Read(ref _sstsTouchedTotal);
+        var l0Ssts = Volatile.Read(ref _l0SstsTouchedTotal);
+        var blocks = Volatile.Read(ref _blocksReadTotal);
+        var sstBudgetViolations = Volatile.Read(ref _sstBudgetViolations);
+        var blockBudgetViolations = Volatile.Read(ref _blockBudgetViolations);
         return new PantsReadAmplificationMetrics
         {
             ReadsTotal = reads,
@@ -414,21 +545,37 @@ internal sealed class RuntimeTelemetry
         };
     }
 
-    private static double Divide(long numerator, long denominator) =>
+    static double Divide(long numerator, long denominator) =>
         denominator == 0 ? 0 : (double)numerator / denominator;
 
-    private static long ToNanoseconds(TimeSpan elapsed) =>
+    static long ToNanoseconds(TimeSpan elapsed) =>
         checked((long)(elapsed.TotalMilliseconds * 1_000_000));
 
     static long ToMicroseconds(TimeSpan elapsed) =>
         checked((long)(elapsed.TotalMilliseconds * 1_000));
 
-    private static void SetMaximum(ref long target, long value)
+    long GetElapsedNanoseconds(long startedAt, long observedAt)
     {
-        long current = Volatile.Read(ref target);
+        if (observedAt <= startedAt)
+        {
+            return 0;
+        }
+
+        var ticks = _timeProvider.GetElapsedTime(startedAt, observedAt).Ticks;
+        return ticks > long.MaxValue / TimeSpan.NanosecondsPerTick
+            ? long.MaxValue
+            : ticks * TimeSpan.NanosecondsPerTick;
+    }
+
+    static long SaturatingAdd(long left, long right) =>
+        left > long.MaxValue - right ? long.MaxValue : left + right;
+
+    static void SetMaximum(ref long target, long value)
+    {
+        var current = Volatile.Read(ref target);
         while (value > current)
         {
-            long observed = Interlocked.CompareExchange(ref target, value, current);
+            var observed = Interlocked.CompareExchange(ref target, value, current);
             if (observed == current)
             {
                 return;

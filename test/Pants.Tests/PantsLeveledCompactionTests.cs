@@ -19,7 +19,9 @@ public sealed class PantsLeveledCompactionTests
         PantsStorageLevelLayout level = Assert.Single(layout.Levels);
         Assert.Equal(1, level.Level);
         Assert.Equal(1, level.FileCount);
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).CompactionsRun);
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(1, metrics.CompactionsRun);
+        Assert.True(metrics.CompactionBytesRewritten > 0);
     }
 
     [Fact]

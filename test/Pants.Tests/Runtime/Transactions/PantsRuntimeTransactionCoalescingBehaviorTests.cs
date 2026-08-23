@@ -5,27 +5,36 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
     [Fact]
     public async Task ShouldPreserveEveryConcurrentWriteWhileRuntimeCoalesces()
     {
-        await using var database = await PantsDatabase.OpenAsync(
-            PantsOpenOptions.InMemory().WithMemtableLimits(64L * 1024 * 1024));
-        var family = await database.CreateColumnFamilyAsync("test_cf");
-        const int writerCount = 8;
-        const int operationsPerWriter = 500;
-        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var writers = Enumerable.Range(0, writerCount)
-            .Select(writer => WriteSeriesAsync(
-                database,
-                family,
-                writer,
-                operationsPerWriter,
-                start.Task))
-            .ToArray();
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
+            new PantsRuntimeDependencies(failpoints));
+        const int commitCount = 16;
+        var transactions = new List<IPantsTransaction>(commitCount);
+        for (var index = 0; index < commitCount; index++)
+        {
+            var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put(
+                TestBytes.FromString($"coalesced-key-{index:D2}"),
+                TestBytes.FromString($"coalesced-value-{index:D2}"));
+            transactions.Add(transaction);
+        }
 
-        start.SetResult();
-        await Task.WhenAll(writers).WaitAsync(TimeSpan.FromSeconds(20));
+        var barrier = database.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(5));
+        var commits = transactions
+            .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask())
+            .ToArray();
+        failpoints.ReleaseRuntimeBarrier();
+        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(5));
 
         var metrics = await database.GetRuntimeMetricsAsync();
         await using var reader = await database.BeginTransactionAsync(
-            family,
+            database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var rowCount = 0;
@@ -34,9 +43,16 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
             rowCount++;
         }
 
-        var totalOperations = writerCount * operationsPerWriter;
-        Assert.Equal(totalOperations, rowCount);
-        Assert.True(metrics.WalAppendCount < totalOperations);
+        Assert.Equal(commitCount, rowCount);
+        Assert.Equal(1, metrics.WalAppendCount);
+        Assert.Equal(0, metrics.WalFlushCount);
+        Assert.Equal(0, metrics.WalFsyncCount);
+        Assert.Equal(0, metrics.DurabilityWaitersFannedOutTotal);
+
+        foreach (var transaction in transactions)
+        {
+            await transaction.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -57,24 +73,6 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         var finalValue = await reader.GetAsync("counter"u8.ToArray());
 
         Assert.Equal("99", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(finalValue)));
-    }
-
-    static async Task WriteSeriesAsync(
-        IPantsDatabase database,
-        IPantsColumnFamily family,
-        int writer,
-        int operationCount,
-        Task start)
-    {
-        await start;
-        for (var operation = 0; operation < operationCount; operation++)
-        {
-            await CommitAsync(
-                database,
-                family,
-                $"key-t{writer:00}-o{operation:000000}",
-                $"val-{operation}");
-        }
     }
 
     static async Task CommitAsync(

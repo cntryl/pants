@@ -4,25 +4,54 @@ sealed class RuntimeMetricsSnapshotFactory(
     PantsOpenOptions options,
     RuntimeTelemetry telemetry,
     LocalDiskStore? diskStore,
-    RuntimeWorker compactionWorker,
-    CloudFlushRetryScheduler cloudFlushRetries,
+    CompactionRuntimeService compactionWorker,
     CloudWalSealController? cloudWalSealController,
     CloudMemtableSegmentTracker? cloudMemtableSegments,
     HybridCacheManager? hybridCache)
 {
+    int _storageHealth = (int)PantsEngineHealth.Healthy;
+
     public PantsRuntimeMetrics Create(
         PantsRuntimeState state,
         long walCloudDurableSequence)
     {
-        var activeSnapshots = state.ActiveSnapshotCount;
         var hybridMetrics = hybridCache is not null && diskStore is not null
             ? hybridCache.GetMetrics(diskStore)
             : null;
-        var writeStalled = MemtableWritePressure.IsStalled(options, state);
         var health = diskStore?.GetHealth(state) ?? state.Health;
-        return new PantsRuntimeMetrics
+        Volatile.Write(ref _storageHealth, (int)health);
+        return RefreshPublished(
+            new PantsRuntimeMetrics
+            {
+                ObsoleteFileBacklog = diskStore?.GetObsoleteFiles().Count ?? 0,
+                HybridMaximumLocalBytes = hybridMetrics?.MaximumLocalBytes ?? 0,
+                HybridTotalCommittedBytes = hybridMetrics?.TotalCommittedBytes ?? 0,
+                HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,
+                HybridUsagePercent = hybridMetrics?.UsagePercent ?? 0,
+                HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0
+            },
+            state,
+            walCloudDurableSequence);
+    }
+
+    public PantsRuntimeMetrics RefreshPublished(
+        PantsRuntimeMetrics snapshot,
+        PantsRuntimeState state,
+        long walCloudDurableSequence)
+    {
+        if (state.Health != PantsEngineHealth.Healthy)
         {
-            Health = EngineHealthClassifier.Classify(health, writeStalled),
+            Volatile.Write(ref _storageHealth, (int)state.Health);
+        }
+
+        var activeSnapshots = state.ActiveSnapshotCount;
+        var writeStalled = MemtableWritePressure.IsStalled(options, state);
+        var writeStallTiming = telemetry.ObserveWriteStall(writeStalled);
+        return snapshot with
+        {
+            Health = EngineHealthClassifier.Classify(
+                (PantsEngineHealth)Volatile.Read(ref _storageHealth),
+                writeStalled),
             CurrentSequence = state.Sequence,
             ManifestLastPersistedSequence = diskStore?.LastPersistedSequence ?? 0,
             ManifestNextWalSequence = diskStore?.NextWalSequence ?? 1,
@@ -35,13 +64,15 @@ sealed class RuntimeMetricsSnapshotFactory(
                 cloudMemtableSegments?.MaximumGap(
                     diskStore?.CurrentWalSegmentId ?? 0) ?? 0)),
             WriteStalled = writeStalled,
-            WalCurrentSegmentId = diskStore?.NextWalSequence ?? 0,
-            WalPendingWrites = cloudWalSealController?.PendingWrites ?? diskStore?.WalRecords ?? 0,
-            WalLastSyncedSequence = telemetry.WalLastSyncedSequence,
-            WalLocalDurableSequence = diskStore is null ? 0 : state.Sequence,
+            WalCurrentSegmentId = checked((long)(diskStore?.CurrentWalSegmentId ?? 0)),
+            WalPendingWrites = cloudWalSealController?.PendingWrites ??
+                diskStore?.WalPendingWrites ??
+                0,
+            WalLastSyncedSequence = diskStore?.WalLastSyncedSequence ?? 0,
+            WalLocalDurableSequence = diskStore?.WalLocalDurableSequence ?? 0,
             WalCloudDurableSequence = walCloudDurableSequence,
             PendingCompactions = compactionWorker.QueueDepth,
-            CompactingSsts = 0,
+            CompactingSsts = compactionWorker.CompactingSsts,
             ActiveCompactions = compactionWorker.InFlight,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshots,
@@ -49,17 +80,19 @@ sealed class RuntimeMetricsSnapshotFactory(
             OldestSnapshotAgeSeconds = GetOldestSnapshotAgeSeconds(state),
             SstCount = diskStore?.SstCount ?? 0,
             SstBytes = diskStore?.SstBytes ?? 0,
-            SalvageModeOpens = state.SalvageModeOpens,
-            NoSpaceEvents = state.NoSpaceEvents,
+            SalvageModeOpens = telemetry.SalvageModeOpens,
+            NoSpaceEvents = telemetry.NoSpaceEvents,
             CompactionsRun = telemetry.CompactionsRun,
             CompactionBytesRewritten = telemetry.CompactionBytesRewritten,
-            CompactionFailures = compactionWorker.Failures,
-            ObsoleteFileBacklog = diskStore?.GetObsoleteFiles().Count ?? 0,
+            CompactionFailures = telemetry.CompactionFailures,
             WriteStallsTotal = checked(
-                telemetry.WriteStallsMemoryTotal + telemetry.WriteStallsNoSpaceTotal),
+                telemetry.WriteStallsMemoryTotal +
+                telemetry.WriteStallsCompactionTotal +
+                telemetry.WriteStallsCloudTotal +
+                telemetry.WriteStallsNoSpaceTotal),
             WriteStallsMemoryTotal = telemetry.WriteStallsMemoryTotal,
-            WriteStallsCompactionTotal = 0,
-            WriteStallsCloudTotal = 0,
+            WriteStallsCompactionTotal = telemetry.WriteStallsCompactionTotal,
+            WriteStallsCloudTotal = telemetry.WriteStallsCloudTotal,
             WriteStallsNoSpaceTotal = telemetry.WriteStallsNoSpaceTotal,
             WriteConflictsTotal = checked(
                 telemetry.WriteConflictsPointTotal + telemetry.WriteConflictsRangeTotal),
@@ -94,11 +127,64 @@ sealed class RuntimeMetricsSnapshotFactory(
             FlushPublishNanosecondsTotal = telemetry.FlushPublishNanosecondsTotal,
             FlushPublishNanosecondsMaximum = telemetry.FlushPublishNanosecondsMaximum,
             FlushFailuresTotal = telemetry.FlushFailuresTotal,
-            FlushRetriesTotal = checked(
-                telemetry.FlushRetriesTotal + cloudFlushRetries.RetryAttempts),
-            WriteStallNanosecondsTotal = 0,
-            WriteStallNanosecondsMaximum = 0,
-            WriteStallActiveNanoseconds = 0,
+            FlushRetriesTotal = telemetry.FlushRetriesTotal,
+            WriteStallNanosecondsTotal = writeStallTiming.TotalNanoseconds,
+            WriteStallNanosecondsMaximum = writeStallTiming.MaximumNanoseconds,
+            WriteStallActiveNanoseconds = writeStallTiming.ActiveNanoseconds,
+            CloudAsyncWalSegmentsSealed = telemetry.CloudAsyncWalSegmentsSealed,
+            CloudAsyncWalBytesSealed = telemetry.CloudAsyncWalBytesSealed,
+            CloudAsyncWalSealLatencyMicroseconds = telemetry.CloudAsyncWalSealLatencyMicroseconds,
+            CloudAsyncWalUploadsStarted = telemetry.CloudAsyncWalUploadsStarted,
+            CloudAsyncWalUploadsCompleted = telemetry.CloudAsyncWalUploadsCompleted,
+            CloudAsyncWalUploadsFailed = telemetry.CloudAsyncWalUploadsFailed,
+            CloudAsyncWalUploadLatencyMicroseconds =
+                telemetry.CloudAsyncWalUploadLatencyMicroseconds,
+            CloudAsyncWalAcknowledgementLatencyMicroseconds =
+                telemetry.CloudAsyncWalAcknowledgementLatencyMicroseconds,
+            HybridPendingEvictions = hybridCache?.PendingEvictions ?? 0,
+            WalRecoveryRecordsReplayed = telemetry.WalRecoveryRecordsReplayed,
+            WalRecoveryBytesReplayed = telemetry.WalRecoveryBytesReplayed,
+            IntentLogReplayRuns = telemetry.IntentLogReplayRuns,
+            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed
+        };
+    }
+
+    public PantsRuntimeMetrics RefreshLive(
+        PantsRuntimeMetrics snapshot,
+        int activeCompactionRequests,
+        long walCloudDurableSequence)
+    {
+        var hybridMetrics = hybridCache is not null && diskStore is not null
+            ? hybridCache.GetMetrics(diskStore)
+            : null;
+        var activeCompactions = compactionWorker.InFlight;
+        var writeStallTiming = telemetry.ObserveWriteStall(snapshot.WriteStalled);
+        return snapshot with
+        {
+            PendingCompactions = Math.Max(
+                compactionWorker.QueueDepth,
+                Math.Max(0, activeCompactionRequests - activeCompactions)),
+            CompactingSsts = compactionWorker.CompactingSsts,
+            ActiveCompactions = activeCompactions,
+            WalCloudDurableSequence = walCloudDurableSequence,
+            PendingCloudUploads = telemetry.PendingCloudUploads,
+            SalvageModeOpens = telemetry.SalvageModeOpens,
+            NoSpaceEvents = telemetry.NoSpaceEvents,
+            CompactionFailures = telemetry.CompactionFailures,
+            WriteStallsTotal = checked(
+                telemetry.WriteStallsMemoryTotal +
+                telemetry.WriteStallsCompactionTotal +
+                telemetry.WriteStallsCloudTotal +
+                telemetry.WriteStallsNoSpaceTotal),
+            WriteStallsMemoryTotal = telemetry.WriteStallsMemoryTotal,
+            WriteStallsCompactionTotal = telemetry.WriteStallsCompactionTotal,
+            WriteStallsCloudTotal = telemetry.WriteStallsCloudTotal,
+            WriteStallsNoSpaceTotal = telemetry.WriteStallsNoSpaceTotal,
+            WriteStallNanosecondsTotal = writeStallTiming.TotalNanoseconds,
+            WriteStallNanosecondsMaximum = writeStallTiming.MaximumNanoseconds,
+            WriteStallActiveNanoseconds = writeStallTiming.ActiveNanoseconds,
+            FlushFailuresTotal = telemetry.FlushFailuresTotal,
+            FlushRetriesTotal = telemetry.FlushRetriesTotal,
             CloudAsyncWalSegmentsSealed = telemetry.CloudAsyncWalSegmentsSealed,
             CloudAsyncWalBytesSealed = telemetry.CloudAsyncWalBytesSealed,
             CloudAsyncWalSealLatencyMicroseconds = telemetry.CloudAsyncWalSealLatencyMicroseconds,
@@ -114,10 +200,10 @@ sealed class RuntimeMetricsSnapshotFactory(
             HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,
             HybridUsagePercent = hybridMetrics?.UsagePercent ?? 0,
             HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0,
-            WalRecoveryRecordsReplayed = diskStore?.WalRecoveryRecordsReplayed ?? 0,
-            WalRecoveryBytesReplayed = diskStore?.WalRecoveryBytesReplayed ?? 0,
-            IntentLogReplayRuns = state.IntentLogReplayRuns,
-            IntentLogEntriesReplayed = state.IntentLogEntriesReplayed
+            WalRecoveryRecordsReplayed = telemetry.WalRecoveryRecordsReplayed,
+            WalRecoveryBytesReplayed = telemetry.WalRecoveryBytesReplayed,
+            IntentLogReplayRuns = telemetry.IntentLogReplayRuns,
+            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed
         };
     }
 

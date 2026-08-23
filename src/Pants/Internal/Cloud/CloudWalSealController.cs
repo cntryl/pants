@@ -31,7 +31,11 @@ sealed class CloudWalSealController
         }
     }
 
-    public void RecordWrite() => PendingWrites = checked(PendingWrites + 1);
+    public void RecordWrite(int physicalRecords = 1)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(physicalRecords);
+        PendingWrites = checked(PendingWrites + physicalRecords);
+    }
 
     public bool ShouldSeal(long activeWalBytes) =>
         PendingWrites > 0 &&

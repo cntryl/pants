@@ -51,10 +51,10 @@ public sealed class PantsTransactionSpillTests
         transaction.Put("filler"u8.ToArray(), value);
         transaction.Insert("duplicate"u8.ToArray(), "second"u8.ToArray());
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+        var error = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
-        Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
+        Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
         await using IPantsTransaction reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);

@@ -48,18 +48,22 @@ public sealed class PantsTelemetryContractTests
         Assert.Equal(metrics.CurrentSequence, metrics.WalCloudDurableSequence);
         Assert.Equal(1, metrics.CloudAsyncWalSegmentsSealed);
         Assert.True(metrics.CloudAsyncWalBytesSealed > 0);
+        Assert.True(metrics.CloudAsyncWalSealLatencyMicroseconds > 0);
         Assert.Equal(1, metrics.CloudAsyncWalUploadsStarted);
         Assert.Equal(1, metrics.CloudAsyncWalUploadsCompleted);
+        Assert.True(metrics.CloudAsyncWalUploadLatencyMicroseconds > 0);
+        Assert.True(metrics.CloudAsyncWalAcknowledgementLatencyMicroseconds > 0);
         Assert.Equal(0, metrics.CloudAsyncWalUploadsFailed);
     }
 
     [Fact]
-    public async Task ShouldReportCloudAsyncWalUploadFailure()
+    public async Task ShouldRetrySaturatedCloudAsyncWalUploadGivenTransientRawIoFailure()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new CloudCompactionFailpointHandler();
+        var failpoints = new RetryingCloudWalUploadFailpointHandler();
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "telemetry-cloud-wal-failure/")
+            .WithCoordinatorQueueCapacityForTesting(1)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
                 EventualFlushSegmentGap: long.MaxValue,
                 WalSealMinimumSegmentBytes: long.MaxValue,
@@ -69,18 +73,41 @@ public sealed class PantsTelemetryContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new PantsRuntimeDependencies(failpoints));
-        failpoints.Arm(PantsFailpoint.BeforeCloudWalUpload);
 
-        await CommitAsync(database, "cloud-async-failure", PantsWriteOptions.CloudAsync);
-        var metrics = await WaitForMetricsAsync(
-            database,
-            static candidate => candidate.CloudAsyncWalUploadsFailed >= 1);
+        try
+        {
+            await CommitAsync(database, "cloud-async-failure", PantsWriteOptions.CloudAsync);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await failpoints.WaitForFailureAsync(timeout.Token);
+            var failed = await WaitForMetricsAsync(
+                database,
+                static candidate =>
+                    candidate.CloudAsyncWalUploadsFailed >= 1 &&
+                    candidate.Health == PantsEngineHealth.Degraded);
 
-        Assert.Equal(1, metrics.CloudAsyncWalSegmentsSealed);
-        Assert.Equal(1, metrics.CloudAsyncWalUploadsStarted);
-        Assert.Equal(0, metrics.CloudAsyncWalUploadsCompleted);
-        Assert.Equal(1, metrics.CloudAsyncWalUploadsFailed);
-        Assert.Equal(0, metrics.WalCloudDurableSequence);
+            Assert.Equal(PantsEngineHealth.Degraded, failed.Health);
+            Assert.Equal(1, failed.CloudAsyncWalSegmentsSealed);
+            Assert.True(failed.CloudAsyncWalUploadsStarted >= 1);
+            Assert.Equal(0, failed.CloudAsyncWalUploadsCompleted);
+            Assert.True(failed.CloudAsyncWalUploadsFailed >= 1);
+            Assert.Equal(1, failed.PendingCloudUploads);
+            Assert.Equal(0, failed.WalCloudDurableSequence);
+
+            failpoints.AllowSuccess();
+            var recovered = await WaitForMetricsAsync(
+                database,
+                static candidate =>
+                    candidate.PendingCloudUploads == 0 &&
+                    candidate.WalCloudDurableSequence == candidate.CurrentSequence);
+
+            Assert.Equal(PantsEngineHealth.Degraded, recovered.Health);
+            Assert.True(failpoints.FailureCount >= 1);
+            await CommitAsync(database, "after-retry", PantsWriteOptions.CloudAsync);
+        }
+        finally
+        {
+            failpoints.AllowSuccess();
+        }
     }
 
     [Fact]
@@ -160,7 +187,7 @@ public sealed class PantsTelemetryContractTests
     }
 
     [Fact]
-    public async Task ShouldDistinguishPointAndRangeWriteConflicts()
+    public async Task ShouldClassifyPointWriteCoveredByRangeAsPointConflict()
     {
         await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
         await using IPantsTransaction pointWriter = await database.BeginTransactionAsync(
@@ -182,8 +209,8 @@ public sealed class PantsTelemetryContractTests
 
         PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.WriteConflictsTotal);
-        Assert.Equal(0, metrics.WriteConflictsPointTotal);
-        Assert.Equal(1, metrics.WriteConflictsRangeTotal);
+        Assert.Equal(1, metrics.WriteConflictsPointTotal);
+        Assert.Equal(0, metrics.WriteConflictsRangeTotal);
     }
 
     [Fact]
@@ -221,12 +248,19 @@ public sealed class PantsTelemetryContractTests
         Assert.True(diagnostics.BloomChecks >= 33);
         Assert.True(diagnostics.BloomRejects > 0);
         Assert.True(diagnostics.DataBlocksRead < diagnostics.BloomChecks);
+        Assert.True(diagnostics.DataBlocksRead > 0);
+        Assert.True(diagnostics.BloomTruePositives > 0);
+        Assert.True(diagnostics.SstReaderCacheHits > 0);
+        Assert.True(diagnostics.SstReaderCacheMisses > 0);
         Assert.True(diagnostics.SstBlockCacheHits > 0);
         Assert.True(diagnostics.SstBlockCacheMisses > 0);
         Assert.Equal(diagnostics.SstBlockCacheHits, runtime.CacheHits);
         Assert.Equal(diagnostics.SstBlockCacheMisses, runtime.CacheMisses);
         Assert.Equal(diagnostics.BloomChecks, runtime.SstBloomChecksTotal);
         Assert.Equal(diagnostics.BloomRejects, runtime.SstBloomRejectsTotal);
+        Assert.Equal(diagnostics.BloomTruePositives, runtime.SstBloomTruePositivesTotal);
+        Assert.Equal(diagnostics.BloomFalsePositives, runtime.SstBloomFalsePositivesTotal);
+        Assert.Equal(diagnostics.KeyRangeRejects, runtime.SstKeyRangeRejectsTotal);
         Assert.Equal(diagnostics.DataBlocksRead, runtime.SstDataBlocksReadTotal);
         Assert.Equal(34, amplification.ReadsTotal);
         Assert.True(amplification.BlocksReadTotal > diagnostics.DataBlocksRead);
@@ -237,6 +271,8 @@ public sealed class PantsTelemetryContractTests
         Assert.Equal(diagnostics.BloomTruePositives, amplification.BloomTruePositivesTotal);
         Assert.Equal(diagnostics.BloomFalsePositives, amplification.BloomFalsePositivesTotal);
         Assert.Equal(diagnostics.BloomTrueNegatives, amplification.BloomTrueNegativesTotal);
+        Assert.Equal(diagnostics.DataBlocksRead, amplification.DataBlocksReadTotal);
+        Assert.True(amplification.DataBlocksReadTotal > 0);
     }
 
     [Fact]
@@ -341,7 +377,9 @@ public sealed class PantsTelemetryContractTests
         Assert.Null(await reader.GetAsync("outside"u8.ToArray()));
 
         PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        var runtime = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.KeyRangeRejectsTotal);
+        Assert.Equal(1, runtime.SstKeyRangeRejectsTotal);
         Assert.Equal(0, metrics.ReaderCacheHitsTotal);
         Assert.Equal(0, metrics.ReaderCacheMissesTotal);
         Assert.Equal(0, metrics.BloomChecksTotal);
@@ -377,9 +415,12 @@ public sealed class PantsTelemetryContractTests
         }
 
         PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        var runtime = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.BloomTruePositivesTotal);
         Assert.True(metrics.BloomFalsePositivesTotal > 0);
         Assert.True(metrics.BloomTrueNegativesTotal > 0);
+        Assert.Equal(metrics.BloomTruePositivesTotal, runtime.SstBloomTruePositivesTotal);
+        Assert.Equal(metrics.BloomFalsePositivesTotal, runtime.SstBloomFalsePositivesTotal);
         Assert.Equal(
             metrics.BloomChecksTotal,
             metrics.BloomTruePositivesTotal +

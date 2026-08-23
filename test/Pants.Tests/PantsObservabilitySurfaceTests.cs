@@ -18,7 +18,7 @@ public sealed class PantsObservabilitySurfaceTests
             {
                 transaction.Put("alpha"u8.ToArray(), "value-alpha"u8.ToArray());
                 transaction.Put("bravo"u8.ToArray(), "value-bravo"u8.ToArray());
-                await transaction.CommitAsync(PantsWriteOptions.BestEffort);
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
             }
 
             await database.FlushAsync(database.DefaultColumnFamily);
@@ -31,14 +31,22 @@ public sealed class PantsObservabilitySurfaceTests
 
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
         Assert.True(metrics.SstCount >= 1);
+        Assert.True(metrics.SstBytes > 0);
         Assert.True(metrics.ManifestLastPersistedSequence >= metrics.CurrentSequence);
+        Assert.True(metrics.ManifestNextWalSequence > 0);
         Assert.Equal(0, metrics.MaximumMemtableWalSegmentGap);
         Assert.True(metrics.WalAppendCount >= metrics.WalFsyncCount);
+        Assert.Equal(0, metrics.WalFlushCount);
+        Assert.True(metrics.WalAppendNanosecondsTotal > 0);
+        Assert.True(metrics.WalFsyncNanosecondsTotal > 0);
+        Assert.True(metrics.WalFsyncNanosecondsMaximum > 0);
         Assert.True(metrics.FlushBuildCount >= 1);
         Assert.True(metrics.FlushPublishCount >= 1);
         Assert.True(metrics.FlushEnqueuedTotal >= metrics.FlushBuildCount);
         Assert.True(metrics.FlushBuildNanosecondsTotal >= metrics.FlushBuildNanosecondsMaximum);
         Assert.True(metrics.FlushPublishNanosecondsTotal >= metrics.FlushPublishNanosecondsMaximum);
+        Assert.True(metrics.FlushBuildNanosecondsMaximum > 0);
+        Assert.True(metrics.FlushPublishNanosecondsMaximum > 0);
         Assert.Equal(0, metrics.FlushQueueDepth);
         Assert.Equal(0, metrics.FlushInFlight);
         Assert.Equal(0, metrics.FlushFailuresTotal);

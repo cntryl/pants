@@ -1,6 +1,6 @@
 namespace Pants;
 
-sealed class CloudFlushRetryScheduler : IAsyncDisposable
+sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDisposable
 {
     static readonly TimeSpan InitialDelay = TimeSpan.FromMilliseconds(10);
     static readonly TimeSpan MaximumDelay = TimeSpan.FromMilliseconds(250);
@@ -8,10 +8,7 @@ sealed class CloudFlushRetryScheduler : IAsyncDisposable
     readonly Lock _gate = new();
     readonly Dictionary<ColumnFamilyIdentity, Task> _retries = [];
     readonly CancellationTokenSource _lifetimeCancellation = new();
-    long _retryAttempts;
     bool _disposed;
-
-    public long RetryAttempts => Volatile.Read(ref _retryAttempts);
 
     public void Schedule(
         ColumnFamilyIdentity identity,
@@ -60,7 +57,7 @@ sealed class CloudFlushRetryScheduler : IAsyncDisposable
             while (true)
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                Interlocked.Increment(ref _retryAttempts);
+                telemetry.RecordCloudFlushRetry();
                 try
                 {
                     await operation(cancellationToken).ConfigureAwait(false);

@@ -1859,7 +1859,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var compacted = await database.GetRuntimeMetricsAsync();
         Assert.True(compacted.CompactionsRun >= 1);
         Assert.True(compacted.TotalMemtableBytes > 0);
-        Assert.True(compacted.WalPendingWrites > 0);
+        Assert.Equal(0, compacted.WalPendingWrites);
     }
 
     [Fact]
@@ -2261,7 +2261,7 @@ public sealed class PantsBackgroundFlushPipelineTests
 
             var partial = await database.GetRuntimeMetricsAsync();
             Assert.Equal(partial.CurrentSequence, partial.ManifestLastPersistedSequence);
-            Assert.True(partial.WalPendingWrites > 0);
+            Assert.Equal(0, partial.WalPendingWrites);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -2306,7 +2306,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             await database.FlushAsync(flushed).AsTask().WaitAsync(AssertionTimeout);
             var partial = await database.GetRuntimeMetricsAsync();
             Assert.Equal(partial.CurrentSequence, partial.ManifestLastPersistedSequence);
-            Assert.True(partial.WalPendingWrites > 0);
+            Assert.Equal(0, partial.WalPendingWrites);
         }
         finally
         {

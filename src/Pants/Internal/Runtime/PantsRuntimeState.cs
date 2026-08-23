@@ -2,11 +2,13 @@ namespace Pants;
 
 internal sealed class PantsRuntimeState
 {
+    readonly RuntimeTelemetry _telemetry;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
-    public PantsRuntimeState(IPantsClock clock)
+    public PantsRuntimeState(IPantsClock clock, RuntimeTelemetry telemetry)
     {
         Clock = clock;
+        _telemetry = telemetry;
         FamilyGeneration = new Dictionary<string, int>(StringComparer.Ordinal);
         ActiveFamilyVersions = new Dictionary<string, int>(StringComparer.Ordinal);
         FamilyData = new Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>>(
@@ -64,14 +66,6 @@ internal sealed class PantsRuntimeState
 
     public PantsEngineHealth Health { get; set; } = PantsEngineHealth.Healthy;
 
-    public long SalvageModeOpens { get; set; }
-
-    public long IntentLogReplayRuns { get; set; }
-
-    public long IntentLogEntriesReplayed { get; set; }
-
-    public long NoSpaceEvents { get; set; }
-
     public bool IsShuttingDown { get; set; }
 
     public void SignalWritePressureChanged()
@@ -85,11 +79,19 @@ internal sealed class PantsRuntimeState
     {
         if (Health != PantsEngineHealth.SalvageMode)
         {
-            SalvageModeOpens++;
+            _telemetry.RecordSalvageModeOpen();
         }
 
         Health = PantsEngineHealth.SalvageMode;
     }
+
+    public void RecordNoSpaceEvent() => _telemetry.RecordNoSpaceEvent();
+
+    public void RecordWalRecovery(int payloadBytes) =>
+        _telemetry.RecordWalRecovery(payloadBytes);
+
+    public void RecordIntentLogReplay(int entryCount) =>
+        _telemetry.RecordIntentLogReplay(entryCount);
 
     public DatabaseSnapshot CreateSnapshot()
     {

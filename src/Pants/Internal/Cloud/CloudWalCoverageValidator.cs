@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-
 namespace Pants;
 
 static class CloudWalCoverageValidator
@@ -33,64 +31,44 @@ static class CloudWalCoverageValidator
             throw new PantsCorruptionException("A published cloud WAL segment is empty.");
         }
 
-        var cursor = 0;
         var observedMaximumSequence = 0UL;
         ulong? observedWriterEpoch = null;
         var mutations = new List<MidgeWalMutation>();
-        while (cursor < bytes.Length)
+        try
         {
-            if (bytes.Length - cursor < 2 * sizeof(uint))
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a torn frame header.");
-            }
+            MidgeWalFrameReader.Visit(
+                bytes,
+                (record, _) =>
+                {
+                    if (observedWriterEpoch.HasValue &&
+                        observedWriterEpoch.Value != record.WriterEpoch)
+                    {
+                        throw new PantsStorageException(
+                            "A published cloud WAL segment mixes writer epochs.");
+                    }
 
-            var payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.Slice(cursor, sizeof(uint))));
-            var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.Slice(cursor + sizeof(uint), sizeof(uint)));
-            cursor += 2 * sizeof(uint);
-            if (payloadLength > MidgeDiskFormat.WalMaximumRecordBytes ||
-                payloadLength > bytes.Length - cursor)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a torn or oversized frame payload.");
-            }
-
-            var payload = bytes.Slice(cursor, payloadLength);
-            if (MidgeDiskFormat.Crc32C(payload) != expectedCrc)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment has a corrupt frame checksum.");
-            }
-
-            IReadOnlyList<MidgeWalMutation> frameMutations;
-            ulong commitSequence;
-            ulong writerEpoch;
-            try
-            {
-                frameMutations = MidgeWalCodec.DecodeTransactionBatch(
-                    payload,
-                    out commitSequence,
-                    out writerEpoch);
-            }
-            catch (PantsException exception)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL transaction frame is malformed.",
-                    exception);
-            }
-
-            if (observedWriterEpoch.HasValue && observedWriterEpoch.Value != writerEpoch)
-            {
-                throw new PantsCorruptionException(
-                    "A published cloud WAL segment mixes writer epochs.");
-            }
-
-            observedWriterEpoch = writerEpoch;
-            observedMaximumSequence = Math.Max(observedMaximumSequence, commitSequence);
-            mutations.AddRange(frameMutations);
-            cursor += payloadLength;
+                    observedWriterEpoch = record.WriterEpoch;
+                    observedMaximumSequence = Math.Max(
+                        observedMaximumSequence,
+                        record.Sequence);
+                    if (record.Operation == MidgeWalOperation.TransactionBatch)
+                    {
+                        mutations.AddRange(MidgeWalCodec.DecodeTransactionBatch(
+                            record,
+                            out var commitSequence,
+                            out var writerEpoch));
+                    }
+                    else if (MidgeWalCodec.IsMutation(record.Operation))
+                    {
+                        mutations.Add(MidgeWalCodec.DecodeMutation(record));
+                    }
+                });
+        }
+        catch (PantsException exception) when (exception is not PantsCorruptionException)
+        {
+            throw new PantsCorruptionException(
+                "A published cloud WAL transaction frame is malformed.",
+                exception);
         }
 
         if (observedMaximumSequence != expectedMaximumSequence)

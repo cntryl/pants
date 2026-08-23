@@ -117,6 +117,24 @@ public sealed class MidgeContractManifestTests
     }
 
     [Fact]
+    public void ShouldMapEveryM4ContractToAnExecutablePantsTest()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+
+        var plannedM4Contracts = document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(static entry =>
+                entry.GetProperty("issue").ValueKind == JsonValueKind.Number &&
+                entry.GetProperty("issue").GetInt32() is 9 or 10 &&
+                entry.GetProperty("status").GetString() == "planned")
+            .ToArray();
+
+        Assert.Empty(plannedM4Contracts);
+    }
+
+    [Fact]
     public void ShouldReserveCompatibilityFixturesForM5Qualification()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");

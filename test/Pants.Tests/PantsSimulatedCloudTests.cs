@@ -27,7 +27,7 @@ public sealed class PantsSimulatedCloudTests
             .GetProperty("1");
         Assert.Equal(1UL, catalog.RootElement.GetProperty("fencing_epoch").GetUInt64());
         Assert.Equal(1UL, publication.GetProperty("writer_epoch").GetUInt64());
-        Assert.Equal(2UL, publication.GetProperty("max_sequence").GetUInt64());
+        Assert.Equal(3UL, publication.GetProperty("max_sequence").GetUInt64());
         Assert.Equal(
             "wal/epochs/00000000000000000001/00000000000000000001.wal",
             publication.GetProperty("object_key").GetString());
@@ -39,7 +39,7 @@ public sealed class PantsSimulatedCloudTests
             "00000000000000000001",
             "00000000000000000001.wal")));
         var metrics = await database.GetRuntimeMetricsAsync();
-        Assert.Equal(2, metrics.WalCloudDurableSequence);
+        Assert.Equal(3, metrics.WalCloudDurableSequence);
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
     }
 

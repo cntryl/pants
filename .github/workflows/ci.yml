@@ -17,7 +17,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 6
     strategy:
       fail-fast: false
       matrix:
@@ -25,18 +25,26 @@ jobs:
           - name: ubuntu-latest / Release
             os: ubuntu-latest
             run-crash-recovery: true
-            remaining-filter: FullyQualifiedName!~PantsCloudCrashRecoveryTests
-            max-parallel-threads: 0
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
+            max-parallel-threads: 8
           - name: macos-latest / Release
             os: macos-latest
             run-crash-recovery: true
-            remaining-filter: FullyQualifiedName!~PantsCloudCrashRecoveryTests
-            max-parallel-threads: 0
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
+            max-parallel-threads: 8
           - name: windows-latest / Release
             os: windows-latest
             run-crash-recovery: false
             remaining-filter: >-
               FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests&
               FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
               FullyQualifiedName!~PantsStorageVerificationHardeningTests&
               FullyQualifiedName!~PantsColumnFamilyReclamationTests&
@@ -76,8 +84,10 @@ jobs:
           dotnet test Pants.slnx
           --configuration Release
           --no-build
-          --filter "FullyQualifiedName~PantsCloudCrashRecoveryTests"
+          --filter "FullyQualifiedName~PantsCloudCrashRecoveryTests|FullyQualifiedName~PantsTransactionSpillCrashRecoveryTests|FullyQualifiedName~PantsCommitCoalescingCrashRecoveryTests"
           --logger "console;verbosity=detailed"
+          --logger "trx;LogFileName=crash.trx"
+          --results-directory TestResults
           --blame-hang-timeout 2m
           --blame-hang-dump-type none
 
@@ -99,16 +109,21 @@ jobs:
         if: ${{ always() }}
         shell: pwsh
         run: |
-          $resultPath = Join-Path $PWD "TestResults/remaining.trx"
-          if (-not (Test-Path $resultPath)) {
-            Write-Warning "No remaining-suite TRX result was produced."
+          $resultPaths = @(
+            Join-Path $PWD "TestResults/crash.trx"
+            Join-Path $PWD "TestResults/remaining.trx"
+          ) | Where-Object { Test-Path $_ }
+          if ($resultPaths.Count -eq 0) {
+            Write-Warning "No TRX test result was produced."
             exit 0
           }
 
-          $results = Select-Xml `
-            -Path $resultPath `
-            -XPath "//*[local-name()='UnitTestResult']" |
-            ForEach-Object { $_.Node }
+          $results = foreach ($resultPath in $resultPaths) {
+            Select-Xml `
+              -Path $resultPath `
+              -XPath "//*[local-name()='UnitTestResult']" |
+              ForEach-Object { $_.Node }
+          }
           $results |
             Sort-Object { [TimeSpan]::Parse($_.duration) } -Descending |
             Select-Object -First 25 |

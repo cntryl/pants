@@ -17,6 +17,7 @@ public sealed class PantsCloudCompactionFailureTests
 
         Assert.Equal(4, initialRemoteCount);
         Assert.Equal(initialRemoteCount, RemoteSsts(directory.Path).Length);
+        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).CompactionFailures);
     }
 
     [Fact]

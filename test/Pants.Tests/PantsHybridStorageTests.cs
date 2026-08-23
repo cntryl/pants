@@ -9,10 +9,15 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path, 8 * 1024 * 1024);
+        await PutAsync(database, "resident", CreateValue(128 * 1024, seed: 11));
+        await database.FlushAsync(database.DefaultColumnFamily);
 
         var metrics = await database.GetRuntimeMetricsAsync();
 
         Assert.Equal(8 * 1024 * 1024, metrics.HybridMaximumLocalBytes);
+        Assert.True(metrics.HybridTotalCommittedBytes > 0);
+        Assert.True(metrics.HybridFreeBytes > 0);
+        Assert.True(metrics.HybridUsagePercent > 0);
     }
 
     [Fact]
@@ -28,6 +33,7 @@ public sealed class PantsHybridStorageTests
         Assert.Empty(LocalSsts(directory.Path));
         Assert.Single(CloudSsts(directory.Path));
         var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.True(metrics.HybridFreeBytes > 0);
         Assert.True(metrics.HybridUsagePercent < 90);
     }
 
@@ -51,7 +57,7 @@ public sealed class PantsHybridStorageTests
             () => blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
 
         Assert.Single(LocalSsts(directory.Path));
-        Assert.True((await database.GetRuntimeMetricsAsync()).NoSpaceEvents > 0);
+        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).NoSpaceEvents);
     }
 
     [Fact]

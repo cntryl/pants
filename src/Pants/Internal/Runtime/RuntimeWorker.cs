@@ -2,18 +2,18 @@ using System.Threading.Channels;
 
 namespace Pants;
 
-internal sealed class RuntimeWorker : IAsyncDisposable
+internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 {
-    private readonly Channel<RuntimeWorkerCommand> _commands;
-    private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private readonly Task _loopTask;
-    private int _queueDepth;
-    private int _inFlight;
+    readonly Channel<RuntimeWorkerCommand> _commands;
+    readonly CancellationTokenSource _lifetimeCancellation = new();
+    readonly Task _loopTask;
+    int _queueDepth;
+    int _inFlight;
     int _outstanding;
-    private int _disposed;
-    private long _enqueued;
-    private long _completed;
-    private long _failures;
+    int _disposed;
+    long _enqueued;
+    long _completed;
+    long _failures;
 
     public RuntimeWorker(int capacity)
     {
@@ -43,7 +43,10 @@ internal sealed class RuntimeWorker : IAsyncDisposable
         Func<CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken = default)
     {
-        RuntimeWorkerCommand command = await EnqueueCoreAsync(operation, cancellationToken)
+        var command = await EnqueueCoreAsync(
+                operation,
+                cancellationToken,
+                cancellationToken)
             .ConfigureAwait(false);
         await command.Task.ConfigureAwait(false);
     }
@@ -57,7 +60,11 @@ internal sealed class RuntimeWorker : IAsyncDisposable
         Func<CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken = default)
     {
-        var command = await EnqueueCoreAsync(operation, cancellationToken).ConfigureAwait(false);
+        var command = await EnqueueCoreAsync(
+                operation,
+                cancellationToken,
+                executionCancellationToken: default)
+            .ConfigureAwait(false);
         return command.Task;
     }
 
@@ -73,20 +80,22 @@ internal sealed class RuntimeWorker : IAsyncDisposable
             cancellationToken);
     }
 
-    private async ValueTask<RuntimeWorkerCommand> EnqueueCoreAsync(
+    async ValueTask<RuntimeWorkerCommand> EnqueueCoreAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken)
+        CancellationToken admissionCancellationToken,
+        CancellationToken executionCancellationToken)
     {
         ArgumentNullException.ThrowIfNull(operation);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
-        var command = new RuntimeWorkerCommand(operation);
-        bool admitted = false;
+        var command = new RuntimeWorkerCommand(operation, executionCancellationToken);
+        var admitted = false;
         Interlocked.Increment(ref _outstanding);
         Interlocked.Increment(ref _queueDepth);
         try
         {
-            await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            await _commands.Writer.WriteAsync(command, admissionCancellationToken)
+                .ConfigureAwait(false);
             admitted = true;
             Interlocked.Increment(ref _enqueued);
             return command;
@@ -129,9 +138,9 @@ internal sealed class RuntimeWorker : IAsyncDisposable
         _lifetimeCancellation.Dispose();
     }
 
-    private async Task RunAsync()
+    async Task RunAsync()
     {
-        await foreach (RuntimeWorkerCommand command in _commands.Reader.ReadAllAsync())
+        await foreach (var command in _commands.Reader.ReadAllAsync())
         {
             Interlocked.Decrement(ref _queueDepth);
             Interlocked.Increment(ref _inFlight);

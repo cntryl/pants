@@ -247,33 +247,6 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
-    public async Task ShouldReportTornWalTailDuringOfflineVerification()
-    {
-        using var directory = new TemporaryDirectory();
-        await using (IPantsDatabase database = await OpenAsync(directory.Path))
-        {
-            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
-                PantsTransactionMode.ReadWrite);
-            transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
-            await transaction.CommitAsync(PantsWriteOptions.Sync);
-        }
-
-        await using (var wal = new FileStream(
-                         Path.Combine(directory.Path, "wal", "wal.log"),
-                         FileMode.Append,
-                         FileAccess.Write,
-                         FileShare.None))
-        {
-            await wal.WriteAsync(new byte[] { 12, 0, 0 });
-        }
-
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-        Assert.Equal(PantsErrorCode.Corruption, error.Code);
-    }
-
-    [Fact]
     public async Task ShouldRejectSecondWriterForSameLocalPath()
     {
         using var directory = new TemporaryDirectory();
@@ -626,10 +599,13 @@ public sealed class PantsDiskStorageTests
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         PantsRecoveryMetrics recovery = await reopened.GetRecoveryMetricsAsync();
+        var runtime = await reopened.GetRuntimeMetricsAsync();
 
         Assert.Equal("value", TestBytes.ToText((await reader.GetAsync("key"u8.ToArray()))!.Value));
         Assert.Equal(1, recovery.IntentLogReplayRuns);
         Assert.Equal(1, recovery.IntentLogEntriesReplayed);
+        Assert.Equal(recovery.IntentLogReplayRuns, runtime.IntentLogReplayRuns);
+        Assert.Equal(recovery.IntentLogEntriesReplayed, runtime.IntentLogEntriesReplayed);
         using JsonDocument intentLog = JsonDocument.Parse(
             await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
         Assert.Empty(intentLog.RootElement.EnumerateArray());

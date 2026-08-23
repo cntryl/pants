@@ -18,7 +18,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         Options = options;
         _transactionMemoryPool = new TransactionMemoryPool(options.TransactionMemoryPoolBytes);
         _ttlClock = new MonotonicPantsClock(options.TtlClock);
-        _telemetry = new RuntimeTelemetry();
+        _telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
         _actor = new PantsActor(options, _ttlClock, _telemetry, dependencies);
         DefaultColumnFamily = CreateHandle(new ColumnFamilyIdentity(
             0,
@@ -337,6 +337,12 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken) =>
         _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
+
+    internal ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken) =>
+        _actor.RecordPointReadWithDiagnosticsAsync(columnFamily, key, cancellationToken);
 
     internal ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
         ColumnFamilyIdentity columnFamily,

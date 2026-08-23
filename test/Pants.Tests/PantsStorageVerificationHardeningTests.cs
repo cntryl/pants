@@ -195,7 +195,7 @@ public sealed class PantsStorageVerificationHardeningTests
 
             return ValueTask.FromResult(HealthyReport());
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(
                 storageVerifier: verifier,
@@ -224,7 +224,7 @@ public sealed class PantsStorageVerificationHardeningTests
     public async Task ShouldReportCloudOnlineVerificationAsNonAuthoritative()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(directory.Path, "verification", "cloud/"),
             new PantsRuntimeDependencies(storageVerifier: (_, _) =>
                 ValueTask.FromResult(HealthyReport())));
@@ -238,7 +238,7 @@ public sealed class PantsStorageVerificationHardeningTests
     public async Task ShouldPreserveDegradedRuntimeHealthGivenOnlineFilesVerifyHealthy()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: (_, _) =>
                 ValueTask.FromResult(HealthyReport())));
@@ -309,7 +309,7 @@ public sealed class PantsStorageVerificationHardeningTests
             await release.Task;
             return HealthyReport();
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: verifier));
         await using var transaction = await database.BeginTransactionAsync(
@@ -351,7 +351,7 @@ public sealed class PantsStorageVerificationHardeningTests
             await release.Task;
             return HealthyReport();
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: verifier));
         using var cancellation = new CancellationTokenSource();
@@ -434,7 +434,7 @@ public sealed class PantsStorageVerificationHardeningTests
             Interlocked.Increment(ref invocations);
             return ValueTask.FromResult(HealthyReport());
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(
                 storageVerifier: verifier,
@@ -463,7 +463,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var failpoint = new ArmableFailpointHandler();
         failpoint.Arm(PantsFailpoint.BeforeVerificationBarrierResponse);
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(failpoint));
 
