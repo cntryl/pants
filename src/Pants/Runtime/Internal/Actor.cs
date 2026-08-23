@@ -83,6 +83,7 @@ sealed class Actor : IAsyncDisposable
         RuntimeTelemetry telemetry,
         RuntimeDependencies dependencies)
     {
+        var startupPhases = dependencies.StartupPhases;
         _options = options;
         _backgroundCompactionEnabled = options.BackgroundCompaction;
         _telemetry = telemetry;
@@ -113,13 +114,18 @@ sealed class Actor : IAsyncDisposable
                     targetSstSizeBytes: options.TargetSstSizeBytes,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
-                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval);
+                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval,
+                    startupPhases: startupPhases);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
-                var simulatedHydration = SimulatedCloudPersistence.PrepareLocalCache(
-                    simulated.LocalCachePath,
-                    options.RecoveryPolicy);
+                SimulatedCloudHydrationResult simulatedHydration;
+                using (startupPhases.Measure(StartupPhase.CloudControlHydration))
+                {
+                    simulatedHydration = SimulatedCloudPersistence.PrepareLocalCache(
+                        simulated.LocalCachePath,
+                        options.RecoveryPolicy);
+                }
                 if (simulatedHydration.RequiresSalvage)
                 {
                     _state.MarkSalvageMode();
@@ -141,7 +147,8 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
-                        simulatedHydration.RecoverySsts);
+                        simulatedHydration.RecoverySsts,
+                        startupPhases);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         _diskStore.WriterEpoch,
@@ -155,8 +162,11 @@ sealed class Actor : IAsyncDisposable
                         simulatedPersistence,
                         _diskStore,
                         dependencies.Failpoints);
-                    _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
-                        .AsTask().GetAwaiter().GetResult();
+                    using (startupPhases.Measure(StartupPhase.IntentReconciliation))
+                    {
+                        _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
+                            .AsTask().GetAwaiter().GetResult();
+                    }
                     _cloudMode = true;
                 }
                 catch
@@ -189,15 +199,23 @@ sealed class Actor : IAsyncDisposable
                 _cloudLease = cloudLease;
                 try
                 {
-                    var cloudEpoch = cloudLease.AcquireAsync(CancellationToken.None)
-                        .AsTask().GetAwaiter().GetResult();
-                    var hydration = ProviderCloudPersistence.HydrateLocalCacheAsync(
-                        cloud.LocalCachePath,
-                        walStore,
-                        sstStore,
-                        controlStore,
-                        options.RecoveryPolicy,
-                        CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                    ulong cloudEpoch;
+                    using (startupPhases.Measure(StartupPhase.Lease))
+                    {
+                        cloudEpoch = cloudLease.AcquireAsync(CancellationToken.None)
+                            .AsTask().GetAwaiter().GetResult();
+                    }
+                    ProviderCloudHydrationResult hydration;
+                    using (startupPhases.Measure(StartupPhase.CloudControlHydration))
+                    {
+                        hydration = ProviderCloudPersistence.HydrateLocalCacheAsync(
+                            cloud.LocalCachePath,
+                            walStore,
+                            sstStore,
+                            controlStore,
+                            options.RecoveryPolicy,
+                            CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                    }
                     if (hydration.RequiresSalvage)
                     {
                         _state.MarkSalvageMode();
@@ -217,7 +235,8 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
-                        hydration.RecoverySsts);
+                        hydration.RecoverySsts,
+                        startupPhases);
                     var providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         walStore,
@@ -239,8 +258,11 @@ sealed class Actor : IAsyncDisposable
                         providerPersistence,
                         _diskStore,
                         dependencies.Failpoints);
-                    _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
-                        .AsTask().GetAwaiter().GetResult();
+                    using (startupPhases.Measure(StartupPhase.IntentReconciliation))
+                    {
+                        _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
+                            .AsTask().GetAwaiter().GetResult();
+                    }
                     Volatile.Write(
                         ref _walCloudDurableSequence,
                         checked((long)hydration.CloudDurableSequence));
@@ -320,6 +342,7 @@ sealed class Actor : IAsyncDisposable
                     _diskStore.CurrentWalSegmentId);
             }
 
+            using var serviceStartup = startupPhases.Measure(StartupPhase.ServiceStartup);
             _walRuntime = new WalRuntimeService(
                 options.CoordinatorQueueCapacity,
                 _diskStore,
@@ -374,7 +397,10 @@ sealed class Actor : IAsyncDisposable
                 SingleWriter = false,
                 AllowSynchronousContinuations = false
             });
-            _currentVersion = _state.CreateVersion();
+            using (startupPhases.Measure(StartupPhase.VersionConstruction))
+            {
+                _currentVersion = _state.CreateVersion();
+            }
             _loopTask = Task.Run(RunLoopAsync);
             if (UsesBackgroundImmutableFlushes)
             {

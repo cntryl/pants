@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -628,7 +627,8 @@ sealed class LocalDiskStore : IDisposable
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null)
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null,
+        StartupPhaseRecorder? startupPhases = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -640,6 +640,7 @@ sealed class LocalDiskStore : IDisposable
         FileStream? walStream = null;
         FileLease? lease = null;
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
+        startupPhases ??= new StartupPhaseRecorder(null);
         try
         {
             Directory.CreateDirectory(root);
@@ -658,14 +659,20 @@ sealed class LocalDiskStore : IDisposable
                     exception);
             }
 
-            lease = FileLease.Acquire(
-                root,
-                minimumWriterEpoch,
-                leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
-                leaseLossCallback,
-                leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10));
+            using (startupPhases.Measure(StartupPhase.Lease))
+            {
+                lease = FileLease.Acquire(
+                    root,
+                    minimumWriterEpoch,
+                    leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
+                    leaseLossCallback,
+                    leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10));
+            }
             lease.EnsureValid();
-            EnsureFormat(root);
+            using (startupPhases.Measure(StartupPhase.Format))
+            {
+                EnsureFormat(root);
+            }
             lease.EnsureValid();
             Directory.CreateDirectory(Path.Combine(root, "wal"));
             Directory.CreateDirectory(Path.Combine(root, "sst"));
@@ -687,13 +694,18 @@ sealed class LocalDiskStore : IDisposable
             lease.EnsureValid();
             TransactionSpillStore.CleanupOrphans(root);
             lease.EnsureValid();
-            var manifest = LoadManifest(root, recoveryPolicy, state);
+            ManifestState manifest;
+            using (startupPhases.Measure(StartupPhase.ManifestSnapshot))
+            {
+                manifest = LoadManifest(root, recoveryPolicy, state);
+            }
             lease.EnsureValid();
             var clearRecoveredIntents = ValidateRecoveryMetadata(
                 root,
                 manifest,
                 recoveryPolicy,
-                state);
+                state,
+                startupPhases);
             ValidateManifestSstNames(manifest);
             lease.EnsureValid();
             CleanStartupResidue(
@@ -725,7 +737,7 @@ sealed class LocalDiskStore : IDisposable
                 blockCachePolicy,
                 blockCacheBytes);
             lease.EnsureValid();
-            store.Recover(state, recoverySsts);
+            store.Recover(state, recoverySsts, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
@@ -2664,62 +2676,69 @@ sealed class LocalDiskStore : IDisposable
 
     void Recover(
         RuntimeState state,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts)
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts,
+        StartupPhaseRecorder startupPhases)
     {
         RestoreColumnFamilies(state);
         var recoveredOperations = new List<WalMutation>();
-        foreach (var file in _manifest.Files.ToArray())
+        using (startupPhases.Measure(StartupPhase.SstHydration))
         {
-            try
+            foreach (var file in _manifest.Files.ToArray())
             {
-                var name = ValidateSstName(file.Name);
-                var path = Path.Combine(_sstDirectory, name);
-                var bytes = File.Exists(path)
-                    ? PositionalFile.ReadAllBytes(path)
-                    : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
-                        ? recovered.ToArray()
-                        : throw new StorageException($"Manifest SST '{file.Name}' is missing.");
-                if (file.ContentCrc32C.HasValue && DiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                try
                 {
-                    throw new StorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
-                }
+                    var name = ValidateSstName(file.Name);
+                    var path = Path.Combine(_sstDirectory, name);
+                    var bytes = File.Exists(path)
+                        ? PositionalFile.ReadAllBytes(path)
+                        : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
+                            ? recovered.ToArray()
+                            : throw new StorageException($"Manifest SST '{file.Name}' is missing.");
+                    if (file.ContentCrc32C.HasValue && DiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                    {
+                        throw new StorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
+                    }
 
-                var contents = SstCodec.Decode(bytes);
-                recoveredOperations.AddRange(contents.Entries.Select(entry => new WalMutation(
-                    file.ColumnFamilyId,
-                    entry.IsDelete ? WalOperation.Delete : WalOperation.Put,
-                    entry.Key,
-                    entry.Value,
-                    entry.Sequence,
-                    entry.Expiration,
-                    null)));
-                recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new WalMutation(
-                    file.ColumnFamilyId,
-                    WalOperation.DeleteRange,
-                    range.Start,
-                    null,
-                    range.Sequence,
-                    null,
-                    range.End)));
-            }
-            catch (Exception exception) when (
-                _recoveryPolicy == PantsRecoveryPolicy.Salvage &&
-                exception is PantsException or IOException)
-            {
-                state.MarkSalvageMode();
-                _manifest.Files.Remove(file);
-            }
-            catch (Exception exception) when (exception is PantsException or IOException)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.RecoveryFailed,
-                    $"Manifest SST '{file.Name}' could not be recovered strictly.",
-                    exception);
+                    var contents = SstCodec.Decode(bytes);
+                    recoveredOperations.AddRange(contents.Entries.Select(entry => new WalMutation(
+                        file.ColumnFamilyId,
+                        entry.IsDelete ? WalOperation.Delete : WalOperation.Put,
+                        entry.Key,
+                        entry.Value,
+                        entry.Sequence,
+                        entry.Expiration,
+                        null)));
+                    recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new WalMutation(
+                        file.ColumnFamilyId,
+                        WalOperation.DeleteRange,
+                        range.Start,
+                        null,
+                        range.Sequence,
+                        null,
+                        range.End)));
+                }
+                catch (Exception exception) when (
+                    _recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                    exception is PantsException or IOException)
+                {
+                    state.MarkSalvageMode();
+                    _manifest.Files.Remove(file);
+                }
+                catch (Exception exception) when (exception is PantsException or IOException)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.RecoveryFailed,
+                        $"Manifest SST '{file.Name}' could not be recovered strictly.",
+                        exception);
+                }
             }
         }
 
         ApplyMutations(state, recoveredOperations.OrderBy(operation => operation.Sequence));
-        ReplayWal(state);
+        using (startupPhases.Measure(StartupPhase.WalReplay))
+        {
+            ReplayWal(state);
+        }
         state.Sequence = checked((long)_nextSequence);
     }
 
@@ -3829,10 +3848,9 @@ sealed class LocalDiskStore : IDisposable
     static void EnsureFormat(string root)
     {
         var path = Path.Combine(root, "FORMAT");
-        const string expected = "midge-format-version=3\n";
         if (File.Exists(path))
         {
-            if (File.ReadAllText(path) != expected)
+            if (!File.ReadAllBytes(path).AsSpan().SequenceEqual("midge-format-version=3\n"u8))
             {
                 throw new PantsCompatibilityException("Unsupported or invalid Midge FORMAT marker.");
             }
@@ -3854,7 +3872,7 @@ sealed class LocalDiskStore : IDisposable
                 "Persisted state without a Midge FORMAT marker is unsupported.");
         }
 
-        AtomicStagedFile.Write(path, Encoding.UTF8.GetBytes(expected));
+        AtomicStagedFile.Write(path, "midge-format-version=3\n"u8);
     }
 
     static ManifestState LoadManifest(
@@ -3945,53 +3963,60 @@ sealed class LocalDiskStore : IDisposable
         string root,
         ManifestState manifest,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        StartupPhaseRecorder startupPhases)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
-        try
+        using (startupPhases.Measure(StartupPhase.ManifestJournal))
         {
-            var journalBytes = File.ReadAllBytes(journalPath);
-            ReplayManifestJournal(journalBytes, manifest, out var durableByteLength);
-            if (durableByteLength < journalBytes.Length)
+            try
             {
-                // A torn tail: repair the journal on disk to the durable prefix before any
-                // future append is allowed to proceed, using the same staged fsync+rename
-                // write already used for the manifest snapshot.
-                AtomicStagedFile.Write(journalPath, journalBytes.AsSpan(0, durableByteLength));
+                var journalBytes = File.ReadAllBytes(journalPath);
+                ReplayManifestJournal(journalBytes, manifest, out var durableByteLength);
+                if (durableByteLength < journalBytes.Length)
+                {
+                    // A torn tail: repair the journal on disk to the durable prefix before any
+                    // future append is allowed to proceed, using the same staged fsync+rename
+                    // write already used for the manifest snapshot.
+                    AtomicStagedFile.Write(journalPath, journalBytes.AsSpan(0, durableByteLength));
+                }
             }
-        }
-        catch (Exception exception) when (exception is PantsException or IOException)
-        {
-            RecoverMetadataFile(
-                journalPath,
-                "The manifest journal could not be recovered strictly.",
-                [],
-                recoveryPolicy,
-                state,
-                exception);
+            catch (Exception exception) when (exception is PantsException or IOException)
+            {
+                RecoverMetadataFile(
+                    journalPath,
+                    "The manifest journal could not be recovered strictly.",
+                    [],
+                    recoveryPolicy,
+                    state,
+                    exception);
+            }
         }
 
         var intentPath = Path.Combine(root, "intent_log.json");
-        try
+        using (startupPhases.Measure(StartupPhase.IntentReconciliation))
         {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            try
             {
-                throw new JsonException("The intent log root must be an array.");
-            }
+                using var document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    throw new JsonException("The intent log root must be an array.");
+                }
 
-            return ReplayIntentLog(root, manifest, document.RootElement, recoveryPolicy, state);
-        }
-        catch (Exception exception) when (exception is JsonException or PantsException or IOException)
-        {
-            RecoverMetadataFile(
-                intentPath,
-                "The intent log could not be recovered strictly.",
-                "[]"u8.ToArray(),
-                recoveryPolicy,
-                state,
-                exception);
-            return false;
+                return ReplayIntentLog(root, manifest, document.RootElement, recoveryPolicy, state);
+            }
+            catch (Exception exception) when (exception is JsonException or PantsException or IOException)
+            {
+                RecoverMetadataFile(
+                    intentPath,
+                    "The intent log could not be recovered strictly.",
+                    "[]"u8.ToArray(),
+                    recoveryPolicy,
+                    state,
+                    exception);
+                return false;
+            }
         }
     }
 
