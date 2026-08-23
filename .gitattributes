@@ -15,6 +15,8 @@
 *.cmd text eol=crlf
 
 *.wal -text
+wal.log -text
 *.sst -text
+*.journal -text
 *.golden -text
 *.bin -text

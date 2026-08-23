@@ -15,12 +15,16 @@ WAL, flush, compaction, immutable-flush, and commit-coalescing responsibilities
 are separate internal types, but the public contracts and persisted Midge wire
 formats remain unchanged. See [`runtime.md`](../architecture/runtime.md).
 
-The inventory is intentionally static for now. Baseline refresh and executable
-compatibility tooling can be introduced later as a separately reviewed change.
-Persisted-fixture qualification remains assigned to final milestone M5. Midge
-CLI-only verification behaviors are explicitly not applicable because Pants
-exposes verification through its async database interfaces and does not ship a
-product CLI. Rust-specific module dependency checks and Midge's benchmark,
-mutation, coverage-analysis, and pull-request scripts are also not applicable:
-they govern Midge's private implementation and repository tooling rather than
-observable database behavior.
+The release-only compatibility harness refreshes this inventory and the golden
+fixtures together from a clean checkout at the pinned commit. It also runs the
+alternate-process, bidirectional qualification. Normal restore, build, and test
+commands remain self-contained and consume only committed artifacts. See
+[`MidgeQualification.md`](MidgeQualification.md) for the exact commands and
+fixture policy.
+
+Midge CLI-only verification behaviors are explicitly not applicable because
+Pants exposes verification through its async database interfaces and does not
+ship a product CLI. Rust-specific module dependency checks and Midge's
+benchmark, mutation, coverage-analysis, and pull-request scripts are also not
+applicable: they govern Midge's private implementation and repository tooling
+rather than observable database behavior.

@@ -18,6 +18,10 @@ public sealed class MidgeContractManifestTests
 
         Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(PinnedSha, root.GetProperty("midgeSha").GetString());
+        var sourceTreeSha = Assert.IsType<string>(
+            root.GetProperty("sourceTreeSha256").GetString());
+        Assert.Equal(64, sourceTreeSha.Length);
+        Assert.All(sourceTreeSha, static value => Assert.True(char.IsAsciiHexDigitLower(value)));
         Assert.True(entries.GetArrayLength() > 900);
         Assert.All(entries.EnumerateArray(), static entry =>
         {
@@ -132,6 +136,24 @@ public sealed class MidgeContractManifestTests
             .ToArray();
 
         Assert.Empty(plannedM4Contracts);
+    }
+
+    [Fact]
+    public void ShouldMapEveryM5ContractToAnExecutablePantsTest()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+
+        var plannedM5Contracts = document.RootElement
+            .GetProperty("entries")
+            .EnumerateArray()
+            .Where(static entry =>
+                entry.GetProperty("issue").ValueKind == JsonValueKind.Number &&
+                entry.GetProperty("issue").GetInt32() == 11 &&
+                entry.GetProperty("status").GetString() == "planned")
+            .ToArray();
+
+        Assert.Empty(plannedM5Contracts);
     }
 
     [Fact]
