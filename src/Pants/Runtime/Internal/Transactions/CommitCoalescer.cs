@@ -22,7 +22,10 @@ sealed class CommitCoalescer(
         Dictionary<ColumnFamilyIdentity, long> stagedBytesByFamily)
     {
         var durability = command.WriteOptions.Durability;
-        if (durability is not (PantsDurability.Sync or PantsDurability.Buffered) ||
+        if (durability is not (PantsDurability.Sync or
+            PantsDurability.Buffered or
+            PantsDurability.BestEffort or
+            PantsDurability.CloudAsync) ||
             (groupDurability is { } expectedDurability && durability != expectedDurability) ||
             command.Payload.Operations.Count == 0 ||
             command.Payload.IsSpilled ||
@@ -87,7 +90,10 @@ sealed class CommitCoalescer(
         Failpoint beforeSync)
     {
         if (prepared.Count == 0 ||
-            durability is not (PantsDurability.Sync or PantsDurability.Buffered) ||
+            durability is not (PantsDurability.Sync or
+                PantsDurability.Buffered or
+                PantsDurability.BestEffort or
+                PantsDurability.CloudAsync) ||
             prepared.Any(commit => commit.Command.WriteOptions.Durability != durability))
         {
             throw new PantsInternalException(
@@ -99,7 +105,10 @@ sealed class CommitCoalescer(
                 commit.Command.Payload,
                 commit.Sequence))
             .ToArray();
-        var result = await appendGroupAsync(group, state, durability, beforeSync)
+        var walDurability = durability == PantsDurability.CloudAsync
+            ? PantsDurability.Buffered
+            : durability;
+        var result = await appendGroupAsync(group, state, walDurability, beforeSync)
             .ConfigureAwait(false);
         if (durability == PantsDurability.Sync)
         {

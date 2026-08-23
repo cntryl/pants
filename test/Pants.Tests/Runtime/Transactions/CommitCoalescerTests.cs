@@ -133,6 +133,43 @@ public sealed class CommitCoalescerTests
         Assert.Equal(0, telemetry.DurabilityWaitersFannedOut);
     }
 
+    [Theory]
+    [InlineData(PantsDurability.BestEffort, PantsDurability.BestEffort)]
+    [InlineData(PantsDurability.CloudAsync, PantsDurability.Buffered)]
+    public async Task ShouldAppendExtendedDurabilityGroupAtLocalBoundary(
+        PantsDurability requested,
+        PantsDurability expectedWalDurability)
+    {
+        var state = CreateState();
+        PantsDurability? appendedDurability = null;
+        var coalescer = new CommitCoalescer(
+            true,
+            1_024,
+            new RuntimeTelemetry(),
+            (commits, _, durability, _) =>
+            {
+                appendedDurability = durability;
+                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
+            },
+            static (_, _, _) => { });
+        var commands = new[] { CreateCommand(1, requested), CreateCommand(2, requested) };
+        var stagedBytes = new Dictionary<ColumnFamilyIdentity, long>(
+            ColumnFamilyIdentityComparer.Instance);
+
+        Assert.All(commands, command => Assert.True(coalescer.TryStage(
+            state,
+            command,
+            requested,
+            stagedBytes)));
+        await coalescer.AppendAsync(
+            state,
+            CommitCoalescer.CreatePreparedCommits(state, commands),
+            requested,
+            Failpoint.BeforeCoalescedWalDurabilityBoundary);
+
+        Assert.Equal(expectedWalDurability, appendedDurability);
+    }
+
     static CommitCoalescer CreateCoalescer(
         bool enabled,
         long memtableSizeLimitBytes = 1_024) =>
@@ -178,6 +215,8 @@ public sealed class CommitCoalescerTests
         {
             PantsDurability.Sync => PantsWriteOptions.Sync,
             PantsDurability.Buffered => PantsWriteOptions.Buffered,
+            PantsDurability.BestEffort => PantsWriteOptions.BestEffort,
+            PantsDurability.CloudAsync => PantsWriteOptions.CloudAsync,
             _ => throw new ArgumentOutOfRangeException(nameof(durability))
         };
         return new CommitRuntimeCommand(

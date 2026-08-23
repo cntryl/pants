@@ -1931,7 +1931,6 @@ sealed class Actor : IAsyncDisposable
     {
         var commitCoalescer = new CommitCoalescer(
             _diskStore is not null &&
-            _cloudPersistence is null &&
             _options.FlushAfterWalRecords == 0,
             _options.MemtableSizeLimitBytes,
             _telemetry,
@@ -2041,6 +2040,7 @@ sealed class Actor : IAsyncDisposable
 
         var durability = groupDurability ??
                          throw new PantsInternalException("A coalesced commit group has no durability policy.");
+        var writtenWalSegmentId = diskStore.CurrentWalSegmentId;
         IReadOnlyList<PreparedCoalescedCommit> prepared;
         try
         {
@@ -2095,6 +2095,11 @@ sealed class Actor : IAsyncDisposable
         commitCoalescer.Apply(state, prepared);
         foreach (var commit in prepared)
         {
+            if (_cloudPersistence is not null)
+            {
+                TrackCloudMemtableWrites(commit.Command.Payload, writtenWalSegmentId);
+            }
+
             _telemetry.RecordTransactionCommit();
         }
 
@@ -2182,6 +2187,34 @@ sealed class Actor : IAsyncDisposable
         {
             RecordPostDurabilityFailure(state, exception);
         }
+
+        if (_cloudPersistence is not null &&
+            prepared[0].Command.WriteOptions.Durability == PantsDurability.CloudAsync)
+        {
+            foreach (var commit in prepared)
+            {
+                RecordCloudWalWrite(
+                    _cloudWalSealController ??
+                    throw new PantsInternalException("CloudAsync has no WAL seal controller."),
+                    commit.Command.Payload);
+            }
+
+            ScheduleCloudAsyncWalMaintenance(diskStore);
+        }
+    }
+
+    void ScheduleCloudAsyncWalMaintenance(LocalDiskStore diskStore)
+    {
+        var controller = _cloudWalSealController ??
+                         throw new PantsInternalException("CloudAsync has no WAL seal controller.");
+        if (controller.ShouldSeal(diskStore.ActiveWalBytes))
+        {
+            ScheduleCloudWalSealDeadline(TimeSpan.Zero);
+            return;
+        }
+
+        ScheduleCloudWalSealDeadline();
+        ScheduleCloudWalBacklogDrain();
     }
 
     void RecordPostDurabilityFailure(RuntimeState state, Exception exception)
