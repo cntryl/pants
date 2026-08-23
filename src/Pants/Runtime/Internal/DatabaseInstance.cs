@@ -106,8 +106,12 @@ sealed class DatabaseInstance : IPantsDatabase
             "PantsDatabase.BeginTransaction");
         activity?.SetTag("pants.column_family.id", handle.Id);
         activity?.SetTag("pants.transaction.mode", mode.ToString());
-        return await _actor
-            .BeginTransactionAsync(this, handle, mode, cancellationToken)
+        if (mode == PantsTransactionMode.ReadOnly)
+        {
+            return _actor.BeginReadOnlyTransaction(this, handle, cancellationToken);
+        }
+
+        return await _actor.BeginTransactionAsync(this, handle, mode, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -321,6 +325,12 @@ sealed class DatabaseInstance : IPantsDatabase
         return _actor.RollbackAsync(transactionId, cancellationToken);
     }
 
+    internal ValueTask RecordReadOnlyTransactionRollbackAsync(long transactionId) =>
+        _actor.RecordReadOnlyTransactionRollbackAsync(transactionId);
+
+    internal ValueTask RecordReadOnlyTransactionCommitAsync(long transactionId) =>
+        _actor.RecordReadOnlyTransactionCommitAsync(transactionId);
+
     internal ValueTask<long> RegisterScanSnapshotAsync(
         DatabaseVersion snapshot,
         CancellationToken cancellationToken) =>
@@ -348,6 +358,8 @@ sealed class DatabaseInstance : IPantsDatabase
         _actor.CreateScanReadValidatorAsync(columnFamily, bounds, cancellationToken);
 
     internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
+
+    internal long CoordinatorCommandsEnqueued => _actor.CommandsEnqueued;
 
     static void ValidateColumnFamilyName(string name)
     {
