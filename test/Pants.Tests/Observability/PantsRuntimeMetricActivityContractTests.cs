@@ -24,6 +24,31 @@ public sealed class PantsRuntimeMetricActivityContractTests
     }
 
     [Fact]
+    public async Task ShouldReadMetricsGivenDirectSnapshotsOpenAndCloseConcurrently()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        var snapshotChurn = Enumerable.Range(0, 16).Select(async _ =>
+        {
+            for (var index = 0; index < 250; index++)
+            {
+                await using var snapshot = await database.BeginTransactionAsync(
+                    database.DefaultColumnFamily,
+                    PantsTransactionMode.ReadOnly);
+            }
+        });
+        var metricReads = Task.Run(async () =>
+        {
+            for (var index = 0; index < 1_000; index++)
+            {
+                var metrics = await database.GetRuntimeMetricsAsync();
+                Assert.True(metrics.OldestSnapshotAgeSeconds >= 0);
+            }
+        });
+
+        await Task.WhenAll(snapshotChurn.Append(metricReads));
+    }
+
+    [Fact]
     public async Task ShouldMeasureActiveAndCompletedWriteStallGivenClockAdvances()
     {
         const int flushThresholdBytes = 128 * 1024;
