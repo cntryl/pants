@@ -1789,9 +1789,12 @@
       "source": "tests/compatibility_fixtures.rs",
       "sourceSymbolOrTest": "should_reject_future_v4_fixture_given_unsupported_version_when_reopening",
       "observableBehavior": "reject future v4 fixture given unsupported version when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 11
+      "issue": 11,
+      "pantsTests": [
+        "Pants.Tests.MidgeCompatibilityFixtureTests.ShouldRejectFutureV4FixtureGivenUnsupportedVersionWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compatibility_fixtures.rs:should_reject_v2_empty_fixture_given_breaking_v4_sst_format",
@@ -1799,9 +1802,12 @@
       "source": "tests/compatibility_fixtures.rs",
       "sourceSymbolOrTest": "should_reject_v2_empty_fixture_given_breaking_v4_sst_format",
       "observableBehavior": "reject v2 empty fixture given breaking v4 sst format",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 11
+      "issue": 11,
+      "pantsTests": [
+        "Pants.Tests.MidgeCompatibilityFixtureTests.ShouldRejectV2EmptyFixtureGivenBreakingV4SstFormat"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compatibility_fixtures.rs:should_verify_populated_release_v3_v4_fixture_given_supported_format_when_reopening",
@@ -1809,9 +1815,12 @@
       "source": "tests/compatibility_fixtures.rs",
       "sourceSymbolOrTest": "should_verify_populated_release_v3_v4_fixture_given_supported_format_when_reopening",
       "observableBehavior": "verify populated release v3 v4 fixture given supported format when reopening",
-      "status": "planned",
+      "status": "mapped",
       "expectedError": null,
-      "issue": 11
+      "issue": 11,
+      "pantsTests": [
+        "Pants.Tests.MidgeCompatibilityFixtureTests.ShouldVerifyPopulatedReleaseV3V4FixtureGivenSupportedFormatWhenReopening"
+      ]
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/compression_compatibility.rs:should_preserve_baseline_compressed_block_fixture",
