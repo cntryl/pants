@@ -106,6 +106,54 @@ public sealed class FixtureRefreshPublisherTests
     }
 
     [Fact]
+    public void ShouldPreserveFixturesGivenPreparedManifestHasUnknownLiveEdit()
+    {
+        using var directory = new CompatibilityTestDirectory();
+        var repository = directory.CreateRepository("old-fixture", "old-manifest");
+        PrepareInterruptedTransaction(repository, "new-fixture", "new-manifest", "prepared");
+        File.WriteAllText(repository.ContractManifest, "unknown-manifest");
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FixtureRefreshPublisher.Recover(repository, forceRefresh: false));
+
+        Assert.Contains("unrecognized hash", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "new-fixture",
+            File.ReadAllText(Path.Combine(repository.CompatibilityFixtures, "fixture.txt")));
+        Assert.Equal("unknown-manifest", File.ReadAllText(repository.ContractManifest));
+        var fixturesBackup = $"{repository.CompatibilityFixtures}.refresh-backup";
+        var manifestBackup = $"{repository.ContractManifest}.refresh-backup";
+        Assert.Equal("old-fixture", File.ReadAllText(Path.Combine(fixturesBackup, "fixture.txt")));
+        Assert.Equal("old-manifest", File.ReadAllText(manifestBackup));
+        Assert.False(Directory.Exists($"{repository.CompatibilityFixtures}.refresh-discard"));
+        Assert.True(File.Exists($"{repository.ContractManifest}.refresh-transaction"));
+    }
+
+    [Fact]
+    public void ShouldPreserveFixturesGivenPreparedManifestBackupIsCorrupt()
+    {
+        using var directory = new CompatibilityTestDirectory();
+        var repository = directory.CreateRepository("old-fixture", "old-manifest");
+        PrepareInterruptedTransaction(repository, "new-fixture", "new-manifest", "prepared");
+        var manifestBackup = $"{repository.ContractManifest}.refresh-backup";
+        File.WriteAllText(manifestBackup, "unknown-backup");
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => FixtureRefreshPublisher.Recover(repository, forceRefresh: true));
+
+        Assert.Contains("manifest backup", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "new-fixture",
+            File.ReadAllText(Path.Combine(repository.CompatibilityFixtures, "fixture.txt")));
+        Assert.Equal("new-manifest", File.ReadAllText(repository.ContractManifest));
+        Assert.Equal("unknown-backup", File.ReadAllText(manifestBackup));
+        var fixturesBackup = $"{repository.CompatibilityFixtures}.refresh-backup";
+        Assert.Equal("old-fixture", File.ReadAllText(Path.Combine(fixturesBackup, "fixture.txt")));
+        Assert.False(Directory.Exists($"{repository.CompatibilityFixtures}.refresh-discard"));
+        Assert.True(File.Exists($"{repository.ContractManifest}.refresh-transaction"));
+    }
+
+    [Fact]
     public void ShouldCompleteCleanupGivenCommittedPublicationWhenRecoveryRuns()
     {
         using var directory = new CompatibilityTestDirectory();

@@ -186,6 +186,19 @@ internal static class FixtureRefreshPublisher
         string fixturesDiscard,
         bool forceRefresh)
     {
+        ValidatePreparedDirectory(
+            repository.CompatibilityFixtures,
+            fixturesBackup,
+            fixturesDiscard,
+            transaction.PreviousFixturesSha256,
+            transaction.NextFixturesSha256,
+            forceRefresh);
+        ValidatePreparedFile(
+            repository.ContractManifest,
+            manifestBackup,
+            transaction.PreviousManifestSha256,
+            transaction.NextManifestSha256,
+            forceRefresh);
         RestorePreparedDirectory(
             repository.CompatibilityFixtures,
             fixturesBackup,
@@ -199,6 +212,67 @@ internal static class FixtureRefreshPublisher
             transaction.PreviousManifestSha256,
             transaction.NextManifestSha256,
             forceRefresh);
+    }
+
+    static void ValidatePreparedDirectory(
+        string livePath,
+        string backupPath,
+        string discardPath,
+        string previousSha256,
+        string nextSha256,
+        bool forceRefresh)
+    {
+        if (!Directory.Exists(backupPath))
+        {
+            EnsureUnmovedDirectoryIsSafe(livePath, previousSha256, forceRefresh);
+            return;
+        }
+
+        EnsureDirectoryHash(backupPath, previousSha256, "fixture backup");
+        if (Directory.Exists(discardPath))
+        {
+            if (Directory.Exists(livePath))
+            {
+                throw ConflictingCleanupPaths(livePath, discardPath);
+            }
+
+            return;
+        }
+
+        if (Directory.Exists(livePath))
+        {
+            EnsureKnownRecoveryTarget(
+                livePath,
+                DirectoryTreeFingerprint.Compute(livePath),
+                previousSha256,
+                nextSha256,
+                forceRefresh);
+        }
+    }
+
+    static void ValidatePreparedFile(
+        string livePath,
+        string backupPath,
+        string previousSha256,
+        string nextSha256,
+        bool forceRefresh)
+    {
+        if (!File.Exists(backupPath))
+        {
+            EnsureUnmovedFileIsSafe(livePath, previousSha256, forceRefresh);
+            return;
+        }
+
+        EnsureFileHash(backupPath, previousSha256, "manifest backup");
+        if (File.Exists(livePath))
+        {
+            EnsureKnownRecoveryTarget(
+                livePath,
+                ComputeFileSha256(livePath),
+                previousSha256,
+                nextSha256,
+                forceRefresh);
+        }
     }
 
     static void RestorePreparedDirectory(
