@@ -16,11 +16,29 @@ static class SstCodec
         IReadOnlyList<RangeTombstone> tombstones,
         PantsPerformanceGoal performanceGoal)
     {
+        using var file = new MemoryStream();
+        EncodeTo(file, sourceEntries, tombstones, performanceGoal);
+        return file.ToArray();
+    }
+
+    public static void EncodeTo(
+        Stream file,
+        IReadOnlyList<SstEntry> sourceEntries,
+        IReadOnlyList<RangeTombstone> tombstones,
+        PantsPerformanceGoal performanceGoal)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        if (!file.CanWrite || !file.CanSeek || file.Position != 0)
+        {
+            throw new ArgumentException(
+                "SST output must be a writable, seekable stream positioned at zero.",
+                nameof(file));
+        }
+
         var entries = sourceEntries
             .OrderBy(entry => entry.Key, ByteArrayComparer.Instance)
             .ThenByDescending(entry => entry.Sequence)
             .ToList();
-        using var file = new MemoryStream();
         var index = new List<(byte[] FirstKey, SstBlockHandle Handle)>();
         var blockKeys = new List<IReadOnlyList<byte[]>>();
         var currentBlockKeys = new List<byte[]>();
@@ -76,7 +94,6 @@ static class SstCodec
             performanceGoal);
         var indexHandle = AppendBlock(file, EncodeIndex(index), performanceGoal);
         file.Write(EncodeFooter(metaHandle, indexHandle, trieHandle, blockBloomHandle));
-        return file.ToArray();
     }
 
     public static SstContents Decode(byte[] bytes)

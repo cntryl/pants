@@ -30,7 +30,7 @@ sealed class LocalDiskStore : IDisposable
     readonly string _manifestJournalPath;
     readonly string _manifestPath;
     readonly string _manifestSnapshotPath;
-    readonly List<WalMutation> _mutableOperations = [];
+    readonly MutableMemtableOperations _mutableOperations = new();
     readonly PantsPerformanceGoal _performanceGoal;
     readonly SstReaderCache _readerCache = new();
     readonly PantsRecoveryPolicy _recoveryPolicy;
@@ -1132,10 +1132,10 @@ sealed class LocalDiskStore : IDisposable
                         dropped_sst_names = droppedSstNames
                     });
                 DurablyApplyManifestEditCore(edit);
-                _mutableOperations.RemoveAll(operation => operation.ColumnFamilyId == id);
+                _ = _mutableOperations.DetachFamily(id);
                 _unflushedCommitSequence = _mutableOperations.Count == 0
                     ? _manifest.LastPersistedSequence
-                    : checked(_mutableOperations.Max(static operation => operation.Sequence) + 1);
+                    : checked(_mutableOperations.LastSequence + 1);
                 _familyIds.Remove(identity);
                 SaveManifestCheckpointCore();
             }
@@ -1156,7 +1156,7 @@ sealed class LocalDiskStore : IDisposable
             var reservedSequence = checked((long)_nextSequence);
             var unflushedCommitSequence = _unflushedCommitSequence;
             var walRecords = _walRecords;
-            var mutableOperationCount = _mutableOperations.Count;
+            var mutableOperationSequence = _mutableOperations.LastSequence;
             var durabilityState = CaptureWalDurabilityState();
             try
             {
@@ -1178,7 +1178,7 @@ sealed class LocalDiskStore : IDisposable
                         reservedSequence,
                         unflushedCommitSequence,
                         walRecords,
-                        mutableOperationCount,
+                        mutableOperationSequence,
                         durabilityState);
                 }
                 catch (Exception rollbackFailure)
@@ -1233,7 +1233,7 @@ sealed class LocalDiskStore : IDisposable
 
             var unflushedCommitSequence = _unflushedCommitSequence;
             var walRecords = _walRecords;
-            var mutableOperationCount = _mutableOperations.Count;
+            var mutableOperationSequence = _mutableOperations.LastSequence;
             var durabilityState = CaptureWalDurabilityState();
             try
             {
@@ -1301,7 +1301,7 @@ sealed class LocalDiskStore : IDisposable
                         reservedSequence,
                         unflushedCommitSequence,
                         walRecords,
-                        mutableOperationCount,
+                        mutableOperationSequence,
                         durabilityState);
                 }
                 catch (Exception rollbackFailure)
@@ -1483,7 +1483,7 @@ sealed class LocalDiskStore : IDisposable
         long reservedSequence,
         ulong unflushedCommitSequence,
         int walRecords,
-        int mutableOperationCount,
+        ulong mutableOperationSequence,
         WalDurabilityState durabilityState)
     {
         try
@@ -1495,7 +1495,7 @@ sealed class LocalDiskStore : IDisposable
                 reservedSequence,
                 unflushedCommitSequence,
                 walRecords,
-                mutableOperationCount,
+                mutableOperationSequence,
                 durabilityState);
         }
         catch
@@ -1505,7 +1505,7 @@ sealed class LocalDiskStore : IDisposable
                 reservedSequence,
                 unflushedCommitSequence,
                 walRecords,
-                mutableOperationCount,
+                mutableOperationSequence,
                 durabilityState);
             throw;
         }
@@ -1517,7 +1517,7 @@ sealed class LocalDiskStore : IDisposable
         long reservedSequence,
         ulong unflushedCommitSequence,
         int walRecords,
-        int mutableOperationCount,
+        ulong mutableOperationSequence,
         WalDurabilityState durabilityState)
     {
         try
@@ -1533,7 +1533,7 @@ sealed class LocalDiskStore : IDisposable
                 reservedSequence,
                 unflushedCommitSequence,
                 walRecords,
-                mutableOperationCount,
+                mutableOperationSequence,
                 durabilityState);
         }
     }
@@ -1543,15 +1543,10 @@ sealed class LocalDiskStore : IDisposable
         long reservedSequence,
         ulong unflushedCommitSequence,
         int walRecords,
-        int mutableOperationCount,
+        ulong mutableOperationSequence,
         WalDurabilityState durabilityState)
     {
-        if (_mutableOperations.Count > mutableOperationCount)
-        {
-            _mutableOperations.RemoveRange(
-                mutableOperationCount,
-                _mutableOperations.Count - mutableOperationCount);
-        }
+        _mutableOperations.TruncateAfter(mutableOperationSequence);
 
         _nextSequence = checked((ulong)reservedSequence);
         state.Sequence = reservedSequence;
@@ -1735,19 +1730,16 @@ sealed class LocalDiskStore : IDisposable
                     $"Column family '{identity.Name}' is not active in persistent storage.");
             }
 
-            var operations = _mutableOperations
-                .Where(operation => operation.ColumnFamilyId == familyId)
-                .ToArray();
-            if (operations.Length == 0)
+            var operations = _mutableOperations.DetachFamily(familyId);
+            if (operations.Count == 0)
             {
                 return null;
             }
 
-            _mutableOperations.RemoveAll(operation => operation.ColumnFamilyId == familyId);
             var manifestState = GetFlushManifestState(familyId);
             _unflushedCommitSequence = _mutableOperations.Count == 0
                 ? manifestState.LastPersistedSequence
-                : checked(_mutableOperations.Max(static operation => operation.Sequence) + 1);
+                : checked(_mutableOperations.LastSequence + 1);
             var sstSequence = Math.Max(
                 manifestState.NextSstSequence,
                 _reservedFlushSstSequences.GetValueOrDefault(familyId, 1UL));
@@ -1823,7 +1815,7 @@ sealed class LocalDiskStore : IDisposable
             return;
         }
 
-        FlushOperations(_mutableOperations, _unflushedCommitSequence);
+        FlushOperations(_mutableOperations.SnapshotAll(), _unflushedCommitSequence);
         RotateWal();
         _mutableOperations.Clear();
     }
@@ -1840,24 +1832,22 @@ sealed class LocalDiskStore : IDisposable
                 $"Column family '{identity.Name}' is not active in persistent storage.");
         }
 
-        var familyOperations = _mutableOperations
-            .Where(operation => operation.ColumnFamilyId == familyId)
-            .ToList();
+        var familyOperations = _mutableOperations.DetachFamily(familyId);
         if (familyOperations.Count == 0)
         {
             SaveManifestCheckpoint();
             return;
         }
 
-        if (familyOperations.Count == _mutableOperations.Count)
+        if (_mutableOperations.Count == 0)
         {
-            FlushCore();
+            FlushOperations(familyOperations, _unflushedCommitSequence);
+            RotateWal();
             return;
         }
 
         FlushOperations(familyOperations, null);
-        _mutableOperations.RemoveAll(operation => operation.ColumnFamilyId == familyId);
-        _unflushedCommitSequence = checked(_mutableOperations.Max(static operation => operation.Sequence) + 1);
+        _unflushedCommitSequence = checked(_mutableOperations.LastSequence + 1);
     }
 
     void CompleteFrozenFlush(FrozenMemtableFlush frozen)
@@ -3203,7 +3193,6 @@ sealed class LocalDiskStore : IDisposable
                            ? nextSequence
                            : 1UL);
         var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
-        var bytes = SstCodec.Encode(entries, ranges, _performanceGoal);
         var stagingPrefix = string.IsNullOrEmpty(stagingIdentity)
             ? _lease.Epoch.ToString(CultureInfo.InvariantCulture)
             : stagingIdentity;
@@ -3212,10 +3201,15 @@ sealed class LocalDiskStore : IDisposable
             ".flush-staging",
             $"{stagingPrefix}.{name}.tmp");
         var finalPath = Path.Combine(_sstDirectory, name);
+        long sizeBytes;
+        uint contentCrc32C;
         using (var stream = new FileStream(stagingPath, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            stream.Write(bytes);
+            var checkedStream = new Crc32CWriteStream(stream);
+            SstCodec.EncodeTo(checkedStream, entries, ranges, _performanceGoal);
             stream.Flush(true);
+            sizeBytes = checkedStream.BytesWritten;
+            contentCrc32C = checkedStream.Checksum;
         }
 
         _failpoints.Hit(outputDurableFailpoint);
@@ -3229,8 +3223,8 @@ sealed class LocalDiskStore : IDisposable
         {
             Name = name,
             Level = level,
-            SizeBytes = checked((ulong)bytes.Length),
-            ContentCrc32C = DiskFormat.Crc32C(bytes),
+            SizeBytes = checked((ulong)sizeBytes),
+            ContentCrc32C = contentCrc32C,
             ColumnFamilyId = familyId,
             SstSequence = sequence,
             SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
