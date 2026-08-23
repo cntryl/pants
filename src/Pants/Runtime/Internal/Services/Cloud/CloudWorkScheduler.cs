@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services.Cloud;
 
 sealed class CloudWorkScheduler(
     RuntimeWorker worker,
@@ -11,30 +11,12 @@ sealed class CloudWorkScheduler(
     readonly Lock _gate = new();
     readonly CancellationTokenSource _lifetimeCancellation = new();
     readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-    Task? _pumpTask;
-    int _outstanding;
-    bool _requested;
     bool _disposed;
+    int _outstanding;
+    Task? _pumpTask;
+    bool _requested;
 
     public int Outstanding => Volatile.Read(ref _outstanding);
-
-    public void Signal()
-    {
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _requested = true;
-            if (_pumpTask is null)
-            {
-                Volatile.Write(ref _outstanding, 1);
-                _pumpTask = Task.Run(RunAsync);
-            }
-        }
-    }
 
     public async ValueTask DisposeAsync()
     {
@@ -65,6 +47,24 @@ sealed class CloudWorkScheduler(
         if (cancel)
         {
             _lifetimeCancellation.Dispose();
+        }
+    }
+
+    public void Signal()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _requested = true;
+            if (_pumpTask is null)
+            {
+                Volatile.Write(ref _outstanding, 1);
+                _pumpTask = Task.Run(RunAsync);
+            }
         }
     }
 

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Index;
 
-internal sealed record KeyStructureProfile(
+sealed record KeyStructureProfile(
     float AverageSharedPrefix,
     int MaximumSharedPrefix,
     int PrefixDivergence,

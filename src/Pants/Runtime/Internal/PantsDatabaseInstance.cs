@@ -1,30 +1,33 @@
-using System.Diagnostics;
+using System.Text;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class PantsDatabaseInstance : IPantsDatabase
+sealed class PantsDatabaseInstance : IPantsDatabase
 {
-    private readonly PantsActor _actor;
-    private readonly object _handleOwner = new();
-    private readonly TransactionMemoryPool _transactionMemoryPool;
-    private readonly IPantsClock _ttlClock;
-    private readonly RuntimeTelemetry _telemetry;
+    readonly PantsActor _actor;
+    readonly object _handleOwner = new();
     readonly Lock _shutdownGate = new();
+    int _lifecycleState;
     Task? _shutdownTask;
-    private int _lifecycleState;
 
     internal PantsDatabaseInstance(PantsOpenOptions options, PantsRuntimeDependencies dependencies)
     {
         Options = options;
-        _transactionMemoryPool = new TransactionMemoryPool(options.TransactionMemoryPoolBytes);
-        _ttlClock = new MonotonicPantsClock(options.TtlClock);
-        _telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
-        _actor = new PantsActor(options, _ttlClock, _telemetry, dependencies);
+        TransactionMemoryPool = new TransactionMemoryPool(options.TransactionMemoryPoolBytes);
+        Clock = new MonotonicPantsClock(options.TtlClock);
+        Telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
+        _actor = new PantsActor(options, Clock, Telemetry, dependencies);
         DefaultColumnFamily = CreateHandle(new ColumnFamilyIdentity(
             0,
             "default",
             PantsRuntimeState.DefaultFamilyVersion));
     }
+
+    internal IPantsClock Clock { get; }
+
+    internal TransactionMemoryPool TransactionMemoryPool { get; }
+
+    internal RuntimeTelemetry Telemetry { get; }
 
     public PantsOpenOptions Options { get; }
 
@@ -36,7 +39,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
     {
         EnsureOpen();
         ValidateColumnFamilyName(name);
-        ColumnFamilyIdentity identity = await _actor
+        var identity = await _actor
             .CreateColumnFamilyAsync(name, cancellationToken)
             .ConfigureAwait(false);
         return CreateHandle(identity);
@@ -48,7 +51,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
     {
         EnsureOpen();
         ArgumentNullException.ThrowIfNull(name);
-        ColumnFamilyIdentity? identity = await _actor
+        var identity = await _actor
             .GetActiveColumnFamilyIdentityAsync(name, cancellationToken)
             .ConfigureAwait(false);
         return identity is { } value
@@ -60,7 +63,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        IReadOnlyList<ColumnFamilyIdentity> identities = await _actor
+        var identities = await _actor
             .ListColumnFamiliesAsync(cancellationToken)
             .ConfigureAwait(false);
         return identities
@@ -74,8 +77,8 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        PantsColumnFamilyHandle handle = ValidateDroppableColumnFamily(columnFamily);
-        return _actor.DropColumnFamilyAsync(handle.Identity, discardUnflushed: false, cancellationToken);
+        var handle = ValidateDroppableColumnFamily(columnFamily);
+        return _actor.DropColumnFamilyAsync(handle.Identity, false, cancellationToken);
     }
 
     public ValueTask DropColumnFamilyDiscardingUnflushedAsync(
@@ -83,8 +86,8 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        PantsColumnFamilyHandle handle = ValidateDroppableColumnFamily(columnFamily);
-        return _actor.DropColumnFamilyAsync(handle.Identity, discardUnflushed: true, cancellationToken);
+        var handle = ValidateDroppableColumnFamily(columnFamily);
+        return _actor.DropColumnFamilyAsync(handle.Identity, true, cancellationToken);
     }
 
     public async ValueTask<IPantsTransaction> BeginTransactionAsync(
@@ -93,13 +96,13 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        PantsColumnFamilyHandle handle = ValidateColumnFamily(columnFamily);
+        var handle = ValidateColumnFamily(columnFamily);
         if (!Enum.IsDefined(mode))
         {
             throw PantsException.InvalidArgument("Transaction mode is invalid.");
         }
 
-        using Activity? activity = PantsDiagnostics.ActivitySource.StartActivity(
+        using var activity = PantsDiagnostics.ActivitySource.StartActivity(
             "PantsDatabase.BeginTransaction");
         activity?.SetTag("pants.column_family.id", handle.Id);
         activity?.SetTag("pants.transaction.mode", mode.ToString());
@@ -113,7 +116,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        PantsColumnFamilyHandle handle = ValidateColumnFamily(columnFamily);
+        var handle = ValidateColumnFamily(columnFamily);
         return _actor.FlushAsync(handle.Identity, cancellationToken);
     }
 
@@ -137,7 +140,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        PantsColumnFamilyHandle handle = ValidateColumnFamily(columnFamily);
+        var handle = ValidateColumnFamily(columnFamily);
         return _actor.WaitForWriteStallClearAsync(
             handle.Identity,
             timeout,
@@ -243,6 +246,16 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         }
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        if (Volatile.Read(ref _lifecycleState) == 2)
+        {
+            return;
+        }
+
+        await ShutdownAsync(Options.ShutdownTimeout).ConfigureAwait(false);
+    }
+
     async Task RunShutdownAttemptAsync(TaskCompletionSource completion)
     {
         try
@@ -277,22 +290,6 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
             // Callers may leave before the shared shutdown attempt terminates.
         }
     }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Volatile.Read(ref _lifecycleState) == 2)
-        {
-            return;
-        }
-
-        await ShutdownAsync(Options.ShutdownTimeout).ConfigureAwait(false);
-    }
-
-    internal IPantsClock Clock => _ttlClock;
-
-    internal TransactionMemoryPool TransactionMemoryPool => _transactionMemoryPool;
-
-    internal RuntimeTelemetry Telemetry => _telemetry;
 
     internal void EnsureOpen()
     {
@@ -352,10 +349,10 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
 
     internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
 
-    private static void ValidateColumnFamilyName(string name)
+    static void ValidateColumnFamilyName(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
-        int utf8Length = System.Text.Encoding.UTF8.GetByteCount(name);
+        var utf8Length = Encoding.UTF8.GetByteCount(name);
         if (utf8Length is 0 or > 255 || name.Contains('\0') || name == "default")
         {
             throw PantsException.InvalidArgument(
@@ -363,7 +360,7 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         }
     }
 
-    private PantsColumnFamilyHandle ValidateColumnFamily(IPantsColumnFamily columnFamily)
+    PantsColumnFamilyHandle ValidateColumnFamily(IPantsColumnFamily columnFamily)
     {
         ArgumentNullException.ThrowIfNull(columnFamily);
         if (columnFamily is not PantsColumnFamilyHandle handle || !handle.IsOwnedBy(_handleOwner))
@@ -375,9 +372,9 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         return handle;
     }
 
-    private PantsColumnFamilyHandle ValidateDroppableColumnFamily(IPantsColumnFamily columnFamily)
+    PantsColumnFamilyHandle ValidateDroppableColumnFamily(IPantsColumnFamily columnFamily)
     {
-        PantsColumnFamilyHandle handle = ValidateColumnFamily(columnFamily);
+        var handle = ValidateColumnFamily(columnFamily);
         if (handle.Id == 0)
         {
             throw PantsException.InvalidArgument("The default column family cannot be dropped.");
@@ -386,6 +383,6 @@ internal sealed class PantsDatabaseInstance : IPantsDatabase
         return handle;
     }
 
-    private PantsColumnFamilyHandle CreateHandle(ColumnFamilyIdentity identity) =>
+    PantsColumnFamilyHandle CreateHandle(ColumnFamilyIdentity identity) =>
         new(_handleOwner, identity.Id, identity.Name, identity.Generation);
 }

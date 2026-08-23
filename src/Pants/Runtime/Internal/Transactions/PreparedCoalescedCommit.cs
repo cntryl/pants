@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Transactions;
 
-internal sealed record PreparedCoalescedCommit(
+sealed record PreparedCoalescedCommit(
     CommitRuntimeCommand Command,
     long Sequence,
     IReadOnlyList<TransactionIntentOperation> Operations,

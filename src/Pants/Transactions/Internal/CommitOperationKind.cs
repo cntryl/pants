@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal enum CommitOperationKind
+enum CommitOperationKind
 {
     Put,
     Delete,

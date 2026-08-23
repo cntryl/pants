@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed record CommittedRangeTombstone(
+sealed record CommittedRangeTombstone(
     byte[] Start,
     byte[] EndExclusive,
     long WriteSequence);

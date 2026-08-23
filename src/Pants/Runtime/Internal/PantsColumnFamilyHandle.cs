@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class PantsColumnFamilyHandle : IPantsColumnFamily
+sealed class PantsColumnFamilyHandle : IPantsColumnFamily
 {
     internal readonly ColumnFamilyIdentity Identity;
-    private readonly object _owner;
+    readonly object _owner;
 
     internal PantsColumnFamilyHandle(object owner, uint id, string name, int generation)
     {
@@ -14,9 +14,10 @@ internal sealed class PantsColumnFamilyHandle : IPantsColumnFamily
         Identity = new ColumnFamilyIdentity(id, name, generation);
     }
 
+    internal int Generation { get; }
+
     public uint Id { get; }
     public string Name { get; }
-    internal int Generation { get; }
 
     public override string ToString() => $"{Name}#{Id}";
 

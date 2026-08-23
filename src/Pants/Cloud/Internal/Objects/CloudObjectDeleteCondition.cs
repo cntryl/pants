@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal abstract record CloudObjectDeleteCondition
+abstract record CloudObjectDeleteCondition
 {
     CloudObjectDeleteCondition()
     {

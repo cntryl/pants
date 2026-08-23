@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Exceptions;
 
 public sealed class PantsWriteConflictException : PantsException
 {
     public PantsWriteConflictException(string message, Exception? innerException = null)
-        : this(message, isRangeConflict: false, innerException)
+        : this(message, false, innerException)
     {
     }
 

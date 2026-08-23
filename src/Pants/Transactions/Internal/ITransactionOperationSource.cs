@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal interface ITransactionOperationSource
+interface ITransactionOperationSource
 {
     ulong Count { get; }
 

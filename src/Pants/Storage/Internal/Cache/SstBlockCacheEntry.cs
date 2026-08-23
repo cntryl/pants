@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal sealed class SstBlockCacheEntry(byte[] content)
+sealed class SstBlockCacheEntry(byte[] content)
 {
-    private readonly byte[] _content = content;
+    readonly byte[] _content = content;
 
     public int SizeBytes => _content.Length;
 

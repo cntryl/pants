@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using System.Buffers.Binary;
+
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 public sealed class TransactionSpillHardeningTestHarnessTests
 {
@@ -16,8 +18,7 @@ public sealed class TransactionSpillHardeningTestHarnessTests
             stream.Write(payload);
         }
 
-        Assert.Throws<PantsStorageException>(
-            () => TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
+        Assert.Throws<PantsStorageException>(() => TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
     }
 
     static byte[] CreateWalPayloadWithUnsupportedCompression()
@@ -38,14 +39,14 @@ public sealed class TransactionSpillHardeningTestHarnessTests
     static void WriteTlvUInt32(Stream stream, byte tag, uint value)
     {
         Span<byte> bytes = stackalloc byte[sizeof(uint)];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
         WriteTlv(stream, tag, bytes);
     }
 
     static void WriteTlvUInt64(Stream stream, byte tag, ulong value)
     {
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
         WriteTlv(stream, tag, bytes);
     }
 

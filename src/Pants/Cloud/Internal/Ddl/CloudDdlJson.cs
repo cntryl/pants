@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 static class CloudDdlJson
 {
@@ -22,7 +22,7 @@ static class CloudDdlJson
         try
         {
             var registry = JsonSerializer.Deserialize<CloudDdlRegistry>(bytes, Options) ??
-                throw new JsonException("The cloud DDL registry is empty.");
+                           throw new JsonException("The cloud DDL registry is empty.");
             ValidateRegistry(registry);
             return registry;
         }
@@ -45,7 +45,7 @@ static class CloudDdlJson
         try
         {
             var prepare = JsonSerializer.Deserialize<CloudDdlPrepare>(bytes, Options) ??
-                throw new JsonException("The cloud DDL prepare is empty.");
+                          throw new JsonException("The cloud DDL prepare is empty.");
             ValidatePrepare(prepare);
             return prepare;
         }

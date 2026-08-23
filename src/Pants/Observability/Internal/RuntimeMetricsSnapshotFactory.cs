@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Observability.Internal;
 
 sealed class RuntimeMetricsSnapshotFactory(
     PantsOpenOptions options,
@@ -66,8 +66,8 @@ sealed class RuntimeMetricsSnapshotFactory(
             WriteStalled = writeStalled,
             WalCurrentSegmentId = checked((long)(diskStore?.CurrentWalSegmentId ?? 0)),
             WalPendingWrites = cloudWalSealController?.PendingWrites ??
-                diskStore?.WalPendingWrites ??
-                0,
+                               diskStore?.WalPendingWrites ??
+                               0,
             WalLastSyncedSequence = diskStore?.WalLastSyncedSequence ?? 0,
             WalLocalDurableSequence = diskStore?.WalLocalDurableSequence ?? 0,
             WalCloudDurableSequence = walCloudDurableSequence,
@@ -114,11 +114,9 @@ sealed class RuntimeMetricsSnapshotFactory(
             SstKeyRangeRejectsTotal = telemetry.SstKeyRangeRejects,
             SstDataBlocksReadTotal = telemetry.SstDataBlocksRead,
             ReadAmplificationCompactionTriggersTotal =
-                telemetry.ReadAmplificationCompactionTriggers,
-            FlushQueueDepth = state.ImmutableMemtableFlushes.Values.Count(
-                static flush => !flush.IsRunning),
-            FlushInFlight = state.ImmutableMemtableFlushes.Values.Count(
-                static flush => flush.IsRunning),
+            telemetry.ReadAmplificationCompactionTriggers,
+            FlushQueueDepth = state.ImmutableMemtableFlushes.Values.Count(static flush => !flush.IsRunning),
+            FlushInFlight = state.ImmutableMemtableFlushes.Values.Count(static flush => flush.IsRunning),
             FlushEnqueuedTotal = telemetry.FlushEnqueuedTotal,
             FlushBuildCount = telemetry.FlushBuildCount,
             FlushBuildNanosecondsTotal = telemetry.FlushBuildNanosecondsTotal,
@@ -138,9 +136,9 @@ sealed class RuntimeMetricsSnapshotFactory(
             CloudAsyncWalUploadsCompleted = telemetry.CloudAsyncWalUploadsCompleted,
             CloudAsyncWalUploadsFailed = telemetry.CloudAsyncWalUploadsFailed,
             CloudAsyncWalUploadLatencyMicroseconds =
-                telemetry.CloudAsyncWalUploadLatencyMicroseconds,
+            telemetry.CloudAsyncWalUploadLatencyMicroseconds,
             CloudAsyncWalAcknowledgementLatencyMicroseconds =
-                telemetry.CloudAsyncWalAcknowledgementLatencyMicroseconds,
+            telemetry.CloudAsyncWalAcknowledgementLatencyMicroseconds,
             HybridPendingEvictions = hybridCache?.PendingEvictions ?? 0,
             WalRecoveryRecordsReplayed = telemetry.WalRecoveryRecordsReplayed,
             WalRecoveryBytesReplayed = telemetry.WalRecoveryBytesReplayed,
@@ -192,9 +190,9 @@ sealed class RuntimeMetricsSnapshotFactory(
             CloudAsyncWalUploadsCompleted = telemetry.CloudAsyncWalUploadsCompleted,
             CloudAsyncWalUploadsFailed = telemetry.CloudAsyncWalUploadsFailed,
             CloudAsyncWalUploadLatencyMicroseconds =
-                telemetry.CloudAsyncWalUploadLatencyMicroseconds,
+            telemetry.CloudAsyncWalUploadLatencyMicroseconds,
             CloudAsyncWalAcknowledgementLatencyMicroseconds =
-                telemetry.CloudAsyncWalAcknowledgementLatencyMicroseconds,
+            telemetry.CloudAsyncWalAcknowledgementLatencyMicroseconds,
             HybridMaximumLocalBytes = hybridMetrics?.MaximumLocalBytes ?? 0,
             HybridTotalCommittedBytes = hybridMetrics?.TotalCommittedBytes ?? 0,
             HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,

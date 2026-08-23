@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class SstReaderCacheTests
 {
@@ -6,8 +6,8 @@ public sealed class SstReaderCacheTests
     public void ShouldCacheParsedReaderAndOwnItsFileHandle()
     {
         using var directory = new TemporaryDirectory();
-        string path = Path.Combine(directory.Path, "reader.sst");
-        MidgeSstEntry[] entries = Enumerable.Range(0, 128)
+        var path = Path.Combine(directory.Path, "reader.sst");
+        var entries = Enumerable.Range(0, 128)
             .Select(index => new MidgeSstEntry(
                 TestBytes.FromString($"key-{index:0000}"),
                 new byte[1024],
@@ -20,10 +20,10 @@ public sealed class SstReaderCacheTests
             MidgeSstCodec.Encode(entries, [], PantsPerformanceGoal.Latency));
         using var cache = new SstReaderCache();
 
-        MidgeSstReader first = cache.GetOrAdd("reader.sst", path, out bool firstHit);
-        MidgeSstReader second = cache.GetOrAdd("reader.sst", path, out bool secondHit);
-        SstPointReadDecision decision = second.GetPointReadDecision(entries[64].Key);
-        byte[] block = second.ReadDataBlock(decision.CandidateBlockIndex);
+        var first = cache.GetOrAdd("reader.sst", path, out var firstHit);
+        var second = cache.GetOrAdd("reader.sst", path, out var secondHit);
+        var decision = second.GetPointReadDecision(entries[64].Key);
+        var block = second.ReadDataBlock(decision.CandidateBlockIndex);
 
         Assert.False(firstHit);
         Assert.True(secondHit);

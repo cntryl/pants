@@ -1,11 +1,13 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class RuntimeWorkerCommand
+sealed class RuntimeWorkerCommand
 {
-    readonly Func<CancellationToken, ValueTask> _operation;
     readonly CancellationToken _callerCancellationToken;
+
     readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly Func<CancellationToken, ValueTask> _operation;
 
     public RuntimeWorkerCommand(
         Func<CancellationToken, ValueTask> operation,

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed class SstScanBlock
+sealed class SstScanBlock
 {
     public SstScanBlock(
         MidgeSstReader reader,

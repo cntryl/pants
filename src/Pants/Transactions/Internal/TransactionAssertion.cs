@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed record TransactionAssertion(byte[] Key, TransactionReadValue Expected);
+sealed record TransactionAssertion(byte[] Key, TransactionReadValue Expected);

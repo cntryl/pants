@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services;
 
 sealed class RuntimeServiceCommand<TRequest, TResult>(TRequest request)
 {

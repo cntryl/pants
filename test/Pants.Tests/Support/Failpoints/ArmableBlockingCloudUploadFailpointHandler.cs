@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class ArmableBlockingCloudUploadFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,15 +6,16 @@ sealed class ArmableBlockingCloudUploadFailpointHandler : IPantsFailpointHandler
 
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _release = new(initialState: false);
+
+    readonly ManualResetEventSlim _release = new(false);
     int _armed;
     int _hit;
 
-    public void Arm() => Volatile.Write(ref _armed, 1);
-
-    public Task WaitUntilEnteredAsync(TimeSpan timeout) => _entered.Task.WaitAsync(timeout);
-
-    public void Release() => _release.Set();
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -32,9 +33,9 @@ sealed class ArmableBlockingCloudUploadFailpointHandler : IPantsFailpointHandler
         }
     }
 
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
+    public void Arm() => Volatile.Write(ref _armed, 1);
+
+    public Task WaitUntilEnteredAsync(TimeSpan timeout) => _entered.Task.WaitAsync(timeout);
+
+    public void Release() => _release.Set();
 }

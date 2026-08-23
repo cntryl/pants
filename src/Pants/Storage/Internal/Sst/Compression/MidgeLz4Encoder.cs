@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Compression;
 
 // Matches lz4_flex 0.14's canonical independent-block output so Pants and Midge
 // emit identical persisted bytes. K4os remains the hardened decoder.
-internal static class MidgeLz4Encoder
+static class MidgeLz4Encoder
 {
     const int HashTableSize = 4 * 1024;
     const int MinimumMatchLength = 4;

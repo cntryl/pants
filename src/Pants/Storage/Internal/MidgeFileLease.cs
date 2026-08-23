@@ -1,19 +1,21 @@
-namespace Cntryl.Pants;
+using System.Text;
 
-internal sealed class MidgeFileLease : IDisposable
+namespace Cntryl.Pants.Storage.Internal;
+
+sealed class MidgeFileLease : IDisposable
 {
-    private static readonly TimeSpan LeaseTakeoverBaseDelay = TimeSpan.FromSeconds(60);
-    private readonly string _leaderPath;
-    private readonly string _lockPath;
-    private readonly string _holderId;
-    private readonly Action? _leaseLossCallback;
-    private readonly object _gate = new();
-    private readonly Timer _heartbeat;
-    private volatile bool _valid = true;
-    private bool _disposed;
-    private int _leaseLossNotified;
+    static readonly TimeSpan LeaseTakeoverBaseDelay = TimeSpan.FromSeconds(60);
+    readonly object _gate = new();
+    readonly Timer _heartbeat;
+    readonly string _holderId;
+    readonly string _leaderPath;
+    readonly Action? _leaseLossCallback;
+    readonly string _lockPath;
+    bool _disposed;
+    int _leaseLossNotified;
+    volatile bool _valid = true;
 
-    private MidgeFileLease(
+    MidgeFileLease(
         string root,
         string holderId,
         ulong epoch,
@@ -29,6 +31,35 @@ internal sealed class MidgeFileLease : IDisposable
     }
 
     public ulong Epoch { get; }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _heartbeat.Dispose();
+            try
+            {
+                using var leaseLock = AcquireMutationLock(_lockPath, _holderId);
+                var current = ReadRecord(_leaderPath);
+                if (current?.Epoch == Epoch && current.HolderId == _holderId)
+                {
+                    WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
+                }
+            }
+            catch
+            {
+                // Disposal is best-effort; the timestamp ages into a safe takeover.
+            }
+
+            _valid = false;
+        }
+    }
 
     public static MidgeFileLease Acquire(
         string root,
@@ -64,14 +95,14 @@ internal sealed class MidgeFileLease : IDisposable
             }
         }
 
-        ulong previousEpoch = Math.Max(current?.Epoch ?? 0, minimumEpoch);
+        var previousEpoch = Math.Max(current?.Epoch ?? 0, minimumEpoch);
         if (previousEpoch == ulong.MaxValue)
         {
             throw new PantsLeaseEpochExhaustedException(
                 "The Midge writer lease epoch cannot be advanced.");
         }
 
-        ulong epoch = previousEpoch + 1;
+        var epoch = previousEpoch + 1;
         WriteRecord(leaderPath, new LeaseRecord(epoch, holderId, DateTimeOffset.UtcNow.ToString("O")));
         var published = ReadRecord(leaderPath);
         if (published?.Epoch != epoch || published.HolderId != holderId)
@@ -115,9 +146,9 @@ internal sealed class MidgeFileLease : IDisposable
         }
     }
 
-    private void Renew()
+    void Renew()
     {
-        bool leaseLost = false;
+        var leaseLost = false;
         lock (_gate)
         {
             if (_disposed)
@@ -169,44 +200,16 @@ internal sealed class MidgeFileLease : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            _heartbeat.Dispose();
-            try
-            {
-                using var leaseLock = AcquireMutationLock(_lockPath, _holderId);
-                var current = ReadRecord(_leaderPath);
-                if (current?.Epoch == Epoch && current.HolderId == _holderId)
-                {
-                    WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
-                }
-            }
-            catch
-            {
-                // Disposal is best-effort; the timestamp ages into a safe takeover.
-            }
-
-            _valid = false;
-        }
-    }
-
-    private static LeaseMutationLock AcquireMutationLock(string path, string holderId)
+    static LeaseMutationLock AcquireMutationLock(string path, string holderId)
     {
         try
         {
             var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             using var writer = new StreamWriter(stream, leaveOpen: true);
-            writer.Write($"holder_id={holderId}\nowner_token={Guid.NewGuid():N}\ncreated_at={DateTimeOffset.UtcNow:O}\n");
+            writer.Write(
+                $"holder_id={holderId}\nowner_token={Guid.NewGuid():N}\ncreated_at={DateTimeOffset.UtcNow:O}\n");
             writer.Flush();
-            stream.Flush(flushToDisk: true);
+            stream.Flush(true);
             return new LeaseMutationLock(stream, path);
         }
         catch (IOException ex)
@@ -217,7 +220,7 @@ internal sealed class MidgeFileLease : IDisposable
         }
     }
 
-    private static LeaseRecord? ReadRecord(string path)
+    static LeaseRecord? ReadRecord(string path)
     {
         if (!File.Exists(path))
         {
@@ -227,7 +230,7 @@ internal sealed class MidgeFileLease : IDisposable
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var line in File.ReadAllLines(path))
         {
-            var parts = line.Split(": ", 2, StringSplitOptions.None);
+            var parts = line.Split(": ", 2);
             if (parts.Length == 2 && !fields.TryAdd(parts[0], parts[1]))
             {
                 throw new PantsLeaseIndeterminateException(
@@ -236,24 +239,25 @@ internal sealed class MidgeFileLease : IDisposable
         }
 
         return fields.TryGetValue("epoch", out var epochRaw) && ulong.TryParse(epochRaw, out var epoch) &&
-               fields.TryGetValue("holder_id", out var holderId) && fields.TryGetValue("acquired_at", out var acquiredAt)
+               fields.TryGetValue("holder_id", out var holderId) &&
+               fields.TryGetValue("acquired_at", out var acquiredAt)
             ? new LeaseRecord(epoch, holderId, acquiredAt)
             : throw new PantsLeaseIndeterminateException(
                 "Midge leader record is invalid; ownership is ambiguous.");
     }
 
-    private static void WriteRecord(string target, LeaseRecord record)
+    static void WriteRecord(string target, LeaseRecord record)
     {
         var content = $"epoch: {record.Epoch}\nholder_id: {record.HolderId}\nacquired_at: {record.AcquiredAt}\n";
-        AtomicStagedFile.Write(target, System.Text.Encoding.UTF8.GetBytes(content));
+        AtomicStagedFile.Write(target, Encoding.UTF8.GetBytes(content));
     }
 
-    private sealed record LeaseRecord(ulong Epoch, string HolderId, string AcquiredAt);
+    sealed record LeaseRecord(ulong Epoch, string HolderId, string AcquiredAt);
 
-    private sealed class LeaseMutationLock : IDisposable
+    sealed class LeaseMutationLock : IDisposable
     {
-        private readonly FileStream _stream;
-        private readonly string _path;
+        readonly string _path;
+        readonly FileStream _stream;
 
         public LeaseMutationLock(FileStream stream, string path)
         {

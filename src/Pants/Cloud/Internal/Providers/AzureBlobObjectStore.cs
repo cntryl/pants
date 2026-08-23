@@ -4,18 +4,18 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-internal sealed class AzureBlobObjectStore : ICloudObjectStore
+sealed class AzureBlobObjectStore : ICloudObjectStore
 {
     const int MaximumAttempts = 3;
     const string ServiceVersion = "2024-11-04";
-    readonly HttpClient _httpClient;
-    readonly Uri _containerEndpoint;
     readonly string _account;
+    readonly Uri _containerEndpoint;
+    readonly AzureResolvedCredential _credential;
+    readonly HttpClient _httpClient;
     readonly string _prefix;
     readonly TimeSpan _timeout;
-    readonly AzureResolvedCredential _credential;
 
     public AzureBlobObjectStore(
         PantsCloudProviderConfiguration.AzureBlob configuration,
@@ -48,8 +48,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         using var response = await SendReadAsync(
-            token => CreateGetRequestAsync(objectKey, token),
-            cancellationToken)
+                token => CreateGetRequestAsync(objectKey, token),
+                cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -60,7 +60,7 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
         var version = response.Headers.ETag?.Tag ??
-            throw new PantsIOException("Azure Blob GET response did not include an ETag.");
+                      throw new PantsIOException("Azure Blob GET response did not include an ETag.");
         return new CloudObject(data, version);
     }
 
@@ -69,8 +69,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         using var response = await SendReadAsync(
-            token => CreateHeadRequestAsync(objectKey, token),
-            cancellationToken)
+                token => CreateHeadRequestAsync(objectKey, token),
+                cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -83,11 +83,11 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
             : throw new PantsIOException(
                 "Azure Blob HEAD response did not include a valid Content-Length.");
         var etag = response.Headers.ETag?.Tag ??
-            throw new PantsIOException("Azure Blob HEAD response did not include an ETag.");
+                   throw new PantsIOException("Azure Blob HEAD response did not include an ETag.");
         return new CloudObjectMetadata(
             size,
             etag,
-            Generation: null,
+            null,
             response.Content.Headers.LastModified);
     }
 
@@ -99,8 +99,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
-            token => CreatePutRequestAsync(objectKey, data, condition, token),
-            cancellationToken)
+                token => CreatePutRequestAsync(objectKey, data, condition, token),
+                cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
         {
@@ -118,8 +118,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
     {
         var fullPrefix = CombinePrefix(prefix);
         using var response = await SendReadAsync(
-            token => CreateListRequestAsync(fullPrefix, continuationToken, token),
-            cancellationToken)
+                token => CreateListRequestAsync(fullPrefix, continuationToken, token),
+                cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken)
@@ -144,8 +144,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
-            token => CreateDeleteRequestAsync(objectKey, condition, token),
-            cancellationToken)
+                token => CreateDeleteRequestAsync(objectKey, condition, token),
+                cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -224,7 +224,7 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         };
         if (continuationToken is not null)
         {
-            parameters.Add(new("marker", continuationToken));
+            parameters.Add(new KeyValuePair<string, string>("marker", continuationToken));
         }
 
         builder.Query = string.Join(
@@ -262,12 +262,12 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: true, cancellationToken);
+        SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: false, cancellationToken);
+        SendAsync(requestFactory, false, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
@@ -486,8 +486,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
             ? CloudProviderXml.TryReadElementValue(body, "Code")
             : headerCode;
         return code is not null &&
-            (code.Equals("ConditionNotMet", StringComparison.OrdinalIgnoreCase) ||
-             code.Equals("TargetConditionNotMet", StringComparison.OrdinalIgnoreCase));
+               (code.Equals("ConditionNotMet", StringComparison.OrdinalIgnoreCase) ||
+                code.Equals("TargetConditionNotMet", StringComparison.OrdinalIgnoreCase));
     }
 
     static string RequireVersion(string version) =>
@@ -551,8 +551,8 @@ internal sealed class AzureBlobObjectStore : ICloudObjectStore
         var providerRequestId = response.Headers.TryGetValues(
             "x-ms-request-id",
             out var values)
-                ? values.FirstOrDefault() ?? "unavailable"
-                : "unavailable";
+            ? values.FirstOrDefault() ?? "unavailable"
+            : "unavailable";
         _ = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         throw new PantsIOException(
             $"Azure Blob request failed with HTTP {(int)response.StatusCode}; request ID {providerRequestId}.");

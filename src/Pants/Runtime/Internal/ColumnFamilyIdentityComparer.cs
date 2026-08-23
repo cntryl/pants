@@ -1,12 +1,12 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class ColumnFamilyIdentityComparer : IEqualityComparer<ColumnFamilyIdentity>
+sealed class ColumnFamilyIdentityComparer : IEqualityComparer<ColumnFamilyIdentity>
 {
-    public static ColumnFamilyIdentityComparer Instance { get; } = new();
-
-    private ColumnFamilyIdentityComparer()
+    ColumnFamilyIdentityComparer()
     {
     }
+
+    public static ColumnFamilyIdentityComparer Instance { get; } = new();
 
     public bool Equals(ColumnFamilyIdentity x, ColumnFamilyIdentity y) =>
         x.Id == y.Id && x.Name == y.Name && x.Generation == y.Generation;

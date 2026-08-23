@@ -1,8 +1,9 @@
-namespace Cntryl.Pants.Tests;
+using System.Globalization;
 
-internal sealed class TestCloudLeaseStore : ICloudLeaseStore
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
+
+sealed class TestCloudLeaseStore : ICloudLeaseStore
 {
-    CloudLeaseRecord? _lease;
     int _version;
 
     public Action? AfterNextRead { get; set; }
@@ -17,7 +18,7 @@ internal sealed class TestCloudLeaseStore : ICloudLeaseStore
 
     public bool IndeterminateReplace { get; set; }
 
-    public CloudLeaseRecord? Lease => _lease;
+    public CloudLeaseRecord? Lease { get; private set; }
 
     public int ReplaceAttempts { get; set; }
 
@@ -30,11 +31,11 @@ internal sealed class TestCloudLeaseStore : ICloudLeaseStore
                 "The conditional lease read outcome is unknown.");
         }
 
-        var snapshot = _lease is null
+        var snapshot = Lease is null
             ? null
             : new CloudLeaseSnapshot(
-                _lease,
-                _version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Lease,
+                _version.ToString(CultureInfo.InvariantCulture));
         var afterRead = AfterNextRead;
         AfterNextRead = null;
         afterRead?.Invoke();
@@ -46,12 +47,12 @@ internal sealed class TestCloudLeaseStore : ICloudLeaseStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_lease is not null)
+        if (Lease is not null)
         {
             return ValueTask.FromResult(false);
         }
 
-        _lease = lease;
+        Lease = lease;
         _version++;
         return ValueTask.FromResult(true);
     }
@@ -65,7 +66,7 @@ internal sealed class TestCloudLeaseStore : ICloudLeaseStore
         ReplaceAttempts++;
         if (!StringComparer.Ordinal.Equals(
                 expectedVersion,
-                _version.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                _version.ToString(CultureInfo.InvariantCulture)))
         {
             return false;
         }
@@ -81,7 +82,7 @@ internal sealed class TestCloudLeaseStore : ICloudLeaseStore
         IndeterminateReplace = false;
         if (!indeterminate || ApplyIndeterminateReplace)
         {
-            _lease = lease;
+            Lease = lease;
             _version++;
         }
 

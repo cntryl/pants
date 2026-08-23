@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class ProviderCloudPersistenceTests
 {
@@ -54,7 +57,7 @@ public sealed class ProviderCloudPersistenceTests
             firstLease);
         Assert.True(await firstPersistence.CompareExchangeDdlRegistryAsync(
             new CloudDdlRegistry(),
-            expectedVersion: null,
+            null,
             CancellationToken.None));
         var observed = Assert.IsType<CloudDdlRegistryObject>(
             await firstPersistence.ReadDdlRegistryAsync(CancellationToken.None));
@@ -128,7 +131,7 @@ public sealed class ProviderCloudPersistenceTests
         {
             Assert.True(await firstPersistence.CompareExchangeDdlRegistryAsync(
                 new CloudDdlRegistry(),
-                expectedVersion: null,
+                null,
                 CancellationToken.None));
             var observed = Assert.IsType<CloudDdlRegistryObject>(
                 await firstPersistence.ReadDdlRegistryAsync(CancellationToken.None));
@@ -142,7 +145,7 @@ public sealed class ProviderCloudPersistenceTests
         }
 
         staleRegistry.Epoch = 1;
-        using var staleEdit = System.Text.Json.JsonDocument.Parse(
+        using var staleEdit = JsonDocument.Parse(
             """{"CreateColumnFamily":{"id":1,"name":"stale-column-family","created_at":1}}""");
         staleRegistry.Operations.Add(new CloudDdlOperation
         {
@@ -229,7 +232,7 @@ public sealed class ProviderCloudPersistenceTests
             Assert.True(second.IsPrimaryLeaseHealthy);
         }
 
-        using var catalog = System.Text.Json.JsonDocument.Parse(
+        using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
         Assert.Equal(2UL, catalog.RootElement.GetProperty("fencing_epoch").GetUInt64());
     }
@@ -244,10 +247,9 @@ public sealed class ProviderCloudPersistenceTests
         };
         using var client = new HttpClient(handler);
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => PantsDatabase.OpenForTestingAsync(
-                PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
-                new PantsRuntimeDependencies(cloudHttpClient: client)).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
+            new PantsRuntimeDependencies(cloudHttpClient: client)).AsTask());
     }
 
     [Fact]
@@ -286,10 +288,10 @@ public sealed class ProviderCloudPersistenceTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
             .WithTtlClock(ttlClock)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: int.MaxValue));
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                int.MaxValue));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new PantsRuntimeDependencies(cloudHttpClient: client));
@@ -325,8 +327,8 @@ public sealed class ProviderCloudPersistenceTests
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             handler.FailWalWrites = true;
 
-            await Assert.ThrowsAsync<PantsInternalException>(
-                () => transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+            await Assert.ThrowsAsync<PantsInternalException>(() =>
+                transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
         }
 
         handler.FailWalWrites = false;
@@ -354,8 +356,8 @@ public sealed class ProviderCloudPersistenceTests
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         handler.AcknowledgeWalWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
 
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(cache.Path, "wal"),
@@ -379,8 +381,8 @@ public sealed class ProviderCloudPersistenceTests
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
 
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(cache.Path, "wal"),
@@ -436,10 +438,10 @@ public sealed class ProviderCloudPersistenceTests
         var options = PantsOpenOptions.Cloud(cache.Path, location)
             .WithBackgroundCompaction(false)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1));
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1));
 
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
@@ -592,8 +594,8 @@ public sealed class ProviderCloudPersistenceTests
             await CommitCloudAsyncAsync(database, "local-only-flush"u8.ToArray());
             handler.FailMetadataWrites = true;
 
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.FlushAsync(database.DefaultColumnFamily).AsTask());
         }
 
         handler.FailMetadataWrites = false;
@@ -621,17 +623,16 @@ public sealed class ProviderCloudPersistenceTests
             dependencies);
         await CommitCloudStrictAsync(database, "first"u8.ToArray());
         await database.FlushAsync(database.DefaultColumnFamily);
-        var remoteManifest = System.Text.Json.Nodes.JsonNode.Parse(
+        var remoteManifest = JsonNode.Parse(
             handler.GetObjectText("/metadata/manifest.snapshot.json"))!.AsObject();
         remoteManifest["last_persisted_sequence"] = 1_000_000UL;
         handler.ReplaceObjectText(
             "/metadata/manifest.snapshot.json",
             remoteManifest.ToJsonString());
 
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => CommitCloudStrictAsync(database, "second"u8.ToArray()));
+        await Assert.ThrowsAsync<PantsFencedException>(() => CommitCloudStrictAsync(database, "second"u8.ToArray()));
 
-        using var readback = System.Text.Json.JsonDocument.Parse(
+        using var readback = JsonDocument.Parse(
             handler.GetObjectText("/metadata/manifest.snapshot.json"));
         Assert.Equal(
             1_000_000UL,

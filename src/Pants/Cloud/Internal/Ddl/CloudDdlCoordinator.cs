@@ -1,15 +1,15 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 sealed class CloudDdlCoordinator
 {
     const string PrepareFileName = "ddl.prepare.json";
-
-    readonly string _preparePath;
     readonly ICloudDdlAuthority _authority;
     readonly LocalDiskStore _diskStore;
     readonly IPantsFailpointHandler _failpoints;
+
+    readonly string _preparePath;
     bool _authorityAmbiguous;
 
     public CloudDdlCoordinator(
@@ -47,7 +47,7 @@ sealed class CloudDdlCoordinator
             var bootstrap = FromLocalManifest();
             if (!await _authority.CompareExchangeDdlRegistryAsync(
                     bootstrap,
-                    expectedVersion: null,
+                    null,
                     cancellationToken).ConfigureAwait(false))
             {
                 throw new PantsFencedException(

@@ -1,25 +1,39 @@
 using System.Collections.Concurrent;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal sealed class SstReaderCache : IDisposable
+sealed class SstReaderCache : IDisposable
 {
-    private readonly ConcurrentDictionary<string, MidgeSstReader> _readers =
+    readonly ConcurrentDictionary<string, MidgeSstReader> _readers =
         new(StringComparer.Ordinal);
-    private int _disposed;
+
+    int _disposed;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        foreach (var (fileName, _) in _readers)
+        {
+            RemoveFile(fileName);
+        }
+    }
 
     public MidgeSstReader GetOrAdd(string fileName, string path, out bool cacheHit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (_readers.TryGetValue(fileName, out MidgeSstReader? cached))
+        if (_readers.TryGetValue(fileName, out var cached))
         {
             cacheHit = true;
             return cached;
         }
 
-        MidgeSstReader created = MidgeSstReader.Open(path);
+        var created = MidgeSstReader.Open(path);
         if (_readers.TryAdd(fileName, created))
         {
             cacheHit = false;
@@ -34,7 +48,7 @@ internal sealed class SstReaderCache : IDisposable
     public void RemoveFile(string fileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
-        if (_readers.TryRemove(fileName, out MidgeSstReader? reader))
+        if (_readers.TryRemove(fileName, out var reader))
         {
             reader.Dispose();
         }
@@ -42,17 +56,4 @@ internal sealed class SstReaderCache : IDisposable
 
     public IReadOnlyList<string> SnapshotFiles() =>
         _readers.Keys.Order(StringComparer.Ordinal).ToArray();
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        foreach ((string fileName, MidgeSstReader _) in _readers)
-        {
-            RemoveFile(fileName);
-        }
-    }
 }

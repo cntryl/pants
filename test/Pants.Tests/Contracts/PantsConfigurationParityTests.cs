@@ -1,16 +1,16 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsConfigurationParityTests
 {
     [Fact]
     public void ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder()
     {
-        PantsOpenOptions defaults = PantsOpenOptions.Local("relative-database");
-        PantsOpenOptions first = defaults
+        var defaults = PantsOpenOptions.Local("relative-database");
+        var first = defaults
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(128L * 1024 * 1024));
-        PantsOpenOptions second = defaults
+        var second = defaults
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(128L * 1024 * 1024))
             .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy)
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput);
@@ -35,19 +35,19 @@ public sealed class PantsConfigurationParityTests
     public void ShouldDeriveDistinctWorkloadAndPerformanceProfilesWithinTheBudget()
     {
         const long budget = 1024L * 1024 * 1024;
-        PantsOpenOptions latency = PantsOpenOptions.InMemory()
+        var latency = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Latency)
             .WithWorkloadProfile(PantsWorkloadProfile.ReadMostly);
-        PantsOpenOptions throughput = PantsOpenOptions.InMemory()
+        var throughput = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy);
-        PantsOpenOptions rangeScan = PantsOpenOptions.InMemory()
+        var rangeScan = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.RangeScan);
-        PantsOpenOptions economy = PantsOpenOptions.InMemory()
+        var economy = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Economy);
 
@@ -57,7 +57,7 @@ public sealed class PantsConfigurationParityTests
         Assert.All(
             [latency, throughput, rangeScan, economy],
             static options => Assert.True(
-                (2 * options.MemtableSizeLimitBytes) +
+                2 * options.MemtableSizeLimitBytes +
                 options.TransactionMemoryPoolBytes +
                 options.BlockCacheBytes <= options.MemoryBudgetBytes));
     }
@@ -71,13 +71,13 @@ public sealed class PantsConfigurationParityTests
     [InlineData(131_072)]
     public void ShouldAccountForEveryPoolWithinSmallExplicitBudgets(long budget)
     {
-        PantsOpenOptions options = PantsOpenOptions.InMemory()
+        var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
 
         Assert.Equal(budget, options.MemoryBudgetBytes);
         Assert.True(options.TransactionMemoryPoolBytes > 0);
         Assert.True(
-            (2 * options.MemtableSizeLimitBytes) +
+            2 * options.MemtableSizeLimitBytes +
             options.TransactionMemoryPoolBytes +
             options.BlockCacheBytes <= budget);
     }
@@ -85,7 +85,7 @@ public sealed class PantsConfigurationParityTests
     [Fact]
     public void ShouldAllocateTenPercentOfExplicitBudgetToTransactionsByDefault()
     {
-        PantsOpenOptions options = PantsOpenOptions.InMemory()
+        var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(1_000));
 
         Assert.Equal(100, options.TransactionMemoryPoolBytes);
@@ -94,7 +94,7 @@ public sealed class PantsConfigurationParityTests
     [Fact]
     public void ShouldValidateEveryExplicitConfigurationBoundary()
     {
-        PantsOpenOptions valid = PantsOpenOptions.InMemory()
+        var valid = PantsOpenOptions.InMemory()
             .WithStorageTimeout(TimeSpan.FromMilliseconds(1))
             .WithTransactionMemoryPool(1024)
             .WithMemtableLimits(2048, 1024)

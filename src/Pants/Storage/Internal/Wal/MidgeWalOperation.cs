@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal enum MidgeWalOperation : byte
+enum MidgeWalOperation : byte
 {
     Put = 0,
     Insert = 1,

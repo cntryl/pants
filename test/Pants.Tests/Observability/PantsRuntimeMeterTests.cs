@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeMeterTests
@@ -77,10 +77,10 @@ public sealed class PantsRuntimeMeterTests
         var cloudOptions = PantsOpenOptions
             .SimulatedCloud(cloudDirectory.Path, "pants-tests", "runtime-meter/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var cloud = await PantsDatabase.OpenAsync(cloudOptions);
         await CommitAsync(cloud, "cloud", PantsWriteOptions.CloudAsync);
@@ -116,8 +116,7 @@ public sealed class PantsRuntimeMeterTests
             await local.FlushAsync(local.DefaultColumnFamily);
             compactionFailure.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
 
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => local.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => local.CompactAllAsync().AsTask());
 
             Assert.Equal(1, (await local.GetRuntimeMetricsAsync()).CompactionFailures);
         }
@@ -133,8 +132,7 @@ public sealed class PantsRuntimeMeterTests
         await CommitAsync(cloud, "retry", PantsWriteOptions.CloudAsync);
         cloudFailure.Arm(PantsFailpoint.BeforeCloudUpload);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => cloud.FlushAsync(cloud.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => cloud.FlushAsync(cloud.DefaultColumnFamily).AsTask());
 
         await measurements.WaitForAsync(names, AssertionTimeout);
         Assert.True(measurements["pants.compactions.failed"] > 0);

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsColumnFamilyReclamationTests
@@ -11,10 +11,10 @@ public sealed class PantsColumnFamilyReclamationTests
     public async Task ShouldReclaimDroppedColumnFamilyFilesWithoutASnapshotPin(bool simulatedCloud)
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(CreateOptions(
+        await using var database = await PantsDatabase.OpenAsync(CreateOptions(
             directory.Path,
             simulatedCloud));
-        IPantsColumnFamily family = await CreateFlushedFamilyAsync(database, "reclaim-now");
+        var family = await CreateFlushedFamilyAsync(database, "reclaim-now");
         Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
 
         await database.DropColumnFamilyAsync(family);
@@ -31,11 +31,11 @@ public sealed class PantsColumnFamilyReclamationTests
     public async Task ShouldDeferReclamationUntilTheOldestSnapshotReleases(bool simulatedCloud)
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(CreateOptions(
+        await using var database = await PantsDatabase.OpenAsync(CreateOptions(
             directory.Path,
             simulatedCloud));
-        IPantsColumnFamily family = await CreateFlushedFamilyAsync(database, "reclaim-later");
-        await using IPantsTransaction snapshot = await database.BeginTransactionAsync(
+        var family = await CreateFlushedFamilyAsync(database, "reclaim-later");
+        await using var snapshot = await database.BeginTransactionAsync(
             family,
             PantsTransactionMode.ReadOnly);
 
@@ -133,7 +133,7 @@ public sealed class PantsColumnFamilyReclamationTests
                 []);
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path, simulatedCloud: true),
+            CreateOptions(directory.Path, true),
             new PantsRuntimeDependencies(failpoint, verifier));
         var family = await CreateFlushedFamilyAsync(database, "failed-reclamation");
         await using var snapshot = await database.BeginTransactionAsync(
@@ -184,7 +184,7 @@ public sealed class PantsColumnFamilyReclamationTests
             {
                 Volatile.Write(
                     ref filesSeenBySecondVerifier,
-                    FamilyFiles(directory.Path, familyId, simulatedCloud: false).Length);
+                    FamilyFiles(directory.Path, familyId, false).Length);
             }
 
             return new PantsStorageVerificationReport(
@@ -202,7 +202,7 @@ public sealed class PantsColumnFamilyReclamationTests
                 []);
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path, simulatedCloud: false),
+            CreateOptions(directory.Path, false),
             new PantsRuntimeDependencies(storageVerifier: verifier));
         var family = await CreateFlushedFamilyAsync(database, "ordered-reclamation");
         familyId = family.Id;
@@ -236,8 +236,8 @@ public sealed class PantsColumnFamilyReclamationTests
         IPantsDatabase database,
         string name)
     {
-        IPantsColumnFamily family = await database.CreateColumnFamilyAsync(name);
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        var family = await database.CreateColumnFamilyAsync(name);
+        await using var transaction = await database.BeginTransactionAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
@@ -269,8 +269,8 @@ public sealed class PantsColumnFamilyReclamationTests
 
     static string[] FamilyFiles(string path, uint familyId, bool simulatedCloud)
     {
-        string pattern = $"{familyId:000000}_*.sst";
-        string[] local = Directory.GetFiles(Path.Combine(path, "sst"), pattern);
+        var pattern = $"{familyId:000000}_*.sst";
+        var local = Directory.GetFiles(Path.Combine(path, "sst"), pattern);
         return simulatedCloud
             ? [.. local, .. Directory.GetFiles(Path.Combine(path, "cloud_store", "sst"), pattern)]
             : local;

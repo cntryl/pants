@@ -1,13 +1,13 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed class SstScanReadValidator : IScanReadValidator
+sealed class SstScanReadValidator : IScanReadValidator
 {
-    private readonly RuntimeTelemetry _telemetry;
-    private readonly IReadOnlyList<MidgeSstReader> _readers;
-    private readonly IReadOnlyList<SstScanBlock> _blocks;
-    private readonly int _candidateSsts;
-    private int _dataBlocksRead;
-    private int _disposed;
+    readonly IReadOnlyList<SstScanBlock> _blocks;
+    readonly int _candidateSsts;
+    readonly IReadOnlyList<MidgeSstReader> _readers;
+    readonly RuntimeTelemetry _telemetry;
+    int _dataBlocksRead;
+    int _disposed;
 
     public SstScanReadValidator(
         RuntimeTelemetry telemetry,
@@ -23,7 +23,7 @@ internal sealed class SstScanReadValidator : IScanReadValidator
 
     public void ValidateKey(ReadOnlySpan<byte> key)
     {
-        foreach (SstScanBlock block in _blocks)
+        foreach (var block in _blocks)
         {
             if (!block.IsValidated && block.Contains(key))
             {
@@ -34,7 +34,7 @@ internal sealed class SstScanReadValidator : IScanReadValidator
 
     public void Complete()
     {
-        foreach (SstScanBlock block in _blocks)
+        foreach (var block in _blocks)
         {
             if (!block.IsValidated)
             {
@@ -50,7 +50,7 @@ internal sealed class SstScanReadValidator : IScanReadValidator
             return;
         }
 
-        foreach (MidgeSstReader reader in _readers)
+        foreach (var reader in _readers)
         {
             reader.Dispose();
         }
@@ -59,12 +59,12 @@ internal sealed class SstScanReadValidator : IScanReadValidator
             _candidateSsts,
             _blocks.Count,
             _dataBlocksRead,
-            readerCacheHits: 0,
-            readerCacheMisses: _candidateSsts,
-            rangeTombstoneScans: _candidateSsts);
+            0,
+            _candidateSsts,
+            _candidateSsts);
     }
 
-    private void Validate(SstScanBlock block)
+    void Validate(SstScanBlock block)
     {
         _ = block.Reader.ReadDataBlock(block.BlockIndex);
         block.IsValidated = true;

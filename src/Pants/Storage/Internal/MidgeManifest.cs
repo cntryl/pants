@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal sealed class MidgeManifest
+sealed class MidgeManifest
 {
     public ulong LastPersistedSequence { get; set; }
 

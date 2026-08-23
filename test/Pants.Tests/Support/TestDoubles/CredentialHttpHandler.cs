@@ -1,10 +1,11 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class CredentialHttpHandler(
+sealed class CredentialHttpHandler(
     Func<RecordedCredentialRequest, int, HttpResponseMessage> responseFactory) : HttpMessageHandler
 {
     readonly Func<RecordedCredentialRequest, int, HttpResponseMessage> _responseFactory =
         responseFactory;
+
     int _requestCount;
 
     public List<RecordedCredentialRequest> Requests { get; } = [];

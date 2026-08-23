@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class MonotonicPantsClock : IPantsClock
+sealed class MonotonicPantsClock : IPantsClock
 {
-    private readonly IPantsClock _inner;
-    private long _latestUtcTicks;
+    readonly IPantsClock _inner;
+    long _latestUtcTicks;
 
     public MonotonicPantsClock(IPantsClock inner)
     {
@@ -14,10 +14,10 @@ internal sealed class MonotonicPantsClock : IPantsClock
     {
         get
         {
-            long observed = _inner.UtcNow.UtcTicks;
+            var observed = _inner.UtcNow.UtcTicks;
             while (true)
             {
-                long latest = Volatile.Read(ref _latestUtcTicks);
+                var latest = Volatile.Read(ref _latestUtcTicks);
                 if (observed <= latest)
                 {
                     return new DateTimeOffset(latest, TimeSpan.Zero);

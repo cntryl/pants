@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsTelemetryContractTests
 {
@@ -30,10 +30,10 @@ public sealed class PantsTelemetryContractTests
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "telemetry-cloud-wal/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
 
@@ -67,10 +67,10 @@ public sealed class PantsTelemetryContractTests
             .SimulatedCloud(directory.Path, "pants-tests", "telemetry-cloud-wal-failure/")
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -120,10 +120,10 @@ public sealed class PantsTelemetryContractTests
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "telemetry-flush-retry/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: int.MaxValue))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                int.MaxValue))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -131,8 +131,7 @@ public sealed class PantsTelemetryContractTests
         await CommitAsync(database, "retry", PantsWriteOptions.CloudAsync);
         failpoints.Arm(PantsFailpoint.BeforeCloudUpload);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
         await WaitForAsync(() => Directory
             .EnumerateFiles(
                 Path.Combine(directory.Path, "cloud_store", "sst"),
@@ -166,10 +165,10 @@ public sealed class PantsTelemetryContractTests
     [Fact]
     public async Task ShouldReportPerDatabaseReadPathActivity()
     {
-        await using IPantsDatabase first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsDatabase second = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var second = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        await using (IPantsTransaction transaction = await first.BeginTransactionAsync(
+        await using (var transaction = await first.BeginTransactionAsync(
                          first.DefaultColumnFamily,
                          PantsTransactionMode.ReadOnly))
         {
@@ -177,8 +176,8 @@ public sealed class PantsTelemetryContractTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        PantsReadPathDiagnostics firstDiagnostics = await first.GetReadPathDiagnosticsAsync();
-        PantsReadPathDiagnostics secondDiagnostics = await second.GetReadPathDiagnosticsAsync();
+        var firstDiagnostics = await first.GetReadPathDiagnosticsAsync();
+        var secondDiagnostics = await second.GetReadPathDiagnosticsAsync();
 
         Assert.Equal(1, firstDiagnostics.ReadOnlyTransactionsBegun);
         Assert.Equal(1, firstDiagnostics.ReadOnlySnapshotCacheHits);
@@ -191,14 +190,14 @@ public sealed class PantsTelemetryContractTests
     [Fact]
     public async Task ShouldClassifyPointWriteCoveredByRangeAsPointConflict()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction pointWriter = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var pointWriter = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         pointWriter.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         pointWriter.Put("key"u8.ToArray(), "first"u8.ToArray());
 
-        await using (IPantsTransaction rangeWriter = await database.BeginTransactionAsync(
+        await using (var rangeWriter = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -209,7 +208,7 @@ public sealed class PantsTelemetryContractTests
         await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
             pointWriter.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
-        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.WriteConflictsTotal);
         Assert.Equal(1, metrics.WriteConflictsPointTotal);
         Assert.Equal(0, metrics.WriteConflictsRangeTotal);
@@ -219,13 +218,13 @@ public sealed class PantsTelemetryContractTests
     public async Task ShouldReportBloomRejectionsAndDataBlockReads()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
-            for (int index = 0; index < 64; index++)
+            for (var index = 0; index < 64; index++)
             {
                 writer.Put(TestBytes.FromString($"key-{index:D4}"), new byte[1024]);
             }
@@ -234,19 +233,19 @@ public sealed class PantsTelemetryContractTests
         }
 
         await database.FlushAsync(database.DefaultColumnFamily);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("key-0001"u8.ToArray()));
         Assert.NotNull(await reader.GetAsync("key-0001"u8.ToArray()));
-        for (int index = 0; index < 32; index++)
+        for (var index = 0; index < 32; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-{index:D4}-absent")));
         }
 
-        PantsReadPathDiagnostics diagnostics = await database.GetReadPathDiagnosticsAsync();
-        PantsReadAmplificationMetrics amplification = await database.GetReadAmplificationMetricsAsync();
-        PantsRuntimeMetrics runtime = await database.GetRuntimeMetricsAsync();
+        var diagnostics = await database.GetReadPathDiagnosticsAsync();
+        var amplification = await database.GetReadAmplificationMetricsAsync();
+        var runtime = await database.GetRuntimeMetricsAsync();
         Assert.True(diagnostics.BloomChecks >= 33);
         Assert.True(diagnostics.BloomRejects > 0);
         Assert.True(diagnostics.DataBlocksRead < diagnostics.BloomChecks);
@@ -281,9 +280,9 @@ public sealed class PantsTelemetryContractTests
     public async Task ShouldReportPhysicalSstWorkGivenFlushedRangeScan()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -295,18 +294,18 @@ public sealed class PantsTelemetryContractTests
         }
 
         await database.FlushAsync(database.DefaultColumnFamily);
-        PantsReadPathDiagnostics before = await database.GetReadPathDiagnosticsAsync();
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        var before = await database.GetReadPathDiagnosticsAsync();
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        await using IPantsScan scan = await reader.ScanAsync(new PantsScanQuery());
+        await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
-        await foreach (PantsEntry entry in scan)
+        await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
 
-        PantsReadPathDiagnostics after = await database.GetReadPathDiagnosticsAsync();
+        var after = await database.GetReadPathDiagnosticsAsync();
         Assert.Equal(2, entries.Count);
         Assert.True(after.CandidateSstFilesChecked > before.CandidateSstFilesChecked);
         Assert.True(after.CandidateBlocksChecked > before.CandidateBlocksChecked);
@@ -318,9 +317,9 @@ public sealed class PantsTelemetryContractTests
     public async Task ShouldLeaveHotBlockCacheContentsUnchangedGivenStreamingScan()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -333,26 +332,26 @@ public sealed class PantsTelemetryContractTests
         }
 
         await database.FlushAsync(database.DefaultColumnFamily);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
         Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
-        PantsReadPathDiagnostics beforeScan = await database.GetReadPathDiagnosticsAsync();
+        var beforeScan = await database.GetReadPathDiagnosticsAsync();
 
-        await using (IPantsScan scan = await reader.ScanAsync(new PantsScanQuery()))
+        await using (var scan = await reader.ScanAsync(new PantsScanQuery()))
         {
-            await foreach (PantsEntry _ in scan)
+            await foreach (var _ in scan)
             {
             }
         }
 
-        PantsReadPathDiagnostics afterScan = await database.GetReadPathDiagnosticsAsync();
+        var afterScan = await database.GetReadPathDiagnosticsAsync();
         Assert.Equal(beforeScan.SstBlockCacheHits, afterScan.SstBlockCacheHits);
         Assert.Equal(beforeScan.SstBlockCacheMisses, afterScan.SstBlockCacheMisses);
 
         Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
-        PantsReadPathDiagnostics afterHotRead = await database.GetReadPathDiagnosticsAsync();
+        var afterHotRead = await database.GetReadPathDiagnosticsAsync();
         Assert.Equal(afterScan.SstBlockCacheHits + 1, afterHotRead.SstBlockCacheHits);
         Assert.Equal(afterScan.SstBlockCacheMisses, afterHotRead.SstBlockCacheMisses);
     }
@@ -361,9 +360,9 @@ public sealed class PantsTelemetryContractTests
     public async Task ShouldGateBloomAndDiskIoWithPersistedKeyRange()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -372,13 +371,13 @@ public sealed class PantsTelemetryContractTests
         }
 
         await database.FlushAsync(database.DefaultColumnFamily);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Null(await reader.GetAsync("outside"u8.ToArray()));
 
-        PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.GetReadAmplificationMetricsAsync();
         var runtime = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.KeyRangeRejectsTotal);
         Assert.Equal(1, runtime.SstKeyRangeRejectsTotal);
@@ -392,9 +391,9 @@ public sealed class PantsTelemetryContractTests
     public async Task ShouldClassifyBloomTrueAndFalsePositives()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -407,7 +406,7 @@ public sealed class PantsTelemetryContractTests
         }
 
         await database.FlushAsync(database.DefaultColumnFamily);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("key-0032"u8.ToArray()));
@@ -416,7 +415,7 @@ public sealed class PantsTelemetryContractTests
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-0032-{index:0000}")));
         }
 
-        PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.GetReadAmplificationMetricsAsync();
         var runtime = await database.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.BloomTruePositivesTotal);
         Assert.True(metrics.BloomFalsePositivesTotal > 0);

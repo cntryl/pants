@@ -1,21 +1,23 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class PublishedFlushRetryValidationFailpointHandler :
     IPantsFailpointHandler,
     IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    readonly ManualResetEventSlim _release = new(false);
 
     readonly TaskCompletionSource _retryValidationEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _release = new(initialState: false);
+
     int _publicationFailureInjected;
     int _retryValidationBlocked;
 
-    public async Task WaitForRetryValidationAsync(TimeSpan timeout) =>
-        await _retryValidationEntered.Task.WaitAsync(timeout);
-
-    public void Release() => _release.Set();
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -38,9 +40,8 @@ sealed class PublishedFlushRetryValidationFailpointHandler :
         }
     }
 
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
+    public async Task WaitForRetryValidationAsync(TimeSpan timeout) =>
+        await _retryValidationEntered.Task.WaitAsync(timeout);
+
+    public void Release() => _release.Set();
 }

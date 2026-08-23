@@ -1,11 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal static class PantsStorageVerifier
+static class PantsStorageVerifier
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -22,7 +22,7 @@ internal static class PantsStorageVerifier
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static PantsStorageVerificationReport VerifyPath(
+    static PantsStorageVerificationReport VerifyPath(
         string path,
         CancellationToken cancellationToken)
     {
@@ -31,7 +31,8 @@ internal static class PantsStorageVerifier
         {
             root = Path.GetFullPath(path);
         }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException
+                                              or PathTooLongException)
         {
             throw PantsException.Create(PantsErrorCode.InvalidPath, "The database path is invalid.", exception);
         }
@@ -42,7 +43,7 @@ internal static class PantsStorageVerifier
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        string formatPath = Path.Combine(root, "FORMAT");
+        var formatPath = Path.Combine(root, "FORMAT");
         if (!File.Exists(formatPath) || File.ReadAllText(formatPath) != "midge-format-version=3\n")
         {
             throw PantsException.Create(
@@ -50,7 +51,7 @@ internal static class PantsStorageVerifier
                 "The path does not contain a valid Midge FORMAT v3 marker.");
         }
 
-        string manifestPath = File.Exists(Path.Combine(root, "manifest.snapshot.json"))
+        var manifestPath = File.Exists(Path.Combine(root, "manifest.snapshot.json"))
             ? Path.Combine(root, "manifest.snapshot.json")
             : Path.Combine(root, "manifest.json");
         if (!File.Exists(manifestPath))
@@ -72,14 +73,14 @@ internal static class PantsStorageVerifier
 
         long bytesVerified = 0;
         long dataBlocksVerified = 0;
-        int sstFilesVerified = 0;
+        var sstFilesVerified = 0;
         var warnings = new List<string>();
         var ownedSsts = new HashSet<string>(StringComparer.Ordinal);
-        foreach (MidgeFileMeta file in manifest.Files)
+        foreach (var file in manifest.Files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string safeName = ValidateFileName(file.Name);
-            string sstPath = Path.Combine(root, "sst", safeName);
+            var safeName = ValidateFileName(file.Name);
+            var sstPath = Path.Combine(root, "sst", safeName);
             if (!File.Exists(sstPath))
             {
                 throw PantsException.Create(
@@ -87,7 +88,7 @@ internal static class PantsStorageVerifier
                     $"Manifest SST '{safeName}' is missing.");
             }
 
-            byte[] bytes = File.ReadAllBytes(sstPath);
+            var bytes = File.ReadAllBytes(sstPath);
             if (checked((ulong)bytes.Length) != file.SizeBytes)
             {
                 throw PantsException.Create(
@@ -129,10 +130,10 @@ internal static class PantsStorageVerifier
             sstFilesVerified++;
         }
 
-        string sstDirectory = Path.Combine(root, "sst");
+        var sstDirectory = Path.Combine(root, "sst");
         if (Directory.Exists(sstDirectory))
         {
-            foreach (string file in Directory.EnumerateFiles(sstDirectory, "*.sst"))
+            foreach (var file in Directory.EnumerateFiles(sstDirectory, "*.sst"))
             {
                 if (!ownedSsts.Contains(Path.GetFileName(file)))
                 {
@@ -141,16 +142,16 @@ internal static class PantsStorageVerifier
             }
         }
 
-        (long walRecords, long walBytes, long? walBoundary) = VerifyWal(root, cancellationToken);
+        var (walRecords, walBytes, walBoundary) = VerifyWal(root, cancellationToken);
         bytesVerified = checked(bytesVerified + walBytes);
 
-        int intentEntries = 0;
-        string intentPath = Path.Combine(root, "intent_log.json");
+        var intentEntries = 0;
+        var intentPath = Path.Combine(root, "intent_log.json");
         if (File.Exists(intentPath))
         {
             try
             {
-                using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
+                using var document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
                 if (document.RootElement.ValueKind != JsonValueKind.Array)
                 {
                     throw new JsonException("The intent log root is not an array.");
@@ -172,7 +173,7 @@ internal static class PantsStorageVerifier
             }
         }
 
-        string journalPath = Path.Combine(root, "manifest.journal");
+        var journalPath = Path.Combine(root, "manifest.journal");
         if (!File.Exists(journalPath))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "The manifest journal is missing.");
@@ -190,8 +191,8 @@ internal static class PantsStorageVerifier
                 exception);
         }
 
-        string retainedWalDirectory = Path.Combine(root, "wal");
-        foreach (string retained in Directory.Exists(retainedWalDirectory)
+        var retainedWalDirectory = Path.Combine(root, "wal");
+        foreach (var retained in Directory.Exists(retainedWalDirectory)
                      ? Directory.EnumerateFiles(
                          retainedWalDirectory,
                          "*.salvage-retained*",
@@ -201,7 +202,7 @@ internal static class PantsStorageVerifier
             warnings.Add($"Salvage-retained WAL preserved: {Path.GetFileName(retained)}");
         }
 
-        PantsEngineHealth health = warnings.Count == 0
+        var health = warnings.Count == 0
             ? PantsEngineHealth.Healthy
             : PantsEngineHealth.Degraded;
         return new PantsStorageVerificationReport(
@@ -219,11 +220,11 @@ internal static class PantsStorageVerifier
             warnings);
     }
 
-    private static (long Records, long Bytes, long? Boundary) VerifyWal(
+    static (long Records, long Bytes, long? Boundary) VerifyWal(
         string root,
         CancellationToken cancellationToken)
     {
-        string walDirectory = Path.Combine(root, "wal");
+        var walDirectory = Path.Combine(root, "wal");
         if (!Directory.Exists(walDirectory))
         {
             return (0, 0, null);
@@ -408,7 +409,7 @@ internal static class PantsStorageVerifier
         return (records, decodedBytes, boundary);
     }
 
-    private static void ValidateSealedWalName(string name)
+    static void ValidateSealedWalName(string name)
     {
         ReadOnlySpan<char> stem = Path.GetFileNameWithoutExtension(name);
         if (stem.Length != 20 || stem.ContainsAnyExceptInRange('0', '9'))
@@ -419,7 +420,7 @@ internal static class PantsStorageVerifier
         }
     }
 
-    private static string ValidateFileName(string name)
+    static string ValidateFileName(string name)
     {
         if (string.IsNullOrEmpty(name) ||
             name != Path.GetFileName(name) ||
@@ -434,26 +435,26 @@ internal static class PantsStorageVerifier
         return name;
     }
 
-    private static void ValidateIntentLogSstNames(JsonElement element)
+    static void ValidateIntentLogSstNames(JsonElement element)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                foreach (JsonProperty property in element.EnumerateObject())
+                foreach (var property in element.EnumerateObject())
                 {
                     ValidateIntentLogSstNames(property.Value);
                 }
 
                 break;
             case JsonValueKind.Array:
-                foreach (JsonElement item in element.EnumerateArray())
+                foreach (var item in element.EnumerateArray())
                 {
                     ValidateIntentLogSstNames(item);
                 }
 
                 break;
             case JsonValueKind.String:
-                string? value = element.GetString();
+                var value = element.GetString();
                 if (value is not null && value.EndsWith(".sst", StringComparison.Ordinal))
                 {
                     _ = ValidateFileName(value);

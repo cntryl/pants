@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class VerificationCompactionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,12 +6,15 @@ sealed class VerificationCompactionRaceFailpointHandler : IPantsFailpointHandler
 
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _release = new(initialState: false);
+
+    readonly ManualResetEventSlim _release = new(false);
     int _hit;
 
-    public Task WaitUntilEnteredAsync(TimeSpan timeout) => _entered.Task.WaitAsync(timeout);
-
-    public void Release() => _release.Set();
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -28,9 +31,7 @@ sealed class VerificationCompactionRaceFailpointHandler : IPantsFailpointHandler
         }
     }
 
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
+    public Task WaitUntilEnteredAsync(TimeSpan timeout) => _entered.Task.WaitAsync(timeout);
+
+    public void Release() => _release.Set();
 }

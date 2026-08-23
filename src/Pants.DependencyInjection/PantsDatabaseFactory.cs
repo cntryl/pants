@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.DependencyInjection;
 
-internal sealed class PantsDatabaseFactory : IPantsDatabaseFactory
+sealed class PantsDatabaseFactory : IPantsDatabaseFactory
 {
     public ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,

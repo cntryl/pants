@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudProviderEngineQualificationTests
 {
@@ -140,7 +140,7 @@ public sealed class CloudProviderEngineQualificationTests
         {
             await WriteFlushRecoverAsync(
                 PantsCloudStorageTopology.Shared(location),
-                cloudHttpClient: null);
+                null);
         }
         finally
         {
@@ -186,7 +186,7 @@ public sealed class CloudProviderEngineQualificationTests
             "bucket",
             "us-test-1",
             new Uri($"https://{host}"),
-            PathStyle: true,
+            true,
             new PantsS3CredentialSource.StaticCredentials("access", "secret")),
         prefix);
 

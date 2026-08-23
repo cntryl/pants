@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal static class SstBlockCachePolicyFactory
+static class SstBlockCachePolicyFactory
 {
     public static ISstBlockCachePolicy Create(PantsBlockCachePolicy policy) => policy switch
     {

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Time.Internal;
 
-internal static class PantsUnixTimestamp
+static class PantsUnixTimestamp
 {
     static readonly long MaximumDateTimeUnixMilliseconds =
         DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();

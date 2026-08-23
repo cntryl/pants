@@ -1,10 +1,10 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal.Spill;
 
-internal sealed class TransactionIntentReadView : IDisposable
+sealed class TransactionIntentReadView : IDisposable
 {
-    readonly TransactionSpillStore? _store;
-    readonly TransactionSpillRun[] _runs;
     readonly TransactionIntentOperation[] _residentOperations;
+    readonly TransactionSpillRun[] _runs;
+    readonly TransactionSpillStore? _store;
     int _disposed;
 
     public TransactionIntentReadView(
@@ -21,6 +21,14 @@ internal sealed class TransactionIntentReadView : IDisposable
         _store = store;
         _runs = runs;
         _residentOperations = residentOperations.ToArray();
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _store?.ReleaseReadView();
+        }
     }
 
     public TransactionIntentLookup? LookupLatest(ReadOnlySpan<byte> key)
@@ -84,14 +92,6 @@ internal sealed class TransactionIntentReadView : IDisposable
             }
 
             throw;
-        }
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            _store?.ReleaseReadView();
         }
     }
 }

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsPersistenceBoundaryParityTests
 {
@@ -10,7 +10,7 @@ public sealed class PantsPersistenceBoundaryParityTests
     {
         using var directory = new TemporaryDirectory();
         var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
                          new PantsRuntimeDependencies(handler)))
         {
@@ -20,11 +20,10 @@ public sealed class PantsPersistenceBoundaryParityTests
                 await database.FlushAsync(database.DefaultColumnFamily);
             }
 
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.CompactAllAsync().AsTask());
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         for (var index = 0; index < 3; index++)
         {
@@ -44,16 +43,16 @@ public sealed class PantsPersistenceBoundaryParityTests
     {
         using var directory = new TemporaryDirectory();
         var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
                          new PantsRuntimeDependencies(handler)))
         {
             await PutAsync(database, "key", "value");
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.FlushAsync(database.DefaultColumnFamily).AsTask());
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.Equal("value", await ReadAsync(reopened, "key"));
         await reopened.FlushAsync(reopened.DefaultColumnFamily);
@@ -64,19 +63,19 @@ public sealed class PantsPersistenceBoundaryParityTests
     {
         using var directory = new TemporaryDirectory();
         var createHandler = new OneShotFailpointHandler(PantsFailpoint.BeforeManifestJournalAppend);
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
                          new PantsRuntimeDependencies(createHandler)))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CreateColumnFamilyAsync("failed-create").AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.CreateColumnFamilyAsync("failed-create").AsTask());
             Assert.Null(await database.GetColumnFamilyAsync("failed-create"));
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.Null(await reopened.GetColumnFamilyAsync("failed-create"));
-        IPantsColumnFamily retained = await reopened.CreateColumnFamilyAsync("retained");
+        var retained = await reopened.CreateColumnFamilyAsync("retained");
         await reopened.FlushAsync(retained);
     }
 
@@ -88,15 +87,15 @@ public sealed class PantsPersistenceBoundaryParityTests
     {
         using var directory = new TemporaryDirectory();
         var handler = new OneShotFailpointHandler(Enum.Parse<PantsFailpoint>(failpointName));
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
                          new PantsRuntimeDependencies(handler)))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CreateColumnFamilyAsync("recovered-create").AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.CreateColumnFamilyAsync("recovered-create").AsTask());
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.NotNull(await reopened.GetColumnFamilyAsync("recovered-create"));
     }
@@ -105,10 +104,10 @@ public sealed class PantsPersistenceBoundaryParityTests
     public async Task ShouldKeepColumnFamilyUsableWhenDropManifestAppendFails()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase seed = await PantsDatabase.OpenAsync(
+        await using var seed = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        IPantsColumnFamily seeded = await seed.CreateColumnFamilyAsync("retained");
-        await using (IPantsTransaction transaction = await seed.BeginTransactionAsync(
+        var seeded = await seed.CreateColumnFamilyAsync("retained");
+        await using (var transaction = await seed.BeginTransactionAsync(
                          seeded,
                          PantsTransactionMode.ReadWrite))
         {
@@ -120,21 +119,20 @@ public sealed class PantsPersistenceBoundaryParityTests
         await seed.DisposeAsync();
 
         var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeManifestJournalAppend);
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
                          new PantsRuntimeDependencies(handler)))
         {
-            IPantsColumnFamily family = Assert.IsAssignableFrom<IPantsColumnFamily>(
+            var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
                 await database.GetColumnFamilyAsync("retained"));
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.DropColumnFamilyAsync(family).AsTask());
-            await using IPantsTransaction reader = await database.BeginTransactionAsync(
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.DropColumnFamilyAsync(family).AsTask());
+            await using var reader = await database.BeginTransactionAsync(
                 family,
                 PantsTransactionMode.ReadOnly);
             Assert.Equal("value", TestBytes.ToText((await reader.GetAsync("key"u8.ToArray()))!.Value));
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.NotNull(await reopened.GetColumnFamilyAsync("retained"));
     }
@@ -145,7 +143,7 @@ public sealed class PantsPersistenceBoundaryParityTests
     public async Task ShouldRecoverWhenManifestCheckpointPublicationFails(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        await using (IPantsDatabase seed = await PantsDatabase.OpenAsync(
+        await using (var seed = await PantsDatabase.OpenAsync(
                          PantsOpenOptions.Local(directory.Path)))
         {
             await PutAsync(seed, "key", "value");
@@ -156,7 +154,7 @@ public sealed class PantsPersistenceBoundaryParityTests
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(handler)).AsTask());
 
-        await using IPantsDatabase recovered = await PantsDatabase.OpenAsync(
+        await using var recovered = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.Equal("value", await ReadAsync(recovered, "key"));
     }
@@ -165,7 +163,7 @@ public sealed class PantsPersistenceBoundaryParityTests
     public async Task ShouldRejectPersistedStateWithoutFormatMarker()
     {
         using var directory = new TemporaryDirectory();
-        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using (var database = await PantsDatabase.OpenAsync(
                          PantsOpenOptions.Local(directory.Path)))
         {
             await PutAsync(database, "key", "value");
@@ -173,32 +171,32 @@ public sealed class PantsPersistenceBoundaryParityTests
 
         File.Delete(Path.Combine(directory.Path, "FORMAT"));
 
-        PantsCompatibilityException error = await Assert.ThrowsAsync<PantsCompatibilityException>(
-            () => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
+        var error = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
+            PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
         Assert.Equal(PantsErrorCode.CompatibilityError, error.Code);
     }
 
-    private static async Task PutAsync(IPantsDatabase database, string key, string value)
+    static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
 
-    private static async Task<string?> ReadAsync(IPantsDatabase database, string key)
+    static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? value = await transaction.GetAsync(TestBytes.FromString(key));
+        var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is null ? null : TestBytes.ToText(value.Value);
     }
 
-    private sealed class OneShotFailpointHandler(PantsFailpoint target) : IPantsFailpointHandler
+    sealed class OneShotFailpointHandler(PantsFailpoint target) : IPantsFailpointHandler
     {
-        private int _triggered;
+        int _triggered;
 
         public void Hit(PantsFailpoint failpoint)
         {

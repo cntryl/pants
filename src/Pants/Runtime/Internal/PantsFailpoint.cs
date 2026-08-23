@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal enum PantsFailpoint
+enum PantsFailpoint
 {
     BeforeWalAppend,
     MidWalAppend,

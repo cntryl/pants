@@ -1,9 +1,11 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCommitCoalescingCrashRecoveryTests
@@ -65,7 +67,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(30));
         _ = await blockedMetrics;
-        throw new Xunit.Sdk.XunitException(
+        throw new XunitException(
             "The child completed every commit without aborting after the shared WAL sync.");
     }
 
@@ -155,8 +157,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsAbortedException>(
-                () => commit.WaitAsync(TimeSpan.FromSeconds(10)));
+            await Assert.ThrowsAsync<PantsAbortedException>(() => commit.WaitAsync(TimeSpan.FromSeconds(10)));
         }
 
         await using (var suffix = await database.BeginTransactionAsync(
@@ -164,18 +165,15 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(
-                () => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsAbortedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.CompactAllAsync().AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.CreateColumnFamilyAsync("fenced-family").AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+            database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.CompactAllAsync().AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+            database.CreateColumnFamilyAsync("fenced-family").AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
 
         WriteDurableSignal(
             Path.Combine(databasePath, RollbackFailureSentinelFileName),
@@ -203,8 +201,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             rejected.Put("uncertain-single"u8.ToArray(), "uncertain"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(
-                () => rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsAbortedException>(() =>
+                rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using (var suffix = await database.BeginTransactionAsync(
@@ -212,14 +210,12 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-single-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(
-                () => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsAbortedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.CreateColumnFamilyAsync("fenced-single-family").AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+            database.CreateColumnFamilyAsync("fenced-single-family").AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
 
         WriteDurableSignal(
             Path.Combine(databasePath, SingleRollbackFailureSentinelFileName),
@@ -337,8 +333,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var start = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                Environment.ProcessPath ??
-                "dotnet",
+                       Environment.ProcessPath ??
+                       "dotnet",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -353,7 +349,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         start.Environment[ChildScenarioEnvironmentVariable] = scenario;
         start.Environment[DatabasePathEnvironmentVariable] = databasePath;
         var child = Process.Start(start) ??
-            throw new InvalidOperationException($"Could not start the {childDescription}.");
+                    throw new InvalidOperationException($"Could not start the {childDescription}.");
         return (
             child,
             child.StandardOutput.ReadToEndAsync(),
@@ -370,7 +366,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             {
                 if (child.HasExited)
                 {
-                    throw new Xunit.Sdk.XunitException(
+                    throw new XunitException(
                         $"Coalesced-commit crash child exited with code {child.ExitCode} " +
                         "before readiness.");
                 }
@@ -380,7 +376,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Coalesced-commit crash child did not become ready within 30 seconds.",
                 exception);
         }
@@ -395,7 +391,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Coalesced-commit crash child did not exit within 15 seconds after readiness.",
                 exception);
         }
@@ -452,7 +448,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Coalesced-commit crash child did not release the writer lock within 30 seconds.",
                 exception);
         }
@@ -498,10 +494,10 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             FileMode.CreateNew,
             FileAccess.Write,
             FileShare.Read,
-            bufferSize: 4_096,
+            4_096,
             FileOptions.WriteThrough);
         stream.Write(bytes);
-        stream.Flush(flushToDisk: true);
+        stream.Flush(true);
     }
 
     static void TryKillProcessTree(Process process)
@@ -510,14 +506,14 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
+                process.Kill(true);
             }
         }
         catch (InvalidOperationException)
         {
             // The process exited after HasExited was observed.
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
             // Lock-release validation below remains the primary failure.
         }

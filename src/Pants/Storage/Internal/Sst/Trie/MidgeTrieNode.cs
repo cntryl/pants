@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Trie;
 
-internal sealed class MidgeTrieNode(
+sealed class MidgeTrieNode(
     ushort prefixLength,
     byte[] keyDelta,
     uint? blockId)
@@ -15,7 +15,7 @@ internal sealed class MidgeTrieNode(
 
     public void AddChild(MidgeTrieEdge edge)
     {
-        int index = Children.BinarySearch(
+        var index = Children.BinarySearch(
             edge,
             Comparer<MidgeTrieEdge>.Create(static (left, right) =>
                 left.FirstByte.CompareTo(right.FirstByte)));
@@ -31,7 +31,7 @@ internal sealed class MidgeTrieNode(
 
     public bool TryGetChild(byte firstByte, out MidgeTrieEdge edge)
     {
-        int index = Children.BinarySearch(
+        var index = Children.BinarySearch(
             new MidgeTrieEdge(firstByte, 0),
             Comparer<MidgeTrieEdge>.Create(static (left, right) =>
                 left.FirstByte.CompareTo(right.FirstByte)));

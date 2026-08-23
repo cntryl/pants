@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 static class CloudDdlEdit
 {

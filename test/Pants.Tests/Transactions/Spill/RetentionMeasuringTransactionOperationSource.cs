@@ -1,15 +1,15 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed class RetentionMeasuringTransactionOperationSource(ITransactionOperationSource inner)
+sealed class RetentionMeasuringTransactionOperationSource(ITransactionOperationSource inner)
     : ITransactionOperationSource
 {
     readonly List<WeakReference<byte[]>> _visitedKeys = [];
 
+    public int RetainedVisitedKeyCount { get; private set; }
+
     public ulong Count => inner.Count;
 
     public bool IsSpilled => inner.IsSpilled;
-
-    public int RetainedVisitedKeyCount { get; private set; }
 
     public void Validate() => inner.Validate();
 

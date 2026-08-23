@@ -5,17 +5,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-internal sealed class GcsObjectStore : ICloudObjectStore
+sealed class GcsObjectStore : ICloudObjectStore
 {
-    private const int MaximumAttempts = 3;
-    private readonly PantsCloudProviderConfiguration.Gcs _configuration;
-    private readonly HttpClient _httpClient;
-    private readonly Uri _endpoint;
-    private readonly string _prefix;
-    private readonly TimeSpan _timeout;
-    private readonly GcsCredential _credential;
+    const int MaximumAttempts = 3;
+    readonly PantsCloudProviderConfiguration.Gcs _configuration;
+    readonly GcsCredential _credential;
+    readonly Uri _endpoint;
+    readonly HttpClient _httpClient;
+    readonly string _prefix;
+    readonly TimeSpan _timeout;
 
     public GcsObjectStore(
         PantsCloudProviderConfiguration.Gcs configuration,
@@ -49,7 +49,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
                 HttpMethod.Get,
                 objectKey,
                 ReadOnlyMemory<byte>.Empty,
-                condition: null,
+                null,
                 token),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -153,12 +153,12 @@ internal sealed class GcsObjectStore : ICloudObjectStore
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: true, cancellationToken);
+        SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: false, cancellationToken);
+        SendAsync(requestFactory, false, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
@@ -231,14 +231,14 @@ internal sealed class GcsObjectStore : ICloudObjectStore
         CloudObjectWriteCondition? condition,
         CancellationToken cancellationToken)
     {
-        string fullKey = CombineKey(objectKey);
-        Uri uri = _configuration.ApiStyle == PantsGcsApiStyle.Json
+        var fullKey = CombineKey(objectKey);
+        var uri = _configuration.ApiStyle == PantsGcsApiStyle.Json
             ? BuildJsonUri(method, fullKey, condition)
             : BuildXmlUri(fullKey);
         var requestMethod = method == HttpMethod.Put &&
-            _configuration.ApiStyle == PantsGcsApiStyle.Json
-                ? HttpMethod.Post
-                : method;
+                            _configuration.ApiStyle == PantsGcsApiStyle.Json
+            ? HttpMethod.Post
+            : method;
         var request = new HttpRequestMessage(requestMethod, uri);
         if (method == HttpMethod.Put)
         {
@@ -346,7 +346,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
         var relative = method == HttpMethod.Get
             ? $"storage/v1/b/{bucket}/o/{escapedName}?alt=media"
             : $"upload/storage/v1/b/{bucket}/o?uploadType=media&name={escapedName}";
-        string? generation = condition switch
+        var generation = condition switch
         {
             null or CloudObjectWriteCondition.Unconditional => null,
             CloudObjectWriteCondition.IfAbsent => "0",
@@ -375,7 +375,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
                 break;
             case CloudObjectDeleteCondition.IfVersion expected:
                 builder.Query = "ifGenerationMatch=" +
-                    Uri.EscapeDataString(RequireVersion(expected.Version));
+                                Uri.EscapeDataString(RequireVersion(expected.Version));
                 break;
             default:
                 throw PantsException.InvalidArgument(
@@ -428,7 +428,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
               Uri.EscapeDataString(continuationToken);
     }
 
-    private static void ApplyXmlCondition(
+    static void ApplyXmlCondition(
         HttpRequestMessage request,
         CloudObjectWriteCondition? condition)
     {
@@ -511,7 +511,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
             : throw new PantsIOException(
                 "GCS XML metadata response did not include a valid Content-Length.");
         var etag = response.Headers.ETag?.Tag ??
-            throw new PantsIOException("GCS XML metadata response did not include an ETag.");
+                   throw new PantsIOException("GCS XML metadata response did not include an ETag.");
         return new CloudObjectMetadata(
             size,
             etag,
@@ -618,13 +618,13 @@ internal sealed class GcsObjectStore : ICloudObjectStore
             {
                 using var document = JsonDocument.Parse(body);
                 reason = document.RootElement.TryGetProperty("error", out var error) &&
-                    error.TryGetProperty("errors", out var errors) &&
-                    errors.ValueKind == JsonValueKind.Array &&
-                    errors.GetArrayLength() > 0 &&
-                    errors[0].TryGetProperty("reason", out var value) &&
-                    value.ValueKind == JsonValueKind.String
-                        ? value.GetString()
-                        : null;
+                         error.TryGetProperty("errors", out var errors) &&
+                         errors.ValueKind == JsonValueKind.Array &&
+                         errors.GetArrayLength() > 0 &&
+                         errors[0].TryGetProperty("reason", out var value) &&
+                         value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
             }
             catch (JsonException)
             {
@@ -633,8 +633,8 @@ internal sealed class GcsObjectStore : ICloudObjectStore
         }
 
         return reason is not null &&
-            (reason.Equals("conditionNotMet", StringComparison.OrdinalIgnoreCase) ||
-             reason.Equals("PreconditionFailed", StringComparison.OrdinalIgnoreCase));
+               (reason.Equals("conditionNotMet", StringComparison.OrdinalIgnoreCase) ||
+                reason.Equals("PreconditionFailed", StringComparison.OrdinalIgnoreCase));
     }
 
     static string ReadRequiredJsonString(
@@ -653,8 +653,8 @@ internal sealed class GcsObjectStore : ICloudObjectStore
         var generation = response.Headers.TryGetValues(
             "x-goog-generation",
             out var generations)
-                ? generations.FirstOrDefault()
-                : null;
+            ? generations.FirstOrDefault()
+            : null;
         return ValidateGeneration(generation, operation);
     }
 
@@ -684,9 +684,9 @@ internal sealed class GcsObjectStore : ICloudObjectStore
     {
         _ = payload;
         var accessId = _credential.HmacAccessId ??
-            throw new PantsInternalException("GCS HMAC access ID is unavailable.");
+                       throw new PantsInternalException("GCS HMAC access ID is unavailable.");
         var secret = _credential.HmacSecret ??
-            throw new PantsInternalException("GCS HMAC secret is unavailable.");
+                     throw new PantsInternalException("GCS HMAC secret is unavailable.");
         var date = DateTimeOffset.UtcNow.ToString("R", CultureInfo.InvariantCulture);
         request.Headers.Date = DateTimeOffset.ParseExact(date, "R", CultureInfo.InvariantCulture);
         var authorization = CreateGoog1Authorization(request, accessId, secret, date);
@@ -778,7 +778,7 @@ internal sealed class GcsObjectStore : ICloudObjectStore
     {
         if (!response.IsSuccessStatusCode)
         {
-            string requestId = response.Headers.TryGetValues("x-guploader-uploadid", out var values)
+            var requestId = response.Headers.TryGetValues("x-guploader-uploadid", out var values)
                 ? values.FirstOrDefault() ?? "unavailable"
                 : "unavailable";
             throw new PantsIOException(

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class CloudWalSealController
 {
@@ -40,8 +40,8 @@ sealed class CloudWalSealController
     public bool ShouldSeal(long activeWalBytes) =>
         PendingWrites > 0 &&
         (activeWalBytes >= _policy.WalSealMinimumSegmentBytes ||
-            PendingWrites >= _policy.WalSealMaximumPendingWrites ||
-            RemainingDelay == TimeSpan.Zero);
+         PendingWrites >= _policy.WalSealMaximumPendingWrites ||
+         RemainingDelay == TimeSpan.Zero);
 
     public void RecordSeal()
     {

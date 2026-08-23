@@ -2,15 +2,15 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
+sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
 {
-    readonly PantsAzureCredentialSource _source;
     readonly Uri _blobEndpoint;
-    readonly HttpClient _httpClient;
-    readonly TimeSpan _timeout;
     readonly SemaphoreSlim _gate = new(1, 1);
+    readonly HttpClient _httpClient;
+    readonly PantsAzureCredentialSource _source;
+    readonly TimeSpan _timeout;
     CachedAzureToken? _cached;
     int _disposed;
 
@@ -76,28 +76,28 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
 
     ValueTask<CachedAzureToken> RefreshClientSecretAsync(
         CancellationToken cancellationToken) => RequestOAuthTokenAsync(
-            RequireEnvironment("AZURE_TENANT_ID"),
-            new Dictionary<string, string>
-            {
-                ["grant_type"] = "client_credentials",
-                ["client_id"] = RequireEnvironment("AZURE_CLIENT_ID"),
-                ["client_secret"] = RequireEnvironment("AZURE_CLIENT_SECRET"),
-                ["scope"] = "https://storage.azure.com/.default"
-            },
-            cancellationToken);
+        RequireEnvironment("AZURE_TENANT_ID"),
+        new Dictionary<string, string>
+        {
+            ["grant_type"] = "client_credentials",
+            ["client_id"] = RequireEnvironment("AZURE_CLIENT_ID"),
+            ["client_secret"] = RequireEnvironment("AZURE_CLIENT_SECRET"),
+            ["scope"] = "https://storage.azure.com/.default"
+        },
+        cancellationToken);
 
     async ValueTask<CachedAzureToken> RefreshWorkloadIdentityAsync(
         PantsAzureCredentialSource.WorkloadIdentity source,
         CancellationToken cancellationToken)
     {
         var tenant = FirstNonempty(source.TenantId, Environment.GetEnvironmentVariable("AZURE_TENANT_ID")) ??
-            throw new PantsInvalidArgumentException("Missing AZURE_TENANT_ID.");
+                     throw new PantsInvalidArgumentException("Missing AZURE_TENANT_ID.");
         var client = FirstNonempty(source.ClientId, Environment.GetEnvironmentVariable("AZURE_CLIENT_ID")) ??
-            throw new PantsInvalidArgumentException("Missing AZURE_CLIENT_ID.");
+                     throw new PantsInvalidArgumentException("Missing AZURE_CLIENT_ID.");
         var tokenPath = FirstNonempty(
-            source.TokenFile,
-            Environment.GetEnvironmentVariable("AZURE_FEDERATED_TOKEN_FILE")) ??
-            throw new PantsInvalidArgumentException("Missing AZURE_FEDERATED_TOKEN_FILE.");
+                            source.TokenFile,
+                            Environment.GetEnvironmentVariable("AZURE_FEDERATED_TOKEN_FILE")) ??
+                        throw new PantsInvalidArgumentException("Missing AZURE_FEDERATED_TOKEN_FILE.");
         string assertion;
         try
         {
@@ -152,9 +152,9 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
                 ? ParseManagedIdentityEndpoint(msiEndpoint, "MSI_ENDPOINT")
                 : new Uri("http://169.254.169.254/metadata/identity/oauth2/token");
         var apiVersion = !string.IsNullOrWhiteSpace(msiEndpoint) &&
-            string.IsNullOrWhiteSpace(identityEndpoint)
-                ? "2017-09-01"
-                : "2019-08-01";
+                         string.IsNullOrWhiteSpace(identityEndpoint)
+            ? "2017-09-01"
+            : "2019-08-01";
         var builder = new UriBuilder(endpoint);
         var parameters = new List<KeyValuePair<string, string>>
         {
@@ -163,7 +163,7 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
         };
         if (clientId is not null)
         {
-            parameters.Add(new("client_id", clientId));
+            parameters.Add(new KeyValuePair<string, string>("client_id", clientId));
         }
 
         builder.Query = string.Join(
@@ -192,7 +192,7 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
         EnsureSuccess(response, "Azure managed identity token request");
         return await ParseTokenResponseAsync(
             response,
-            requireAbsoluteExpiry: true,
+            true,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -215,7 +215,7 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
         EnsureSuccess(response, "Azure OAuth token request");
         return await ParseTokenResponseAsync(
             response,
-            requireAbsoluteExpiry: false,
+            false,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -311,7 +311,7 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
             }
 
             var token = root.TryGetProperty("access_token", out var tokenElement) &&
-                tokenElement.ValueKind == JsonValueKind.String
+                        tokenElement.ValueKind == JsonValueKind.String
                 ? tokenElement.GetString()
                 : null;
             if (string.IsNullOrWhiteSpace(token))
@@ -337,8 +337,8 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
                 }
             }
             else if (!requireAbsoluteExpiry &&
-                root.TryGetProperty("expires_in", out var relative) &&
-                TryReadPositiveInt64(relative, out var lifetime) && lifetime > 0)
+                     root.TryGetProperty("expires_in", out var relative) &&
+                     TryReadPositiveInt64(relative, out var lifetime) && lifetime > 0)
             {
                 try
                 {
@@ -401,9 +401,8 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
         return endpoint;
     }
 
-    static bool HasCompleteEnvironment(params string[] names) => names.All(
-        static name => !string.IsNullOrWhiteSpace(
-            Environment.GetEnvironmentVariable(name)));
+    static bool HasCompleteEnvironment(params string[] names) => names.All(static name => !string.IsNullOrWhiteSpace(
+        Environment.GetEnvironmentVariable(name)));
 
     static string RequireEnvironment(string name)
     {
@@ -425,11 +424,11 @@ internal sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDispo
         }
 
         return value.ValueKind == JsonValueKind.String &&
-            long.TryParse(
-                value.GetString(),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture,
-                out result);
+               long.TryParse(
+                   value.GetString(),
+                   NumberStyles.None,
+                   CultureInfo.InvariantCulture,
+                   out result);
     }
 
     static void EnsureSuccess(HttpResponseMessage response, string operation)

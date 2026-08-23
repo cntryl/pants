@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal sealed class SstBlockCache
+sealed class SstBlockCache
 {
-    private const int DefaultShardCount = 16;
-    private readonly SstBlockCacheShard[] _shards;
+    const int DefaultShardCount = 16;
+    readonly SstBlockCacheShard[] _shards;
 
     public SstBlockCache(
         PantsBlockCachePolicy policy,
@@ -18,11 +18,11 @@ internal sealed class SstBlockCache
 
         ArgumentOutOfRangeException.ThrowIfNegative(capacityBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(shardCount);
-        int capacityLimitedShardCount = capacityBytes == 0
+        var capacityLimitedShardCount = capacityBytes == 0
             ? 1
             : checked((int)Math.Min(capacityBytes, int.MaxValue));
-        int resolvedShardCount = Math.Min(shardCount, capacityLimitedShardCount);
-        long shardCapacity = capacityBytes / resolvedShardCount;
+        var resolvedShardCount = Math.Min(shardCount, capacityLimitedShardCount);
+        var shardCapacity = capacityBytes / resolvedShardCount;
         _shards = Enumerable.Range(0, resolvedShardCount)
             .Select(index => new SstBlockCacheShard(
                 shardCapacity,
@@ -45,7 +45,7 @@ internal sealed class SstBlockCache
     public void RemoveFile(string fileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
-        foreach (SstBlockCacheShard shard in _shards)
+        foreach (var shard in _shards)
         {
             shard.RemoveFile(fileName);
         }
@@ -60,5 +60,5 @@ internal sealed class SstBlockCache
     internal int GetShardIndex(SstBlockCacheKey key) =>
         checked((int)(unchecked((uint)key.GetHashCode()) % (uint)_shards.Length));
 
-    private SstBlockCacheShard GetShard(SstBlockCacheKey key) => _shards[GetShardIndex(key)];
+    SstBlockCacheShard GetShard(SstBlockCacheKey key) => _shards[GetShardIndex(key)];
 }

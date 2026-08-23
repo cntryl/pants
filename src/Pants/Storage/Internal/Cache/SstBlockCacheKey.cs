@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal readonly record struct SstBlockCacheKey(string FileName, int BlockIndex);
+readonly record struct SstBlockCacheKey(string FileName, int BlockIndex);

@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class RuntimeCommand<T> : IRuntimeCommand
+sealed class RuntimeCommand<T> : IRuntimeCommand
 {
-    readonly Func<PantsRuntimeState, ValueTask<T>> _operation;
     readonly CancellationToken _callerCancellationToken;
+    readonly Func<PantsRuntimeState, ValueTask<T>> _operation;
     readonly RuntimeResponseSlot<T> _response = new();
 
     public RuntimeCommand(
@@ -15,8 +15,6 @@ internal sealed class RuntimeCommand<T> : IRuntimeCommand
     }
 
     public Task<T> Response => _response.Response;
-
-    public void UnregisterResponse() => _response.Unregister();
 
     public async ValueTask ExecuteAsync(PantsRuntimeState state)
     {
@@ -38,4 +36,6 @@ internal sealed class RuntimeCommand<T> : IRuntimeCommand
             _response.Fail(publicException);
         }
     }
+
+    public void UnregisterResponse() => _response.Unregister();
 }

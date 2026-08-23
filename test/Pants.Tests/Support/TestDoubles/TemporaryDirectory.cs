@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class TemporaryDirectory : IDisposable
+sealed class TemporaryDirectory : IDisposable
 {
     public TemporaryDirectory()
     {
@@ -16,7 +16,7 @@ internal sealed class TemporaryDirectory : IDisposable
     {
         if (Directory.Exists(Path))
         {
-            Directory.Delete(Path, recursive: true);
+            Directory.Delete(Path, true);
         }
     }
 }

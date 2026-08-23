@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
 sealed record CloudWalSealResult(
     SealedWalSegment? Segment,

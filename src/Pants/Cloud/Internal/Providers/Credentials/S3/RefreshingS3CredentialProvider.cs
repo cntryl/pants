@@ -2,14 +2,14 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
+sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 {
-    readonly string _region;
-    readonly HttpClient _httpClient;
-    readonly TimeSpan _timeout;
     readonly SemaphoreSlim _gate = new(1, 1);
+    readonly HttpClient _httpClient;
+    readonly string _region;
+    readonly TimeSpan _timeout;
     CachedS3Credentials? _cached;
     int _disposed;
 
@@ -21,6 +21,14 @@ internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, ID
         _region = region;
         _httpClient = httpClient;
         _timeout = timeout;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _gate.Dispose();
+        }
     }
 
     public async ValueTask<S3Credentials> GetCredentialsAsync(
@@ -49,25 +57,17 @@ internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, ID
         }
     }
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            _gate.Dispose();
-        }
-    }
-
     async ValueTask<CachedS3Credentials> ResolveFreshAsync(
         CancellationToken cancellationToken)
     {
         if (S3CredentialResolver.FromEnvironment() is { } environment)
         {
-            return new CachedS3Credentials(environment, ExpiresAt: null);
+            return new CachedS3Credentials(environment, null);
         }
 
         if (S3CredentialResolver.FromDefaultProfile() is { } profile)
         {
-            return new CachedS3Credentials(profile, ExpiresAt: null);
+            return new CachedS3Credentials(profile, null);
         }
 
         if (Environment.GetEnvironmentVariable("AWS_ROLE_ARN") is not null ||
@@ -83,7 +83,7 @@ internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, ID
         }
 
         if (Environment.GetEnvironmentVariable("AWS_EC2_METADATA_DISABLED")
-            ?.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+                ?.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
         {
             throw new PantsInvalidArgumentException(
                 "EC2 IMDS credential resolution is disabled by AWS_EC2_METADATA_DISABLED.");
@@ -175,7 +175,7 @@ internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, ID
             }
         }
         else if (Environment.GetEnvironmentVariable("AWS_CONTAINER_AUTHORIZATION_TOKEN") is { } authorization &&
-            !string.IsNullOrWhiteSpace(authorization))
+                 !string.IsNullOrWhiteSpace(authorization))
         {
             request.Headers.TryAddWithoutValidation("Authorization", authorization);
         }
@@ -441,9 +441,9 @@ internal sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, ID
         }
 
         return IPAddress.IsLoopback(address) ||
-            address.Equals(IPAddress.Parse("169.254.170.2")) ||
-            address.Equals(IPAddress.Parse("169.254.170.23")) ||
-            address.Equals(IPAddress.Parse("fd00:ec2::23"));
+               address.Equals(IPAddress.Parse("169.254.170.2")) ||
+               address.Equals(IPAddress.Parse("169.254.170.23")) ||
+               address.Equals(IPAddress.Parse("fd00:ec2::23"));
     }
 
     static string RequireEnvironment(string name)

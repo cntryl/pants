@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal.Spill;
 
-internal sealed record TransactionIntentLookup(
+sealed record TransactionIntentLookup(
     ulong Ordinal,
     byte[]? Value,
     bool IsDeleted)
@@ -13,14 +13,14 @@ internal sealed record TransactionIntentLookup(
         var candidate = operation.Kind switch
         {
             CommitOperationKind.Put when operation.Key.AsSpan().SequenceEqual(key) =>
-                new TransactionIntentLookup(operation.Ordinal, operation.Value, IsDeleted: false),
+                new TransactionIntentLookup(operation.Ordinal, operation.Value, false),
             CommitOperationKind.Delete when operation.Key.AsSpan().SequenceEqual(key) =>
-                new TransactionIntentLookup(operation.Ordinal, null, IsDeleted: true),
+                new TransactionIntentLookup(operation.Ordinal, null, true),
             CommitOperationKind.DeleteRange when
                 operation.EndExclusive is not null &&
                 operation.Key.AsSpan().SequenceCompareTo(key) <= 0 &&
                 key.SequenceCompareTo(operation.EndExclusive) < 0 =>
-                new TransactionIntentLookup(operation.Ordinal, null, IsDeleted: true),
+                new TransactionIntentLookup(operation.Ordinal, null, true),
             _ => null
         };
         if (candidate is not null && (latest is null || candidate.Ordinal > latest.Ordinal))

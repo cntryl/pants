@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsMemoryManagementContractTests
 {

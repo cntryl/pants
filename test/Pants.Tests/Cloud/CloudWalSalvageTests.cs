@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudWalSalvageTests
 {
@@ -26,25 +26,25 @@ public sealed class CloudWalSalvageTests
     static byte[] CreateSplitWalBytes() => Frame(
         MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionBegin,
-            transactionId: 1,
-            sequence: 1,
-            writerEpoch: 7),
+            1,
+            1,
+            7),
         MidgeWalCodec.EncodeTransactionMutation(
             new MidgeWalMutation(
-                ColumnFamilyId: 0,
+                0,
                 MidgeWalOperation.Put,
                 "alpha"u8.ToArray(),
                 "value"u8.ToArray(),
-                Sequence: 2,
-                Expiration: null,
-                RangeEnd: null),
-            transactionId: 1,
-            writerEpoch: 7),
+                2,
+                null,
+                null),
+            1,
+            7),
         MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionCommit,
-            transactionId: 1,
-            sequence: 3,
-            writerEpoch: 7));
+            1,
+            3,
+            7));
 
     static byte[] Frame(params byte[][] payloads)
     {

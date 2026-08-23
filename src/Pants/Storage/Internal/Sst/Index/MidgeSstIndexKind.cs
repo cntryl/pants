@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Index;
 
-internal enum MidgeSstIndexKind : byte
+enum MidgeSstIndexKind : byte
 {
     Sparse = 0,
     Trie = 1

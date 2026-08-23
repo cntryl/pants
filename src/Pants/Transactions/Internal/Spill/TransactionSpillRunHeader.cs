@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal.Spill;
 
-internal sealed record TransactionSpillRunHeader(
+sealed record TransactionSpillRunHeader(
     int RecordCount,
     ulong OrdinalTableOffset,
     ulong SparseIndexOffset,

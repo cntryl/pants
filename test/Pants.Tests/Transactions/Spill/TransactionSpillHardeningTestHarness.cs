@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal static class TransactionSpillHardeningTestHarness
+static class TransactionSpillHardeningTestHarness
 {
     const int DefaultPoolBytes = 1_024;
     const int DefaultValueBytes = 900;

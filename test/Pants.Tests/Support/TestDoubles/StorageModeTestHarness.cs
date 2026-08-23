@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal static class StorageModeTestHarness
+static class StorageModeTestHarness
 {
     public static ValueTask<IPantsDatabase> OpenAsync(string mode, string path) =>
         PantsDatabase.OpenAsync(mode switch

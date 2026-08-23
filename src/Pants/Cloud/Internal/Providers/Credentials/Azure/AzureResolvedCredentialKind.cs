@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal enum AzureResolvedCredentialKind
+enum AzureResolvedCredentialKind
 {
     SharedKey,
     Sas,

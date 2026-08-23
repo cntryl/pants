@@ -1,20 +1,22 @@
-namespace Cntryl.Pants;
+using System.Collections;
 
-internal sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
+namespace Cntryl.Pants.Transactions.Internal.Spill;
+
+sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
 {
-    readonly TransactionSpillStore _store;
-    readonly FileStream _stream;
     readonly ulong _dataEnd;
-    readonly byte[]? _startInclusive;
     readonly byte[]? _endExclusive;
     readonly bool _reverse;
     readonly List<(ulong Start, ulong End)> _reverseChunks;
-    IEnumerator<byte[]> _reverseKeys = Enumerable.Empty<byte[]>().GetEnumerator();
-    byte[]? _previousKey;
+    readonly byte[]? _startInclusive;
+    readonly TransactionSpillStore _store;
+    readonly FileStream _stream;
     ulong _cursor;
-    int _nextReverseChunk;
-    bool _exhausted;
     int _disposed;
+    bool _exhausted;
+    int _nextReverseChunk;
+    byte[]? _previousKey;
+    IEnumerator<byte[]> _reverseKeys = Enumerable.Empty<byte[]>().GetEnumerator();
 
     internal TransactionSpillRunKeyCursor(
         TransactionSpillStore store,
@@ -34,7 +36,7 @@ internal sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 16 * 1_024,
+                16 * 1_024,
                 FileOptions.RandomAccess);
             var header = store.ReadRunHeader(_stream, run);
             _dataEnd = header.OrdinalTableOffset;
@@ -69,7 +71,7 @@ internal sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
 
     public byte[] Current { get; private set; } = [];
 
-    object System.Collections.IEnumerator.Current => Current;
+    object IEnumerator.Current => Current;
 
     public bool MoveNext()
     {

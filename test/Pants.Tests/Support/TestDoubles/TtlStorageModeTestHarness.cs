@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal static class TtlStorageModeTestHarness
+static class TtlStorageModeTestHarness
 {
     internal static ValueTask<IPantsDatabase> OpenAsync(
         TtlStorageMode mode,

@@ -1,25 +1,25 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
-internal static class CompactionMerger
+static class CompactionMerger
 {
     public static CompactionMergeResult Merge(
         IEnumerable<MidgeSstContents> contents,
         CompactionPlan plan)
     {
         ulong? horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : null;
-        MidgeRangeTombstone[] allRanges = contents
+        var allRanges = contents
             .SelectMany(static content => content.RangeTombstones)
             .OrderBy(static tombstone => tombstone.Start, ByteArrayComparer.Instance)
             .ThenByDescending(static tombstone => tombstone.Sequence)
             .ToArray();
-        MidgeRangeTombstone[] retainedRanges = allRanges
+        var retainedRanges = allRanges
             .Where(tombstone => !CanDrop(tombstone.Sequence, horizon, plan.RangeTombstoneGcEligible))
             .ToArray();
-        MidgeRangeTombstone[] droppedRanges = allRanges
+        var droppedRanges = allRanges
             .Where(tombstone => CanDrop(tombstone.Sequence, horizon, plan.RangeTombstoneGcEligible))
             .ToArray();
 
-        MidgeSstEntry[] entries = contents
+        var entries = contents
             .SelectMany(static content => content.Entries)
             .Where(entry => !droppedRanges.Any(range => Covers(range, entry)))
             .GroupBy(static entry => entry.Key, ByteArrayComparer.Instance)
@@ -34,18 +34,18 @@ internal static class CompactionMerger
         return new CompactionMergeResult(entries, retainedRanges);
     }
 
-    private static List<MidgeSstEntry> RetainVersions(
+    static List<MidgeSstEntry> RetainVersions(
         IEnumerable<MidgeSstEntry> orderedEntries,
         ulong? horizon,
         bool tombstoneGcEligible)
     {
-        MidgeSstEntry[] versions = orderedEntries.ToArray();
+        var versions = orderedEntries.ToArray();
         if (versions.Length == 0)
         {
             return [];
         }
 
-        MidgeSstEntry newest = versions[0];
+        var newest = versions[0];
         if (newest.IsDelete && CanDrop(newest.Sequence, horizon, tombstoneGcEligible))
         {
             return [];
@@ -57,7 +57,7 @@ internal static class CompactionMerger
         }
 
         var retained = versions.TakeWhile(entry => entry.Sequence > horizon.Value).ToList();
-        MidgeSstEntry? visibleAtHorizon = versions.FirstOrDefault(entry => entry.Sequence <= horizon.Value);
+        var visibleAtHorizon = versions.FirstOrDefault(entry => entry.Sequence <= horizon.Value);
         if (visibleAtHorizon is not null)
         {
             retained.Add(visibleAtHorizon);
@@ -66,10 +66,10 @@ internal static class CompactionMerger
         return retained;
     }
 
-    private static bool CanDrop(ulong sequence, ulong? horizon, bool eligible) =>
+    static bool CanDrop(ulong sequence, ulong? horizon, bool eligible) =>
         eligible && (horizon is null || sequence <= horizon.Value);
 
-    private static bool Covers(MidgeRangeTombstone range, MidgeSstEntry entry) =>
+    static bool Covers(MidgeRangeTombstone range, MidgeSstEntry entry) =>
         entry.Sequence < range.Sequence &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.Start) >= 0 &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.End) < 0;

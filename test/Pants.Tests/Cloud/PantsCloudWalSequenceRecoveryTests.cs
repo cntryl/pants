@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsCloudWalSequenceRecoveryTests
 {
@@ -144,7 +144,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         {
             handler.ReplaceObjectText(
                 path,
-                SetNextWalSequence(handler.GetObjectText(path), nextWalSequence: 1));
+                SetNextWalSequence(handler.GetObjectText(path), 1));
         }
     }
 
@@ -158,14 +158,14 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         {
             File.WriteAllText(
                 path,
-                SetNextWalSequence(File.ReadAllText(path), nextWalSequence: 1));
+                SetNextWalSequence(File.ReadAllText(path), 1));
         }
     }
 
     static string SetNextWalSequence(string manifestJson, ulong nextWalSequence)
     {
         var manifest = JsonNode.Parse(manifestJson)?.AsObject() ??
-            throw new InvalidOperationException("The cloud manifest was empty.");
+                       throw new InvalidOperationException("The cloud manifest was empty.");
         manifest["next_wal_seq"] = nextWalSequence;
         return manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -191,7 +191,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
 
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(path, true);
             }
             else
             {

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class OneShotCloudWalSealFailureHandler(
     PantsFailpoint failure = PantsFailpoint.BeforeWalRotation,
@@ -6,17 +6,13 @@ sealed class OneShotCloudWalSealFailureHandler(
 {
     readonly TaskCompletionSource _failureInjected = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     readonly TaskCompletionSource _retryAttempted = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _attempts;
 
     public int Attempts => Volatile.Read(ref _attempts);
-
-    public Task WaitUntilFailureInjectedAsync(TimeSpan timeout) =>
-        _failureInjected.Task.WaitAsync(timeout);
-
-    public Task WaitUntilRetryAttemptedAsync(TimeSpan timeout) =>
-        _retryAttempted.Task.WaitAsync(timeout);
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -30,9 +26,15 @@ sealed class OneShotCloudWalSealFailureHandler(
         {
             _failureInjected.TrySetResult();
             throw createFailure?.Invoke() ??
-                new IOException($"Injected first cloud WAL seal failure at {failure}.");
+                  new IOException($"Injected first cloud WAL seal failure at {failure}.");
         }
 
         _retryAttempted.TrySetResult();
     }
+
+    public Task WaitUntilFailureInjectedAsync(TimeSpan timeout) =>
+        _failureInjected.Task.WaitAsync(timeout);
+
+    public Task WaitUntilRetryAttemptedAsync(TimeSpan timeout) =>
+        _retryAttempted.Task.WaitAsync(timeout);
 }

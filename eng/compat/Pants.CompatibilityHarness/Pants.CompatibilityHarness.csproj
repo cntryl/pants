@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <AssemblyName>Cntryl.Pants.CompatibilityHarness</AssemblyName>
+    <RootNamespace>Cntryl.Pants.CompatibilityHarness</RootNamespace>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
@@ -10,7 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Pants.CompatibilityHarness.Tests" />
+    <InternalsVisibleTo Include="Cntryl.Pants.CompatibilityHarness.Tests" />
   </ItemGroup>
 
 </Project>

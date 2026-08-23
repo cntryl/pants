@@ -1,17 +1,17 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
+sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
 {
-    private Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>>? _entriesFactory;
-    private readonly Func<ValueTask> _releaseSnapshot;
-    private readonly PantsScanBounds _bounds;
-    private IEnumerator<PantsEntry>? _entries;
-    private CancellationToken _cancellationToken;
-    private Exception? _failure;
-    private int _emitted;
-    private int _enumerationStarted;
-    private int _disposed;
-    private int _snapshotReleased;
+    readonly PantsScanBounds _bounds;
+    readonly Func<ValueTask> _releaseSnapshot;
+    CancellationToken _cancellationToken;
+    int _disposed;
+    int _emitted;
+    IEnumerator<PantsEntry>? _entries;
+    Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>>? _entriesFactory;
+    int _enumerationStarted;
+    Exception? _failure;
+    int _snapshotReleased;
 
     internal PantsScanInstance(
         Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
@@ -24,6 +24,23 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         Direction = _bounds.Direction;
     }
 
+    public PantsEntry Current { get; private set; }
+
+    public ValueTask<bool> MoveNextAsync()
+    {
+        if (_failure is { } failure)
+        {
+            return ValueTask.FromException<bool>(failure);
+        }
+
+        if (State != PantsIteratorState.Active || Volatile.Read(ref _disposed) != 0)
+        {
+            return ValueTask.FromResult(false);
+        }
+
+        return MoveNextCoreAsync();
+    }
+
     public PantsScanDirection Direction { get; }
 
     public PantsIteratorState State { get; private set; } = PantsIteratorState.Active;
@@ -33,8 +50,6 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
     public bool IsExhausted => State == PantsIteratorState.Exhausted;
 
     public bool IsFailed => State == PantsIteratorState.Failed;
-
-    public PantsEntry Current { get; private set; }
 
     public IAsyncEnumerator<PantsEntry> GetAsyncEnumerator(
         CancellationToken cancellationToken = default)
@@ -52,21 +67,6 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         return this;
     }
 
-    public ValueTask<bool> MoveNextAsync()
-    {
-        if (_failure is { } failure)
-        {
-            return ValueTask.FromException<bool>(failure);
-        }
-
-        if (State != PantsIteratorState.Active || Volatile.Read(ref _disposed) != 0)
-        {
-            return ValueTask.FromResult(false);
-        }
-
-        return MoveNextCoreAsync();
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0 && State == PantsIteratorState.Active)
@@ -80,7 +80,7 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         await ReleaseSnapshotAsync().ConfigureAwait(false);
     }
 
-    private async ValueTask<bool> MoveNextCoreAsync()
+    async ValueTask<bool> MoveNextCoreAsync()
     {
         try
         {
@@ -94,8 +94,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
             await EnsureEntriesInitializedAsync().ConfigureAwait(false);
             while (_entries!.MoveNext())
             {
-                PantsEntry candidate = _entries.Current;
-                ReadOnlySpan<byte> key = candidate.Key.Span;
+                var candidate = _entries.Current;
+                var key = candidate.Key.Span;
                 if (!_bounds.Matches(key))
                 {
                     continue;
@@ -125,20 +125,20 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         }
     }
 
-    private async ValueTask EnsureEntriesInitializedAsync()
+    async ValueTask EnsureEntriesInitializedAsync()
     {
         if (_entries is not null)
         {
             return;
         }
 
-        Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> factory = _entriesFactory ??
-            throw new PantsInternalException("The scan entry source is unavailable.");
+        var factory = _entriesFactory ??
+                      throw new PantsInternalException("The scan entry source is unavailable.");
         _entries = await factory(_cancellationToken).ConfigureAwait(false);
         _entriesFactory = null;
     }
 
-    private async ValueTask ExhaustAsync()
+    async ValueTask ExhaustAsync()
     {
         State = PantsIteratorState.Exhausted;
         Current = default;
@@ -147,7 +147,7 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         await ReleaseSnapshotAsync().ConfigureAwait(false);
     }
 
-    private void Fail(Exception exception)
+    void Fail(Exception exception)
     {
         _failure ??= exception;
         State = PantsIteratorState.Failed;
@@ -156,9 +156,8 @@ internal sealed class PantsScanInstance : IPantsScan, IAsyncEnumerator<PantsEntr
         _entries = null;
     }
 
-    private ValueTask ReleaseSnapshotAsync() =>
+    ValueTask ReleaseSnapshotAsync() =>
         Interlocked.Exchange(ref _snapshotReleased, 1) == 0
             ? _releaseSnapshot()
             : ValueTask.CompletedTask;
-
 }

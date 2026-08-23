@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services;
 
 interface IRuntimeServiceMetrics
 {

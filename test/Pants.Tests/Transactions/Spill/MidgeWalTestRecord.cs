@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed record MidgeWalTestRecord(
+sealed record MidgeWalTestRecord(
     byte Operation,
     uint ColumnFamilyId,
     ulong Sequence,

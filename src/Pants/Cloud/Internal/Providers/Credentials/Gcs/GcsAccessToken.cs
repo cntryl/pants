@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal sealed record GcsAccessToken(string Value, DateTimeOffset ExpiresAt)
+sealed record GcsAccessToken(string Value, DateTimeOffset ExpiresAt)
 {
     public bool RequiresRefresh(DateTimeOffset now) => now.AddMinutes(5) >= ExpiresAt;
 

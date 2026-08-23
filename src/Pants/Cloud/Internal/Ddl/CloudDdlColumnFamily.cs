@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 sealed class CloudDdlColumnFamily
 {

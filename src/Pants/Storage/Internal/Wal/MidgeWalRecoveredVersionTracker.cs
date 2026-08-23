@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal sealed class MidgeWalRecoveredVersionTracker
+sealed class MidgeWalRecoveredVersionTracker
 {
     readonly Dictionary<(uint ColumnFamilyId, ulong Sequence), HashSet<byte[]>> _versions = [];
 

@@ -1,12 +1,12 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 sealed class CloudSstGarbageCollector
 {
-    readonly ICloudObjectStore _sstStore;
     readonly Func<CancellationToken, ValueTask<CloudSstRetentionProof>> _captureProofAsync;
-    readonly Func<IReadOnlySet<string>> _readLocalProtectedNames;
     readonly Action _ensureAuthority;
     readonly IPantsFailpointHandler _failpoints;
+    readonly Func<IReadOnlySet<string>> _readLocalProtectedNames;
+    readonly ICloudObjectStore _sstStore;
 
     public CloudSstGarbageCollector(
         ICloudObjectStore sstStore,

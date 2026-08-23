@@ -1,8 +1,9 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class S3ObjectStoreTests
 {
@@ -16,7 +17,7 @@ public sealed class S3ObjectStoreTests
             ? new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent("value"u8.ToArray()),
-                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             }
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
         using var client = new HttpClient(handler);
@@ -26,14 +27,14 @@ public sealed class S3ObjectStoreTests
                 "bucket",
                 "us-test-1",
                 new Uri("https://objects.example.test/base"),
-                PathStyle: true,
+                true,
                 new PantsS3CredentialSource.StaticCredentials("access", secret, "session")),
             "database",
             client,
             TimeSpan.FromSeconds(5));
 
-        CloudObject? value = await store.GetAsync("metadata/manifest.json", CancellationToken.None);
-        bool replaced = await store.PutAsync(
+        var value = await store.GetAsync("metadata/manifest.json", CancellationToken.None);
+        var replaced = await store.PutAsync(
             "metadata/manifest.json",
             "next"u8.ToArray(),
             new CloudObjectWriteCondition.IfVersion("\"v1\""),
@@ -61,7 +62,7 @@ public sealed class S3ObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(responses.Dequeue())
         {
             Content = new ByteArrayContent("value"u8.ToArray()),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+            Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
         });
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
@@ -149,7 +150,7 @@ public sealed class S3ObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new ByteArrayContent("value"u8.ToArray()),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+            Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
         });
         using var client = new HttpClient(handler);
         const string accessKey = "access";
@@ -178,7 +179,7 @@ public sealed class S3ObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new NeverCompletingHttpContent(),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+            Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
         });
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
@@ -190,8 +191,8 @@ public sealed class S3ObjectStoreTests
             client,
             TimeSpan.FromMilliseconds(20));
 
-        await Assert.ThrowsAsync<PantsTimeoutException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+            store.GetAsync("object", CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -246,8 +247,9 @@ public sealed class S3ObjectStoreTests
         using var client = new HttpClient(handler);
         var store = CreateStore(client, string.Empty);
 
-        var exception = await Assert.ThrowsAsync<PantsInternalException>(
-            () => store.ListAllAsync("sst/", CancellationToken.None).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsInternalException>(() =>
+                store.ListAllAsync("sst/", CancellationToken.None).AsTask());
 
         Assert.Contains("repeated continuation token", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, handler.Requests.Count);
@@ -260,7 +262,7 @@ public sealed class S3ObjectStoreTests
             ? new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(new byte[12]),
-                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v12\"") }
+                Headers = { ETag = new EntityTagHeaderValue("\"v12\"") }
             }
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed)
             {
@@ -287,12 +289,11 @@ public sealed class S3ObjectStoreTests
     public void ShouldResolveSharedProfileAndRouteEveryS3ProviderVariant()
     {
         using var directory = new TemporaryDirectory();
-        string credentialsPath = Path.Combine(directory.Path, "credentials");
+        var credentialsPath = Path.Combine(directory.Path, "credentials");
         File.WriteAllText(
             credentialsPath,
             "[qualification]\naws_access_key_id = profile-access\naws_secret_access_key = profile-secret\n");
-        using var client = new HttpClient(new RecordingHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK)));
+        using var client = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
         PantsCloudProviderConfiguration[] providers =
         [
             new PantsCloudProviderConfiguration.AwsS3(
@@ -303,7 +304,7 @@ public sealed class S3ObjectStoreTests
                 "bucket",
                 "us-east-1",
                 new Uri("https://objects.example.test"),
-                PathStyle: true,
+                true,
                 new PantsS3CredentialSource.SharedProfile("qualification", credentialsPath))
         ];
 
@@ -319,7 +320,7 @@ public sealed class S3ObjectStoreTests
             "bucket",
             "us-test-1",
             new Uri("https://objects.example.test/base"),
-            PathStyle: true,
+            true,
             new PantsS3CredentialSource.StaticCredentials("access", "secret")),
         prefix,
         client,

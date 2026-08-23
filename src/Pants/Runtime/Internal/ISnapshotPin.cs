@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal interface ISnapshotPin
+interface ISnapshotPin
 {
     long SnapshotId { get; }
 

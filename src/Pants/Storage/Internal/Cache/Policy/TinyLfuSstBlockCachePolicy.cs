@@ -1,10 +1,10 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache.Policy;
 
-internal sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
+sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
 {
-    private const int WindowSize = 100;
-    private readonly Dictionary<SstBlockCacheKey, uint> _frequencies = [];
-    private readonly LinkedList<SstBlockCacheKey> _recentSamples = [];
+    const int WindowSize = 100;
+    readonly Dictionary<SstBlockCacheKey, uint> _frequencies = [];
+    readonly LinkedList<SstBlockCacheKey> _recentSamples = [];
 
     public void RecordAccess(SstBlockCacheKey key)
     {
@@ -19,7 +19,7 @@ internal sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
             return;
         }
 
-        SstBlockCacheKey expired = _recentSamples.First!.Value;
+        var expired = _recentSamples.First!.Value;
         _recentSamples.RemoveFirst();
         if (!_recentSamples.Contains(expired))
         {
@@ -29,7 +29,7 @@ internal sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
 
     public bool TrySelectVictim(out SstBlockCacheKey key)
     {
-        LinkedListNode<SstBlockCacheKey>? sample = _recentSamples.First;
+        var sample = _recentSamples.First;
         if (sample is null)
         {
             key = default;
@@ -37,10 +37,10 @@ internal sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
         }
 
         key = sample.Value;
-        uint minimumFrequency = _frequencies.GetValueOrDefault(key);
+        var minimumFrequency = _frequencies.GetValueOrDefault(key);
         for (sample = sample.Next; sample is not null; sample = sample.Next)
         {
-            uint frequency = _frequencies.GetValueOrDefault(sample.Value);
+            var frequency = _frequencies.GetValueOrDefault(sample.Value);
             if (frequency < minimumFrequency)
             {
                 key = sample.Value;
@@ -61,12 +61,12 @@ internal sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
         _recentSamples.Clear();
     }
 
-    private void Remove(SstBlockCacheKey key)
+    void Remove(SstBlockCacheKey key)
     {
-        LinkedListNode<SstBlockCacheKey>? node = _recentSamples.First;
+        var node = _recentSamples.First;
         while (node is not null)
         {
-            LinkedListNode<SstBlockCacheKey>? next = node.Next;
+            var next = node.Next;
             if (node.Value == key)
             {
                 _recentSamples.Remove(node);

@@ -1,10 +1,11 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class CommitRuntimeCommand : IRuntimeCommand
+sealed class CommitRuntimeCommand : IRuntimeCommand
 {
-    readonly Func<PantsRuntimeState, ValueTask<bool>> _operation;
     readonly TaskCompletionSource<bool> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly Func<PantsRuntimeState, ValueTask<bool>> _operation;
 
     public CommitRuntimeCommand(
         PantsWriteOptions writeOptions,

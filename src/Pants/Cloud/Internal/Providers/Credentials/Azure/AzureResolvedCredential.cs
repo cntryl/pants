@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal sealed class AzureResolvedCredential
+sealed class AzureResolvedCredential
 {
     AzureResolvedCredential(
         AzureResolvedCredentialKind kind,
@@ -21,16 +21,16 @@ internal sealed class AzureResolvedCredential
     public static AzureResolvedCredential SharedKey(string key) => new(
         AzureResolvedCredentialKind.SharedKey,
         key,
-        tokenProvider: null);
+        null);
 
     public static AzureResolvedCredential Sas(string token) => new(
         AzureResolvedCredentialKind.Sas,
         token.TrimStart('?'),
-        tokenProvider: null);
+        null);
 
     public static AzureResolvedCredential Bearer(IAzureTokenProvider tokenProvider) => new(
         AzureResolvedCredentialKind.Bearer,
-        secret: null,
+        null,
         tokenProvider);
 
     public override string ToString() => $"{Kind} {{ Credential = [REDACTED] }}";

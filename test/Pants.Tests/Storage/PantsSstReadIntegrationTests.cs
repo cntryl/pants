@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsSstReadIntegrationTests
 {
@@ -6,7 +6,7 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldReadFromSstAfterFlush()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"key_{index:000}", "value_from_sst");
@@ -23,7 +23,7 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldTrackL0SstReads()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var batch = 0; batch < 3; batch++)
         {
             for (var index = 0; index < 5; index++)
@@ -39,7 +39,7 @@ public sealed class PantsSstReadIntegrationTests
             Assert.Equal("value", await ReadAsync(database, $"batch{batch}_key0"));
         }
 
-        PantsReadAmplificationMetrics metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.GetReadAmplificationMetricsAsync();
         Assert.True(metrics.L0SstsTouchedTotal >= 3);
     }
 
@@ -47,7 +47,7 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldUseKeyRangesForHigherLevels()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var index = 0; index < 20; index++)
         {
             await PutAsync(database, $"key_{index:000}", "test_value");
@@ -66,7 +66,7 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldHandleMemtableAndSstReads()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "sst_key", "sst_value");
         await database.FlushAsync(database.DefaultColumnFamily);
         await PutAsync(database, "mem_key", "mem_value");
@@ -83,11 +83,11 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldErrorGivenCorruptSstWhenTransactionGetReadsFlushedKey()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "corrupt-key", "corrupt-value");
         await database.FlushAsync(database.DefaultColumnFamily);
         CorruptFirstSstDataByte(directory.Path);
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
@@ -99,7 +99,7 @@ public sealed class PantsSstReadIntegrationTests
     public async Task ShouldErrorGivenCorruptSstWhenTransactionScanReadsFlushedRange()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var index = 0; index < 3; index++)
         {
             await PutAsync(database, $"corrupt-range-{index}", "corrupt-value");
@@ -107,44 +107,44 @@ public sealed class PantsSstReadIntegrationTests
 
         await database.FlushAsync(database.DefaultColumnFamily);
         CorruptFirstSstDataByte(directory.Path);
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        await using IPantsScan scan = await transaction.ScanAsync(new PantsScanQuery());
+        await using var scan = await transaction.ScanAsync(new PantsScanQuery());
 
         await Assert.ThrowsAsync<PantsStorageException>(async () =>
         {
-            await foreach (PantsEntry _ in scan)
+            await foreach (var _ in scan)
             {
             }
         });
     }
 
-    private static ValueTask<IPantsDatabase> OpenAsync(string path) =>
+    static ValueTask<IPantsDatabase> OpenAsync(string path) =>
         PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path).WithBackgroundCompaction(false));
 
-    private static async Task PutAsync(IPantsDatabase database, string key, string value)
+    static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
     }
 
-    private static async Task<string?> ReadAsync(IPantsDatabase database, string key)
+    static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? value = await transaction.GetAsync(TestBytes.FromString(key));
+        var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;
     }
 
-    private static void CorruptFirstSstDataByte(string databasePath)
+    static void CorruptFirstSstDataByte(string databasePath)
     {
-        string path = Directory.EnumerateFiles(
+        var path = Directory.EnumerateFiles(
                 Path.Combine(databasePath, "sst"),
                 "*.sst",
                 SearchOption.TopDirectoryOnly)
@@ -156,10 +156,10 @@ public sealed class PantsSstReadIntegrationTests
             FileAccess.ReadWrite,
             FileShare.Read);
         stream.Position = sizeof(uint);
-        int value = stream.ReadByte();
+        var value = stream.ReadByte();
         Assert.NotEqual(-1, value);
         stream.Position = sizeof(uint);
         stream.WriteByte(checked((byte)(value ^ 1)));
-        stream.Flush(flushToDisk: true);
+        stream.Flush(true);
     }
 }

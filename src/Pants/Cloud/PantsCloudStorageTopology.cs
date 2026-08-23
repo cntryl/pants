@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud;
 
 public sealed record PantsCloudStorageTopology(
     PantsCloudStorageLocation Wal,
@@ -8,7 +8,7 @@ public sealed record PantsCloudStorageTopology(
     public static PantsCloudStorageTopology Shared(PantsCloudStorageLocation location)
     {
         ArgumentNullException.ThrowIfNull(location);
-        return new(location, location, location);
+        return new PantsCloudStorageTopology(location, location, location);
     }
 
     public PantsCloudStorageTopology WithWal(PantsCloudStorageLocation location) =>

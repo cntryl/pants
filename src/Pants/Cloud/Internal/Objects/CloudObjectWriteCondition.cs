@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal abstract record CloudObjectWriteCondition
+abstract record CloudObjectWriteCondition
 {
-    private CloudObjectWriteCondition()
+    CloudObjectWriteCondition()
     {
     }
 

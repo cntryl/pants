@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class TransactionSpillStore : IDisposable
+sealed class TransactionSpillStore : IDisposable
 {
     const int HeaderLength = 48;
     const int SparseIndexStride = 16;
@@ -12,15 +12,11 @@ internal sealed class TransactionSpillStore : IDisposable
 
     static readonly Lock DirectoryMutationGate = new();
 
-    static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
-
-    static ReadOnlySpan<byte> RangeMagic => "MDGRNG01"u8;
-
     readonly string _directory;
-    readonly ulong _transactionId;
     readonly ColumnFamilyIdentity _family;
-    readonly List<TransactionSpillRun> _runs = [];
     readonly Lock _lifetimeGate = new();
+    readonly List<TransactionSpillRun> _runs = [];
+    readonly ulong _transactionId;
     int _activeReadViews;
     bool _disposeRequested;
     int _disposed;
@@ -35,9 +31,33 @@ internal sealed class TransactionSpillStore : IDisposable
         _family = family;
     }
 
+    static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
+
+    static ReadOnlySpan<byte> RangeMagic => "MDGRNG01"u8;
+
     public bool HasRuns => _runs.Count != 0;
 
     internal static ulong RunHeaderLength => HeaderLength;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        var delete = false;
+        lock (_lifetimeGate)
+        {
+            _disposeRequested = true;
+            delete = _activeReadViews == 0;
+        }
+
+        if (delete)
+        {
+            DeleteRuns();
+        }
+    }
 
     public static void CleanupOrphans(string databasePath)
     {
@@ -46,7 +66,7 @@ internal sealed class TransactionSpillStore : IDisposable
         {
             if (Directory.Exists(directory))
             {
-                Directory.Delete(directory, recursive: true);
+                Directory.Delete(directory, true);
             }
         }
     }
@@ -168,26 +188,6 @@ internal sealed class TransactionSpillStore : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        var delete = false;
-        lock (_lifetimeGate)
-        {
-            _disposeRequested = true;
-            delete = _activeReadViews == 0;
-        }
-
-        if (delete)
-        {
-            DeleteRuns();
-        }
-    }
-
     internal void ReleaseReadView()
     {
         var delete = false;
@@ -243,7 +243,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 FileMode.CreateNew,
                 FileAccess.ReadWrite,
                 FileShare.None,
-                bufferSize: 16 * 1024,
+                16 * 1024,
                 FileOptions.None);
         }
     }
@@ -463,7 +463,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 16 * 1_024,
+                16 * 1_024,
                 FileOptions.RandomAccess);
             var header = ReadRunHeader(stream, run);
             var keyCopy = key.ToArray();
@@ -525,7 +525,7 @@ internal sealed class TransactionSpillStore : IDisposable
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
-            bufferSize: 16 * 1_024,
+            16 * 1_024,
             FileOptions.RandomAccess);
         Span<byte> header = stackalloc byte[RangeHeaderLength];
         ReadExactly(stream, header, "Transaction range index header is truncated.");
@@ -542,7 +542,7 @@ internal sealed class TransactionSpillStore : IDisposable
         var nodeSectionOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
         var streamLength = checked((ulong)stream.Length);
         if (nodeCount > int.MaxValue ||
-            nodeSectionOffset != checked((ulong)RangeHeaderLength + (nodeCount * RangeTableEntryLength)) ||
+            nodeSectionOffset != checked(RangeHeaderLength + nodeCount * RangeTableEntryLength) ||
             nodeSectionOffset > streamLength)
         {
             throw PantsException.Create(
@@ -557,9 +557,9 @@ internal sealed class TransactionSpillStore : IDisposable
 
         LookupRangeSubtree(
             stream,
-            nodeIndex: 0,
-            loaded: null,
-            remainingNodes: nodeCount,
+            0,
+            null,
+            nodeCount,
             nodeCount,
             nodeSectionOffset,
             streamLength,
@@ -622,7 +622,7 @@ internal sealed class TransactionSpillStore : IDisposable
             key.SequenceCompareTo(node.End) < 0 &&
             (latest is null || node.Ordinal > latest.Ordinal))
         {
-            latest = new TransactionIntentLookup(node.Ordinal, null, IsDeleted: true);
+            latest = new TransactionIntentLookup(node.Ordinal, null, true);
         }
 
         if (node.Right != NoRangeChild && node.Start.AsSpan().SequenceCompareTo(key) <= 0)
@@ -630,7 +630,7 @@ internal sealed class TransactionSpillStore : IDisposable
             LookupRangeSubtree(
                 stream,
                 node.Right,
-                loaded: null,
+                null,
                 remainingNodes - 1,
                 nodeCount,
                 nodeSectionOffset,
@@ -647,10 +647,10 @@ internal sealed class TransactionSpillStore : IDisposable
         var ordinalOffsets = new List<(ulong Ordinal, ulong Offset)>(operations.Length);
         var sparseEntries = new List<(byte[] Key, ulong Offset)>(
             operations.Length / SparseIndexStride + 1);
-        for (int index = 0; index < operations.Length; index++)
+        for (var index = 0; index < operations.Length; index++)
         {
-            TransactionIntentOperation operation = operations[index];
-            ulong offset = checked((ulong)stream.Position);
+            var operation = operations[index];
+            var offset = checked((ulong)stream.Position);
             WriteOperationFrame(stream, operation);
             ordinalOffsets.Add((operation.Ordinal, offset));
             if (index % SparseIndexStride == 0)
@@ -659,17 +659,17 @@ internal sealed class TransactionSpillStore : IDisposable
             }
         }
 
-        ulong ordinalTableOffset = checked((ulong)stream.Position);
+        var ordinalTableOffset = checked((ulong)stream.Position);
         var ordinalPayload = new byte[16];
-        foreach ((ulong ordinal, ulong offset) in ordinalOffsets.OrderBy(static entry => entry.Ordinal))
+        foreach (var (ordinal, offset) in ordinalOffsets.OrderBy(static entry => entry.Ordinal))
         {
             BinaryPrimitives.WriteUInt64LittleEndian(ordinalPayload, ordinal);
             BinaryPrimitives.WriteUInt64LittleEndian(ordinalPayload.AsSpan(8), offset);
             WriteFrame(stream, ordinalPayload);
         }
 
-        ulong sparseIndexOffset = checked((ulong)stream.Position);
-        foreach ((byte[] key, ulong offset) in sparseEntries)
+        var sparseIndexOffset = checked((ulong)stream.Position);
+        foreach (var (key, offset) in sparseEntries)
         {
             using var payload = new MemoryStream();
             WriteLength(payload, key.Length);
@@ -688,7 +688,7 @@ internal sealed class TransactionSpillStore : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(header[44..], MidgeDiskFormat.Crc32C(header[..44]));
         stream.Position = 0;
         stream.Write(header);
-        stream.Flush(flushToDisk: true);
+        stream.Flush(true);
     }
 
     void ReadRun(TransactionSpillRun run, Action<TransactionIntentOperation> visitor)
@@ -700,7 +700,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                bufferSize: 16 * 1024,
+                16 * 1024,
                 FileOptions.SequentialScan);
             Span<byte> header = stackalloc byte[HeaderLength];
             ReadExactly(stream, header, "Transaction spill header is truncated.");
@@ -830,7 +830,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 : 0);
         WriteLength(payload, operation.Key.Length);
         payload.Write(operation.Key);
-        byte[] second = operation.Kind switch
+        var second = operation.Kind switch
         {
             CommitOperationKind.Put => operation.Value ?? [],
             CommitOperationKind.DeleteRange => operation.EndExclusive ?? [],
@@ -845,18 +845,18 @@ internal sealed class TransactionSpillStore : IDisposable
         Stream stream,
         ulong? expectedOrdinal = null)
     {
-        byte[] payload = ReadFrame(stream);
+        var payload = ReadFrame(stream);
         if (payload.Length < 30)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation is truncated.");
         }
 
         ReadOnlySpan<byte> bytes = payload;
-        ulong ordinal = BinaryPrimitives.ReadUInt64LittleEndian(bytes);
-        byte tag = bytes[8];
-        uint familyId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[9..]);
-        byte ttlPresent = bytes[13];
-        ulong ttlSeconds = BinaryPrimitives.ReadUInt64LittleEndian(bytes[14..]);
+        var ordinal = BinaryPrimitives.ReadUInt64LittleEndian(bytes);
+        var tag = bytes[8];
+        var familyId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[9..]);
+        var ttlPresent = bytes[13];
+        var ttlSeconds = BinaryPrimitives.ReadUInt64LittleEndian(bytes[14..]);
         if ((expectedOrdinal is { } expected && ordinal != expected) ||
             familyId != _family.Id || ttlPresent > 1 ||
             (ttlPresent == 0 && ttlSeconds != 0) || (tag >= 2 && ttlPresent != 0))
@@ -864,9 +864,9 @@ internal sealed class TransactionSpillStore : IDisposable
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation metadata is invalid.");
         }
 
-        int cursor = 22;
-        byte[] key = ReadField(bytes, ref cursor);
-        byte[] second = ReadField(bytes, ref cursor);
+        var cursor = 22;
+        var key = ReadField(bytes, ref cursor);
+        var second = ReadField(bytes, ref cursor);
         if (cursor != bytes.Length || tag > 3 || (tag == 2 && second.Length != 0))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation payload is invalid.");
@@ -1055,12 +1055,12 @@ internal sealed class TransactionSpillStore : IDisposable
             FileMode.CreateNew,
             FileAccess.ReadWrite,
             FileShare.None,
-            bufferSize: 16 * 1024,
+            16 * 1024,
             FileOptions.None);
         stream.Write(new byte[RangeHeaderLength + checked(nodes.Length * RangeTableEntryLength)]);
-        ulong nodeSectionOffset = checked((ulong)stream.Position);
+        var nodeSectionOffset = checked((ulong)stream.Position);
         var offsets = new ulong[nodes.Length];
-        for (int index = 0; index < nodes.Length; index++)
+        for (var index = 0; index < nodes.Length; index++)
         {
             offsets[index] = checked((ulong)stream.Position);
             WriteRangeNodeFrame(stream, nodes[index]);
@@ -1068,7 +1068,7 @@ internal sealed class TransactionSpillStore : IDisposable
 
         stream.Position = RangeHeaderLength;
         var entry = new byte[RangeTableEntryLength];
-        foreach (ulong offset in offsets)
+        foreach (var offset in offsets)
         {
             BinaryPrimitives.WriteUInt64LittleEndian(entry, offset);
             BinaryPrimitives.WriteUInt32LittleEndian(
@@ -1085,7 +1085,7 @@ internal sealed class TransactionSpillStore : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(header[28..], MidgeDiskFormat.Crc32C(header[..28]));
         stream.Position = 0;
         stream.Write(header);
-        stream.Flush(flushToDisk: true);
+        stream.Flush(true);
     }
 
     void ValidateSparseIndex(
@@ -1169,7 +1169,7 @@ internal sealed class TransactionSpillStore : IDisposable
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
-            bufferSize: 16 * 1024,
+            16 * 1024,
             FileOptions.RandomAccess);
         Span<byte> header = stackalloc byte[RangeHeaderLength];
         ReadExactly(stream, header, "Transaction range index header is truncated.");
@@ -1184,7 +1184,7 @@ internal sealed class TransactionSpillStore : IDisposable
         var nodeSectionOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
         var streamLength = checked((ulong)stream.Length);
         if (nodeCount > int.MaxValue ||
-            nodeCount > (streamLength - Math.Min(streamLength, (ulong)RangeHeaderLength)) /
+            nodeCount > (streamLength - Math.Min(streamLength, RangeHeaderLength)) /
             RangeTableEntryLength)
         {
             throw PantsException.Create(
@@ -1193,7 +1193,7 @@ internal sealed class TransactionSpillStore : IDisposable
         }
 
         var expectedNodeSectionOffset =
-            (ulong)RangeHeaderLength + (nodeCount * RangeTableEntryLength);
+            RangeHeaderLength + nodeCount * RangeTableEntryLength;
         if (nodeSectionOffset != expectedNodeSectionOffset || nodeSectionOffset > streamLength)
         {
             throw PantsException.Create(
@@ -1205,7 +1205,7 @@ internal sealed class TransactionSpillStore : IDisposable
         Span<byte> entry = stackalloc byte[RangeTableEntryLength];
         for (var index = 0UL; index < nodeCount; index++)
         {
-            stream.Position = checked((long)((ulong)RangeHeaderLength + (index * RangeTableEntryLength)));
+            stream.Position = checked((long)(RangeHeaderLength + index * RangeTableEntryLength));
             ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
             if (MidgeDiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
             {
@@ -1253,7 +1253,7 @@ internal sealed class TransactionSpillStore : IDisposable
         var upper = recordCount - 1;
         while (lower <= upper)
         {
-            var middle = lower + ((upper - lower) / 2);
+            var middle = lower + (upper - lower) / 2;
             var entryOffset = checked(
                 ordinalTableOffset + (ulong)middle * (2 * sizeof(uint) + 2 * sizeof(ulong)));
             runStream.Position = checked((long)entryOffset);
@@ -1344,8 +1344,8 @@ internal sealed class TransactionSpillStore : IDisposable
             }
 
             var expectedMaximumEnd = node.End;
-            ValidateChild(node.Left, isLeft: true);
-            ValidateChild(node.Right, isLeft: false);
+            ValidateChild(node.Left, true);
+            ValidateChild(node.Right, false);
             if (!expectedMaximumEnd.AsSpan().SequenceEqual(node.MaximumEnd))
             {
                 throw PantsException.Create(
@@ -1407,7 +1407,7 @@ internal sealed class TransactionSpillStore : IDisposable
                 "Transaction range child is out of bounds.");
         }
 
-        stream.Position = checked((long)((ulong)RangeHeaderLength + (nodeIndex * RangeTableEntryLength)));
+        stream.Position = checked((long)(RangeHeaderLength + nodeIndex * RangeTableEntryLength));
         Span<byte> entry = stackalloc byte[RangeTableEntryLength];
         ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
         if (MidgeDiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
@@ -1472,7 +1472,7 @@ internal sealed class TransactionSpillStore : IDisposable
     static TransactionSpillRangeNode[] BuildRangeNodes(
         IReadOnlyList<TransactionIntentOperation> operations)
     {
-        int[] operationIndexes = operations
+        var operationIndexes = operations
             .Select(static (operation, index) => (operation, index))
             .Where(static item => item.operation.Kind == CommitOperationKind.DeleteRange)
             .Select(static item => item.index)
@@ -1492,9 +1492,9 @@ internal sealed class TransactionSpillStore : IDisposable
             return null;
         }
 
-        int middle = operationIndexes.Length / 2;
-        TransactionIntentOperation operation = operations[operationIndexes[middle]];
-        int nodeIndex = nodes.Count;
+        var middle = operationIndexes.Length / 2;
+        var operation = operations[operationIndexes[middle]];
+        var nodeIndex = nodes.Count;
         var node = new TransactionSpillRangeNode(
             operation.Ordinal,
             NoRangeChild,
@@ -1503,10 +1503,10 @@ internal sealed class TransactionSpillStore : IDisposable
             operation.EndExclusive!,
             operation.EndExclusive!);
         nodes.Add(node);
-        ulong? left = BuildRangeSubtree(operationIndexes[..middle], operations, nodes);
-        ulong? right = BuildRangeSubtree(operationIndexes[(middle + 1)..], operations, nodes);
-        byte[] maximumEnd = node.End;
-        foreach (ulong child in new[] { left, right }.OfType<ulong>())
+        var left = BuildRangeSubtree(operationIndexes[..middle], operations, nodes);
+        var right = BuildRangeSubtree(operationIndexes[(middle + 1)..], operations, nodes);
+        var maximumEnd = node.End;
+        foreach (var child in new[] { left, right }.OfType<ulong>())
         {
             if (ByteArrayComparer.Instance.Compare(nodes[checked((int)child)].MaximumEnd, maximumEnd) > 0)
             {
@@ -1554,14 +1554,14 @@ internal sealed class TransactionSpillStore : IDisposable
     {
         Span<byte> header = stackalloc byte[8];
         ReadExactly(stream, header, "Transaction spill frame header is truncated.");
-        uint length = BinaryPrimitives.ReadUInt32LittleEndian(header);
-        uint expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
+        var length = BinaryPrimitives.ReadUInt32LittleEndian(header);
+        var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
         if (length > MidgeDiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill frame exceeds the limit.");
         }
 
-        byte[] payload = GC.AllocateUninitializedArray<byte>(checked((int)length));
+        var payload = GC.AllocateUninitializedArray<byte>(checked((int)length));
         ReadExactly(stream, payload, "Transaction spill frame is truncated.");
         if (MidgeDiskFormat.Crc32C(payload) != expectedChecksum)
         {
@@ -1578,14 +1578,14 @@ internal sealed class TransactionSpillStore : IDisposable
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill field length is truncated.");
         }
 
-        int length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(payload[cursor..]));
+        var length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(payload[cursor..]));
         cursor += sizeof(uint);
         if (length < 0 || cursor > payload.Length - length)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill field is truncated.");
         }
 
-        byte[] value = payload.Slice(cursor, length).ToArray();
+        var value = payload.Slice(cursor, length).ToArray();
         cursor += length;
         return value;
     }
@@ -1636,5 +1636,4 @@ internal sealed class TransactionSpillStore : IDisposable
         {
         }
     }
-
 }

@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Observability;
 
 public sealed record PantsPointReadTrace(
     int KeyRangeRejects,

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,25 +6,24 @@ sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDispo
 
     readonly TaskCompletionSource _flushEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly ManualResetEventSlim _flushRelease = new(false);
+
     readonly TaskCompletionSource _walEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _flushRelease = new(initialState: false);
-    readonly ManualResetEventSlim _walRelease = new(initialState: false);
+
+    readonly ManualResetEventSlim _walRelease = new(false);
     int _flushHit;
     int _walArmed;
     int _walHit;
 
-    public void ArmWalAppend() => Volatile.Write(ref _walArmed, 1);
-
-    public async Task WaitForFlushAsync(TimeSpan timeout) =>
-        await _flushEntered.Task.WaitAsync(timeout);
-
-    public async Task WaitForWalAsync(TimeSpan timeout) =>
-        await _walEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseFlush() => _flushRelease.Set();
-
-    public void ReleaseWal() => _walRelease.Set();
+    public void Dispose()
+    {
+        _flushRelease.Set();
+        _walRelease.Set();
+        _flushRelease.Dispose();
+        _walRelease.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -43,13 +42,17 @@ sealed class WriteAdmissionRaceFailpointHandler : IPantsFailpointHandler, IDispo
         }
     }
 
-    public void Dispose()
-    {
-        _flushRelease.Set();
-        _walRelease.Set();
-        _flushRelease.Dispose();
-        _walRelease.Dispose();
-    }
+    public void ArmWalAppend() => Volatile.Write(ref _walArmed, 1);
+
+    public async Task WaitForFlushAsync(TimeSpan timeout) =>
+        await _flushEntered.Task.WaitAsync(timeout);
+
+    public async Task WaitForWalAsync(TimeSpan timeout) =>
+        await _walEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseFlush() => _flushRelease.Set();
+
+    public void ReleaseWal() => _walRelease.Set();
 
     static void Block(
         TaskCompletionSource entered,

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 interface ICloudPersistence : ICloudDdlAuthority
 {

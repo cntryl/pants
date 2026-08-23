@@ -1,9 +1,9 @@
 using System.Xml;
 using System.Xml.Linq;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Protocol;
 
-internal static class CloudProviderXml
+static class CloudProviderXml
 {
     public static XDocument ParseList(
         string body,

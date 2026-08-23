@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed record TransactionReadValue(byte[]? Value, bool Missing);
+sealed record TransactionReadValue(byte[]? Value, bool Missing);

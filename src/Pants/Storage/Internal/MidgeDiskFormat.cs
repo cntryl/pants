@@ -2,9 +2,9 @@ using System.Buffers.Binary;
 using K4os.Compression.LZ4;
 using ZstdSharp;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal static class MidgeDiskFormat
+static class MidgeDiskFormat
 {
     public const int FormatVersion = 3;
     public const int WalMaximumRecordBytes = 64 * 1024 * 1024;
@@ -12,7 +12,7 @@ internal static class MidgeDiskFormat
     public const int SstFooterSize = 84;
     public const ulong SstFooterMagic = 0xdb47_7524_8b80_fb57;
 
-    private static readonly uint[] CrcTable = CreateCrcTable();
+    static readonly uint[] CrcTable = CreateCrcTable();
 
     public static uint Crc32C(ReadOnlySpan<byte> bytes) => Crc32CAppend(0, bytes);
 
@@ -43,10 +43,10 @@ internal static class MidgeDiskFormat
 
     public static bool ReadExactly(Stream stream, Span<byte> buffer)
     {
-        int read = 0;
+        var read = 0;
         while (read < buffer.Length)
         {
-            int count = stream.Read(buffer[read..]);
+            var count = stream.Read(buffer[read..]);
             if (count == 0)
             {
                 return false;
@@ -70,14 +70,14 @@ internal static class MidgeDiskFormat
                     throw new PantsStorageException("Midge LZ4 payload has no size prefix.");
                 }
 
-                int decodedLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
+                var decodedLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
                 if (decodedLength > 64 * 1024 * 1024)
                 {
                     throw new PantsStorageException("Midge LZ4 payload exceeds the decompression limit.");
                 }
 
                 var decoded = new byte[decodedLength];
-                int actualLength = LZ4Codec.Decode(bytes[4..], decoded);
+                var actualLength = LZ4Codec.Decode(bytes[4..], decoded);
                 if (actualLength != decodedLength)
                 {
                     throw new PantsStorageException("Midge LZ4 payload could not be decompressed.");
@@ -88,7 +88,7 @@ internal static class MidgeDiskFormat
             case 3:
                 using (var decompressor = new Decompressor())
                 {
-                    Span<byte> output = decompressor.Unwrap(bytes.ToArray());
+                    var output = decompressor.Unwrap(bytes.ToArray());
                     if (output.Length > 64 * 1024 * 1024)
                     {
                         throw new PantsStorageException("Midge Zstd payload exceeds the decompression limit.");
@@ -102,14 +102,14 @@ internal static class MidgeDiskFormat
         }
     }
 
-    private static uint[] CreateCrcTable()
+    static uint[] CreateCrcTable()
     {
         const uint polynomial = 0x82f63b78;
         var table = new uint[256];
         for (uint index = 0; index < table.Length; index++)
         {
-            uint current = index;
-            for (int bit = 0; bit < 8; bit++)
+            var current = index;
+            for (var bit = 0; bit < 8; bit++)
             {
                 current = (current & 1) != 0
                     ? (current >> 1) ^ polynomial

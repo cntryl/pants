@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal sealed record CloudObjectMetadata(
+sealed record CloudObjectMetadata(
     ulong SizeBytes,
     string ETag,
     string? Generation,

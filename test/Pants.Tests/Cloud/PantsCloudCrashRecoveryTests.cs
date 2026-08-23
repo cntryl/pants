@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCloudCrashRecoveryTests
@@ -28,8 +30,8 @@ public sealed class PantsCloudCrashRecoveryTests
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
         var options = CreateOptions(
             path,
-            buffered: StringComparer.Ordinal.Equals(scenario, PublishedSstScenario) ||
-                StringComparer.Ordinal.Equals(scenario, LocalWalScenario));
+            StringComparer.Ordinal.Equals(scenario, PublishedSstScenario) ||
+            StringComparer.Ordinal.Equals(scenario, LocalWalScenario));
         var dependencies = StringComparer.Ordinal.Equals(scenario, LocalWalScenario)
             ? new PantsRuntimeDependencies(
                 new CrashChildFailpointHandler(PantsFailpoint.BeforeCloudWalUpload))
@@ -250,7 +252,7 @@ public sealed class PantsCloudCrashRecoveryTests
         ResetDirectory(Path.Combine(directory.Path, "sst"));
 
         await using var reopened = await PantsDatabase.OpenAsync(
-            CreateOptions(directory.Path, buffered: true));
+            CreateOptions(directory.Path, true));
         var metrics = await reopened.GetRuntimeMetricsAsync();
         var layout = await reopened.GetStorageLayoutAsync();
 
@@ -289,8 +291,7 @@ public sealed class PantsCloudCrashRecoveryTests
         var retainedBytes = await File.ReadAllBytesAsync(remoteWal);
         ResetDirectory(Path.Combine(directory.Path, "wal"));
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => PantsDatabase.OpenAsync(options).AsTask());
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => PantsDatabase.OpenAsync(options).AsTask());
 
         await using var salvaged = await PantsDatabase.OpenAsync(
             options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
@@ -307,8 +308,8 @@ public sealed class PantsCloudCrashRecoveryTests
         var start = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                Environment.ProcessPath ??
-                "dotnet",
+                       Environment.ProcessPath ??
+                       "dotnet",
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -330,7 +331,7 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             if (child.HasExited)
             {
-                throw new Xunit.Sdk.XunitException(
+                throw new XunitException(
                     $"Crash child exited with code {child.ExitCode} before readiness.");
             }
 
@@ -364,7 +365,7 @@ public sealed class PantsCloudCrashRecoveryTests
                 // The failure below reports the bounded cleanup failure.
             }
 
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Crash child did not exit within 10 seconds after signaling readiness.",
                 exception);
         }
@@ -410,7 +411,7 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             // The process exited after HasExited was observed.
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
             // The timeout remains the primary failure when cleanup cannot signal the process.
         }
@@ -450,7 +451,7 @@ public sealed class PantsCloudCrashRecoveryTests
 
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(path, true);
             }
             else
             {
@@ -470,7 +471,7 @@ public sealed class PantsCloudCrashRecoveryTests
             while (true)
             {
                 last = await database.GetRuntimeMetricsAsync(timeout.Token);
-                if (predicate(last))
+                if (predicate((PantsRuntimeMetrics)last))
                 {
                     return last;
                 }
@@ -480,7 +481,7 @@ public sealed class PantsCloudCrashRecoveryTests
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 $"Cloud crash scenario metrics did not converge: " +
                 $"sequence={last?.CurrentSequence}, cloud={last?.WalCloudDurableSequence}, " +
                 $"sst={last?.SstCount}, persisted={last?.ManifestLastPersistedSequence}, " +
@@ -584,7 +585,7 @@ public sealed class PantsCloudCrashRecoveryTests
     {
         if (Directory.Exists(path))
         {
-            Directory.Delete(path, recursive: true);
+            Directory.Delete(path, true);
         }
 
         Directory.CreateDirectory(path);
@@ -593,9 +594,9 @@ public sealed class PantsCloudCrashRecoveryTests
     static PantsOpenOptions CreateOptions(string path, bool buffered = false) =>
         PantsOpenOptions.SimulatedCloud(path, "pants-tests", "cloud-crash/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: buffered ? 4 : int.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: buffered ? 1 : int.MaxValue))
+                buffered ? 4 : int.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                buffered ? 1 : int.MaxValue))
             .WithBackgroundCompaction(false);
 }

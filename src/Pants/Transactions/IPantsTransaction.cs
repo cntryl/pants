@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions;
 
 public interface IPantsTransaction : IAsyncDisposable
 {

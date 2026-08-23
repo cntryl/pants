@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class AzureCredentialSourceTests
@@ -29,12 +30,11 @@ public sealed class AzureCredentialSourceTests
     public async Task ShouldResolveConnectionStringAccountKeyAndEndpointSuffix()
     {
         const string key = "c2VjcmV0LWtleQ==";
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => AzureObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => AzureObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
-            account: string.Empty,
-            endpoint: null,
+            string.Empty,
+            null,
             new PantsAzureCredentialSource.ConnectionString(
                 $"DefaultEndpointsProtocol=https;AccountName=connection-account;AccountKey={key};EndpointSuffix=example.test"),
             client);
@@ -57,8 +57,7 @@ public sealed class AzureCredentialSourceTests
         {
             ["AZURE_STORAGE_KEY"] = "c2VjcmV0LWtleQ=="
         });
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => AzureObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => AzureObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
             "account",
@@ -93,7 +92,7 @@ public sealed class AzureCredentialSourceTests
                 Assert.Equal("/tenant/oauth2/v2.0/token", request.Uri.AbsolutePath);
                 Assert.Contains("grant_type=client_credentials", request.Body, StringComparison.Ordinal);
                 Assert.Contains("client_secret=client-secret", request.Body, StringComparison.Ordinal);
-                return AzureTokenResponse($"oauth-token-{issued}", expiresIn: 60);
+                return AzureTokenResponse($"oauth-token-{issued}", 60);
             }
 
             return AzureObjectResponse();
@@ -109,8 +108,7 @@ public sealed class AzureCredentialSourceTests
         Assert.NotNull(await store.GetAsync("second", CancellationToken.None));
 
         Assert.Equal(2, issued);
-        var objects = handler.Requests.Where(
-            static request => request.Uri.Host == "storage.example.test").ToArray();
+        var objects = handler.Requests.Where(static request => request.Uri.Host == "storage.example.test").ToArray();
         Assert.Equal("Bearer oauth-token-1", objects[0].Header("Authorization"));
         Assert.Equal("Bearer oauth-token-2", objects[1].Header("Authorization"));
     }
@@ -126,8 +124,8 @@ public sealed class AzureCredentialSourceTests
             ["AZURE_AUTHORITY_HOST"] = "https://authority.example.test"
         });
         const string responseSecret = "never-leak-provider-response";
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        using var handler = new CredentialHttpHandler(static (_, _) =>
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
             {
                 Content = new StringContent(responseSecret)
             });
@@ -138,8 +136,8 @@ public sealed class AzureCredentialSourceTests
             new PantsAzureCredentialSource.EnvironmentClientSecret(),
             client);
 
-        var exception = await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
 
         Assert.DoesNotContain(responseSecret, exception.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("never-leak-client-secret", exception.ToString(), StringComparison.Ordinal);
@@ -155,12 +153,11 @@ public sealed class AzureCredentialSourceTests
             ["AZURE_CLIENT_SECRET"] = "client-secret",
             ["AZURE_AUTHORITY_HOST"] = "https://authority.example.test"
         });
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"access_token\":42,\"expires_in\":3600}")
-            });
+        using var handler = new CredentialHttpHandler(static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"access_token\":42,\"expires_in\":3600}")
+        });
         using var client = new HttpClient(handler);
         var store = CreateStore(
             "account",
@@ -168,8 +165,7 @@ public sealed class AzureCredentialSourceTests
             new PantsAzureCredentialSource.EnvironmentClientSecret(),
             client);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -184,7 +180,7 @@ public sealed class AzureCredentialSourceTests
         });
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "authority.example.test"
-                ? AzureTokenResponse("workload-token", expiresIn: 3600)
+                ? AzureTokenResponse("workload-token", 3600)
                 : AzureObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -253,7 +249,7 @@ public sealed class AzureCredentialSourceTests
         });
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "authority.example.test"
-                ? AzureTokenResponse("default-chain-token", expiresIn: 3600)
+                ? AzureTokenResponse("default-chain-token", 3600)
                 : AzureObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -271,8 +267,7 @@ public sealed class AzureCredentialSourceTests
     [Fact]
     public void ShouldRejectInsecureBlobEndpointForAzureIdentityCredential()
     {
-        using var client = new HttpClient(new CredentialHttpHandler(
-            static (_, _) => AzureObjectResponse()));
+        using var client = new HttpClient(new CredentialHttpHandler(static (_, _) => AzureObjectResponse()));
 
         var exception = Assert.Throws<PantsInvalidArgumentException>(() => CreateStore(
             "account",
@@ -305,14 +300,14 @@ public sealed class AzureCredentialSourceTests
         Uri? endpoint,
         PantsAzureCredentialSource source,
         HttpClient client) => new(
-            new PantsCloudProviderConfiguration.AzureBlob(
-                account,
-                "container",
-                endpoint,
-                source),
-            string.Empty,
-            client,
-            TimeSpan.FromSeconds(5));
+        new PantsCloudProviderConfiguration.AzureBlob(
+            account,
+            "container",
+            endpoint,
+            source),
+        string.Empty,
+        client,
+        TimeSpan.FromSeconds(5));
 
     static EnvironmentVariableScope SetAzureEnvironment(
         IReadOnlyDictionary<string, string?> overrides)
@@ -332,7 +327,7 @@ public sealed class AzureCredentialSourceTests
     static HttpResponseMessage AzureObjectResponse() => new(HttpStatusCode.OK)
     {
         Content = new ByteArrayContent("value"u8.ToArray()),
-        Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"etag\"") }
+        Headers = { ETag = new EntityTagHeaderValue("\"etag\"") }
     };
 
     static HttpResponseMessage AzureTokenResponse(string token, int expiresIn) => new(HttpStatusCode.OK)

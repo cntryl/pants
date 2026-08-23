@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal interface IScanReadValidator : IDisposable
+interface IScanReadValidator : IDisposable
 {
     void ValidateKey(ReadOnlySpan<byte> key);
 

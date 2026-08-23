@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class PantsWalLogicalByteMetricsTests
 {
@@ -9,9 +9,9 @@ public sealed class PantsWalLogicalByteMetricsTests
             MidgeWalOperation.Put,
             "alpha",
             "bravo",
-            sequence: 1);
+            1);
 
-        await AssertWalMetricsAsync([record], expectedRecords: 1, expectedBytes: 10);
+        await AssertWalMetricsAsync([record], 1, 10);
     }
 
     [Fact]
@@ -20,32 +20,32 @@ public sealed class PantsWalLogicalByteMetricsTests
         var record = CreateRecord(
             MidgeWalOperation.DeleteRange,
             "alpha",
-            value: null,
-            sequence: 1,
-            rangeEnd: "omega");
+            null,
+            1,
+            "omega");
 
-        await AssertWalMetricsAsync([record], expectedRecords: 1, expectedBytes: 10);
+        await AssertWalMetricsAsync([record], 1, 10);
     }
 
     [Fact]
     public async Task ShouldCountOuterBatchKeyAndPayloadBytesExactlyWhenVerifyingAndRecovering()
     {
         var record = MidgeWalCodec.EncodeTransactionBatch(
-            transactionId: 7,
-            beginSequence: 1,
-            writerEpoch: 1,
+            7,
+            1,
+            1,
             [
                 new MidgeWalMutation(
-                    ColumnFamilyId: 0,
+                    0,
                     MidgeWalOperation.Put,
                     "batch-key"u8.ToArray(),
                     "batch-value"u8.ToArray(),
-                    Sequence: 0,
-                    Expiration: null,
-                    RangeEnd: null)
+                    0,
+                    null,
+                    null)
             ]);
 
-        await AssertWalMetricsAsync([record], expectedRecords: 1, expectedBytes: 78);
+        await AssertWalMetricsAsync([record], 1, 78);
     }
 
     [Fact]
@@ -53,16 +53,16 @@ public sealed class PantsWalLogicalByteMetricsTests
     {
         var begin = MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionBegin,
-            transactionId: 7,
-            sequence: 1,
-            writerEpoch: 1);
+            7,
+            1,
+            1);
         var commit = MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionCommit,
-            transactionId: 7,
-            sequence: 2,
-            writerEpoch: 1);
+            7,
+            2,
+            1);
 
-        await AssertWalMetricsAsync([begin, commit], expectedRecords: 2, expectedBytes: 6);
+        await AssertWalMetricsAsync([begin, commit], 2, 6);
     }
 
     static async Task AssertWalMetricsAsync(
@@ -98,15 +98,15 @@ public sealed class PantsWalLogicalByteMetricsTests
         ulong sequence,
         string? rangeEnd = null) =>
         MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
-            ColumnFamilyId: 0,
+            0,
             operation,
             TestBytes.FromString(key),
             value is null ? null : TestBytes.FromString(value),
             sequence,
-            Expiration: null,
+            null,
             rangeEnd is null ? null : TestBytes.FromString(rangeEnd),
-            TransactionId: null,
-            WriterEpoch: 1));
+            null,
+            1));
 
     static byte[] Frame(IEnumerable<byte[]> payloads)
     {

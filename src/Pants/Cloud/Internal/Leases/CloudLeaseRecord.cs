@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Leases;
 
-internal sealed record CloudLeaseRecord(
+sealed record CloudLeaseRecord(
     string HolderId,
     ulong Epoch,
     string OwnerToken,

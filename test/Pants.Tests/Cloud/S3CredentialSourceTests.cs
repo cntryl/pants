@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class S3CredentialSourceTests
@@ -38,8 +39,7 @@ public sealed class S3CredentialSourceTests
             ["AWS_SECRET_ACCESS_KEY"] = "environment-secret",
             ["AWS_SECURITY_TOKEN"] = "environment-session"
         });
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => S3ObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateS3CompatibleStore(
             new PantsS3CredentialSource.Environment(),
@@ -55,8 +55,7 @@ public sealed class S3CredentialSourceTests
     [Fact]
     public async Task ShouldUseAwsChinaDnsSuffixForS3Requests()
     {
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => S3ObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
             new PantsCloudProviderConfiguration.AwsS3(
@@ -82,14 +81,13 @@ public sealed class S3CredentialSourceTests
         await File.WriteAllTextAsync(
             configPath,
             "[profile qualification]\naccess_key_id = config-access\nsecret_access_key = config-secret\naws_security_token = config-session\n");
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => S3ObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateS3CompatibleStore(
             new PantsS3CredentialSource.SharedProfile(
                 "qualification",
-                CredentialsFile: Path.Combine(directory.Path, "missing"),
-                ConfigFile: configPath),
+                Path.Combine(directory.Path, "missing"),
+                configPath),
             client);
 
         Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
@@ -102,8 +100,7 @@ public sealed class S3CredentialSourceTests
     [Fact]
     public void ShouldRejectAwsDefaultChainForS3CompatibleProvider()
     {
-        using var client = new HttpClient(new CredentialHttpHandler(
-            static (_, _) => S3ObjectResponse()));
+        using var client = new HttpClient(new CredentialHttpHandler(static (_, _) => S3ObjectResponse()));
 
         var exception = Assert.Throws<PantsInvalidArgumentException>(() =>
             CreateS3CompatibleStore(new PantsS3CredentialSource.AwsDefaultChain(), client));
@@ -126,8 +123,7 @@ public sealed class S3CredentialSourceTests
             ["AWS_CONFIG_FILE"] = Path.Combine(directory.Path, "missing-config"),
             ["AWS_EC2_METADATA_DISABLED"] = "true"
         });
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => S3ObjectResponse());
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
 
@@ -177,11 +173,13 @@ public sealed class S3CredentialSourceTests
         Assert.NotNull(await store.GetAsync("second", CancellationToken.None));
 
         Assert.Equal(2, issued);
-        var objectRequests = handler.Requests.Where(
-            static request => request.Uri.Host.EndsWith("amazonaws.com", StringComparison.Ordinal) &&
-                !request.Uri.Host.StartsWith("sts.", StringComparison.Ordinal)).ToArray();
-        Assert.Contains("Credential=temporary-access-1/", objectRequests[0].Header("Authorization"), StringComparison.Ordinal);
-        Assert.Contains("Credential=temporary-access-2/", objectRequests[1].Header("Authorization"), StringComparison.Ordinal);
+        var objectRequests = handler.Requests.Where(static request =>
+            request.Uri.Host.EndsWith("amazonaws.com", StringComparison.Ordinal) &&
+            !request.Uri.Host.StartsWith("sts.", StringComparison.Ordinal)).ToArray();
+        Assert.Contains("Credential=temporary-access-1/", objectRequests[0].Header("Authorization"),
+            StringComparison.Ordinal);
+        Assert.Contains("Credential=temporary-access-2/", objectRequests[1].Header("Authorization"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -198,16 +196,16 @@ public sealed class S3CredentialSourceTests
             ["AWS_CONFIG_FILE"] = Path.Combine(directory.Path, "missing-config")
         });
         const string responseSecret = "provider-response-secret";
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        using var handler = new CredentialHttpHandler(static (_, _) =>
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
             {
                 Content = new StringContent(responseSecret)
             });
         using var client = new HttpClient(handler);
         var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
 
-        var exception = await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
 
         Assert.DoesNotContain(responseSecret, exception.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("web-identity-secret", exception.ToString(), StringComparison.Ordinal);
@@ -223,16 +221,14 @@ public sealed class S3CredentialSourceTests
             ["AWS_SHARED_CREDENTIALS_FILE"] = Path.Combine(directory.Path, "missing"),
             ["AWS_CONFIG_FILE"] = Path.Combine(directory.Path, "missing-config")
         });
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("[]")
-            });
+        using var handler = new CredentialHttpHandler(static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]")
+        });
         using var client = new HttpClient(handler);
         var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -260,7 +256,8 @@ public sealed class S3CredentialSourceTests
 
         var credentialRequest = handler.Requests[0];
         Assert.Equal("container-authorization", credentialRequest.Header("Authorization"));
-        Assert.Contains("Credential=ecs-access/", handler.Requests[1].Header("Authorization"), StringComparison.Ordinal);
+        Assert.Contains("Credential=ecs-access/", handler.Requests[1].Header("Authorization"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -333,15 +330,15 @@ public sealed class S3CredentialSourceTests
     static S3ObjectStore CreateS3CompatibleStore(
         PantsS3CredentialSource source,
         HttpClient client) => new(
-            new PantsCloudProviderConfiguration.S3Compatible(
-                "bucket",
-                "us-east-1",
-                new Uri("https://objects.example.test"),
-                PathStyle: true,
-                source),
-            string.Empty,
-            client,
-            TimeSpan.FromSeconds(5));
+        new PantsCloudProviderConfiguration.S3Compatible(
+            "bucket",
+            "us-east-1",
+            new Uri("https://objects.example.test"),
+            true,
+            source),
+        string.Empty,
+        client,
+        TimeSpan.FromSeconds(5));
 
     static EnvironmentVariableScope SetAwsEnvironment(
         IReadOnlyDictionary<string, string?> overrides)
@@ -361,7 +358,7 @@ public sealed class S3CredentialSourceTests
     static HttpResponseMessage S3ObjectResponse() => new(HttpStatusCode.OK)
     {
         Content = new ByteArrayContent("value"u8.ToArray()),
-        Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"etag\"") }
+        Headers = { ETag = new EntityTagHeaderValue("\"etag\"") }
     };
 
     static HttpResponseMessage StsResponse(
@@ -371,7 +368,7 @@ public sealed class S3CredentialSourceTests
         DateTimeOffset expiration) => new(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                $"<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>{accessKey}</AccessKeyId><SecretAccessKey>{secretKey}</SecretAccessKey><SessionToken>{sessionToken}</SessionToken><Expiration>{expiration.ToString("O", CultureInfo.InvariantCulture)}</Expiration></Credentials></AssumeRoleWithWebIdentityResponse>")
+            $"<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>{accessKey}</AccessKeyId><SecretAccessKey>{secretKey}</SecretAccessKey><SessionToken>{sessionToken}</SessionToken><Expiration>{expiration.ToString("O", CultureInfo.InvariantCulture)}</Expiration></Credentials></AssumeRoleWithWebIdentityResponse>")
         };
 
     static HttpResponseMessage TemporaryAwsJsonResponse(
@@ -380,13 +377,13 @@ public sealed class S3CredentialSourceTests
         string sessionToken) => new(HttpStatusCode.OK)
         {
             Content = new StringContent(
-                $$"""
-                {
-                  "AccessKeyId": "{{accessKey}}",
-                  "SecretAccessKey": "{{secretKey}}",
-                  "Token": "{{sessionToken}}",
-                  "Expiration": "{{DateTimeOffset.UtcNow.AddHours(1).ToString("O", CultureInfo.InvariantCulture)}}"
-                }
-                """)
+            $$"""
+              {
+                "AccessKeyId": "{{accessKey}}",
+                "SecretAccessKey": "{{secretKey}}",
+                "Token": "{{sessionToken}}",
+                "Expiration": "{{DateTimeOffset.UtcNow.AddHours(1).ToString("O", CultureInfo.InvariantCulture)}}"
+              }
+              """)
         };
 }

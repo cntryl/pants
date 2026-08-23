@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class BlockingThrowingFlushFailpointHandler(PantsFailpoint target) :
     IPantsFailpointHandler,
@@ -8,13 +8,15 @@ sealed class BlockingThrowingFlushFailpointHandler(PantsFailpoint target) :
 
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _release = new(initialState: false);
+
+    readonly ManualResetEventSlim _release = new(false);
     int _hit;
 
-    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
-        await _entered.Task.WaitAsync(timeout);
-
-    public void Release() => _release.Set();
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -32,9 +34,8 @@ sealed class BlockingThrowingFlushFailpointHandler(PantsFailpoint target) :
         throw new IOException($"Injected failure after releasing {failpoint}.");
     }
 
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
+    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
+        await _entered.Task.WaitAsync(timeout);
+
+    public void Release() => _release.Set();
 }

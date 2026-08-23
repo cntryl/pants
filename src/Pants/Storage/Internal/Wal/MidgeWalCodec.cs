@@ -1,16 +1,17 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Win32.SafeHandles;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal static class MidgeWalCodec
+static class MidgeWalCodec
 {
+    const int TransactionBatchRecordMinimumLength =
+        4 * sizeof(byte) + 2 * sizeof(uint) + sizeof(ulong);
+
     static ReadOnlySpan<byte> RecordMagic => "MW"u8;
 
     static ReadOnlySpan<byte> BatchMagic => "TB"u8;
-
-    const int TransactionBatchRecordMinimumLength =
-        (4 * sizeof(byte)) + (2 * sizeof(uint)) + sizeof(ulong);
 
     public static byte[] EncodeRecord(MidgeWalRecord record)
     {
@@ -230,8 +231,8 @@ internal static class MidgeWalCodec
         ulong writerEpoch)
     {
         if (operation is not (
-                MidgeWalOperation.TransactionBegin or
-                MidgeWalOperation.TransactionCommit))
+            MidgeWalOperation.TransactionBegin or
+            MidgeWalOperation.TransactionCommit))
         {
             throw new PantsStorageException(
                 $"WAL operation '{operation}' is not a transaction marker.");
@@ -395,7 +396,7 @@ internal static class MidgeWalCodec
 
     public static bool TryDecodeMutation(
         MidgeWalRecord record,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out MidgeWalMutation? mutation)
+        [NotNullWhen(true)] out MidgeWalMutation? mutation)
     {
         if (!IsMutation(record.Operation) ||
             (record.Operation is MidgeWalOperation.Put or MidgeWalOperation.Insert &&

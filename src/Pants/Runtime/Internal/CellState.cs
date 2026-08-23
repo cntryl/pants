@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class CellState
+sealed class CellState
 {
     public CellState(byte[]? value, long writeSequence, DateTimeOffset? expiresAtUtc)
         : this(

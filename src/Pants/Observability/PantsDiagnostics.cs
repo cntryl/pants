@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Observability;
 
 public static class PantsDiagnostics
 {

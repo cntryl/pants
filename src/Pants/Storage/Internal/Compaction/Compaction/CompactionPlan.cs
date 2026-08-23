@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
-internal sealed record CompactionPlan(
+sealed record CompactionPlan(
     uint SourceLevel,
     uint TargetLevel,
     uint ColumnFamilyId,

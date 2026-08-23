@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services.Flush;
 
 sealed class FlushRuntimeService(
     int capacity,
@@ -41,7 +41,7 @@ sealed class FlushRuntimeService(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var store = diskStore ??
-            throw new PantsInternalException("A flush runtime request requires local storage.");
+                    throw new PantsInternalException("A flush runtime request requires local storage.");
         return request switch
         {
             FlushAllRuntimeRequest flush => FlushAll(store, flush),
@@ -107,7 +107,7 @@ sealed class FlushRuntimeService(
         {
             var result = new FrozenFlushRuntimeResult(
                 publicationPlan,
-                PersistenceAnomaly: false);
+                false);
             throw new FrozenFlushRuntimeException(result, exception);
         }
     }
@@ -117,6 +117,6 @@ sealed class FlushRuntimeService(
     {
         var result = await response.ConfigureAwait(false);
         return result.Frozen ??
-            throw new PantsInternalException("A frozen flush returned no publication result.");
+               throw new PantsInternalException("A frozen flush returned no publication result.");
     }
 }

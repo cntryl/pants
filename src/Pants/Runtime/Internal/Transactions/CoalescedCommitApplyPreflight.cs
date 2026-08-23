@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Transactions;
 
-internal static class CoalescedCommitApplyPreflight
+static class CoalescedCommitApplyPreflight
 {
     public static IReadOnlyList<PreparedCoalescedCommit> Create(
         PantsRuntimeState state,

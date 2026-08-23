@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed record RecordedCredentialRequest(
+sealed record RecordedCredentialRequest(
     HttpMethod Method,
     Uri Uri,
     IReadOnlyDictionary<string, string> Headers,

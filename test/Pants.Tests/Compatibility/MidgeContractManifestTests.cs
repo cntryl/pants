@@ -1,20 +1,20 @@
 using System.Reflection;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class MidgeContractManifestTests
 {
-    private const string PinnedSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
-    private static readonly string[] ValidStatuses = ["mapped", "planned", "n/a"];
+    const string PinnedSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
+    static readonly string[] ValidStatuses = ["mapped", "planned", "n/a"];
 
     [Fact]
     public void ShouldConsumeCommittedManifestWithoutSiblingCheckout()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
-        JsonElement root = document.RootElement;
-        JsonElement entries = root.GetProperty("entries");
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var root = document.RootElement;
+        var entries = root.GetProperty("entries");
 
         Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(PinnedSha, root.GetProperty("midgeSha").GetString());
@@ -28,14 +28,14 @@ public sealed class MidgeContractManifestTests
             Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("source").GetString()));
             Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("sourceSymbolOrTest").GetString()));
             Assert.False(string.IsNullOrWhiteSpace(entry.GetProperty("observableBehavior").GetString()));
-            string status = Assert.IsType<string>(entry.GetProperty("status").GetString());
+            var status = Assert.IsType<string>(entry.GetProperty("status").GetString());
             Assert.Contains(status, ValidStatuses);
-            Assert.True(entry.TryGetProperty("issue", out JsonElement issue));
+            Assert.True(entry.TryGetProperty("issue", out var issue));
             Assert.True(issue.ValueKind is JsonValueKind.Number or JsonValueKind.Null);
 
             if (status == "mapped")
             {
-                JsonElement pantsTests = entry.GetProperty("pantsTests");
+                var pantsTests = entry.GetProperty("pantsTests");
                 Assert.NotEmpty(pantsTests.EnumerateArray());
                 Assert.All(pantsTests.EnumerateArray(), static pantsTest =>
                     Assert.True(TestExists(Assert.IsType<string>(pantsTest.GetString()))));
@@ -51,10 +51,10 @@ public sealed class MidgeContractManifestTests
     [Fact]
     public void ShouldMapEveryM1ContractToAnExecutablePantsTest()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
 
-        JsonElement[] plannedM1Contracts = document.RootElement
+        var plannedM1Contracts = document.RootElement
             .GetProperty("entries")
             .EnumerateArray()
             .Where(static entry =>
@@ -69,10 +69,10 @@ public sealed class MidgeContractManifestTests
     [Fact]
     public void ShouldMapEveryM15ContractToAnExecutablePantsTest()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
 
-        JsonElement[] plannedM15Contracts = document.RootElement
+        var plannedM15Contracts = document.RootElement
             .GetProperty("entries")
             .EnumerateArray()
             .Where(static entry =>
@@ -87,10 +87,10 @@ public sealed class MidgeContractManifestTests
     [Fact]
     public void ShouldMapEveryM2ContractToAnExecutablePantsTest()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
 
-        JsonElement[] plannedM2Contracts = document.RootElement
+        var plannedM2Contracts = document.RootElement
             .GetProperty("entries")
             .EnumerateArray()
             .Where(static entry =>
@@ -105,10 +105,10 @@ public sealed class MidgeContractManifestTests
     [Fact]
     public void ShouldMapEveryM3ContractToAnExecutablePantsTest()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var path = Path.Combine(AppContext.BaseDirectory, "MidgeContractManifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
 
-        JsonElement[] plannedM3Contracts = document.RootElement
+        var plannedM3Contracts = document.RootElement
             .GetProperty("entries")
             .EnumerateArray()
             .Where(static entry =>

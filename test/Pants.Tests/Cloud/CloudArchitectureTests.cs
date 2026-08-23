@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudArchitectureTests
 {
@@ -8,7 +8,7 @@ public sealed class CloudArchitectureTests
         var configurationTypes = typeof(PantsCloudProviderConfiguration).Assembly
             .GetExportedTypes()
             .Where(static type => type == typeof(PantsCloudProviderConfiguration) ||
-                type.IsNested && type.DeclaringType == typeof(PantsCloudProviderConfiguration))
+                                  (type.IsNested && type.DeclaringType == typeof(PantsCloudProviderConfiguration)))
             .ToArray();
 
         Assert.Contains(typeof(PantsCloudProviderConfiguration.AwsS3), configurationTypes);

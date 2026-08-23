@@ -4,16 +4,17 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
+sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 {
     const string StorageScope =
         "https://www.googleapis.com/auth/devstorage.full_control";
+
+    readonly SemaphoreSlim _gate = new(1, 1);
     readonly HttpClient _httpClient;
     readonly PantsGcsCredentialSource _source;
     readonly TimeSpan _timeout;
-    readonly SemaphoreSlim _gate = new(1, 1);
     GcsAccessToken? _cached;
     int _disposed;
 
@@ -25,6 +26,14 @@ internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposabl
         _httpClient = httpClient;
         _source = source;
         _timeout = timeout;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _gate.Dispose();
+        }
     }
 
     public async ValueTask<string> GetTokenAsync(CancellationToken cancellationToken)
@@ -49,14 +58,6 @@ internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposabl
         finally
         {
             _gate.Release();
-        }
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            _gate.Dispose();
         }
     }
 
@@ -121,7 +122,7 @@ internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposabl
         var email = GetRequiredString(root, "client_email");
         var privateKey = GetRequiredString(root, "private_key");
         var tokenUri = GetOptionalString(root, "token_uri") ??
-            "https://oauth2.googleapis.com/token";
+                       "https://oauth2.googleapis.com/token";
         var now = DateTimeOffset.UtcNow;
         var header = Base64Url(
             Encoding.UTF8.GetBytes("{\"alg\":\"RS256\",\"typ\":\"JWT\"}"));
@@ -171,7 +172,7 @@ internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposabl
         CancellationToken cancellationToken)
     {
         var tokenUri = GetOptionalString(root, "token_uri") ??
-            "https://oauth2.googleapis.com/token";
+                       "https://oauth2.googleapis.com/token";
         return RequestTokenAsync(
             new Uri(tokenUri, UriKind.Absolute),
             new Dictionary<string, string>
@@ -188,7 +189,7 @@ internal sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposabl
         CancellationToken cancellationToken)
     {
         var host = Environment.GetEnvironmentVariable("GCE_METADATA_HOST") ??
-            "metadata.google.internal";
+                   "metadata.google.internal";
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"http://{host.TrimEnd('/')}/computeMetadata/v1/instance/service-accounts/default/token");

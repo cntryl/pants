@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed record MidgeSstEntry(
+sealed record MidgeSstEntry(
     byte[] Key,
     byte[]? Value,
     ulong Sequence,

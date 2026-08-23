@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsCloudCompactionFailureTests
 {
@@ -12,8 +12,7 @@ public sealed class PantsCloudCompactionFailureTests
         var initialRemoteCount = RemoteSsts(directory.Path).Length;
         failpoints.Arm(PantsFailpoint.BeforeIntentLogReplace);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.CompactAllAsync().AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
         Assert.Equal(4, initialRemoteCount);
         Assert.Equal(initialRemoteCount, RemoteSsts(directory.Path).Length);
@@ -33,8 +32,7 @@ public sealed class PantsCloudCompactionFailureTests
             initialRemoteCount = RemoteSsts(directory.Path).Length;
             failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
 
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
             Assert.Equal(4, initialRemoteCount);
             Assert.Equal(initialRemoteCount + 1, RemoteSsts(directory.Path).Length);
@@ -61,8 +59,7 @@ public sealed class PantsCloudCompactionFailureTests
                 .Select(Path.GetFileName)
                 .ToHashSet(StringComparer.Ordinal);
             failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
             orphanPath = Assert.Single(
                 RemoteSsts(directory.Path),
                 path => !initialRemoteNames.Contains(Path.GetFileName(path)));
@@ -102,8 +99,7 @@ public sealed class PantsCloudCompactionFailureTests
         publicationFailure.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
         await using (var failingDatabase = await OpenAsync(options, publicationFailure))
         {
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => failingDatabase.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => failingDatabase.CompactAllAsync().AsTask());
 
             orphanPath = Assert.Single(
                 RemoteSsts(directory.Path),
@@ -116,8 +112,7 @@ public sealed class PantsCloudCompactionFailureTests
             PantsFailpoint.BeforeCloudSstGarbageCollectionDelete,
             () => File.WriteAllBytes(orphanPath, replacement));
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => OpenAsync(options, cleanupFailure).AsTask());
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => OpenAsync(options, cleanupFailure).AsTask());
 
         Assert.Equal(replacement, await File.ReadAllBytesAsync(orphanPath));
         using var lockProbe = new FileStream(
@@ -136,15 +131,14 @@ public sealed class PantsCloudCompactionFailureTests
         await SeedWritesAsync(database, database.DefaultColumnFamily, "cloud-retry");
         failpoints.Arm(PantsFailpoint.BeforeCloudUpload);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         await WaitForAsync(() => RemoteSsts(directory.Path).Length == 1);
         await AssertSeedValuesAsync(
             database,
             database.DefaultColumnFamily,
             "cloud-retry",
-            count: 6);
+            6);
     }
 
     static async ValueTask SeedCompactionInputsAsync(
@@ -230,9 +224,9 @@ public sealed class PantsCloudCompactionFailureTests
     static PantsOpenOptions CreateOptions(string path) =>
         PantsOpenOptions.SimulatedCloud(path, "pants-tests", "compaction-failures/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: int.MaxValue))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                int.MaxValue))
             .WithBackgroundCompaction(false);
 }

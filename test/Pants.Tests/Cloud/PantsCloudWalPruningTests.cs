@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsCloudWalPruningTests
 {
@@ -107,8 +107,7 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeSstWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -128,8 +127,7 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeMetadataWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -149,8 +147,7 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -250,8 +247,7 @@ public sealed class PantsCloudWalPruningTests
             File.Delete(path);
         }
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => PantsDatabase.OpenAsync(options).AsTask());
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => PantsDatabase.OpenAsync(options).AsTask());
     }
 
     [Fact]
@@ -452,7 +448,7 @@ public sealed class PantsCloudWalPruningTests
 
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(path, true);
             }
             else
             {
@@ -465,7 +461,7 @@ public sealed class PantsCloudWalPruningTests
     {
         if (Directory.Exists(path))
         {
-            Directory.Delete(path, recursive: true);
+            Directory.Delete(path, true);
         }
 
         Directory.CreateDirectory(path);

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class ManualClock(DateTimeOffset initial) : IPantsClock
+sealed class ManualClock(DateTimeOffset initial) : IPantsClock
 {
     public DateTimeOffset UtcNow { get; set; } = initial;
 }

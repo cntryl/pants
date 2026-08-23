@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal static class RuntimeExceptionMapper
+static class RuntimeExceptionMapper
 {
     public static Exception ToPublicException(
         Exception exception,
@@ -13,8 +13,8 @@ internal static class RuntimeExceptionMapper
                 "The Pants runtime operation was aborted by the engine.",
                 canceled),
             WalCommitRollbackException or
-            WalCommitGroupRollbackException or
-            WalRotationRecoveryException =>
+                WalCommitGroupRollbackException or
+                WalRotationRecoveryException =>
                 new PantsAbortedException(
                     "The WAL outcome is uncertain after a failed rollback.",
                     exception),

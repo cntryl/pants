@@ -1,23 +1,17 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class RetryingCloudWalSealFailpointHandler : IPantsFailpointHandler
 {
     readonly TaskCompletionSource _failureObserved = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     readonly TaskCompletionSource _retryObserved = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    int _failuresEnabled = 1;
+
     int _attempts;
+    int _failuresEnabled = 1;
 
     public int Attempts => Volatile.Read(ref _attempts);
-
-    public Task WaitForFailureAsync(TimeSpan timeout) =>
-        _failureObserved.Task.WaitAsync(timeout);
-
-    public Task WaitForRetryAsync(TimeSpan timeout) =>
-        _retryObserved.Task.WaitAsync(timeout);
-
-    public void AllowSuccess() => Volatile.Write(ref _failuresEnabled, 0);
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -38,4 +32,12 @@ sealed class RetryingCloudWalSealFailpointHandler : IPantsFailpointHandler
             throw new IOException("Injected cloud WAL seal failure.");
         }
     }
+
+    public Task WaitForFailureAsync(TimeSpan timeout) =>
+        _failureObserved.Task.WaitAsync(timeout);
+
+    public Task WaitForRetryAsync(TimeSpan timeout) =>
+        _retryObserved.Task.WaitAsync(timeout);
+
+    public void AllowSuccess() => Volatile.Write(ref _failuresEnabled, 0);
 }

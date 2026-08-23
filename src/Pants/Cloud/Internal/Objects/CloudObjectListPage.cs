@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal sealed record CloudObjectListPage
+sealed record CloudObjectListPage
 {
     public CloudObjectListPage(
         IEnumerable<string> objectKeys,

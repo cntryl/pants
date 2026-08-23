@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Verification;
 
 readonly record struct OnlineVerificationMaintenance(
     bool CollectGarbage,

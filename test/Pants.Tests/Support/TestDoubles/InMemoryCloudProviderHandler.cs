@@ -4,7 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class InMemoryCloudProviderHandler : HttpMessageHandler
 {
@@ -14,8 +14,10 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
     const string S3Protocol = "s3";
 
     readonly Lock _gate = new();
+
     readonly Dictionary<string, (byte[] Data, long Version)> _objects =
         new(StringComparer.Ordinal);
+
     readonly HashSet<string> _observedObjectWrites = new(StringComparer.Ordinal);
 
     public bool ContainsObject(string host, string pathFragment)
@@ -124,7 +126,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
             }
 
-            if (!ConditionMatches(request, protocol, exists: true, current.Version))
+            if (!ConditionMatches(request, protocol, true, current.Version))
             {
                 return CreatePredicateFailure(protocol);
             }
@@ -187,9 +189,9 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
             }
 
             return expected is null ||
-                exists && StringComparer.Ordinal.Equals(
-                    expected,
-                    currentVersion.ToString(CultureInfo.InvariantCulture));
+                   (exists && StringComparer.Ordinal.Equals(
+                       expected,
+                       currentVersion.ToString(CultureInfo.InvariantCulture)));
         }
 
         if (request.Headers.IfNoneMatch.Any(static value => value.Tag == "*"))
@@ -199,7 +201,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
 
         var expectedEtag = request.Headers.IfMatch.SingleOrDefault()?.Tag;
         return expectedEtag is null ||
-            exists && StringComparer.Ordinal.Equals(expectedEtag, FormatEtag(currentVersion));
+               (exists && StringComparer.Ordinal.Equals(expectedEtag, FormatEtag(currentVersion)));
     }
 
     static HttpResponseMessage CreateObjectResponse(
@@ -286,7 +288,7 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         if (uri.AbsolutePath.StartsWith("/upload/", StringComparison.Ordinal))
         {
             return GetQueryValue(uri, "name") ??
-                throw new InvalidOperationException("GCS JSON upload did not contain an object name.");
+                   throw new InvalidOperationException("GCS JSON upload did not contain an object name.");
         }
 
         var marker = "/o/";

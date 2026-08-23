@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,28 +6,23 @@ sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, ID
 
     readonly TaskCompletionSource _compactionAdmission = CreateCompletion();
     readonly TaskCompletionSource _flushPublication = CreateCompletion();
+    readonly ManualResetEventSlim _releaseCompaction = new(false);
+    readonly ManualResetEventSlim _releaseFlush = new(false);
+    readonly ManualResetEventSlim _releaseReset = new(false);
     readonly TaskCompletionSource _signalReset = CreateCompletion();
-    readonly ManualResetEventSlim _releaseCompaction = new(initialState: false);
-    readonly ManualResetEventSlim _releaseFlush = new(initialState: false);
-    readonly ManualResetEventSlim _releaseReset = new(initialState: false);
     int _compactionHit;
     int _flushHits;
     int _resetHit;
 
-    public Task WaitForCompactionAdmissionAsync(TimeSpan timeout) =>
-        _compactionAdmission.Task.WaitAsync(timeout);
-
-    public Task WaitForFlushPublicationAsync(TimeSpan timeout) =>
-        _flushPublication.Task.WaitAsync(timeout);
-
-    public Task WaitForSignalResetAsync(TimeSpan timeout) =>
-        _signalReset.Task.WaitAsync(timeout);
-
-    public void ReleaseCompactionAdmission() => _releaseCompaction.Set();
-
-    public void ReleaseFlushPublication() => _releaseFlush.Set();
-
-    public void ReleaseSignalReset() => _releaseReset.Set();
+    public void Dispose()
+    {
+        _releaseCompaction.Set();
+        _releaseFlush.Set();
+        _releaseReset.Set();
+        _releaseCompaction.Dispose();
+        _releaseFlush.Dispose();
+        _releaseReset.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -48,15 +43,20 @@ sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, ID
         }
     }
 
-    public void Dispose()
-    {
-        _releaseCompaction.Set();
-        _releaseFlush.Set();
-        _releaseReset.Set();
-        _releaseCompaction.Dispose();
-        _releaseFlush.Dispose();
-        _releaseReset.Dispose();
-    }
+    public Task WaitForCompactionAdmissionAsync(TimeSpan timeout) =>
+        _compactionAdmission.Task.WaitAsync(timeout);
+
+    public Task WaitForFlushPublicationAsync(TimeSpan timeout) =>
+        _flushPublication.Task.WaitAsync(timeout);
+
+    public Task WaitForSignalResetAsync(TimeSpan timeout) =>
+        _signalReset.Task.WaitAsync(timeout);
+
+    public void ReleaseCompactionAdmission() => _releaseCompaction.Set();
+
+    public void ReleaseFlushPublication() => _releaseFlush.Set();
+
+    public void ReleaseSignalReset() => _releaseReset.Set();
 
     static TaskCompletionSource CreateCompletion() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

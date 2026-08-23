@@ -1,19 +1,19 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache.Policy;
 
-internal sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
+sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
 {
-    private const int DefaultCapacity = 1024;
-    private readonly Dictionary<SstBlockCacheKey, int> _slotsByKey = [];
-    private readonly List<ClockProSstBlockCacheSlot> _slots = new(DefaultCapacity);
-    private int _hand;
-    private int _hotCount;
-    private int _hotTarget = DefaultCapacity / 4;
+    const int DefaultCapacity = 1024;
+    readonly List<ClockProSstBlockCacheSlot> _slots = new(DefaultCapacity);
+    readonly Dictionary<SstBlockCacheKey, int> _slotsByKey = [];
+    int _hand;
+    int _hotCount;
+    int _hotTarget = DefaultCapacity / 4;
 
     public void RecordAccess(SstBlockCacheKey key)
     {
-        if (_slotsByKey.TryGetValue(key, out int existingIndex))
+        if (_slotsByKey.TryGetValue(key, out var existingIndex))
         {
-            ClockProSstBlockCacheSlot existing = _slots[existingIndex];
+            var existing = _slots[existingIndex];
             existing.Referenced = true;
             if (!existing.Hot && _hotCount < _hotTarget)
             {
@@ -24,14 +24,14 @@ internal sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
             return;
         }
 
-        int slotIndex = _slots.FindIndex(static slot => slot.Key is null);
+        var slotIndex = _slots.FindIndex(static slot => slot.Key is null);
         if (slotIndex < 0)
         {
             slotIndex = _slots.Count;
             _slots.Add(new ClockProSstBlockCacheSlot());
         }
 
-        ClockProSstBlockCacheSlot slot = _slots[slotIndex];
+        var slot = _slots[slotIndex];
         slot.Key = key;
         slot.Referenced = true;
         slot.Hot = false;
@@ -46,10 +46,10 @@ internal sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
             return false;
         }
 
-        int maximumScans = checked(_slots.Count + 1);
+        var maximumScans = checked(_slots.Count + 1);
         for (var scan = 0; scan < maximumScans; scan++)
         {
-            ClockProSstBlockCacheSlot slot = _slots[_hand];
+            var slot = _slots[_hand];
             AdvanceHand();
             if (slot.Key is not { } candidate)
             {
@@ -89,14 +89,14 @@ internal sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         _hotTarget = DefaultCapacity / 4;
     }
 
-    private void RemoveSlot(SstBlockCacheKey key)
+    void RemoveSlot(SstBlockCacheKey key)
     {
-        if (!_slotsByKey.Remove(key, out int slotIndex))
+        if (!_slotsByKey.Remove(key, out var slotIndex))
         {
             return;
         }
 
-        ClockProSstBlockCacheSlot slot = _slots[slotIndex];
+        var slot = _slots[slotIndex];
         if (slot.Hot)
         {
             _hotCount--;
@@ -107,5 +107,5 @@ internal sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         slot.Hot = false;
     }
 
-    private void AdvanceHand() => _hand = (_hand + 1) % _slots.Count;
+    void AdvanceHand() => _hand = (_hand + 1) % _slots.Count;
 }

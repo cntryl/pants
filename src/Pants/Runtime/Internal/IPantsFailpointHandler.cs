@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal interface IPantsFailpointHandler
+interface IPantsFailpointHandler
 {
     void Hit(PantsFailpoint failpoint);
 }

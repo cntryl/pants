@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal static class S3CredentialResolver
+static class S3CredentialResolver
 {
     public static IS3CredentialProvider Resolve(
         PantsS3CredentialSource source,
@@ -47,23 +47,23 @@ internal static class S3CredentialResolver
     {
         var profile = Environment.GetEnvironmentVariable("AWS_PROFILE") ?? "default";
         var credentialsPath = Environment.GetEnvironmentVariable("AWS_SHARED_CREDENTIALS_FILE") ??
-            DefaultHomeFile(".aws/credentials");
+                              DefaultHomeFile(".aws/credentials");
         var configPath = Environment.GetEnvironmentVariable("AWS_CONFIG_FILE") ??
-            DefaultHomeFile(".aws/config");
+                         DefaultHomeFile(".aws/config");
         return FromProfileFiles(profile, credentialsPath, configPath);
     }
 
     static S3Credentials? FromProfile(PantsS3CredentialSource.SharedProfile profile)
     {
         var profileName = profile.Profile ??
-            Environment.GetEnvironmentVariable("AWS_PROFILE") ??
-            "default";
+                          Environment.GetEnvironmentVariable("AWS_PROFILE") ??
+                          "default";
         var credentialsPath = profile.CredentialsFile ??
-            Environment.GetEnvironmentVariable("AWS_SHARED_CREDENTIALS_FILE") ??
-            DefaultHomeFile(".aws/credentials");
+                              Environment.GetEnvironmentVariable("AWS_SHARED_CREDENTIALS_FILE") ??
+                              DefaultHomeFile(".aws/credentials");
         var configPath = profile.ConfigFile ??
-            Environment.GetEnvironmentVariable("AWS_CONFIG_FILE") ??
-            DefaultHomeFile(".aws/config");
+                         Environment.GetEnvironmentVariable("AWS_CONFIG_FILE") ??
+                         DefaultHomeFile(".aws/config");
         return FromProfileFiles(profileName, credentialsPath, configPath);
     }
 
@@ -73,14 +73,14 @@ internal static class S3CredentialResolver
         string? configPath)
     {
         if (credentialsPath is not null &&
-            ReadProfile(credentialsPath, profile, isConfigFile: false) is { } credentials)
+            ReadProfile(credentialsPath, profile, false) is { } credentials)
         {
             return credentials;
         }
 
         return configPath is null
             ? null
-            : ReadProfile(configPath, profile, isConfigFile: true);
+            : ReadProfile(configPath, profile, true);
     }
 
     static S3Credentials? ReadProfile(string path, string profile, bool isConfigFile)
@@ -122,9 +122,9 @@ internal static class S3CredentialResolver
         }
 
         var accessKey = fields.GetValueOrDefault("aws_access_key_id") ??
-            fields.GetValueOrDefault("access_key_id");
+                        fields.GetValueOrDefault("access_key_id");
         var secretKey = fields.GetValueOrDefault("aws_secret_access_key") ??
-            fields.GetValueOrDefault("secret_access_key");
+                        fields.GetValueOrDefault("secret_access_key");
         if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
         {
             return null;
@@ -134,7 +134,7 @@ internal static class S3CredentialResolver
             accessKey,
             secretKey,
             fields.GetValueOrDefault("aws_session_token") ??
-                fields.GetValueOrDefault("aws_security_token"));
+            fields.GetValueOrDefault("aws_security_token"));
     }
 
     static Dictionary<string, string>? ReadIniSection(string content, string section)

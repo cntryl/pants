@@ -1,10 +1,10 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class TestCloudObjectStore : ICloudObjectStore
+sealed class TestCloudObjectStore : ICloudObjectStore
 {
     string? _objectKey;
-    string? _version;
     int _putCount;
+    string? _version;
 
     public ReadOnlyMemory<byte> Data { get; set; }
 
@@ -19,8 +19,8 @@ internal sealed class TestCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        CloudObject? value = _version is null ||
-                             !StringComparer.Ordinal.Equals(_objectKey, objectKey)
+        var value = _version is null ||
+                    !StringComparer.Ordinal.Equals(_objectKey, objectKey)
             ? null
             : new CloudObject(Data, _version);
         return ValueTask.FromResult(value);
@@ -31,14 +31,14 @@ internal sealed class TestCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        CloudObjectMetadata? metadata = _version is null ||
-                                        !StringComparer.Ordinal.Equals(_objectKey, objectKey)
+        var metadata = _version is null ||
+                       !StringComparer.Ordinal.Equals(_objectKey, objectKey)
             ? null
             : new CloudObjectMetadata(
                 checked((ulong)Data.Length),
                 _version,
-                Generation: null,
-                LastModifiedUtc: null);
+                null,
+                null);
         return ValueTask.FromResult(metadata);
     }
 
@@ -90,7 +90,7 @@ internal sealed class TestCloudObjectStore : ICloudObjectStore
             objectKeys.Add(objectKey);
         }
 
-        return ValueTask.FromResult(new CloudObjectListPage(objectKeys, continuationToken: null));
+        return ValueTask.FromResult(new CloudObjectListPage(objectKeys, null));
     }
 
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(

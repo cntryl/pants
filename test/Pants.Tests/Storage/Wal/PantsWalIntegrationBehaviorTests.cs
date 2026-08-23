@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class PantsWalIntegrationBehaviorTests
 {
@@ -102,7 +102,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         {
             var key = TestBytes.ToText(row.Key);
             return string.CompareOrdinal(key, "dr_05") >= 0 &&
-                string.CompareOrdinal(key, "dr_15") < 0;
+                   string.CompareOrdinal(key, "dr_15") < 0;
         });
         Assert.Contains(rows, static row => TestBytes.ToText(row.Key) == "dr_04");
         Assert.Contains(rows, static row => TestBytes.ToText(row.Key) == "dr_15");

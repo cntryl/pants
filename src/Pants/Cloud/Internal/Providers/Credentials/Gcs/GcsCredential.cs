@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal sealed record GcsCredential(
+sealed record GcsCredential(
     string? HmacAccessId,
     string? HmacSecret,
     IGcsTokenProvider? TokenProvider)

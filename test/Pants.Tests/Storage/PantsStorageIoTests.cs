@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsStorageIoTests
 {
@@ -19,7 +19,7 @@ public sealed class PantsStorageIoTests
     public void ShouldLeavePreviousFileIntactWhenStagedWriteFailsBeforePublish()
     {
         using var directory = new TemporaryDirectory();
-        string path = Path.Combine(directory.Path, "manifest.json");
+        var path = Path.Combine(directory.Path, "manifest.json");
         AtomicStagedFile.Write(path, "old"u8);
 
         Assert.Throws<IOException>(() => AtomicStagedFile.Write(
@@ -35,7 +35,7 @@ public sealed class PantsStorageIoTests
     public void ShouldAppendVectoredBuffersWithoutSharingAFileCursor()
     {
         using var directory = new TemporaryDirectory();
-        string path = Path.Combine(directory.Path, "journal");
+        var path = Path.Combine(directory.Path, "journal");
 
         PositionalFile.AppendAndFlush(path, ["one"u8.ToArray(), "two"u8.ToArray()]);
         PositionalFile.AppendAndFlush(path, ["three"u8.ToArray()]);

@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class MidgeStorageGoldenTests
 {
@@ -155,7 +155,7 @@ public sealed class MidgeStorageGoldenTests
     static Dictionary<string, string> ParseLease(byte[] bytes) =>
         Encoding.UTF8.GetString(bytes)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(static line => line.Split(": ", 2, StringSplitOptions.None))
+            .Select(static line => line.Split(": ", 2))
             .ToDictionary(static parts => parts[0], static parts => parts[1], StringComparer.Ordinal);
 
     static byte[] ReadStorageFixture(string relativePath) =>

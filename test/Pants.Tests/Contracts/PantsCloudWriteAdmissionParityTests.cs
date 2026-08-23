@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsCloudWriteAdmissionParityTests
 {
@@ -75,10 +75,10 @@ public sealed class PantsCloudWriteAdmissionParityTests
             .SimulatedCloud(path, "pants-tests", $"cloud-write-admission/{prefix}")
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
 
     static async ValueTask CommitWriteAsync(IPantsDatabase database, string key)

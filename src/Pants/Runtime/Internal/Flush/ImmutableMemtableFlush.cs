@@ -1,58 +1,54 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Flush;
 
 sealed class ImmutableMemtableFlush(FrozenMemtableFlush frozen)
 {
     TaskCompletionSource<Exception?> _attemptCompletion = CreateCompletion();
-    Task? _runningTask;
-    int _attempts;
-    bool _isRunning;
-    bool _hasFailed;
 
     public FrozenMemtableFlush Frozen { get; } = frozen;
 
     public Task<Exception?> AttemptTask => _attemptCompletion.Task;
 
-    public int Attempts => _attempts;
+    public int Attempts { get; private set; }
 
-    public bool IsRunning => _isRunning;
+    public bool IsRunning { get; private set; }
 
-    public bool HasFailed => _hasFailed;
+    public bool HasFailed { get; private set; }
 
     public FlushPublicationPlan? PublicationPlan { get; set; }
 
     public bool PersistenceAnomaly { get; set; }
 
-    public Task? RunningTask => _runningTask;
+    public Task? RunningTask { get; private set; }
 
     public void BeginAttempt()
     {
-        if (_isRunning)
+        if (IsRunning)
         {
             throw new PantsInternalException(
                 $"Immutable flush {Frozen.Id} already has a running attempt.");
         }
 
-        if (_attempts != 0)
+        if (Attempts != 0)
         {
             _attemptCompletion = CreateCompletion();
         }
 
-        _attempts = checked(_attempts + 1);
-        _isRunning = true;
-        _hasFailed = false;
-        _runningTask = null;
+        Attempts = checked(Attempts + 1);
+        IsRunning = true;
+        HasFailed = false;
+        RunningTask = null;
     }
 
     public void CompleteAttempt(Exception? failure)
     {
-        _isRunning = false;
-        _hasFailed = failure is not null;
+        IsRunning = false;
+        HasFailed = failure is not null;
         _attemptCompletion.TrySetResult(failure);
-        _runningTask = null;
+        RunningTask = null;
     }
 
     public void AttachRunningTask(Task runningTask) =>
-        _runningTask = runningTask ?? throw new ArgumentNullException(nameof(runningTask));
+        RunningTask = runningTask ?? throw new ArgumentNullException(nameof(runningTask));
 
     public void FailWaiterForShutdown() => _attemptCompletion.TrySetResult(
         new PantsBusyException("The runtime is shutting down."));

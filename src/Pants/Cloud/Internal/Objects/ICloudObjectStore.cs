@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal interface ICloudObjectStore
+interface ICloudObjectStore
 {
     ValueTask<CloudObject?> GetAsync(
         string objectKey,

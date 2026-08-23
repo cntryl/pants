@@ -1,14 +1,14 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class ProviderCloudCompactionPublisher
 {
     const string IntentFileName = "intent_log.json";
+    readonly ICloudObjectStore _controlStore;
+    readonly IPantsFailpointHandler _failpoints;
+    readonly CloudLeaseCoordinator _lease;
 
     readonly string _localRoot;
     readonly ICloudObjectStore _sstStore;
-    readonly ICloudObjectStore _controlStore;
-    readonly CloudLeaseCoordinator _lease;
-    readonly IPantsFailpointHandler _failpoints;
 
     public ProviderCloudCompactionPublisher(
         string localRoot,
@@ -64,7 +64,7 @@ sealed class ProviderCloudCompactionPublisher
 
         var readback = await _controlStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
-                "Cloud compaction intent was acknowledged without an authoritative object.");
+            "Cloud compaction intent was acknowledged without an authoritative object.");
         _lease.EnsureValid();
         if (!readback.Data.Span.SequenceEqual(data))
         {
@@ -94,7 +94,7 @@ sealed class ProviderCloudCompactionPublisher
             cancellationToken).ConfigureAwait(false);
         var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
-                $"Cloud compaction output '{objectKey}' was acknowledged without an object.");
+            $"Cloud compaction output '{objectKey}' was acknowledged without an object.");
         _lease.EnsureValid();
         if (!readback.Data.Span.SequenceEqual(data))
         {

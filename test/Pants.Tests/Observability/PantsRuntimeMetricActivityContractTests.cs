@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsRuntimeMetricActivityContractTests
 {
@@ -231,10 +231,10 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-cloud-stall/")
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -269,10 +269,10 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-cloud-stall-capacity-two/")
             .WithCoordinatorQueueCapacityForTesting(2)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -310,8 +310,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
             }
-        }
-        while (drained.PendingCloudUploads != 0);
+        } while (drained.PendingCloudUploads != 0);
 
         Assert.Equal(1, drained.WriteStallsCloudTotal);
     }

@@ -1,8 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal sealed class AzureConnectionString
+sealed class AzureConnectionString
 {
     const string AzuriteAccount = "devstoreaccount1";
+
     const string AzuriteKey =
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
 
@@ -35,7 +36,7 @@ internal sealed class AzureConnectionString
                 static pair => pair[1].Trim(),
                 StringComparer.OrdinalIgnoreCase);
         if (fields.GetValueOrDefault("UseDevelopmentStorage")
-            ?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+                ?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
         {
             return new AzureConnectionString
             {

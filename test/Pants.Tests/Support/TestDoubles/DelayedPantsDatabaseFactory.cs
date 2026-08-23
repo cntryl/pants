@@ -1,12 +1,13 @@
 using Cntryl.Pants.DependencyInjection;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class DelayedPantsDatabaseFactory : IPantsDatabaseFactory
+sealed class DelayedPantsDatabaseFactory : IPantsDatabaseFactory
 {
-    private readonly TaskCompletionSource _allowOpen =
+    readonly TaskCompletionSource _allowOpen =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private int _openCount;
+
+    int _openCount;
 
     public int OpenCount => Volatile.Read(ref _openCount);
 

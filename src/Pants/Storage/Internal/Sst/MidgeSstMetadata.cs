@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed record MidgeSstMetadata(
+sealed record MidgeSstMetadata(
     MidgeSstIndexKind IndexKind,
     MidgeSstBlockHandle? RangeHandle,
     byte[]? SmallestKey,

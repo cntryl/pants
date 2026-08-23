@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Manifest;
 
 sealed record ManifestReadSnapshot(
     ulong LastPersistedSequence,

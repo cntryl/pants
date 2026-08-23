@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class AzureBlobObjectStoreTests
 {
@@ -13,7 +15,7 @@ public sealed class AzureBlobObjectStoreTests
             ? new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent("lease"u8.ToArray()),
-                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             }
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
         using var client = new HttpClient(handler);
@@ -27,10 +29,10 @@ public sealed class AzureBlobObjectStoreTests
             client,
             TimeSpan.FromSeconds(5));
 
-        CloudObject? value = await store.GetAsync(
+        var value = await store.GetAsync(
             PantsCloudObjectLayout.LeaseObjectKey,
             CancellationToken.None);
-        bool replaced = await store.PutAsync(
+        var replaced = await store.PutAsync(
             PantsCloudObjectLayout.LeaseObjectKey,
             "next"u8.ToArray(),
             new CloudObjectWriteCondition.IfVersion("\"v1\""),
@@ -72,7 +74,7 @@ public sealed class AzureBlobObjectStoreTests
             new CloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
 
-        RecordedRequest request = Assert.Single(handler.Requests);
+        var request = Assert.Single(handler.Requests);
         Assert.StartsWith("SharedKey account:", request.Authorization, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, request.Authorization, StringComparison.Ordinal);
         Assert.Equal("*", request.IfNoneMatch);
@@ -135,8 +137,7 @@ public sealed class AzureBlobObjectStoreTests
     [Fact]
     public void ShouldSelectAzureClientGivenProviderLocation()
     {
-        using var client = new HttpClient(new RecordingHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK)));
+        using var client = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
         var location = new PantsCloudStorageLocation(
             new PantsCloudProviderConfiguration.AzureBlob(
                 "account",
@@ -145,7 +146,7 @@ public sealed class AzureBlobObjectStoreTests
                 new PantsAzureCredentialSource.SasToken("sig=value")),
             "database");
 
-        ICloudObjectStore store = CloudObjectStoreFactory.Create(
+        var store = CloudObjectStoreFactory.Create(
             location,
             TimeSpan.FromSeconds(5),
             client);
@@ -182,7 +183,7 @@ public sealed class AzureBlobObjectStoreTests
             : new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent("value"u8.ToArray()),
-                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v1\"") }
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             });
         using var client = new HttpClient(handler);
         var store = new AzureBlobObjectStore(
@@ -296,7 +297,7 @@ public sealed class AzureBlobObjectStoreTests
             ? new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(new byte[9]),
-                Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"v9\"") }
+                Headers = { ETag = new EntityTagHeaderValue("\"v9\"") }
             }
             : AzurePredicateFailure());
         using var client = new HttpClient(handler);
@@ -353,7 +354,7 @@ public sealed class AzureBlobObjectStoreTests
         string account)
     {
         var contentLength = request.ContentLength is > 0
-            ? request.ContentLength.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ? request.ContentLength.Value.ToString(CultureInfo.InvariantCulture)
             : string.Empty;
         return string.Join(
             '\n',

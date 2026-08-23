@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class PantsRuntimeDependencies
+sealed class PantsRuntimeDependencies
 {
     public PantsRuntimeDependencies(
         IPantsFailpointHandler? failpoints = null,

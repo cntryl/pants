@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CoalescedCommitFailureFailpointHandler(
     PantsFailpoint? failure = null,
@@ -8,14 +8,16 @@ sealed class CoalescedCommitFailureFailpointHandler(
 
     readonly TaskCompletionSource _runtimeBarrierEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _runtimeBarrierRelease = new(initialState: false);
-    int _runtimeBarrierArmed = 1;
+
+    readonly ManualResetEventSlim _runtimeBarrierRelease = new(false);
     int _failureHits;
+    int _runtimeBarrierArmed = 1;
 
-    public async Task WaitForRuntimeBarrierAsync(TimeSpan timeout) =>
-        await _runtimeBarrierEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseRuntimeBarrier() => _runtimeBarrierRelease.Set();
+    public void Dispose()
+    {
+        _runtimeBarrierRelease.Set();
+        _runtimeBarrierRelease.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -40,9 +42,8 @@ sealed class CoalescedCommitFailureFailpointHandler(
         }
     }
 
-    public void Dispose()
-    {
-        _runtimeBarrierRelease.Set();
-        _runtimeBarrierRelease.Dispose();
-    }
+    public async Task WaitForRuntimeBarrierAsync(TimeSpan timeout) =>
+        await _runtimeBarrierEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseRuntimeBarrier() => _runtimeBarrierRelease.Set();
 }

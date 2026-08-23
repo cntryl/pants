@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal static class GcsCredentialResolver
+static class GcsCredentialResolver
 {
     public static GcsCredential Resolve(
         PantsGcsCredentialSource source,
@@ -19,12 +19,12 @@ internal static class GcsCredentialResolver
                 Require(hmac.Secret, "GCS HMAC secret"),
                 null),
             PantsGcsCredentialSource.ApplicationDefault or
-            PantsGcsCredentialSource.ServiceAccountJsonFile or
-            PantsGcsCredentialSource.AuthorizedUserJsonFile or
-            PantsGcsCredentialSource.MetadataServer => new GcsCredential(
-                null,
-                null,
-                new RefreshingGcsTokenProvider(httpClient, source, timeout)),
+                PantsGcsCredentialSource.ServiceAccountJsonFile or
+                PantsGcsCredentialSource.AuthorizedUserJsonFile or
+                PantsGcsCredentialSource.MetadataServer => new GcsCredential(
+                    null,
+                    null,
+                    new RefreshingGcsTokenProvider(httpClient, source, timeout)),
             _ => throw new PantsNotSupportedException("The GCS credential source is unsupported.")
         };
     }

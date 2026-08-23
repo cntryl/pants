@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class PantsCoverageManifestTests
 {

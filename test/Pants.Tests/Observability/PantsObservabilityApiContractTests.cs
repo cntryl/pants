@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsObservabilityApiContractTests
 {
@@ -7,8 +7,8 @@ public sealed class PantsObservabilityApiContractTests
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        var error = await Assert.ThrowsAsync<PantsNotSupportedException>(
-            () => database.VerifyStorageAsync(TimeSpan.FromSeconds(5)).AsTask());
+        var error = await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+            database.VerifyStorageAsync(TimeSpan.FromSeconds(5)).AsTask());
 
         Assert.Contains("no persistent path", error.Message, StringComparison.OrdinalIgnoreCase);
     }

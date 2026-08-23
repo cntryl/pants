@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal sealed record S3Credentials(
+sealed record S3Credentials(
     string AccessKey,
     string SecretKey,
     string? SessionToken)

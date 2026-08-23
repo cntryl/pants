@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal static class CommitValidator
+static class CommitValidator
 {
     public static void Validate(PantsRuntimeState state, CommitPayload payload)
     {
@@ -79,8 +79,8 @@ internal static class CommitValidator
                 break;
             case CommitOperationKind.DeleteRange when operation.EndExclusive is not null:
                 if (family.Any(pair =>
-                    IsInRange(pair.Key, operation.Key, operation.EndExclusive) &&
-                    pair.Value.WriteSequence > payload.StartSnapshot.Sequence))
+                        IsInRange(pair.Key, operation.Key, operation.EndExclusive) &&
+                        pair.Value.WriteSequence > payload.StartSnapshot.Sequence))
                 {
                     throw RangeConflict("A covered range changed after the transaction began.");
                 }
@@ -176,8 +176,8 @@ internal static class CommitValidator
         ByteArrayComparer.Instance.Compare(rightStart, leftEnd) < 0;
 
     static PantsWriteConflictException PointConflict(string message) =>
-        new(message, isRangeConflict: false);
+        new(message, false);
 
     static PantsWriteConflictException RangeConflict(string message) =>
-        new(message, isRangeConflict: true);
+        new(message, true);
 }

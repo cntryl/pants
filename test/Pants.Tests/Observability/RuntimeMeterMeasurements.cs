@@ -2,14 +2,16 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 sealed class RuntimeMeterMeasurements : IDisposable
 {
-    readonly IReadOnlySet<string> _names;
+    readonly MeterListener _listener = new();
+
     readonly ConcurrentDictionary<string, long> _measurements =
         new(StringComparer.Ordinal);
-    readonly MeterListener _listener = new();
+
+    readonly IReadOnlySet<string> _names;
     int _hasTags;
 
     public RuntimeMeterMeasurements(IReadOnlySet<string> names)
@@ -41,6 +43,8 @@ sealed class RuntimeMeterMeasurements : IDisposable
 
     public long this[string name] => _measurements.GetValueOrDefault(name);
 
+    public void Dispose() => _listener.Dispose();
+
     public async ValueTask WaitForAsync(
         IReadOnlySet<string> names,
         TimeSpan timeout)
@@ -56,6 +60,4 @@ sealed class RuntimeMeterMeasurements : IDisposable
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
     }
-
-    public void Dispose() => _listener.Dispose();
 }

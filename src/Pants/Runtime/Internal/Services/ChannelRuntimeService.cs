@@ -1,19 +1,19 @@
 using System.Threading.Channels;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services;
 
 abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRuntimeServiceMetrics
 {
     readonly Channel<RuntimeServiceCommand<TRequest, TResult>> _commands;
     readonly CancellationTokenSource _lifetimeCancellation = new();
     readonly Task _loopTask;
-    int _queueDepth;
-    int _inFlight;
-    int _outstanding;
+    long _completed;
     int _disposed;
     long _enqueued;
-    long _completed;
     long _failures;
+    int _inFlight;
+    int _outstanding;
+    int _queueDepth;
 
     protected ChannelRuntimeService(int capacity)
     {
@@ -26,6 +26,18 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
                 AllowSynchronousContinuations = false
             });
         _loopTask = Task.Run(RunAsync);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _commands.Writer.TryComplete();
+        await _loopTask.ConfigureAwait(false);
+        _lifetimeCancellation.Dispose();
     }
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
@@ -77,18 +89,6 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
                 Interlocked.Decrement(ref _outstanding);
             }
         }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        _commands.Writer.TryComplete();
-        await _loopTask.ConfigureAwait(false);
-        _lifetimeCancellation.Dispose();
     }
 
     protected abstract ValueTask<TResult> DispatchAsync(

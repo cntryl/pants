@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class LeveledCompactionPlannerTests
 {
@@ -15,12 +15,12 @@ public sealed class LeveledCompactionPlannerTests
             File("l1-unrelated.sst", 1, 6, "x", "z")
         ];
 
-        CompactionPlan? plan = LeveledCompactionPlanner.Pick(
+        var plan = LeveledCompactionPlanner.Pick(
             files,
-            columnFamilyId: 0,
+            0,
             Configuration(l0FileCountTrigger: 3, maximumInputFiles: 5),
-            snapshotHorizon: 42,
-            force: false);
+            42,
+            false);
 
         Assert.NotNull(plan);
         Assert.Equal(1u, plan.TargetLevel);
@@ -44,13 +44,13 @@ public sealed class LeveledCompactionPlannerTests
             File("l1-3.sst", 1, 5, "n", "z")
         ];
 
-        PantsException exception = Assert.ThrowsAny<PantsException>(() =>
+        var exception = Assert.ThrowsAny<PantsException>(() =>
             LeveledCompactionPlanner.Pick(
                 files,
-                columnFamilyId: 0,
+                0,
                 Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
-                snapshotHorizon: null,
-                force: false));
+                null,
+                false));
 
         Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
     }
@@ -60,15 +60,15 @@ public sealed class LeveledCompactionPlannerTests
     {
         MidgeFileMeta[] files =
         [
-            File("l0-1.sst", 0, 1, "a", "z", sizeBytes: 1025)
+            File("l0-1.sst", 0, 1, "a", "z", 1025)
         ];
 
-        CompactionPlan? plan = LeveledCompactionPlanner.Pick(
+        var plan = LeveledCompactionPlanner.Pick(
             files,
-            columnFamilyId: 0,
-            Configuration(l0SizeTriggerBytes: 1024, l0FileCountTrigger: 10),
-            snapshotHorizon: null,
-            force: false);
+            0,
+            Configuration(1024, 10),
+            null,
+            false);
 
         Assert.NotNull(plan);
     }
@@ -78,16 +78,16 @@ public sealed class LeveledCompactionPlannerTests
     {
         MidgeFileMeta[] files =
         [
-            File("l1-1.sst", 1, 1, "a", "m", sizeBytes: 1025),
+            File("l1-1.sst", 1, 1, "a", "m", 1025),
             File("l2-1.sst", 2, 2, "n", "z")
         ];
 
-        CompactionPlan? plan = LeveledCompactionPlanner.Pick(
+        var plan = LeveledCompactionPlanner.Pick(
             files,
-            columnFamilyId: 0,
+            0,
             Configuration(l1TargetSizeBytes: 1024, levelMultiplier: 3),
-            snapshotHorizon: null,
-            force: false);
+            null,
+            false);
 
         Assert.NotNull(plan);
         Assert.Equal(1u, plan.SourceLevel);
@@ -103,12 +103,12 @@ public sealed class LeveledCompactionPlannerTests
             File("l0-unselected.sst", 0, 2, "x", "z")
         ];
 
-        CompactionPlan? plan = LeveledCompactionPlanner.Pick(
+        var plan = LeveledCompactionPlanner.Pick(
             files,
-            columnFamilyId: 0,
+            0,
             Configuration(l0FileCountTrigger: 1, maximumInputFiles: 1),
-            snapshotHorizon: 7,
-            force: false);
+            7,
+            false);
 
         Assert.NotNull(plan);
         Assert.True(plan.PointTombstoneGcEligible);
@@ -118,15 +118,15 @@ public sealed class LeveledCompactionPlannerTests
     [Fact]
     public void ShouldRejectInvalidFileMetadataAsCorruption()
     {
-        MidgeFileMeta invalid = File("invalid.sst", 7, 1, "z", "a");
+        var invalid = File("invalid.sst", 7, 1, "z", "a");
 
-        PantsException exception = Assert.ThrowsAny<PantsException>(() =>
+        var exception = Assert.ThrowsAny<PantsException>(() =>
             LeveledCompactionPlanner.Pick(
                 [invalid],
-                columnFamilyId: 0,
+                0,
                 Configuration(),
-                snapshotHorizon: null,
-                force: false));
+                null,
+                false));
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -140,12 +140,12 @@ public sealed class LeveledCompactionPlannerTests
             File("l0-1.sst", 0, 1, "a", "c"),
             File("l1-1.sst", 1, 3, "b", "e")
         ];
-        PantsCompactionConfiguration configuration = Configuration(l0FileCountTrigger: 2);
+        var configuration = Configuration(l0FileCountTrigger: 2);
 
-        CompactionPlan? first = LeveledCompactionPlanner.Pick(
-            files, 0, configuration, snapshotHorizon: 5, force: false);
-        CompactionPlan? second = LeveledCompactionPlanner.Pick(
-            files, 0, configuration, snapshotHorizon: 5, force: false);
+        var first = LeveledCompactionPlanner.Pick(
+            files, 0, configuration, 5, false);
+        var second = LeveledCompactionPlanner.Pick(
+            files, 0, configuration, 5, false);
 
         Assert.Equal(first?.SourceLevel, second?.SourceLevel);
         Assert.Equal(first?.TargetLevel, second?.TargetLevel);
@@ -154,20 +154,19 @@ public sealed class LeveledCompactionPlannerTests
             second?.Inputs.Select(static file => file.Name));
     }
 
-    private static PantsCompactionConfiguration Configuration(
+    static PantsCompactionConfiguration Configuration(
         long l0SizeTriggerBytes = 4L * 1024 * 1024,
         int l0FileCountTrigger = 4,
         int maximumInputFiles = 64,
         int levelMultiplier = 10,
         long l1TargetSizeBytes = 40L * 1024 * 1024) => new(
-            l0SizeTriggerBytes,
-            l0FileCountTrigger,
-            maximumInputFiles,
-            levelMultiplier,
-            l1TargetSizeBytes,
-            MaximumLevels: 7);
+        l0SizeTriggerBytes,
+        l0FileCountTrigger,
+        maximumInputFiles,
+        levelMultiplier,
+        l1TargetSizeBytes);
 
-    private static MidgeFileMeta File(
+    static MidgeFileMeta File(
         string name,
         uint level,
         ulong sequence,

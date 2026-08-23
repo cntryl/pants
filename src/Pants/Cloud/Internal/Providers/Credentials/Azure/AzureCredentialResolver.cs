@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal static class AzureCredentialResolver
+static class AzureCredentialResolver
 {
     public static AzureCredentialResolution Resolve(
         PantsCloudProviderConfiguration.AzureBlob configuration,
@@ -26,12 +26,12 @@ internal static class AzureCredentialResolver
                 httpClient,
                 timeout),
             PantsAzureCredentialSource.EnvironmentClientSecret or
-            PantsAzureCredentialSource.WorkloadIdentity or
-            PantsAzureCredentialSource.ManagedIdentity or
-            PantsAzureCredentialSource.LightweightDefaultChain => Identity(
-                configuration,
-                httpClient,
-                timeout),
+                PantsAzureCredentialSource.WorkloadIdentity or
+                PantsAzureCredentialSource.ManagedIdentity or
+                PantsAzureCredentialSource.LightweightDefaultChain => Identity(
+                    configuration,
+                    httpClient,
+                    timeout),
             _ => throw new PantsNotSupportedException(
                 "The Azure credential source is unsupported.")
         };
@@ -44,8 +44,8 @@ internal static class AzureCredentialResolver
         var parsed = AzureConnectionString.Parse(value);
         var account = parsed.Account ?? configuration.Account;
         var endpoint = configuration.Endpoint ??
-            parsed.CreateAccountEndpoint() ??
-            ResolveEndpoint(account, endpoint: null);
+                       parsed.CreateAccountEndpoint() ??
+                       ResolveEndpoint(account, null);
         if (parsed.AccountKey is { } key)
         {
             return Static(

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Index;
 
-internal static class MidgeSstIndexTuner
+static class MidgeSstIndexTuner
 {
     public static MidgeSstIndexKind Decide(KeyStructureProfile profile)
     {

@@ -1,12 +1,12 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class SimulatedCloudCompactionPublisher
 {
     const string IntentFileName = "intent_log.json";
-
-    readonly string _localRoot;
     readonly string _cloudRoot;
     readonly IPantsFailpointHandler _failpoints;
+
+    readonly string _localRoot;
 
     public SimulatedCloudCompactionPublisher(
         string localRoot,

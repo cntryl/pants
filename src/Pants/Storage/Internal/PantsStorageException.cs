@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal sealed class PantsStorageException : PantsIOException
+sealed class PantsStorageException : PantsIOException
 {
     public PantsStorageException(string message)
         : base(message)

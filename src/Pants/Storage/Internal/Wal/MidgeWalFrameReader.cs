@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal static class MidgeWalFrameReader
+static class MidgeWalFrameReader
 {
     public static void Visit(
         Stream stream,

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class CompactionOutputPartitionerTests
 {
@@ -9,8 +9,8 @@ public sealed class CompactionOutputPartitionerTests
             [Entry("a", 1), Entry("b", 2), Entry("c", 3)],
             []);
 
-        IReadOnlyList<CompactionMergeResult> partitions =
-            CompactionOutputPartitioner.Partition(merged, targetSizeBytes: 34);
+        var partitions =
+            CompactionOutputPartitioner.Partition(merged, 34);
 
         Assert.Equal(3, partitions.Count);
         Assert.Equal(["a", "b", "c"], partitions
@@ -23,13 +23,15 @@ public sealed class CompactionOutputPartitionerTests
     {
         var merged = new CompactionMergeResult(
             [Entry("a", 1), Entry("b", 2), Entry("c", 3)],
-            [new MidgeRangeTombstone(
-                TestBytes.FromString("0"),
-                TestBytes.FromString("z"),
-                Sequence: 4)]);
+            [
+                new MidgeRangeTombstone(
+                    TestBytes.FromString("0"),
+                    TestBytes.FromString("z"),
+                    4)
+            ]);
 
-        IReadOnlyList<CompactionMergeResult> partitions =
-            CompactionOutputPartitioner.Partition(merged, targetSizeBytes: 34);
+        var partitions =
+            CompactionOutputPartitioner.Partition(merged, 34);
 
         Assert.Equal(3, partitions.Count);
         Assert.Equal("b", TestBytes.ToText(Assert.Single(partitions[0].RangeTombstones).End));
@@ -38,10 +40,10 @@ public sealed class CompactionOutputPartitionerTests
         Assert.Equal("c", TestBytes.ToText(Assert.Single(partitions[2].RangeTombstones).Start));
     }
 
-    private static MidgeSstEntry Entry(string key, ulong sequence) => new(
+    static MidgeSstEntry Entry(string key, ulong sequence) => new(
         TestBytes.FromString(key),
         TestBytes.FromString("v"),
         sequence,
-        Expiration: null,
-        IsDelete: false);
+        null,
+        false);
 }

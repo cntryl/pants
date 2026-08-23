@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Hybrid;
 
 sealed class HybridStorageBudgetPolicy
 {

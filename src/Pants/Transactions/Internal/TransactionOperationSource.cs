@@ -1,10 +1,10 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class TransactionOperationSource : ITransactionOperationSource
+sealed class TransactionOperationSource : ITransactionOperationSource
 {
-    readonly TransactionSpillStore? _spillStore;
-    readonly TransactionIntentOperation[] _residentOperations;
     readonly DateTimeOffset _commitTime;
+    readonly TransactionIntentOperation[] _residentOperations;
+    readonly TransactionSpillStore? _spillStore;
 
     public TransactionOperationSource(
         TransactionSpillStore? spillStore,

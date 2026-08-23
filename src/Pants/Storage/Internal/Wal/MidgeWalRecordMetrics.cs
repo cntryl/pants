@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal static class MidgeWalRecordMetrics
+static class MidgeWalRecordMetrics
 {
     public static int GetLogicalByteCount(MidgeWalRecord record)
     {

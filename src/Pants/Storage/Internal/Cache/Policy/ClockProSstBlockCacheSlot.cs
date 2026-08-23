@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache.Policy;
 
-internal sealed class ClockProSstBlockCacheSlot
+sealed class ClockProSstBlockCacheSlot
 {
     public SstBlockCacheKey? Key { get; set; }
 

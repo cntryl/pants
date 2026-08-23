@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CoalescedCommitCrashFailpointHandler(
     string sentinelPath,
@@ -10,14 +10,16 @@ sealed class CoalescedCommitCrashFailpointHandler(
 
     readonly TaskCompletionSource _runtimeBarrierEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _runtimeBarrierRelease = new(initialState: false);
-    int _runtimeBarrierArmed = 1;
+
+    readonly ManualResetEventSlim _runtimeBarrierRelease = new(false);
     int _crashArmed = 1;
+    int _runtimeBarrierArmed = 1;
 
-    public async Task WaitForRuntimeBarrierAsync(TimeSpan timeout) =>
-        await _runtimeBarrierEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseRuntimeBarrier() => _runtimeBarrierRelease.Set();
+    public void Dispose()
+    {
+        _runtimeBarrierRelease.Set();
+        _runtimeBarrierRelease.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -48,25 +50,24 @@ sealed class CoalescedCommitCrashFailpointHandler(
                    FileMode.CreateNew,
                    FileAccess.Write,
                    FileShare.Read,
-                   bufferSize: 4_096,
+                   4_096,
                    FileOptions.WriteThrough))
         {
             stream.Write(sentinel);
-            stream.Flush(flushToDisk: true);
+            stream.Flush(true);
         }
 
         var parent = Path.GetDirectoryName(sentinelPath) ??
-            throw new InvalidOperationException(
-                "The coalesced-commit crash sentinel has no parent directory.");
+                     throw new InvalidOperationException(
+                         "The coalesced-commit crash sentinel has no parent directory.");
         AtomicStagedFile.FlushDirectory(parent);
 
         Environment.FailFast(
             $"Injected crash at {PantsFailpoint.AfterCoalescedWalDurabilityBoundary}.");
     }
 
-    public void Dispose()
-    {
-        _runtimeBarrierRelease.Set();
-        _runtimeBarrierRelease.Dispose();
-    }
+    public async Task WaitForRuntimeBarrierAsync(TimeSpan timeout) =>
+        await _runtimeBarrierEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseRuntimeBarrier() => _runtimeBarrierRelease.Set();
 }

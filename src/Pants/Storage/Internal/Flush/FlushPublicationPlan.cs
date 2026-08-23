@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Flush;
 
 sealed record FlushPublicationPlan(
     List<JsonElement> Edits,

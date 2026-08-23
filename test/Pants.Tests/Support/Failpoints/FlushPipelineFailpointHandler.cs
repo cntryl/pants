@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class FlushPipelineFailpointHandler(
     PantsFailpoint target,
@@ -8,15 +8,17 @@ sealed class FlushPipelineFailpointHandler(
 
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _release = new(initialState: false);
+
+    readonly ManualResetEventSlim _release = new(false);
     int _hit;
 
     public int HitCount => Volatile.Read(ref _hit);
 
-    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
-        await _entered.Task.WaitAsync(timeout);
-
-    public void Release() => _release.Set();
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -37,9 +39,8 @@ sealed class FlushPipelineFailpointHandler(
         }
     }
 
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
+    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
+        await _entered.Task.WaitAsync(timeout);
+
+    public void Release() => _release.Set();
 }

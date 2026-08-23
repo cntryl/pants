@@ -1,19 +1,15 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class PersistentThrowingFlushFailpointHandler(PantsFailpoint target) :
     IPantsFailpointHandler
 {
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _armed = 1;
     int _hits;
 
     public int HitCount => Volatile.Read(ref _hits);
-
-    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
-        await _entered.Task.WaitAsync(timeout);
-
-    public void Release() => Volatile.Write(ref _armed, 0);
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -26,4 +22,9 @@ sealed class PersistentThrowingFlushFailpointHandler(PantsFailpoint target) :
         _entered.TrySetResult();
         throw new IOException($"Injected persistent failure at {failpoint}.");
     }
+
+    public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
+        await _entered.Task.WaitAsync(timeout);
+
+    public void Release() => Volatile.Write(ref _armed, 0);
 }

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class LocalDiskStoreRotationRecoveryTests
 {
@@ -27,13 +27,12 @@ public sealed class LocalDiskStoreRotationRecoveryTests
                 PantsDurability.Sync);
             Assert.Null(result.PostDurabilityFailure);
 
-            var failure = Assert.Throws<WalRotationRecoveryException>(
-                () => store.RotateActiveLocalWal());
+            var failure = Assert.Throws<WalRotationRecoveryException>(() => store.RotateActiveLocalWal());
             Assert.IsType<IOException>(failure.RotationFailure);
             Assert.IsType<IOException>(failure.RecoveryFailure);
 
-            var aborted = Assert.Throws<PantsAbortedException>(
-                () => store.CreateColumnFamily(new ColumnFamilyIdentity(1, "fenced", 1)));
+            var aborted = Assert.Throws<PantsAbortedException>(() =>
+                store.CreateColumnFamily(new ColumnFamilyIdentity(1, "fenced", 1)));
             Assert.Same(failure, aborted.InnerException);
         }
 
@@ -124,14 +123,13 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             store,
             NullPantsFailpointHandler.Instance,
             new WalMetricsRecorder(telemetry),
-            validateCloudWriteAuthority: () =>
+            () =>
             {
                 Interlocked.Increment(ref validations);
                 throw new PantsFencedException("Injected provider lease loss.");
             });
 
-        _ = await Assert.ThrowsAsync<PantsFencedException>(
-            () => runtime.SealCloudWalAsync().AsTask());
+        _ = await Assert.ThrowsAsync<PantsFencedException>(() => runtime.SealCloudWalAsync().AsTask());
 
         Assert.Equal(1, Volatile.Read(ref validations));
         Assert.Equal(1, store.WalPendingWrites);
@@ -145,22 +143,22 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     static CommitPayload CreateCommitPayload(PantsRuntimeState state)
     {
         var operation = new TransactionIntentOperation(
-            ordinal: 0,
+            0,
             CommitOperationKind.Put,
             DefaultFamily,
             "rotation-key"u8.ToArray(),
-            endExclusive: null,
+            null,
             "rotation-value"u8.ToArray(),
-            timeToLive: null,
-            expiryUtc: null,
-            insertOnly: false);
+            null,
+            null,
+            false);
         var source = new TransactionOperationSource(
-            spillStore: null,
+            null,
             [operation],
-            count: 1,
+            1,
             DateTimeOffset.UnixEpoch);
         return new CommitPayload(
-            transactionId: 1,
+            1,
             PantsTransactionMode.ReadWrite,
             PantsConflictPolicy.LastWriteWins,
             DateTimeOffset.UnixEpoch,

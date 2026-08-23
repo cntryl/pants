@@ -1,8 +1,8 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal static class TestBytes
+static class TestBytes
 {
     public static byte[] FromString(string value) => Encoding.UTF8.GetBytes(value);
 

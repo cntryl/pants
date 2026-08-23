@@ -1,22 +1,25 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services.Flush;
 
 sealed class ImmutableFlushPipeline
 {
     static readonly TimeSpan InitialRetryBackoff = TimeSpan.FromMilliseconds(10);
     static readonly TimeSpan MaximumRetryBackoff = TimeSpan.FromSeconds(1);
 
-    readonly RuntimeTelemetry _telemetry;
-    readonly Func<
-        FrozenMemtableFlush,
-        FlushPublicationPlan?,
-        ValueTask<Task<FrozenFlushRuntimeResult>>> _scheduleWorkerAsync;
     readonly Func<
         ImmutableMemtableFlush,
         FrozenFlushRuntimeResult?,
         Exception?,
         ValueTask<bool>> _completeAttemptAsync;
-    readonly Func<ImmutableMemtableFlush, int, ValueTask> _retryAttemptAsync;
+
     readonly Func<bool> _isDisposed;
+    readonly Func<ImmutableMemtableFlush, int, ValueTask> _retryAttemptAsync;
+
+    readonly Func<
+        FrozenMemtableFlush,
+        FlushPublicationPlan?,
+        ValueTask<Task<FrozenFlushRuntimeResult>>> _scheduleWorkerAsync;
+
+    readonly RuntimeTelemetry _telemetry;
     readonly TimeProvider _timeProvider;
 
     public ImmutableFlushPipeline(
@@ -51,7 +54,7 @@ sealed class ImmutableFlushPipeline
             .ThenBy(static flush => flush.Frozen.Id)
             .ThenBy(static flush => flush.Frozen.ColumnFamilyId)
             .FirstOrDefault();
-        if (next is null || next.IsRunning || next.HasFailed && !retryFailure)
+        if (next is null || next.IsRunning || (next.HasFailed && !retryFailure))
         {
             return;
         }

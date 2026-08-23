@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 readonly record struct CloudSstIdentity(uint ColumnFamilyId, ulong Sequence)
 {

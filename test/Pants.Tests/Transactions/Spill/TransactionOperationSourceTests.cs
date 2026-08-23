@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 public sealed class TransactionOperationSourceTests
 {

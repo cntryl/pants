@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Verification;
 
 sealed class OnlineVerificationBarrier
 {

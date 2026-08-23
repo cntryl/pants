@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal readonly record struct MidgeSstBlockHandle(ulong Offset, ulong Size);
+readonly record struct MidgeSstBlockHandle(ulong Offset, ulong Size);

@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Trie;
 
-internal readonly record struct MidgeTrieEdge(byte FirstByte, uint ChildIndex);
+readonly record struct MidgeTrieEdge(byte FirstByte, uint ChildIndex);

@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class TransactionMemoryPool
+sealed class TransactionMemoryPool
 {
-    private readonly long _capacity;
-    private long _used;
+    readonly long _capacity;
+    long _used;
 
     public TransactionMemoryPool(long capacity)
     {
@@ -17,7 +17,7 @@ internal sealed class TransactionMemoryPool
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         while (true)
         {
-            long observed = Volatile.Read(ref _used);
+            var observed = Volatile.Read(ref _used);
             if (bytes > _capacity - observed)
             {
                 return false;
@@ -33,7 +33,7 @@ internal sealed class TransactionMemoryPool
     public void Release(long bytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
-        long remaining = Interlocked.Add(ref _used, -bytes);
+        var remaining = Interlocked.Add(ref _used, -bytes);
         if (remaining < 0)
         {
             Interlocked.Exchange(ref _used, 0);

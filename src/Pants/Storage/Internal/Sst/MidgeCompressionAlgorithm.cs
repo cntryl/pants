@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal enum MidgeCompressionAlgorithm : byte
+enum MidgeCompressionAlgorithm : byte
 {
     None = 0,
     Lz4 = 1,

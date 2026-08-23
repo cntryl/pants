@@ -4,20 +4,20 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-internal sealed class S3ObjectStore : ICloudObjectStore
+sealed class S3ObjectStore : ICloudObjectStore
 {
     const int MaximumAttempts = 3;
     static readonly string EmptyPayloadHash = Hex(SHA256.HashData([]));
-    readonly HttpClient _httpClient;
-    readonly Uri _endpoint;
     readonly string _bucket;
-    readonly string _region;
-    readonly string _prefix;
-    readonly bool _pathStyle;
-    readonly TimeSpan _timeout;
     readonly IS3CredentialProvider _credentialProvider;
+    readonly Uri _endpoint;
+    readonly HttpClient _httpClient;
+    readonly bool _pathStyle;
+    readonly string _prefix;
+    readonly string _region;
+    readonly TimeSpan _timeout;
 
     public S3ObjectStore(
         PantsCloudProviderConfiguration provider,
@@ -41,7 +41,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
                 S3CredentialResolver.Resolve(
                     aws.Credentials,
                     aws.Region,
-                    allowAwsDefaultChain: true,
+                    true,
                     httpClient,
                     timeout)),
             PantsCloudProviderConfiguration.S3Compatible compatible => (
@@ -52,7 +52,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
                 S3CredentialResolver.Resolve(
                     compatible.Credentials,
                     compatible.Region,
-                    allowAwsDefaultChain: false,
+                    false,
                     httpClient,
                     timeout)),
             _ => throw PantsException.InvalidArgument("An S3 provider configuration is required.")
@@ -70,7 +70,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
                 HttpMethod.Get,
                 objectKey,
                 ReadOnlyMemory<byte>.Empty,
-                condition: null,
+                null,
                 token),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -82,7 +82,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
         var version = response.Headers.ETag?.Tag ??
-            throw new PantsIOException("S3 GET response did not include an ETag.");
+                      throw new PantsIOException("S3 GET response did not include an ETag.");
         return new CloudObject(data, version);
     }
 
@@ -95,7 +95,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
                 HttpMethod.Head,
                 objectKey,
                 ReadOnlyMemory<byte>.Empty,
-                condition: null,
+                null,
                 token),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -108,11 +108,11 @@ internal sealed class S3ObjectStore : ICloudObjectStore
             ? checked((ulong)contentLength)
             : throw new PantsIOException("S3 HEAD response did not include a valid Content-Length.");
         var etag = response.Headers.ETag?.Tag ??
-            throw new PantsIOException("S3 HEAD response did not include an ETag.");
+                   throw new PantsIOException("S3 HEAD response did not include an ETag.");
         return new CloudObjectMetadata(
             size,
             etag,
-            Generation: null,
+            null,
             response.Content.Headers.LastModified);
     }
 
@@ -210,12 +210,12 @@ internal sealed class S3ObjectStore : ICloudObjectStore
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: true, cancellationToken);
+        SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
-        SendAsync(requestFactory, retryTransientFailures: false, cancellationToken);
+        SendAsync(requestFactory, false, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
@@ -454,7 +454,7 @@ internal sealed class S3ObjectStore : ICloudObjectStore
         };
         if (continuationToken is not null)
         {
-            parameters.Add(new("continuation-token", continuationToken));
+            parameters.Add(new KeyValuePair<string, string>("continuation-token", continuationToken));
         }
 
         builder.Query = string.Join(

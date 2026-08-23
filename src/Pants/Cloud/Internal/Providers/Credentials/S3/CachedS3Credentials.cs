@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal sealed record CachedS3Credentials(
+sealed record CachedS3Credentials(
     S3Credentials Credentials,
     DateTimeOffset? ExpiresAt)
 {

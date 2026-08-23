@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDisposable
 {
@@ -6,26 +6,9 @@ sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDispos
     static readonly TimeSpan MaximumDelay = TimeSpan.FromMilliseconds(250);
 
     readonly Lock _gate = new();
-    readonly Dictionary<ColumnFamilyIdentity, Task> _retries = [];
     readonly CancellationTokenSource _lifetimeCancellation = new();
+    readonly Dictionary<ColumnFamilyIdentity, Task> _retries = [];
     bool _disposed;
-
-    public void Schedule(
-        ColumnFamilyIdentity identity,
-        Func<CancellationToken, ValueTask> operation)
-    {
-        ArgumentNullException.ThrowIfNull(operation);
-        lock (_gate)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_retries.ContainsKey(identity))
-            {
-                return;
-            }
-
-            _retries.Add(identity, RetryAsync(identity, operation));
-        }
-    }
 
     public async ValueTask DisposeAsync()
     {
@@ -44,6 +27,23 @@ sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDispos
 
         await Task.WhenAll(retries).ConfigureAwait(false);
         _lifetimeCancellation.Dispose();
+    }
+
+    public void Schedule(
+        ColumnFamilyIdentity identity,
+        Func<CancellationToken, ValueTask> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_retries.ContainsKey(identity))
+            {
+                return;
+            }
+
+            _retries.Add(identity, RetryAsync(identity, operation));
+        }
     }
 
     async Task RetryAsync(

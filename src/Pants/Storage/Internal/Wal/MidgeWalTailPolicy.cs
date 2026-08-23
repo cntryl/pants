@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal enum MidgeWalTailPolicy
+enum MidgeWalTailPolicy
 {
     Strict,
     AllowIncompleteFinalTail

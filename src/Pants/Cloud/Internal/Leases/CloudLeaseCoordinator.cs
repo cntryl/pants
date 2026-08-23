@@ -1,20 +1,20 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Leases;
 
-internal sealed class CloudLeaseCoordinator : IDisposable
+sealed class CloudLeaseCoordinator : IDisposable
 {
-    readonly ICloudLeaseStore _store;
     readonly IPantsClock _clock;
-    readonly string _holderId;
-    readonly string _ownerToken = Guid.NewGuid().ToString("N");
-    readonly TimeSpan _leaseDuration;
     readonly TimeSpan _clockSkewTolerance;
-    readonly Action? _leaseLossCallback;
     readonly SemaphoreSlim _gate = new(1, 1);
+    readonly string _holderId;
+    readonly TimeSpan _leaseDuration;
+    readonly Action? _leaseLossCallback;
+    readonly string _ownerToken = Guid.NewGuid().ToString("N");
+    readonly ICloudLeaseStore _store;
+    int _disposed;
     ulong _epoch;
     long _expiresAtUtcTicks;
     long _latestObservedUtcTicks;
     int _lost;
-    int _disposed;
 
     public CloudLeaseCoordinator(
         ICloudLeaseStore store,
@@ -65,6 +65,15 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            Volatile.Write(ref _lost, 1);
+            _gate.Dispose();
+        }
+    }
+
     public async ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -75,6 +84,7 @@ internal sealed class CloudLeaseCoordinator : IDisposable
             {
                 throw new PantsFencedException("The cloud primary lease coordinator is fenced.");
             }
+
             var now = ObserveMonotonicUtcNow();
             var current = await _store.ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -243,15 +253,6 @@ internal sealed class CloudLeaseCoordinator : IDisposable
         finally
         {
             _gate.Release();
-        }
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            Volatile.Write(ref _lost, 1);
-            _gate.Dispose();
         }
     }
 

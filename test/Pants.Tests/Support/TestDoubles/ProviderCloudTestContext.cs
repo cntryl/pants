@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class ProviderCloudTestContext : IAsyncDisposable
 {
@@ -20,6 +20,13 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
     public InMemoryAzureBlobHandler Handler { get; }
 
     public IPantsDatabase Database { get; }
+
+    public async ValueTask DisposeAsync()
+    {
+        await Database.DisposeAsync().ConfigureAwait(false);
+        _client.Dispose();
+        _cache.Dispose();
+    }
 
     public static async ValueTask<ProviderCloudTestContext> CreateAsync()
     {
@@ -46,12 +53,5 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
             cache.Dispose();
             throw;
         }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await Database.DisposeAsync().ConfigureAwait(false);
-        _client.Dispose();
-        _cache.Dispose();
     }
 }

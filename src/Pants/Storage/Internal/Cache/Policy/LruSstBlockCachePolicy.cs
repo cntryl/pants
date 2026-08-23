@@ -1,13 +1,13 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache.Policy;
 
-internal sealed class LruSstBlockCachePolicy : ISstBlockCachePolicy
+sealed class LruSstBlockCachePolicy : ISstBlockCachePolicy
 {
-    private readonly Dictionary<SstBlockCacheKey, LinkedListNode<SstBlockCacheKey>> _nodes = [];
-    private readonly LinkedList<SstBlockCacheKey> _recency = [];
+    readonly Dictionary<SstBlockCacheKey, LinkedListNode<SstBlockCacheKey>> _nodes = [];
+    readonly LinkedList<SstBlockCacheKey> _recency = [];
 
     public void RecordAccess(SstBlockCacheKey key)
     {
-        if (_nodes.Remove(key, out LinkedListNode<SstBlockCacheKey>? existing))
+        if (_nodes.Remove(key, out var existing))
         {
             _recency.Remove(existing);
         }
@@ -37,9 +37,9 @@ internal sealed class LruSstBlockCachePolicy : ISstBlockCachePolicy
         _recency.Clear();
     }
 
-    private void Remove(SstBlockCacheKey key)
+    void Remove(SstBlockCacheKey key)
     {
-        if (_nodes.Remove(key, out LinkedListNode<SstBlockCacheKey>? node))
+        if (_nodes.Remove(key, out var node))
         {
             _recency.Remove(node);
         }

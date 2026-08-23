@@ -1,20 +1,20 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Index;
 
-internal sealed class KeyStructureProfiler
+sealed class KeyStructureProfiler
 {
-    private const int TrackedPrefixLength = 4;
-    private const int MaximumTrackedPrefixes = 4096;
-    private readonly Dictionary<byte[], int> _prefixFrequencies = new(ByteArrayComparer.Instance);
-    private readonly long[] _byteFrequencies = new long[256];
-    private byte[]? _firstKey;
-    private byte[]? _previousKey;
-    private long _sharedPrefixTotal;
-    private int _maximumSharedPrefix;
-    private long _totalBytes;
-    private long _totalKeyBytes;
-    private UInt128 _totalKeyBytesSquared;
-    private int _commonPrefixLength;
-    private int _keyCount;
+    const int TrackedPrefixLength = 4;
+    const int MaximumTrackedPrefixes = 4096;
+    readonly long[] _byteFrequencies = new long[256];
+    readonly Dictionary<byte[], int> _prefixFrequencies = new(ByteArrayComparer.Instance);
+    int _commonPrefixLength;
+    byte[]? _firstKey;
+    int _keyCount;
+    int _maximumSharedPrefix;
+    byte[]? _previousKey;
+    long _sharedPrefixTotal;
+    long _totalBytes;
+    long _totalKeyBytes;
+    UInt128 _totalKeyBytesSquared;
 
     public void Add(ReadOnlySpan<byte> key)
     {
@@ -25,7 +25,7 @@ internal sealed class KeyStructureProfiler
 
         if (_previousKey is not null)
         {
-            int shared = CommonPrefixLength(_previousKey, key);
+            var shared = CommonPrefixLength(_previousKey, key);
             _sharedPrefixTotal = checked(_sharedPrefixTotal + shared);
             _maximumSharedPrefix = Math.Max(_maximumSharedPrefix, shared);
         }
@@ -42,8 +42,8 @@ internal sealed class KeyStructureProfiler
                 CommonPrefixLength(_firstKey, key));
         }
 
-        byte[] prefix = key[..Math.Min(TrackedPrefixLength, key.Length)].ToArray();
-        if (_prefixFrequencies.TryGetValue(prefix, out int frequency))
+        var prefix = key[..Math.Min(TrackedPrefixLength, key.Length)].ToArray();
+        if (_prefixFrequencies.TryGetValue(prefix, out var frequency))
         {
             _prefixFrequencies[prefix] = checked(frequency + 1);
         }
@@ -52,7 +52,7 @@ internal sealed class KeyStructureProfiler
             _prefixFrequencies.Add(prefix, 1);
         }
 
-        foreach (byte value in key)
+        foreach (var value in key)
         {
             _byteFrequencies[value] = checked(_byteFrequencies[value] + 1);
             _totalBytes = checked(_totalBytes + 1);
@@ -61,7 +61,7 @@ internal sealed class KeyStructureProfiler
         _keyCount = checked(_keyCount + 1);
         _totalKeyBytes = checked(_totalKeyBytes + key.Length);
         _totalKeyBytesSquared = checked(
-            _totalKeyBytesSquared + ((UInt128)(uint)key.Length * (uint)key.Length));
+            _totalKeyBytesSquared + (UInt128)(uint)key.Length * (uint)key.Length);
         _previousKey = key.ToArray();
     }
 
@@ -72,14 +72,14 @@ internal sealed class KeyStructureProfiler
             return new KeyStructureProfile(0, 0, 0, 0, 0, 0, [], 0);
         }
 
-        float averageSharedPrefix = _keyCount > 1
+        var averageSharedPrefix = _keyCount > 1
             ? (float)_sharedPrefixTotal / (_keyCount - 1)
             : 0;
-        float meanLength = (float)_totalKeyBytes / _keyCount;
-        float meanLengthSquared = (float)_totalKeyBytesSquared / _keyCount;
-        float standardDeviation = MathF.Sqrt(MathF.Max(
+        var meanLength = (float)_totalKeyBytes / _keyCount;
+        var meanLengthSquared = (float)_totalKeyBytesSquared / _keyCount;
+        var standardDeviation = MathF.Sqrt(MathF.Max(
             0F,
-            meanLengthSquared - (meanLength * meanLength)));
+            meanLengthSquared - meanLength * meanLength));
         return new KeyStructureProfile(
             averageSharedPrefix,
             _maximumSharedPrefix,
@@ -96,7 +96,7 @@ internal sealed class KeyStructureProfiler
             _keyCount);
     }
 
-    private float CalculateEntropy()
+    float CalculateEntropy()
     {
         if (_totalBytes == 0)
         {
@@ -104,23 +104,23 @@ internal sealed class KeyStructureProfiler
         }
 
         float entropy = 0;
-        foreach (long count in _byteFrequencies)
+        foreach (var count in _byteFrequencies)
         {
             if (count == 0)
             {
                 continue;
             }
 
-            float probability = (float)count / _totalBytes;
+            var probability = (float)count / _totalBytes;
             entropy -= probability * MathF.Log2(probability);
         }
 
         return entropy;
     }
 
-    private static int CommonPrefixLength(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    static int CommonPrefixLength(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
-        int length = Math.Min(left.Length, right.Length);
+        var length = Math.Min(left.Length, right.Length);
         var index = 0;
         while (index < length && left[index] == right[index])
         {

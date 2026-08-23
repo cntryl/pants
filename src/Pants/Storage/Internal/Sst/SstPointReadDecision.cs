@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal readonly record struct SstPointReadDecision(
+readonly record struct SstPointReadDecision(
     int BloomChecks,
     int CandidateBlocks,
     int BlocksRead,

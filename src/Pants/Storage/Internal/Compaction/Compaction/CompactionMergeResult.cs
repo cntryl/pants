@@ -1,5 +1,5 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
-internal sealed record CompactionMergeResult(
+sealed record CompactionMergeResult(
     IReadOnlyList<MidgeSstEntry> Entries,
     IReadOnlyList<MidgeRangeTombstone> RangeTombstones);

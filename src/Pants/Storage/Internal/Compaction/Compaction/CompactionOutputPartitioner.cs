@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
-internal static class CompactionOutputPartitioner
+static class CompactionOutputPartitioner
 {
-    private const int EntryOverheadBytes = 32;
+    const int EntryOverheadBytes = 32;
 
     public static IReadOnlyList<CompactionMergeResult> Partition(
         CompactionMergeResult merged,
@@ -17,7 +17,7 @@ internal static class CompactionOutputPartitioner
         var entryPartitions = new List<List<MidgeSstEntry>>();
         var entries = new List<MidgeSstEntry>();
         long estimatedBytes = 0;
-        foreach (MidgeSstEntry entry in merged.Entries)
+        foreach (var entry in merged.Entries)
         {
             long entryBytes = checked(entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes);
             if (entries.Count > 0 && estimatedBytes + entryBytes > targetSizeBytes)
@@ -39,13 +39,13 @@ internal static class CompactionOutputPartitioner
             index + 1 == entryPartitions.Count ? null : entryPartitions[index + 1][0].Key)).ToArray();
     }
 
-    private static CompactionMergeResult CreatePartition(
+    static CompactionMergeResult CreatePartition(
         List<MidgeSstEntry> entries,
         IReadOnlyList<MidgeRangeTombstone> ranges,
         byte[]? regionStart,
         byte[]? regionEnd)
     {
-        MidgeRangeTombstone[] overlappingRanges = ranges
+        var overlappingRanges = ranges
             .Where(range =>
                 (regionEnd is null || ByteArrayComparer.Instance.Compare(range.Start, regionEnd) < 0) &&
                 (regionStart is null || ByteArrayComparer.Instance.Compare(range.End, regionStart) > 0))

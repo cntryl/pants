@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class ProviderCloudEngineTests
 {
@@ -104,15 +104,14 @@ public sealed class ProviderCloudEngineTests
             context.Database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         sync.Put("sync"u8.ToArray(), "value"u8.ToArray());
-        await Assert.ThrowsAsync<PantsNotSupportedException>(
-            () => sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        await Assert.ThrowsAsync<PantsNotSupportedException>(() => sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
         await using var buffered = await context.Database.BeginTransactionAsync(
             context.Database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         buffered.Put("buffered"u8.ToArray(), "value"u8.ToArray());
 
-        await Assert.ThrowsAsync<PantsNotSupportedException>(
-            () => buffered.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+        await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+            buffered.CommitAsync(PantsWriteOptions.Buffered).AsTask());
     }
 
     static ValueTask PutAsync(IPantsDatabase database, string key, string value) =>

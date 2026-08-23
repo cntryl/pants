@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class TransactionInfo : ISnapshotPin
+sealed class TransactionInfo : ISnapshotPin
 {
     public TransactionInfo(
         long transactionId,
@@ -18,9 +18,9 @@ internal sealed class TransactionInfo : ISnapshotPin
 
     public long TransactionId { get; }
 
-    public long SnapshotId => TransactionId;
-
     public PantsTransactionMode Mode { get; }
+
+    public long SnapshotId => TransactionId;
 
     public long BeginSequence { get; }
 

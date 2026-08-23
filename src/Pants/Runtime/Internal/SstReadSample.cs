@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal readonly record struct SstReadSample
+readonly record struct SstReadSample
 {
     public int SstsTouched { get; init; }
 

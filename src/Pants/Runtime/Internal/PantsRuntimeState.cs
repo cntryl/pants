@@ -1,7 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class PantsRuntimeState
+sealed class PantsRuntimeState
 {
+    public const int DefaultFamilyVersion = 0;
     readonly RuntimeTelemetry _telemetry;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
@@ -27,8 +28,6 @@ internal sealed class PantsRuntimeState
         RangeTombstones[defaultFamily] = [];
         ActiveMemtableBytes[defaultFamily] = 0;
     }
-
-    public const int DefaultFamilyVersion = 0;
 
     public IPantsClock Clock { get; }
 
@@ -98,7 +97,7 @@ internal sealed class PantsRuntimeState
         var familyDataSnapshot =
             new Dictionary<ColumnFamilyIdentity, SortedDictionary<byte[], CellState>>(
                 ColumnFamilyIdentityComparer.Instance);
-        foreach ((ColumnFamilyIdentity family, SortedDictionary<byte[], CellState> data) in FamilyData)
+        foreach (var (family, data) in FamilyData)
         {
             familyDataSnapshot[family] = new SortedDictionary<byte[], CellState>(
                 data,

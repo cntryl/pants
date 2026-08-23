@@ -1,11 +1,13 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class GatedSstReadHttpHandler : DelegatingHandler
 {
-    readonly TaskCompletionSource _requestStarted =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource _release =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly TaskCompletionSource _requestStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _armed;
 
     public GatedSstReadHttpHandler(HttpMessageHandler innerHandler)

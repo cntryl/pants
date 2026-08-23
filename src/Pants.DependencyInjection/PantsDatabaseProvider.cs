@@ -1,14 +1,14 @@
 namespace Cntryl.Pants.DependencyInjection;
 
-internal sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
+sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
 {
-    private readonly object _gate = new();
-    private readonly IPantsDatabaseFactory _databaseFactory;
-    private readonly IServiceProvider _serviceProvider;
-    private readonly Func<IServiceProvider, PantsOpenOptions> _optionsFactory;
-    private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private Task<IPantsDatabase>? _databaseTask;
-    private bool _disposed;
+    readonly IPantsDatabaseFactory _databaseFactory;
+    readonly object _gate = new();
+    readonly CancellationTokenSource _lifetimeCancellation = new();
+    readonly Func<IServiceProvider, PantsOpenOptions> _optionsFactory;
+    readonly IServiceProvider _serviceProvider;
+    Task<IPantsDatabase>? _databaseTask;
+    bool _disposed;
 
     public PantsDatabaseProvider(
         IServiceProvider serviceProvider,
@@ -18,6 +18,39 @@ internal sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisp
         _serviceProvider = serviceProvider;
         _databaseFactory = databaseFactory;
         _optionsFactory = registration.OptionsFactory;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Task<IPantsDatabase>? databaseTask;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _lifetimeCancellation.Cancel();
+            databaseTask = _databaseTask;
+        }
+
+        try
+        {
+            if (databaseTask is not null)
+            {
+                var database = await databaseTask.ConfigureAwait(false);
+                await database.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // Disposal canceled initialization before a database was published.
+        }
+        finally
+        {
+            _lifetimeCancellation.Dispose();
+        }
     }
 
     public ValueTask<IPantsDatabase> GetDatabaseAsync(
@@ -48,53 +81,20 @@ internal sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisp
             : new ValueTask<IPantsDatabase>(databaseTask);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        Task<IPantsDatabase>? databaseTask;
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            _lifetimeCancellation.Cancel();
-            databaseTask = _databaseTask;
-        }
-
-        try
-        {
-            if (databaseTask is not null)
-            {
-                IPantsDatabase database = await databaseTask.ConfigureAwait(false);
-                await database.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
-        {
-            // Disposal canceled initialization before a database was published.
-        }
-        finally
-        {
-            _lifetimeCancellation.Dispose();
-        }
-    }
-
-    private async Task InitializeDatabaseAsync(
+    async Task InitializeDatabaseAsync(
         TaskCompletionSource<IPantsDatabase> initialization,
         CancellationToken cancellationToken)
     {
         try
         {
-            PantsOpenOptions options = _optionsFactory(_serviceProvider);
+            var options = _optionsFactory(_serviceProvider);
             if (options is null)
             {
                 throw new InvalidOperationException(
                     "The registered Pants options factory returned null.");
             }
 
-            IPantsDatabase database = await _databaseFactory
+            var database = await _databaseFactory
                 .OpenAsync(options, cancellationToken)
                 .ConfigureAwait(false);
             initialization.TrySetResult(database);

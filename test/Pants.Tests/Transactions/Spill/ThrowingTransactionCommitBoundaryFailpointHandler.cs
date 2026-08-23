@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
-internal sealed class ThrowingTransactionCommitBoundaryFailpointHandler(
+sealed class ThrowingTransactionCommitBoundaryFailpointHandler(
     PantsFailpoint target) : IPantsFailpointHandler
 {
     int _armed = 1;

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 public sealed class PantsTransactionSpillHardeningBehaviorTests
 {
@@ -15,7 +15,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(
             directory.Path,
-            transactionMemoryPoolBytes: 1_500);
+            1_500);
         await using var first = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -167,8 +167,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                 .Take(1));
         File.Delete(dataRun);
 
-        var error = await Assert.ThrowsAnyAsync<PantsException>(
-            () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Contains(error.Code, new[] { PantsErrorCode.Io, PantsErrorCode.Corruption });
         for (var index = 0; index < 6; index++)
@@ -216,8 +216,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         transaction.Insert("duplicate"u8.ToArray(), "second"u8.ToArray());
 
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
-        var error = await Assert.ThrowsAsync<PantsInvalidArgumentException>(
-            () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        var error = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
         Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(database, "duplicate"));
@@ -361,8 +361,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                          PantsTransactionMode.ReadWrite))
         {
             TransactionSpillHardeningTestHarness.Fill(spilled, "failed", 12);
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using (var direct = await database.BeginTransactionAsync(
@@ -410,8 +409,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                 PantsTransactionMode.ReadWrite);
             TransactionSpillHardeningTestHarness.Fill(transaction, "failed-cloud", 12);
 
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() =>
+                transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
 
             Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(
                 database,

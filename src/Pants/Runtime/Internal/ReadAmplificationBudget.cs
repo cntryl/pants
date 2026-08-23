@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal static class ReadAmplificationBudget
+static class ReadAmplificationBudget
 {
     public const int MaximumSstsPerRead = 5;
 

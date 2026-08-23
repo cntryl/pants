@@ -2,11 +2,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class SimulatedCloudPersistence : ICloudPersistence
 {
     const uint CatalogFormatVersion = 1;
+
     static readonly string[] MetadataFiles =
     [
         "FORMAT",
@@ -23,14 +24,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    readonly string _localRoot;
-    readonly string _cloudRoot;
-    readonly ulong _writerEpoch;
     readonly WalPublicationCatalog _catalog;
+    readonly string _cloudRoot;
     readonly IPantsFailpointHandler _failpoints;
-    int _persistenceAnomaly;
 
-    public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
+    readonly string _localRoot;
+    readonly ulong _writerEpoch;
+    int _persistenceAnomaly;
 
     public SimulatedCloudPersistence(
         string localRoot,
@@ -53,6 +53,115 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _catalog.FencingEpoch = writerEpoch;
         SaveCatalog();
         MirrorMetadataAndSsts();
+    }
+
+    public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
+
+    public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(
+            _cloudRoot,
+            PantsCloudObjectLayout.SstPrefix + name);
+        return ValueTask.FromResult<ReadOnlyMemory<byte>?>(
+            File.Exists(path) ? File.ReadAllBytes(path) : null);
+    }
+
+    public ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        if (!File.Exists(path))
+        {
+            return ValueTask.FromResult<CloudDdlRegistryObject?>(null);
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        return ValueTask.FromResult<CloudDdlRegistryObject?>(new CloudDdlRegistryObject(
+            CloudDdlJson.DeserializeRegistry(bytes),
+            CreateVersion(bytes)));
+    }
+
+    public ValueTask FenceDdlRegistryAsync(
+        CloudDdlRegistry bootstrap,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        var current = File.Exists(path)
+            ? File.ReadAllBytes(path)
+            : CloudDdlJson.SerializeRegistry(bootstrap);
+        var fenced = CloudDdlFence.Encode(current, _writerEpoch);
+        if (!File.Exists(path) || !current.AsSpan().SequenceEqual(fenced))
+        {
+            AtomicStagedFile.Write(path, fenced);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<bool> CompareExchangeDdlRegistryAsync(
+        CloudDdlRegistry registry,
+        string? expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+        var exists = File.Exists(path);
+        if (expectedVersion is null)
+        {
+            if (exists)
+            {
+                return ValueTask.FromResult(false);
+            }
+        }
+        else if (!exists || !StringComparer.Ordinal.Equals(
+                     CreateVersion(File.ReadAllBytes(path)),
+                     expectedVersion))
+        {
+            return ValueTask.FromResult(false);
+        }
+
+        AtomicStagedFile.Write(path, CloudDdlJson.SerializeRegistry(registry));
+        return ValueTask.FromResult(true);
+    }
+
+    public ValueTask PublishWalAsync(
+        SealedWalSegment segment,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        PublishWal(segment);
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        MirrorMetadataAndSsts();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CollectObsoleteSsts();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_catalog.FencingEpoch != _writerEpoch)
+        {
+            throw new PantsFencedException(
+                "The simulated-cloud WAL catalog is not fenced to this writer.");
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     public static SimulatedCloudHydrationResult PrepareLocalCache(
@@ -97,8 +206,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             var cloudPath = Path.Combine(cloudRoot, "sst", file.Name);
             if (!File.Exists(cloudPath))
             {
-                var isRemoteAuthoritative = localManifest is null || remoteManifest?.Files.Any(
-                    remoteFile => StringComparer.Ordinal.Equals(
+                var isRemoteAuthoritative = localManifest is null || remoteManifest?.Files.Any(remoteFile =>
+                    StringComparer.Ordinal.Equals(
                         remoteFile.Name,
                         file.Name)) == true;
                 if (isRemoteAuthoritative || !File.Exists(localPath))
@@ -136,7 +245,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var localWalDirectory = Path.Combine(root, "wal");
         Directory.CreateDirectory(localWalDirectory);
         var requiresSalvage = false;
-        foreach ((var segmentId, var publication) in catalog.Segments)
+        foreach (var (segmentId, publication) in catalog.Segments)
         {
             ValidatePublication(segmentId, publication, catalog.FencingEpoch);
             var remotePath = ResolveObjectPath(cloudRoot, publication.ObjectKey);
@@ -327,113 +436,6 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         AtomicStagedFile.Write(path, bytes);
     }
 
-    public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = ResolveObjectPath(
-            _cloudRoot,
-            PantsCloudObjectLayout.SstPrefix + name);
-        return ValueTask.FromResult<ReadOnlyMemory<byte>?>(
-            File.Exists(path) ? File.ReadAllBytes(path) : null);
-    }
-
-    public ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
-        if (!File.Exists(path))
-        {
-            return ValueTask.FromResult<CloudDdlRegistryObject?>(null);
-        }
-
-        var bytes = File.ReadAllBytes(path);
-        return ValueTask.FromResult<CloudDdlRegistryObject?>(new(
-            CloudDdlJson.DeserializeRegistry(bytes),
-            CreateVersion(bytes)));
-    }
-
-    public ValueTask FenceDdlRegistryAsync(
-        CloudDdlRegistry bootstrap,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
-        var current = File.Exists(path)
-            ? File.ReadAllBytes(path)
-            : CloudDdlJson.SerializeRegistry(bootstrap);
-        var fenced = CloudDdlFence.Encode(current, _writerEpoch);
-        if (!File.Exists(path) || !current.AsSpan().SequenceEqual(fenced))
-        {
-            AtomicStagedFile.Write(path, fenced);
-        }
-
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask<bool> CompareExchangeDdlRegistryAsync(
-        CloudDdlRegistry registry,
-        string? expectedVersion,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
-        var exists = File.Exists(path);
-        if (expectedVersion is null)
-        {
-            if (exists)
-            {
-                return ValueTask.FromResult(false);
-            }
-        }
-        else if (!exists || !StringComparer.Ordinal.Equals(
-                     CreateVersion(File.ReadAllBytes(path)),
-                     expectedVersion))
-        {
-            return ValueTask.FromResult(false);
-        }
-
-        AtomicStagedFile.Write(path, CloudDdlJson.SerializeRegistry(registry));
-        return ValueTask.FromResult(true);
-    }
-
-    public ValueTask PublishWalAsync(
-        SealedWalSegment segment,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        PublishWal(segment);
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        MirrorMetadataAndSsts();
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        CollectObsoleteSsts();
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_catalog.FencingEpoch != _writerEpoch)
-        {
-            throw new PantsFencedException(
-                "The simulated-cloud WAL catalog is not fenced to this writer.");
-        }
-
-        return ValueTask.CompletedTask;
-    }
-
     void CollectObsoleteSsts()
     {
         if (!SimulatedCloudSstGarbageCollector.Collect(
@@ -463,7 +465,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 throw new JsonException("Cloud WAL catalog header is invalid.");
             }
 
-            foreach ((var segmentId, var publication) in catalog.Segments)
+            foreach (var (segmentId, publication) in catalog.Segments)
             {
                 ValidatePublication(segmentId, publication, catalog.FencingEpoch);
             }
@@ -555,7 +557,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     bytes,
                     segment.MaximumSequence,
                     segment.WriterEpoch,
-                    manifest))
+                    (MidgeManifest)manifest))
             {
                 continue;
             }
@@ -572,7 +574,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return;
         }
 
-        var dependencyGuards = ValidateManifestDependencies(manifest, metadata);
+        var dependencyGuards = ValidateManifestDependencies((MidgeManifest)manifest, metadata);
         VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
         foreach (var segment in retired)
         {
@@ -580,7 +582,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 walBytes[segment.SegmentId],
                 segment.MaximumSequence,
                 segment.WriterEpoch,
-                manifest);
+                (MidgeManifest)manifest);
         }
 
         foreach (var segment in retired)
@@ -709,13 +711,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         public ulong WriterEpoch { get; set; }
 
-        [JsonPropertyName("max_sequence")]
-        public ulong MaximumSequence { get; set; }
+        [JsonPropertyName("max_sequence")] public ulong MaximumSequence { get; set; }
 
         public ulong SizeBytes { get; set; }
 
-        [JsonPropertyName("content_crc32c")]
-        public uint ContentCrc32C { get; set; }
+        [JsonPropertyName("content_crc32c")] public uint ContentCrc32C { get; set; }
 
         public string ObjectKey { get; set; } = string.Empty;
 
@@ -738,5 +738,4 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             ContentCrc32C,
             ObjectKey);
     }
-
 }

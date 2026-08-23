@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudWalSealControllerTests
 {
@@ -9,7 +9,7 @@ public sealed class CloudWalSealControllerTests
         var controller = new CloudWalSealController(CreatePolicy(), timeProvider);
         timeProvider.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.False(controller.ShouldSeal(activeWalBytes: 0));
+        Assert.False(controller.ShouldSeal(0));
     }
 
     [Fact]
@@ -20,7 +20,7 @@ public sealed class CloudWalSealControllerTests
             new ManualTimeProvider());
         controller.RecordWrite();
 
-        Assert.True(controller.ShouldSeal(activeWalBytes: 1024));
+        Assert.True(controller.ShouldSeal(1024));
     }
 
     [Fact]
@@ -32,7 +32,7 @@ public sealed class CloudWalSealControllerTests
         controller.RecordWrite();
         controller.RecordWrite();
 
-        Assert.True(controller.ShouldSeal(activeWalBytes: 1));
+        Assert.True(controller.ShouldSeal(1));
     }
 
     [Fact]
@@ -42,10 +42,10 @@ public sealed class CloudWalSealControllerTests
             CreatePolicy(),
             new ManualTimeProvider());
 
-        controller.RecordWrite(physicalRecords: 8);
+        controller.RecordWrite(8);
 
         Assert.Equal(8, controller.PendingWrites);
-        Assert.True(controller.ShouldSeal(activeWalBytes: 1));
+        Assert.True(controller.ShouldSeal(1));
     }
 
     [Fact]
@@ -70,12 +70,12 @@ public sealed class CloudWalSealControllerTests
 
         Assert.Equal(0, controller.PendingWrites);
         Assert.Null(controller.RemainingDelay);
-        Assert.False(controller.ShouldSeal(activeWalBytes: 1024));
+        Assert.False(controller.ShouldSeal(1024));
     }
 
     static PantsCloudWritePolicy CreatePolicy() => new(
-        EventualFlushSegmentGap: 4,
-        WalSealMinimumSegmentBytes: 1024,
-        WalSealMaximumFlushDelay: TimeSpan.FromSeconds(5),
-        WalSealMaximumPendingWrites: 2);
+        4,
+        1024,
+        TimeSpan.FromSeconds(5),
+        2);
 }

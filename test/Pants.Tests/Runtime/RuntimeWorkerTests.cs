@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class RuntimeWorkerTests
@@ -8,7 +8,7 @@ public sealed class RuntimeWorkerTests
     [Fact]
     public async Task ShouldTrackOutstandingWorkFromAdmissionThroughCompletion()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         var started = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
@@ -50,7 +50,7 @@ public sealed class RuntimeWorkerTests
     [Fact]
     public async Task ShouldObserveCallerCancellationDuringExecution()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         using var cancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -69,8 +69,8 @@ public sealed class RuntimeWorkerTests
             await started.Task.WaitAsync(AssertionTimeout);
             cancellation.Cancel();
 
-            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => execution.WaitAsync(AssertionTimeout));
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(AssertionTimeout));
             Assert.Equal(cancellation.Token, exception.CancellationToken);
         }
         finally
@@ -82,7 +82,7 @@ public sealed class RuntimeWorkerTests
     [Fact]
     public async Task ShouldCompleteAdmittedScheduledWorkGivenAdmissionTokenCancels()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         using var cancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);

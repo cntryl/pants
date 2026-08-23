@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal sealed class MidgeColumnFamilyMeta
+sealed class MidgeColumnFamilyMeta
 {
     public uint Id { get; set; }
 

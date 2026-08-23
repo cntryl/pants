@@ -1,87 +1,87 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class RuntimeTelemetry
+sealed class RuntimeTelemetry
 {
+    readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
     readonly TimeProvider _timeProvider;
-    long _readOnlyTransactionsBegun;
-    long _readOnlySnapshotCacheHits;
-    long _readOnlySnapshotCacheMisses;
-    long _snapshotsRegistered;
-    long _snapshotsUnregistered;
-    long _transactionsCommitted;
-    long _transactionsRolledBack;
-    long _commandsRejected;
-    long _commandLatencyNanosecondsTotal;
-    long _readsTotal;
-    long _sstsTouchedTotal;
-    long _l0SstsTouchedTotal;
+    readonly object _writeStallTimingGate = new();
+    long _blockBudgetViolations;
     long _blocksReadTotal;
-    long _sstReaderCacheHits;
-    long _sstReaderCacheMisses;
-    long _sstBlockCacheHits;
-    long _sstBlockCacheMisses;
-    long _candidateSstFilesChecked;
-    long _candidateBlocksChecked;
-    long _dataBlocksRead;
-    long _keyRangeRejects;
     long _bloomChecks;
+    long _bloomFalsePositives;
     long _bloomRejects;
     long _bloomTruePositives;
-    long _bloomFalsePositives;
-    long _rangeTombstoneScans;
-    long _sstBudgetViolations;
-    long _blockBudgetViolations;
-    long _readAmplificationCompactionTriggers;
-    long _writeConflictsPoint;
-    long _writeConflictsRange;
-    long _compactionsRun;
-    long _compactionBytesRewritten;
-    long _compactionFailures;
-    long _walAppendCount;
-    long _walFlushCount;
-    long _walFsyncCount;
-    long _walAppendNanosecondsTotal;
-    long _walFsyncNanosecondsTotal;
-    long _walFsyncNanosecondsMaximum;
-    long _durabilityWaitersFannedOut;
-    long _flushBuildCount;
-    long _flushBuildNanosecondsTotal;
-    long _flushBuildNanosecondsMaximum;
-    long _flushPublishCount;
-    long _flushPublishNanosecondsTotal;
-    long _flushPublishNanosecondsMaximum;
-    long _flushEnqueued;
-    long _flushFailures;
-    long _flushRetries;
-    int _pendingCloudUploads;
-    readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
-    long _walLastSyncedSequence;
-    long _writeStallsMemory;
-    long _writeStallsCompaction;
-    long _writeStallsCloud;
-    long _writeStallsNoSpace;
-    readonly object _writeStallTimingGate = new();
-    long? _writeStallStartedAt;
-    long _writeStallActiveNanoseconds;
-    long _writeStallNanosecondsTotal;
-    long _writeStallNanosecondsMaximum;
-    long _cloudAsyncWalSegmentsSealed;
+    long _candidateBlocksChecked;
+    long _candidateSstFilesChecked;
+    long _cloudAsyncWalAcknowledgementLatencyMicroseconds;
     long _cloudAsyncWalBytesSealed;
     long _cloudAsyncWalSealLatencyMicroseconds;
-    long _cloudAsyncWalUploadsStarted;
+    long _cloudAsyncWalSegmentsSealed;
+    long _cloudAsyncWalUploadLatencyMicroseconds;
     long _cloudAsyncWalUploadsCompleted;
     long _cloudAsyncWalUploadsFailed;
-    long _cloudAsyncWalUploadLatencyMicroseconds;
-    long _cloudAsyncWalAcknowledgementLatencyMicroseconds;
-    long _salvageModeOpens;
-    long _noSpaceEvents;
-    long _walRecoveryRecordsReplayed;
-    long _walRecoveryBytesReplayed;
-    long _intentLogReplayRuns;
+    long _cloudAsyncWalUploadsStarted;
+    long _commandLatencyNanosecondsTotal;
+    long _commandsRejected;
+    long _compactionBytesRewritten;
+    long _compactionFailures;
+    long _compactionsRun;
+    long _dataBlocksRead;
+    long _durabilityWaitersFannedOut;
+    long _flushBuildCount;
+    long _flushBuildNanosecondsMaximum;
+    long _flushBuildNanosecondsTotal;
+    long _flushEnqueued;
+    long _flushFailures;
+    long _flushPublishCount;
+    long _flushPublishNanosecondsMaximum;
+    long _flushPublishNanosecondsTotal;
+    long _flushRetries;
     long _intentLogEntriesReplayed;
+    long _intentLogReplayRuns;
+    long _keyRangeRejects;
+    long _l0SstsTouchedTotal;
+    long _noSpaceEvents;
+    int _pendingCloudUploads;
+    long _rangeTombstoneScans;
+    long _readAmplificationCompactionTriggers;
+    long _readOnlySnapshotCacheHits;
+    long _readOnlySnapshotCacheMisses;
+    long _readOnlyTransactionsBegun;
+    long _readsTotal;
+    long _salvageModeOpens;
+    long _snapshotsRegistered;
+    long _snapshotsUnregistered;
+    long _sstBlockCacheHits;
+    long _sstBlockCacheMisses;
+    long _sstBudgetViolations;
+    long _sstReaderCacheHits;
+    long _sstReaderCacheMisses;
+    long _sstsTouchedTotal;
+    long _transactionsCommitted;
+    long _transactionsRolledBack;
+    long _walAppendCount;
+    long _walAppendNanosecondsTotal;
+    long _walFlushCount;
+    long _walFsyncCount;
+    long _walFsyncNanosecondsMaximum;
+    long _walFsyncNanosecondsTotal;
+    long _walLastSyncedSequence;
+    long _walRecoveryBytesReplayed;
+    long _walRecoveryRecordsReplayed;
+    long _writeConflictsPoint;
+    long _writeConflictsRange;
+    long _writeStallActiveNanoseconds;
+    long _writeStallNanosecondsMaximum;
+    long _writeStallNanosecondsTotal;
+    long? _writeStallStartedAt;
+    long _writeStallsCloud;
+    long _writeStallsCompaction;
+    long _writeStallsMemory;
+    long _writeStallsNoSpace;
 
     public RuntimeTelemetry(TimeProvider? timeProvider = null)
     {
@@ -333,10 +333,7 @@ internal sealed class RuntimeTelemetry
         SetMaximum(ref _walLastSyncedSequence, sequence);
     }
 
-    public void RecordWriteStallNoSpace()
-    {
-        Interlocked.Increment(ref _writeStallsNoSpace);
-    }
+    public void RecordWriteStallNoSpace() => Interlocked.Increment(ref _writeStallsNoSpace);
 
     public void RecordWriteStallMemory() => Interlocked.Increment(ref _writeStallsMemory);
 
@@ -457,15 +454,9 @@ internal sealed class RuntimeTelemetry
 
     public void RecordCloudUploadCompleted() => Interlocked.Decrement(ref _pendingCloudUploads);
 
-    public void RecordSalvageModeOpen()
-    {
-        Interlocked.Increment(ref _salvageModeOpens);
-    }
+    public void RecordSalvageModeOpen() => Interlocked.Increment(ref _salvageModeOpens);
 
-    public void RecordNoSpaceEvent()
-    {
-        Interlocked.Increment(ref _noSpaceEvents);
-    }
+    public void RecordNoSpaceEvent() => Interlocked.Increment(ref _noSpaceEvents);
 
     public void RecordWalRecovery(int payloadBytes)
     {

@@ -1,12 +1,12 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<byte[]>
+sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<byte[]>
 {
-    public static ByteArrayComparer Instance { get; } = new();
-
-    private ByteArrayComparer()
+    ByteArrayComparer()
     {
     }
+
+    public static ByteArrayComparer Instance { get; } = new();
 
     public int Compare(byte[]? x, byte[]? y)
     {
@@ -25,10 +25,10 @@ internal sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<b
             return 1;
         }
 
-        int length = Math.Min(x.Length, y.Length);
-        for (int index = 0; index < length; index++)
+        var length = Math.Min(x.Length, y.Length);
+        for (var index = 0; index < length; index++)
         {
-            int comparison = x[index].CompareTo(y[index]);
+            var comparison = x[index].CompareTo(y[index]);
             if (comparison != 0)
             {
                 return comparison;
@@ -45,7 +45,7 @@ internal sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<b
         ArgumentNullException.ThrowIfNull(value);
 
         var hash = new HashCode();
-        foreach (byte item in value)
+        foreach (var item in value)
         {
             hash.Add(item);
         }

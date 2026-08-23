@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed record MidgeRangeTombstone(byte[] Start, byte[] End, ulong Sequence);
+sealed record MidgeRangeTombstone(byte[] Start, byte[] End, ulong Sequence);

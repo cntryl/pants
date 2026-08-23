@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsLeveledCompactionTests
 {
@@ -10,13 +10,13 @@ public sealed class PantsLeveledCompactionTests
             PantsOpenOptions.Local(directory.Path)
                 .WithPerformanceGoal(PantsPerformanceGoal.Latency)
                 .WithBackgroundCompaction(true));
-        for (int index = 0; index < 3; index++)
+        for (var index = 0; index < 3; index++)
         {
             await PutAndFlushAsync(database, index);
         }
 
         var layout = await database.GetStorageLayoutAsync();
-        PantsStorageLevelLayout level = Assert.Single(layout.Levels);
+        var level = Assert.Single(layout.Levels);
         Assert.Equal(1, level.Level);
         Assert.Equal(1, level.FileCount);
         var metrics = await database.GetRuntimeMetricsAsync();
@@ -28,7 +28,7 @@ public sealed class PantsLeveledCompactionTests
     public async Task ShouldKeepCompactionInputSetBoundedAndReportMultipleLevels()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
                 .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
@@ -39,7 +39,7 @@ public sealed class PantsLeveledCompactionTests
 
         await database.CompactAllAsync();
 
-        PantsStorageLayout layout = await database.GetStorageLayoutAsync();
+        var layout = await database.GetStorageLayoutAsync();
         Assert.Equal([0, 1], layout.Levels.Select(static level => level.Level));
         Assert.Equal(2, layout.Levels.Single(static level => level.Level == 0).FileCount);
         Assert.Equal(2, layout.Levels.Single(static level => level.Level == 1).FileCount);
@@ -49,11 +49,11 @@ public sealed class PantsLeveledCompactionTests
     public async Task ShouldChangeBackgroundCompactionAtRuntime()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
                 .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
-        for (int index = 0; index < 3; index++)
+        for (var index = 0; index < 3; index++)
         {
             await PutAndFlushAsync(database, index);
         }
@@ -63,7 +63,7 @@ public sealed class PantsLeveledCompactionTests
         await database.SetBackgroundCompactionAsync(true);
         await PutAndFlushAsync(database, 3);
 
-        PantsStorageLayout layout = await database.GetStorageLayoutAsync();
+        var layout = await database.GetStorageLayoutAsync();
         Assert.Contains(layout.Levels, static level => level.Level == 1);
     }
 
@@ -71,12 +71,12 @@ public sealed class PantsLeveledCompactionTests
     public async Task ShouldPublishNoOutputWhenCompactionProvesADeleteObsolete()
     {
         using var directory = new TemporaryDirectory();
-        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+        var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
-        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(options))
+        await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await using (IPantsTransaction transaction = await database.BeginTransactionAsync(
+            await using (var transaction = await database.BeginTransactionAsync(
                              database.DefaultColumnFamily,
                              PantsTransactionMode.ReadWrite))
             {
@@ -85,7 +85,7 @@ public sealed class PantsLeveledCompactionTests
             }
 
             await database.FlushAsync(database.DefaultColumnFamily);
-            await using (IPantsTransaction transaction = await database.BeginTransactionAsync(
+            await using (var transaction = await database.BeginTransactionAsync(
                              database.DefaultColumnFamily,
                              PantsTransactionMode.ReadWrite))
             {
@@ -98,8 +98,8 @@ public sealed class PantsLeveledCompactionTests
             Assert.Empty((await database.GetStorageLayoutAsync()).Levels);
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(options);
-        await using IPantsTransaction read = await reopened.BeginTransactionAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var read = await reopened.BeginTransactionAsync(
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await read.GetAsync(TestBytes.FromString("key")));
@@ -109,16 +109,16 @@ public sealed class PantsLeveledCompactionTests
     public async Task ShouldPublishMultipleTargetSizedOutputsWithUniqueSequences()
     {
         using var directory = new TemporaryDirectory();
-        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+        var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 2,
                 TargetSstSizeBytes: 80));
-        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(options))
+        await using (var database = await PantsDatabase.OpenAsync(options))
         {
             for (var batch = 0; batch < 2; batch++)
             {
-                await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+                await using var transaction = await database.BeginTransactionAsync(
                     database.DefaultColumnFamily,
                     PantsTransactionMode.ReadWrite);
                 for (var index = 0; index < 5; index++)
@@ -133,20 +133,20 @@ public sealed class PantsLeveledCompactionTests
             }
 
             await database.CompactAllAsync();
-            PantsStorageLevelLayout level = Assert.Single(
+            var level = Assert.Single(
                 (await database.GetStorageLayoutAsync()).Levels,
                 static candidate => candidate.Level == 1);
             Assert.True(level.FileCount > 1);
             Assert.Equal(level.FileCount, level.Files.Select(static file => file.Name).Distinct().Count());
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(options);
-        await using IPantsTransaction read = await reopened.BeginTransactionAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var read = await reopened.BeginTransactionAsync(
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         var entries = new List<PantsEntry>();
-        await using IPantsScan scan = await read.ScanAsync(new PantsScanQuery());
-        await foreach (PantsEntry entry in scan)
+        await using var scan = await read.ScanAsync(new PantsScanQuery());
+        await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
@@ -154,9 +154,9 @@ public sealed class PantsLeveledCompactionTests
         Assert.Equal(10, entries.Count);
     }
 
-    private static async ValueTask PutAndFlushAsync(IPantsDatabase database, int index)
+    static async ValueTask PutAndFlushAsync(IPantsDatabase database, int index)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(

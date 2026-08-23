@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using System.Text;
+
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudSstGarbageCollectionTests
 {
@@ -48,8 +50,7 @@ public sealed class CloudSstGarbageCollectionTests
             initialNames.UnionWith(handler.GetObjectPaths("/sst/"));
             failpoints.Arm(PantsFailpoint.BeforeCompactionManifestPublish);
 
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
 
             orphanPath = Assert.Single(
                 handler.GetObjectPaths("/sst/"),
@@ -239,7 +240,7 @@ public sealed class CloudSstGarbageCollectionTests
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
-        transaction.Put(System.Text.Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
+        transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.FlushAsync(database.DefaultColumnFamily);
     }
@@ -255,7 +256,7 @@ public sealed class CloudSstGarbageCollectionTests
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        var value = await transaction.GetAsync(System.Text.Encoding.UTF8.GetBytes(key));
+        var value = await transaction.GetAsync(Encoding.UTF8.GetBytes(key));
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
     }
 

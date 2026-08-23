@@ -1,10 +1,12 @@
-namespace Cntryl.Pants;
+using System.Collections;
 
-internal sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
+namespace Cntryl.Pants.Transactions.Internal;
+
+sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
 {
-    private readonly IEnumerator<PantsEntry> _entries;
-    private readonly IScanReadValidator _validator;
-    private int _disposed;
+    readonly IEnumerator<PantsEntry> _entries;
+    readonly IScanReadValidator _validator;
+    int _disposed;
 
     public ValidatingScanEnumerator(
         IEnumerator<PantsEntry> entries,
@@ -16,7 +18,7 @@ internal sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
 
     public PantsEntry Current => _entries.Current;
 
-    object System.Collections.IEnumerator.Current => Current;
+    object IEnumerator.Current => Current;
 
     public bool MoveNext()
     {

@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class CloudControlMetadataSnapshot
 {
@@ -43,7 +43,7 @@ sealed class CloudControlMetadataSnapshot
             }
         }
 
-        var manifests = new List<MidgeManifest>(capacity: 2);
+        var manifests = new List<MidgeManifest>(2);
         var referencedNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
         {

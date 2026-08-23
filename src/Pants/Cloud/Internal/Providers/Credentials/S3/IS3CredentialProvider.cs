@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal interface IS3CredentialProvider
+interface IS3CredentialProvider
 {
     ValueTask<S3Credentials> GetCredentialsAsync(CancellationToken cancellationToken);
 }

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Scan;
 
 public interface IPantsScan : IAsyncEnumerable<PantsEntry>, IAsyncDisposable
 {

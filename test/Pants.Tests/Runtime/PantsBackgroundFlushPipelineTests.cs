@@ -1,7 +1,8 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsBackgroundFlushPipelineTests
@@ -181,8 +182,9 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 PantsTransactionMode.ReadWrite);
             afterHint.Put(new byte[] { 4 }, value);
-            var stalled = await Assert.ThrowsAsync<PantsWriteStallException>(
-                () => afterHint.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            var stalled =
+                await Assert.ThrowsAsync<PantsWriteStallException>(() =>
+                    afterHint.CommitAsync(PantsWriteOptions.Sync).AsTask());
             var blocked = await database.GetRuntimeMetricsAsync();
 
             Assert.Equal(PantsErrorCode.WriteStall, stalled.Code);
@@ -499,7 +501,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
             PantsFailpoint.BeforeFlushBuild,
-            throwOnHit: true);
+            true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("automatic-flush-retry");
 
@@ -531,7 +533,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
             PantsFailpoint.BeforeFlushManifestPublish,
-            throwOnHit: true);
+            true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("retained-flush-build");
         await CommitAsync(
@@ -572,8 +574,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 new byte[160 * 1024]);
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
             Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-            Assert.Empty((await database.GetStorageLayoutAsync()).Levels.SelectMany(
-                static level => level.Files));
+            Assert.Empty((await database.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files));
 
             CopyCrashImage(directory.Path, recoveryDirectory.Path);
             ExpireWriterLease(recoveryDirectory.Path);
@@ -1458,7 +1459,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
             PantsFailpoint.AfterFlushManifestPublish,
-            throwOnHit: true);
+            true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.CreateColumnFamilyAsync("published-retry-intent");
         await File.WriteAllTextAsync(
@@ -1901,8 +1902,8 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.Equal(
                 2,
                 (await database.GetStorageLayoutAsync()).Levels
-                    .SelectMany(static level => level.Files)
-                    .Count(static file => file.Level == 0));
+                .SelectMany(static level => level.Files)
+                .Count(static file => file.Level == 0));
         }
         finally
         {
@@ -2045,7 +2046,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
             PantsFailpoint.BeforeCompactionManifestPublish,
-            throwOnHit: true);
+            true);
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
@@ -2063,8 +2064,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 await database.FlushAsync(database.DefaultColumnFamily);
             }
 
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.CompactAllAsync().AsTask());
 
             using var intent = JsonDocument.Parse(
                 await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
@@ -2444,8 +2444,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var recovered = await reopened.GetRuntimeMetricsAsync();
         var largestSequence = Assert.Single(
-                (await reopened.GetStorageLayoutAsync()).Levels.SelectMany(
-                    static level => level.Files))
+                (await reopened.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files))
             .LargestSequence;
         Assert.NotNull(largestSequence);
         Assert.True(recovered.CurrentSequence >= largestSequence);
@@ -2642,12 +2641,12 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         var leasePath = Path.Combine(path, ".midge_leader");
         var fields = File.ReadAllLines(leasePath)
-            .Select(static line => line.Split(": ", 2, StringSplitOptions.None))
+            .Select(static line => line.Split(": ", 2))
             .Where(static parts => parts.Length == 2)
             .ToDictionary(static parts => parts[0], static parts => parts[1], StringComparer.Ordinal);
         var nextEpoch = checked(ulong.Parse(
             fields["epoch"],
-            System.Globalization.CultureInfo.InvariantCulture) + 1);
+            CultureInfo.InvariantCulture) + 1);
         File.WriteAllText(
             leasePath,
             $"epoch: {nextEpoch}\nholder_id: fenced-writer\nacquired_at: {DateTimeOffset.UtcNow:O}\n");
@@ -2678,7 +2677,7 @@ public sealed class PantsBackgroundFlushPipelineTests
 
             var destinationFile = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
-            File.Copy(sourceFile, destinationFile, overwrite: true);
+            File.Copy(sourceFile, destinationFile, true);
         }
     }
 

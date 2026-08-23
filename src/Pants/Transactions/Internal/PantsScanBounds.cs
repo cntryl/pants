@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class PantsScanBounds
+sealed class PantsScanBounds
 {
     public PantsScanBounds(PantsScanQuery query)
     {
@@ -47,7 +47,7 @@ internal sealed class PantsScanBounds
         (EndExclusive is null || smallest.SequenceCompareTo(EndExclusive) < 0) &&
         (StartInclusive is null || largest.SequenceCompareTo(StartInclusive) >= 0);
 
-    private static byte[]? Maximum(byte[]? left, byte[]? right)
+    static byte[]? Maximum(byte[]? left, byte[]? right)
     {
         if (left is null)
         {
@@ -62,7 +62,7 @@ internal sealed class PantsScanBounds
         return left.AsSpan().SequenceCompareTo(right) >= 0 ? left : right;
     }
 
-    private static byte[]? Minimum(byte[]? left, byte[]? right)
+    static byte[]? Minimum(byte[]? left, byte[]? right)
     {
         if (left is null)
         {
@@ -77,15 +77,15 @@ internal sealed class PantsScanBounds
         return left.AsSpan().SequenceCompareTo(right) <= 0 ? left : right;
     }
 
-    private static byte[]? PrefixSuccessor(byte[]? prefix)
+    static byte[]? PrefixSuccessor(byte[]? prefix)
     {
         if (prefix is null || prefix.Length == 0)
         {
             return null;
         }
 
-        byte[] successor = prefix.ToArray();
-        for (int index = successor.Length - 1; index >= 0; index--)
+        var successor = prefix.ToArray();
+        for (var index = successor.Length - 1; index >= 0; index--)
         {
             if (successor[index] == byte.MaxValue)
             {
@@ -99,6 +99,6 @@ internal sealed class PantsScanBounds
         return null;
     }
 
-    private static byte[]? Copy(ReadOnlyMemory<byte>? value) =>
+    static byte[]? Copy(ReadOnlyMemory<byte>? value) =>
         value.HasValue ? value.Value.ToArray() : null;
 }

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal enum CloudObjectDeleteOutcome
+enum CloudObjectDeleteOutcome
 {
     Deleted,
     NotFound,

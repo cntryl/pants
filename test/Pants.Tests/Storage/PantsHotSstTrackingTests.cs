@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsHotSstTrackingTests
 {
@@ -6,7 +6,7 @@ public sealed class PantsHotSstTrackingTests
     public async Task ShouldPreserveReadsGivenTwoFlushedBatchesWhenRepeatedlyAccessed()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"batch1_key{index:000}", "value1");
@@ -32,7 +32,7 @@ public sealed class PantsHotSstTrackingTests
     public async Task ShouldReturnLatestValueGivenOverlappingL0KeysWhenMultipleBatchesFlushed()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var batch = 0; batch < 3; batch++)
         {
             for (var index = 0; index < 5; index++)
@@ -51,8 +51,8 @@ public sealed class PantsHotSstTrackingTests
     public async Task ShouldFindKeysGivenDisjointKeyRangesWhenFlushed()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
-        foreach ((string prefix, string value) in new[]
+        await using var database = await OpenAsync(directory.Path);
+        foreach (var (prefix, value) in new[]
                  {
                      ("a", "value_a"),
                      ("b", "value_b"),
@@ -76,7 +76,7 @@ public sealed class PantsHotSstTrackingTests
     public async Task ShouldPreserveReadabilityGivenMixedAccessPatternWhenKeysRepeatedlyAccessed()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path);
         for (var index = 0; index < 20; index++)
         {
             await PutAsync(database, $"key{index:000}", "test_value");
@@ -98,25 +98,25 @@ public sealed class PantsHotSstTrackingTests
         Assert.Null(await ReadAsync(database, "missing_key"));
     }
 
-    private static ValueTask<IPantsDatabase> OpenAsync(string path) =>
+    static ValueTask<IPantsDatabase> OpenAsync(string path) =>
         PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path).WithBackgroundCompaction(false));
 
-    private static async Task PutAsync(IPantsDatabase database, string key, string value)
+    static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
     }
 
-    private static async Task<string?> ReadAsync(IPantsDatabase database, string key)
+    static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? value = await transaction.GetAsync(TestBytes.FromString(key));
+        var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;
     }
 }

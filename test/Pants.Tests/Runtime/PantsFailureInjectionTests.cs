@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 public sealed class PantsFailureInjectionTests
 {
@@ -7,19 +7,19 @@ public sealed class PantsFailureInjectionTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new TestFailpointHandler(PantsFailpoint.BeforeWalAppend);
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(failpoints));
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
-        PantsIOException error = await Assert.ThrowsAsync<PantsIOException>(() =>
+        var error = await Assert.ThrowsAsync<PantsIOException>(() =>
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Contains(nameof(PantsFailpoint.BeforeWalAppend), error.Message, StringComparison.Ordinal);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("key"u8.ToArray()));
@@ -32,11 +32,11 @@ public sealed class PantsFailureInjectionTests
         using var directory = new TemporaryDirectory();
         var failpoints = new TestFailpointHandler(
             PantsFailpoint.AfterFlushOutputDurable,
-            oneShot: true);
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+            true);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(failpoints));
-        await using (IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -66,34 +66,33 @@ public sealed class PantsFailureInjectionTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new TestFailpointHandler(PantsFailpoint.MidWalAppend);
-        await using (IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
                          new PantsRuntimeDependencies(failpoints)))
         {
-            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+            await using var transaction = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("first"u8.ToArray(), "one"u8.ToArray());
             transaction.Put("second"u8.ToArray(), "two"u8.ToArray());
 
-            await Assert.ThrowsAsync<PantsIOException>(
-                () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using IPantsTransaction reader = await reopened.BeginTransactionAsync(
+        await using var reader = await reopened.BeginTransactionAsync(
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("first"u8.ToArray()));
         Assert.Null(await reader.GetAsync("second"u8.ToArray()));
     }
 
-    private sealed class TestFailpointHandler(
+    sealed class TestFailpointHandler(
         PantsFailpoint target,
         bool oneShot = false) : IPantsFailpointHandler
     {
-        private int _hitCount;
+        int _hitCount;
 
         public int HitCount => Volatile.Read(ref _hitCount);
 

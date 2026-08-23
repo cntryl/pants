@@ -1,6 +1,7 @@
 using System.Net;
+using System.Net.Http.Headers;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class GcsObjectStoreTests
 {
@@ -8,7 +9,7 @@ public sealed class GcsObjectStoreTests
     public async Task ShouldUseBearerTokenAndGenerationConditionsGivenJsonApi()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get
-            ? Response(HttpStatusCode.OK, "value", generation: "7")
+            ? Response(HttpStatusCode.OK, "value", "7")
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
         using var client = new HttpClient(handler);
         var store = new GcsObjectStore(
@@ -22,8 +23,8 @@ public sealed class GcsObjectStoreTests
             client,
             TimeSpan.FromSeconds(5));
 
-        CloudObject? value = await store.GetAsync("metadata/manifest.json", CancellationToken.None);
-        bool replaced = await store.PutAsync(
+        var value = await store.GetAsync("metadata/manifest.json", CancellationToken.None);
+        var replaced = await store.PutAsync(
             "metadata/manifest.json",
             "next"u8.ToArray(),
             new CloudObjectWriteCondition.IfVersion("7"),
@@ -121,7 +122,7 @@ public sealed class GcsObjectStoreTests
             new CloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
 
-        RecordedRequest request = Assert.Single(handler.Requests);
+        var request = Assert.Single(handler.Requests);
         Assert.Equal("/bucket/database/metadata/manifest.json", request.Uri.AbsolutePath);
         Assert.StartsWith("GOOG1 access-id:", request.Authorization, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, request.Authorization, StringComparison.Ordinal);
@@ -137,7 +138,7 @@ public sealed class GcsObjectStoreTests
         {
             Content = new ByteArrayContent("lease"u8.ToArray())
         };
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(
             "application/octet-stream");
         request.Headers.TryAddWithoutValidation("X-Goog-Meta-Owner", " first   holder ");
         request.Headers.TryAddWithoutValidation("x-goog-if-generation-match", "42");
@@ -156,7 +157,7 @@ public sealed class GcsObjectStoreTests
     public async Task ShouldRefreshAuthorizedUserCredentialAndRouteGcsFactoryVariant()
     {
         using var directory = new TemporaryDirectory();
-        string credentialPath = Path.Combine(directory.Path, "authorized-user.json");
+        var credentialPath = Path.Combine(directory.Path, "authorized-user.json");
         File.WriteAllText(
             credentialPath,
             """
@@ -173,7 +174,7 @@ public sealed class GcsObjectStoreTests
             {
                 Content = new StringContent("{\"access_token\":\"refreshed-token\",\"expires_in\":3600}")
             }
-            : Response(HttpStatusCode.OK, "value", generation: "1"));
+            : Response(HttpStatusCode.OK, "value", "1"));
         using var client = new HttpClient(handler);
         var location = new PantsCloudStorageLocation(
             new PantsCloudProviderConfiguration.Gcs(
@@ -184,7 +185,7 @@ public sealed class GcsObjectStoreTests
                 new PantsGcsCredentialSource.AuthorizedUserJsonFile(credentialPath)),
             "database");
 
-        ICloudObjectStore store = CloudObjectStoreFactory.Create(
+        var store = CloudObjectStoreFactory.Create(
             location,
             TimeSpan.FromSeconds(5),
             client);
@@ -233,8 +234,9 @@ public sealed class GcsObjectStoreTests
         using var client = new HttpClient(handler);
         var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
 
-        var exception = await Assert.ThrowsAsync<PantsInternalException>(
-            () => store.ListAllAsync("sst/", CancellationToken.None).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsInternalException>(() =>
+                store.ListAllAsync("sst/", CancellationToken.None).AsTask());
 
         Assert.Contains("repeated continuation token", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, handler.Requests.Count);
@@ -306,11 +308,10 @@ public sealed class GcsObjectStoreTests
         using var client = new HttpClient(handler);
         var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => store.DeleteAsync(
-                "sst/object.sst",
-                new CloudObjectDeleteCondition.IfVersion("17"),
-                CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
+            "sst/object.sst",
+            new CloudObjectDeleteCondition.IfVersion("17"),
+            CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -343,25 +344,25 @@ public sealed class GcsObjectStoreTests
         HttpClient client,
         PantsGcsApiStyle apiStyle,
         string prefix) => new(
-            new PantsCloudProviderConfiguration.Gcs(
-                "bucket",
-                "project",
-                new Uri("https://gcs.example.test"),
-                apiStyle,
-                apiStyle == PantsGcsApiStyle.Json
-                    ? new PantsGcsCredentialSource.BearerToken("token")
-                    : new PantsGcsCredentialSource.HmacKey("access", "secret")),
-            prefix,
-            client,
-            TimeSpan.FromSeconds(5));
+        new PantsCloudProviderConfiguration.Gcs(
+            "bucket",
+            "project",
+            new Uri("https://gcs.example.test"),
+            apiStyle,
+            apiStyle == PantsGcsApiStyle.Json
+                ? new PantsGcsCredentialSource.BearerToken("token")
+                : new PantsGcsCredentialSource.HmacKey("access", "secret")),
+        prefix,
+        client,
+        TimeSpan.FromSeconds(5));
 
     static HttpResponseMessage GcsJsonPredicateFailure(string reason) => new(
         HttpStatusCode.PreconditionFailed)
     {
         Content = new StringContent(
             $$"""
-            { "error": { "errors": [{ "reason": "{{reason}}" }] } }
-            """)
+              { "error": { "errors": [{ "reason": "{{reason}}" }] } }
+              """)
     };
 
     static HttpResponseMessage XmlMetadataResponse(
@@ -372,13 +373,13 @@ public sealed class GcsObjectStoreTests
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new ByteArrayContent(new byte[size]),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue(etag) }
+            Headers = { ETag = new EntityTagHeaderValue(etag) }
         };
         response.Headers.TryAddWithoutValidation("x-goog-generation", generation);
         return response;
     }
 
-    private static HttpResponseMessage Response(
+    static HttpResponseMessage Response(
         HttpStatusCode status,
         string content,
         string generation)
@@ -386,13 +387,13 @@ public sealed class GcsObjectStoreTests
         var response = new HttpResponseMessage(status)
         {
             Content = new ByteArrayContent(TestBytes.FromString(content)),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"etag\"") }
+            Headers = { ETag = new EntityTagHeaderValue("\"etag\"") }
         };
         response.Headers.TryAddWithoutValidation("x-goog-generation", generation);
         return response;
     }
 
-    private sealed class RecordingHandler(
+    sealed class RecordingHandler(
         Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
     {
         public List<RecordedRequest> Requests { get; } = [];
@@ -413,7 +414,7 @@ public sealed class GcsObjectStoreTests
         }
     }
 
-    private sealed record RecordedRequest(
+    sealed record RecordedRequest(
         HttpMethod Method,
         Uri Uri,
         string? Authorization,

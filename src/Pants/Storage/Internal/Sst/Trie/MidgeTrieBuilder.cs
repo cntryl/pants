@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Trie;
 
-internal sealed class MidgeTrieBuilder
+sealed class MidgeTrieBuilder
 {
-    private readonly List<MidgeTrieNode> _nodes = [new(0, [], null)];
-    private byte[] _lastKey = [];
+    readonly List<MidgeTrieNode> _nodes = [new(0, [], null)];
+    byte[] _lastKey = [];
 
     public void Add(ReadOnlySpan<byte> key, uint blockId)
     {
@@ -28,25 +28,25 @@ internal sealed class MidgeTrieBuilder
 
     public IReadOnlyList<MidgeTrieNode> Finish() => _nodes;
 
-    private void Insert(ReadOnlySpan<byte> key, uint blockId)
+    void Insert(ReadOnlySpan<byte> key, uint blockId)
     {
         var currentIndex = 0;
         var matchedLength = 0;
         while (matchedLength < key.Length)
         {
-            ReadOnlySpan<byte> remaining = key[matchedLength..];
-            if (!_nodes[currentIndex].TryGetChild(remaining[0], out MidgeTrieEdge edge))
+            var remaining = key[matchedLength..];
+            if (!_nodes[currentIndex].TryGetChild(remaining[0], out var edge))
             {
-                ushort prefixLength = checked((ushort)matchedLength);
-                uint newIndex = checked((uint)_nodes.Count);
+                var prefixLength = checked((ushort)matchedLength);
+                var newIndex = checked((uint)_nodes.Count);
                 _nodes.Add(new MidgeTrieNode(prefixLength, remaining.ToArray(), blockId));
                 _nodes[currentIndex].AddChild(new MidgeTrieEdge(remaining[0], newIndex));
                 return;
             }
 
-            int childIndex = checked((int)edge.ChildIndex);
-            MidgeTrieNode child = _nodes[childIndex];
-            int childMatchLength = CommonPrefixLength(child.KeyDelta, remaining);
+            var childIndex = checked((int)edge.ChildIndex);
+            var child = _nodes[childIndex];
+            var childMatchLength = CommonPrefixLength(child.KeyDelta, remaining);
             if (childMatchLength == child.KeyDelta.Length)
             {
                 matchedLength = checked(matchedLength + childMatchLength);
@@ -61,20 +61,20 @@ internal sealed class MidgeTrieBuilder
         _nodes[currentIndex].BlockId = blockId;
     }
 
-    private void SplitNode(
+    void SplitNode(
         int nodeIndex,
         int splitPosition,
         ReadOnlySpan<byte> remaining,
         uint blockId)
     {
-        MidgeTrieNode existing = _nodes[nodeIndex];
-        byte[] oldSuffix = existing.KeyDelta[splitPosition..];
-        ushort splitPrefixLength = checked((ushort)splitPosition);
+        var existing = _nodes[nodeIndex];
+        var oldSuffix = existing.KeyDelta[splitPosition..];
+        var splitPrefixLength = checked((ushort)splitPosition);
         var intermediate = new MidgeTrieNode(
             existing.PrefixLength,
             existing.KeyDelta[..splitPosition],
             null);
-        uint oldRemainderIndex = checked((uint)_nodes.Count);
+        var oldRemainderIndex = checked((uint)_nodes.Count);
         var oldRemainder = new MidgeTrieNode(
             splitPrefixLength,
             oldSuffix,
@@ -85,14 +85,14 @@ internal sealed class MidgeTrieBuilder
         _nodes.Add(oldRemainder);
         intermediate.AddChild(new MidgeTrieEdge(oldSuffix[0], oldRemainderIndex));
 
-        byte[] newSuffix = remaining[splitPosition..].ToArray();
+        var newSuffix = remaining[splitPosition..].ToArray();
         if (newSuffix.Length == 0)
         {
             intermediate.BlockId = blockId;
         }
         else
         {
-            uint newIndex = checked((uint)_nodes.Count);
+            var newIndex = checked((uint)_nodes.Count);
             _nodes.Add(new MidgeTrieNode(splitPrefixLength, newSuffix, blockId));
             intermediate.AddChild(new MidgeTrieEdge(newSuffix[0], newIndex));
         }
@@ -100,9 +100,9 @@ internal sealed class MidgeTrieBuilder
         _nodes[nodeIndex] = intermediate;
     }
 
-    private static int CommonPrefixLength(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    static int CommonPrefixLength(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
-        int length = Math.Min(left.Length, right.Length);
+        var length = Math.Min(left.Length, right.Length);
         var index = 0;
         while (index < length && left[index] == right[index])
         {

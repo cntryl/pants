@@ -1,27 +1,24 @@
-using System.Diagnostics;
+namespace Cntryl.Pants.Transactions.Internal;
 
-namespace Cntryl.Pants;
-
-internal sealed class PantsTransactionInstance : IPantsTransaction
+sealed class PantsTransactionInstance : IPantsTransaction
 {
-    private const int OperationAccountingOverhead = 64;
-    private const int AssertionAccountingOverhead = 48;
+    const int OperationAccountingOverhead = 64;
+    const int AssertionAccountingOverhead = 48;
+    readonly List<TransactionAssertion> _assertions = [];
+    readonly PantsColumnFamilyHandle _columnFamily;
 
-    private readonly PantsDatabaseInstance _database;
-    private readonly long _transactionId;
-    private readonly PantsColumnFamilyHandle _columnFamily;
-    private readonly PantsTransactionMode _mode;
-    private readonly DatabaseSnapshot _startSnapshot;
-    private readonly DateTimeOffset _snapshotTime;
-    private readonly TransactionSpillStore? _spillStore;
-    private readonly List<TransactionIntentOperation> _intentLog = [];
-    private readonly List<TransactionAssertion> _assertions = [];
-    private readonly object _gate = new();
-    private PantsConflictPolicy _conflictPolicy = PantsConflictPolicy.LastWriteWins;
-    private long _residentIntentBytes;
-    private long _assertionBytes;
-    private ulong _nextOrdinal;
-    private int _state;
+    readonly PantsDatabaseInstance _database;
+    readonly object _gate = new();
+    readonly List<TransactionIntentOperation> _intentLog = [];
+    readonly DateTimeOffset _snapshotTime;
+    readonly TransactionSpillStore? _spillStore;
+    readonly DatabaseSnapshot _startSnapshot;
+    readonly long _transactionId;
+    long _assertionBytes;
+    PantsConflictPolicy _conflictPolicy = PantsConflictPolicy.LastWriteWins;
+    ulong _nextOrdinal;
+    long _residentIntentBytes;
+    int _state;
 
     internal PantsTransactionInstance(
         PantsDatabaseInstance database,
@@ -35,7 +32,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         _database = database;
         _transactionId = transactionId;
         _columnFamily = columnFamily;
-        _mode = mode;
+        Mode = mode;
         _startSnapshot = startSnapshot;
         _snapshotTime = snapshotTime;
         _spillStore = persistentDatabasePath is null
@@ -45,7 +42,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
 
     public IPantsColumnFamily ColumnFamily => _columnFamily;
 
-    public PantsTransactionMode Mode => _mode;
+    public PantsTransactionMode Mode { get; }
 
     public PantsConflictPolicy ConflictPolicy
     {
@@ -76,30 +73,30 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
         TimeSpan? timeToLive = null) =>
-        StagePointWrite(key, value, timeToLive, insertOnly: false);
+        StagePointWrite(key, value, timeToLive, false);
 
     public void Insert(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
         TimeSpan? timeToLive = null) =>
-        StagePointWrite(key, value, timeToLive, insertOnly: true);
+        StagePointWrite(key, value, timeToLive, true);
 
     public void Delete(ReadOnlyMemory<byte> key)
     {
         lock (_gate)
         {
             EnsureWritable();
-            byte[] keyCopy = key.ToArray();
+            var keyCopy = key.ToArray();
             StageIntent(new TransactionIntentOperation(
-                _nextOrdinal,
-                CommitOperationKind.Delete,
-                _columnFamily.Identity,
-                keyCopy,
-                null,
-                null,
-                null,
-                null,
-                false),
+                    _nextOrdinal,
+                    CommitOperationKind.Delete,
+                    _columnFamily.Identity,
+                    keyCopy,
+                    null,
+                    null,
+                    null,
+                    null,
+                    false),
                 checked(keyCopy.Length + OperationAccountingOverhead));
         }
     }
@@ -111,8 +108,8 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureWritable();
-            byte[] startCopy = startInclusive.ToArray();
-            byte[] endCopy = endExclusive.ToArray();
+            var startCopy = startInclusive.ToArray();
+            var endCopy = endExclusive.ToArray();
             if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) > 0)
             {
                 throw PantsException.InvalidArgument(
@@ -120,15 +117,15 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             }
 
             StageIntent(new TransactionIntentOperation(
-                _nextOrdinal,
-                CommitOperationKind.DeleteRange,
-                _columnFamily.Identity,
-                startCopy,
-                endCopy,
-                null,
-                null,
-                null,
-                false),
+                    _nextOrdinal,
+                    CommitOperationKind.DeleteRange,
+                    _columnFamily.Identity,
+                    startCopy,
+                    endCopy,
+                    null,
+                    null,
+                    null,
+                    false),
                 checked(startCopy.Length + endCopy.Length + OperationAccountingOverhead));
         }
     }
@@ -140,8 +137,8 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureWritable();
-            byte[] keyCopy = key.ToArray();
-            byte[]? valueCopy = expectedValue?.ToArray();
+            var keyCopy = key.ToArray();
+            var valueCopy = expectedValue?.ToArray();
             ReserveAssertion(checked(
                 keyCopy.Length +
                 (valueCopy?.Length ?? 0) +
@@ -223,7 +220,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             return new PantsScanInstance(
                 async scanCancellationToken =>
                 {
-                    IScanReadValidator? validator = await _database.CreateScanReadValidatorAsync(
+                    var validator = await _database.CreateScanReadValidatorAsync(
                         _columnFamily.Identity,
                         bounds,
                         scanCancellationToken).ConfigureAwait(false);
@@ -276,7 +273,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
-        if (_mode != PantsTransactionMode.ReadOnly &&
+        if (Mode != PantsTransactionMode.ReadOnly &&
             !_database.IsSupported(options.Durability))
         {
             throw PantsException.Create(
@@ -291,7 +288,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             _state = 1;
         }
 
-        using Activity? activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Commit");
+        using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Commit");
         try
         {
             await _database.CommitTransactionAsync(this, options, cancellationToken)
@@ -328,7 +325,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             _state = 1;
         }
 
-        using Activity? activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Rollback");
+        using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Rollback");
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -387,7 +384,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
             };
             return new CommitPayload(
                 _transactionId,
-                _mode,
+                Mode,
                 _conflictPolicy,
                 _snapshotTime,
                 _startSnapshot,
@@ -396,7 +393,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         }
     }
 
-    private void StagePointWrite(
+    void StagePointWrite(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
         TimeSpan? timeToLive,
@@ -406,18 +403,18 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         {
             EnsureWritable();
             ValidateTimeToLive(timeToLive);
-            byte[] keyCopy = key.ToArray();
-            byte[] valueCopy = value.ToArray();
+            var keyCopy = key.ToArray();
+            var valueCopy = value.ToArray();
             StageIntent(new TransactionIntentOperation(
-                _nextOrdinal,
-                CommitOperationKind.Put,
-                _columnFamily.Identity,
-                keyCopy,
-                null,
-                valueCopy,
-                timeToLive is null or { Ticks: 0 } ? null : timeToLive,
-                null,
-                insertOnly),
+                    _nextOrdinal,
+                    CommitOperationKind.Put,
+                    _columnFamily.Identity,
+                    keyCopy,
+                    null,
+                    valueCopy,
+                    timeToLive is null or { Ticks: 0 } ? null : timeToLive,
+                    null,
+                    insertOnly),
                 checked(keyCopy.Length + valueCopy.Length + OperationAccountingOverhead));
         }
     }
@@ -432,7 +429,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         }
 
         if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) ||
-            !family.TryGetValue(key, out CellState? cell) ||
+            !family.TryGetValue(key, out var cell) ||
             cell.Value is null ||
             cell.IsExpired(_snapshotTime))
         {
@@ -465,7 +462,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
     TransactionIntentReadView CreateIntentReadView() =>
         _spillStore?.CreateReadView(_intentLog) ?? new TransactionIntentReadView(_intentLog);
 
-    private void StageIntent(TransactionIntentOperation operation, long bytes)
+    void StageIntent(TransactionIntentOperation operation, long bytes)
     {
         if (_database.TransactionMemoryPool.TryReserve(bytes))
         {
@@ -503,7 +500,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         _nextOrdinal++;
     }
 
-    private void ReserveAssertion(long bytes)
+    void ReserveAssertion(long bytes)
     {
         if (!_database.TransactionMemoryPool.TryReserve(bytes))
         {
@@ -515,7 +512,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         _assertionBytes = checked(_assertionBytes + bytes);
     }
 
-    private void Finish()
+    void Finish()
     {
         long bytes;
         lock (_gate)
@@ -541,7 +538,7 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         _spillStore?.Dispose();
     }
 
-    private void EnsureActive()
+    void EnsureActive()
     {
         if (_state != 0)
         {
@@ -553,16 +550,16 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
         _database.EnsureOpen();
     }
 
-    private void EnsureWritable()
+    void EnsureWritable()
     {
         EnsureActive();
-        if (_mode == PantsTransactionMode.ReadOnly)
+        if (Mode == PantsTransactionMode.ReadOnly)
         {
             throw PantsException.InvalidArgument("A read-only transaction cannot stage mutations.");
         }
     }
 
-    private static void ValidateTimeToLive(TimeSpan? timeToLive)
+    static void ValidateTimeToLive(TimeSpan? timeToLive)
     {
         if (timeToLive is { } value &&
             (value < TimeSpan.Zero || value.Ticks % TimeSpan.TicksPerSecond != 0))
@@ -571,5 +568,4 @@ internal sealed class PantsTransactionInstance : IPantsTransaction
                 "TTL must be null, zero, or a non-negative whole number of seconds.");
         }
     }
-
 }

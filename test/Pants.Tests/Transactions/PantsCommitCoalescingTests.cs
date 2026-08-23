@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions;
 
 public sealed class PantsCommitCoalescingTests
 {
@@ -9,14 +9,14 @@ public sealed class PantsCommitCoalescingTests
     {
         using var directory = new TemporaryDirectory();
         PantsRuntimeMetrics metrics;
-        await using (IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using (var database = await PantsDatabase.OpenAsync(
                          PantsOpenOptions.Local(directory.Path)
                              .WithBackgroundCompaction(false)))
         {
             var transactions = new List<IPantsTransaction>();
-            for (int index = 0; index < 32; index++)
+            for (var index = 0; index < 32; index++)
             {
-                IPantsTransaction transaction = await database.BeginTransactionAsync(
+                var transaction = await database.BeginTransactionAsync(
                     database.DefaultColumnFamily,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(
@@ -37,14 +37,14 @@ public sealed class PantsCommitCoalescingTests
         Assert.InRange(metrics.WalFsyncCount, 1, 31);
         Assert.True(metrics.DurabilityWaitersFannedOutTotal > 1);
 
-        await using IPantsDatabase reopened = await PantsDatabase.OpenAsync(
+        await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using IPantsTransaction reader = await reopened.BeginTransactionAsync(
+        await using var reader = await reopened.BeginTransactionAsync(
             reopened.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        for (int index = 0; index < 32; index++)
+        for (var index = 0; index < 32; index++)
         {
-            ReadOnlyMemory<byte>? value = await reader.GetAsync(
+            var value = await reader.GetAsync(
                 TestBytes.FromString($"key-{index:D2}"));
             Assert.NotNull(value);
             Assert.Equal($"value-{index:D2}", TestBytes.ToText(value.Value));
@@ -179,7 +179,7 @@ public sealed class PantsCommitCoalescingTests
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
             PantsFailpoint.AfterWalAppend,
-            failAtHit: 2);
+            2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
                          new PantsRuntimeDependencies(failpoints)))
@@ -206,8 +206,7 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in commits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(
-                    () => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
             }
 
             var metrics = await database.GetRuntimeMetricsAsync();
@@ -331,8 +330,7 @@ public sealed class PantsCommitCoalescingTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(
-                () => commit.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
         }
 
         var metrics = await database.GetRuntimeMetricsAsync();
@@ -385,10 +383,8 @@ public sealed class PantsCommitCoalescingTests
         failpoints.ReleaseRuntimeBarrier();
         _ = await barrier.WaitAsync(AssertionTimeout);
 
-        await Assert.ThrowsAsync<PantsNoSpaceException>(
-            () => firstCommit.WaitAsync(AssertionTimeout));
-        await Assert.ThrowsAsync<PantsNoSpaceException>(
-            () => secondCommit.WaitAsync(AssertionTimeout));
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() => firstCommit.WaitAsync(AssertionTimeout));
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() => secondCommit.WaitAsync(AssertionTimeout));
         await bufferedCommit.WaitAsync(AssertionTimeout);
 
         var metrics = await database.GetRuntimeMetricsAsync();
@@ -411,7 +407,7 @@ public sealed class PantsCommitCoalescingTests
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
             PantsFailpoint.AfterWalAppend,
-            failAtHit: 2);
+            2);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
             new PantsRuntimeDependencies(failpoints));
@@ -437,8 +433,7 @@ public sealed class PantsCommitCoalescingTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(
-                () => commit.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
         }
 
         var metrics = await database.GetRuntimeMetricsAsync();
@@ -466,7 +461,7 @@ public sealed class PantsCommitCoalescingTests
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
             PantsFailpoint.AfterWalAppend,
-            failAtHit: 2);
+            2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
                          new PantsRuntimeDependencies(failpoints)))
@@ -493,8 +488,7 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(
-                    () => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
             }
 
             await using var accepted = await database.BeginTransactionAsync(
@@ -525,7 +519,7 @@ public sealed class PantsCommitCoalescingTests
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
             PantsFailpoint.MidWalAppend,
-            failAtHit: 2);
+            2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
                          new PantsRuntimeDependencies(failpoints)))
@@ -552,8 +546,7 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(
-                    () => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
             }
 
             await using var accepted = await database.BeginTransactionAsync(
@@ -655,8 +648,7 @@ public sealed class PantsCommitCoalescingTests
             _ = await barrier.WaitAsync(AssertionTimeout);
 
             await firstCommit.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsInvalidArgumentException>(
-                () => staleCommit.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => staleCommit.WaitAsync(AssertionTimeout));
             await laterCommit.WaitAsync(AssertionTimeout);
         }
 

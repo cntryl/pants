@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed record ScanSnapshotPin(
+sealed record ScanSnapshotPin(
     long SnapshotId,
     long BeginSequence,
     DateTimeOffset StartedAtUtc,

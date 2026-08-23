@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Observability.Internal;
 
 sealed class WalMetricsRecorder(RuntimeTelemetry telemetry)
 {

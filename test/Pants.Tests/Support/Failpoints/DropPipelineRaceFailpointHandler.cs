@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,22 +6,23 @@ sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposa
 
     readonly TaskCompletionSource _dropAdmissionEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly ManualResetEventSlim _dropAdmissionRelease = new(false);
+
     readonly TaskCompletionSource _flushPublicationEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _dropAdmissionRelease = new(initialState: false);
-    readonly ManualResetEventSlim _flushPublicationRelease = new(initialState: false);
+
+    readonly ManualResetEventSlim _flushPublicationRelease = new(false);
     int _dropAdmissionHit;
     int _flushPublicationHit;
 
-    public async Task WaitForDropAdmissionAsync(TimeSpan timeout) =>
-        await _dropAdmissionEntered.Task.WaitAsync(timeout);
-
-    public async Task WaitForFlushPublicationAsync(TimeSpan timeout) =>
-        await _flushPublicationEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseDropAdmission() => _dropAdmissionRelease.Set();
-
-    public void ReleaseFlushPublication() => _flushPublicationRelease.Set();
+    public void Dispose()
+    {
+        _dropAdmissionRelease.Set();
+        _flushPublicationRelease.Set();
+        _dropAdmissionRelease.Dispose();
+        _flushPublicationRelease.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -38,13 +39,15 @@ sealed class DropPipelineRaceFailpointHandler : IPantsFailpointHandler, IDisposa
         }
     }
 
-    public void Dispose()
-    {
-        _dropAdmissionRelease.Set();
-        _flushPublicationRelease.Set();
-        _dropAdmissionRelease.Dispose();
-        _flushPublicationRelease.Dispose();
-    }
+    public async Task WaitForDropAdmissionAsync(TimeSpan timeout) =>
+        await _dropAdmissionEntered.Task.WaitAsync(timeout);
+
+    public async Task WaitForFlushPublicationAsync(TimeSpan timeout) =>
+        await _flushPublicationEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseDropAdmission() => _dropAdmissionRelease.Set();
+
+    public void ReleaseFlushPublication() => _flushPublicationRelease.Set();
 
     static void Block(
         TaskCompletionSource entered,

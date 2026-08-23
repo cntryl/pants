@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage;
 
 public abstract record PantsStorageConfiguration
 {
-    private PantsStorageConfiguration()
+    PantsStorageConfiguration()
     {
     }
 

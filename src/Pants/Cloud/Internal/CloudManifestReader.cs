@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 static class CloudManifestReader
 {
@@ -47,7 +47,7 @@ static class CloudManifestReader
         try
         {
             return JsonSerializer.Deserialize<MidgeManifest>(bytes, JsonOptions) ??
-                throw new JsonException("Cloud manifest is empty.");
+                   throw new JsonException("Cloud manifest is empty.");
         }
         catch (JsonException exception)
         {

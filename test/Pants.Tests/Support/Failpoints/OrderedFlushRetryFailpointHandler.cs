@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class OrderedFlushRetryFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,21 +6,22 @@ sealed class OrderedFlushRetryFailpointHandler : IPantsFailpointHandler, IDispos
 
     readonly TaskCompletionSource _firstEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly ManualResetEventSlim _releaseFirst = new(false);
+    readonly ManualResetEventSlim _releaseSecond = new(false);
+
     readonly TaskCompletionSource _secondEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _releaseFirst = new(initialState: false);
-    readonly ManualResetEventSlim _releaseSecond = new(initialState: false);
+
     int _hits;
 
-    public async Task WaitForFirstAsync(TimeSpan timeout) =>
-        await _firstEntered.Task.WaitAsync(timeout);
-
-    public async Task WaitForSecondAsync(TimeSpan timeout) =>
-        await _secondEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseFirst() => _releaseFirst.Set();
-
-    public void ReleaseSecond() => _releaseSecond.Set();
+    public void Dispose()
+    {
+        _releaseFirst.Set();
+        _releaseSecond.Set();
+        _releaseFirst.Dispose();
+        _releaseSecond.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -51,11 +52,13 @@ sealed class OrderedFlushRetryFailpointHandler : IPantsFailpointHandler, IDispos
         }
     }
 
-    public void Dispose()
-    {
-        _releaseFirst.Set();
-        _releaseSecond.Set();
-        _releaseFirst.Dispose();
-        _releaseSecond.Dispose();
-    }
+    public async Task WaitForFirstAsync(TimeSpan timeout) =>
+        await _firstEntered.Task.WaitAsync(timeout);
+
+    public async Task WaitForSecondAsync(TimeSpan timeout) =>
+        await _secondEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseFirst() => _releaseFirst.Set();
+
+    public void ReleaseSecond() => _releaseSecond.Set();
 }

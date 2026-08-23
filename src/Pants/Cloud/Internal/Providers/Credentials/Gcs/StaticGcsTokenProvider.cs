@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal sealed class StaticGcsTokenProvider(string token) : IGcsTokenProvider
+sealed class StaticGcsTokenProvider(string token) : IGcsTokenProvider
 {
     readonly string _token = string.IsNullOrWhiteSpace(token)
         ? throw new PantsInvalidArgumentException("GCS bearer token must not be empty.")

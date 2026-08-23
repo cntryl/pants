@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
 sealed class WalCommitRollbackException(
     Exception commitFailure,

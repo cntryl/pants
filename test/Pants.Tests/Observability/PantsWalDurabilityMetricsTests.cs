@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsWalDurabilityMetricsTests
 {
@@ -83,8 +83,7 @@ public sealed class PantsWalDurabilityMetricsTests
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("failed"u8.ToArray(), "value"u8.ToArray());
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
         var metrics = await database.GetRuntimeMetricsAsync();
         Assert.Equal(before.WalAppendCount + 1, metrics.WalAppendCount);
@@ -200,10 +199,10 @@ public sealed class PantsWalDurabilityMetricsTests
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "wal-flush-metrics/")
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
-                EventualFlushSegmentGap: long.MaxValue,
-                WalSealMinimumSegmentBytes: long.MaxValue,
-                WalSealMaximumFlushDelay: TimeSpan.FromHours(1),
-                WalSealMaximumPendingWrites: 1))
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
         var before = await database.GetRuntimeMetricsAsync();
@@ -237,8 +236,8 @@ public sealed class PantsWalDurabilityMetricsTests
                 database.DefaultColumnFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("strict-failure"u8.ToArray(), "value"u8.ToArray());
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
             await failpoints.WaitForFailureAsync(AssertionTimeout);
 
             await using var reader = await database.BeginTransactionAsync(

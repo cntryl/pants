@@ -1,12 +1,12 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class SystemPantsClock : IPantsClock
+sealed class SystemPantsClock : IPantsClock
 {
-    public static SystemPantsClock Instance { get; } = new();
-
-    private SystemPantsClock()
+    SystemPantsClock()
     {
     }
+
+    public static SystemPantsClock Instance { get; } = new();
 
     public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
 }

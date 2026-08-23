@@ -1,6 +1,7 @@
 using System.Globalization;
+using Cntryl.Pants.Observability;
 
-namespace Pants.CompatibilityHarness.Internal;
+namespace Cntryl.Pants.CompatibilityHarness.Internal;
 
 internal static class FixtureRefreshRunner
 {

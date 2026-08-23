@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using ZstdSharp;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Compression;
 
-internal static class MidgeSstBlockCodec
+static class MidgeSstBlockCodec
 {
     internal const int TrailerSize = 5;
 
@@ -120,7 +120,7 @@ internal static class MidgeSstBlockCodec
         foreach (var candidate in candidates)
         {
             if (!CompressionQualifies(data.Length, candidate.Payload.Length) ||
-                best is { } current && candidate.Payload.Length >= current.Payload.Length)
+                (best is { } current && candidate.Payload.Length >= current.Payload.Length))
             {
                 continue;
             }
@@ -141,7 +141,7 @@ internal static class MidgeSstBlockCodec
         var threshold = (double)AdaptiveMaximumRatio;
         var thresholdBits = BitConverter.SingleToInt32Bits(AdaptiveMaximumRatio);
         var next = BitConverter.Int32BitsToSingle(checked(thresholdBits + 1));
-        threshold += ((double)next - threshold) / 2D;
+        threshold += (next - threshold) / 2D;
         return (double)compressedSize / originalSize <= threshold;
     }
 

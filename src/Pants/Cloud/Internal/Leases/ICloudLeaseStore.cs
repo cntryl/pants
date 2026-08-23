@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Leases;
 
-internal interface ICloudLeaseStore
+interface ICloudLeaseStore
 {
     ValueTask<CloudLeaseSnapshot?> ReadAsync(CancellationToken cancellationToken);
 

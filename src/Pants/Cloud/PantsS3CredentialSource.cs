@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud;
 
 public abstract record PantsS3CredentialSource
 {

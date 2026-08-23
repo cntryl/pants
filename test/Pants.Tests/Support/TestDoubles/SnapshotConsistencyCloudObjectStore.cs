@@ -1,31 +1,17 @@
-namespace Cntryl.Pants.Tests;
+using System.Globalization;
+
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
 {
     readonly Lock _gate = new();
+
     readonly Dictionary<string, (byte[] Data, long Version)> _objects =
         new(StringComparer.Ordinal);
+
     int _manifestSnapshotGetCount;
 
     public Func<string, int, CancellationToken, ValueTask>? BeforeGetAsync { get; set; }
-
-    public void Seed(string objectKey, ReadOnlySpan<byte> data)
-    {
-        lock (_gate)
-        {
-            _objects[objectKey] = (data.ToArray(), 1);
-        }
-    }
-
-    public byte[]? GetData(string objectKey)
-    {
-        lock (_gate)
-        {
-            return _objects.TryGetValue(objectKey, out var value)
-                ? value.Data.ToArray()
-                : null;
-        }
-    }
 
     public async ValueTask<CloudObject?> GetAsync(
         string objectKey,
@@ -62,8 +48,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
                     ? new CloudObjectMetadata(
                         checked((ulong)value.Data.Length),
                         FormatVersion(value.Version),
-                        Generation: null,
-                        LastModifiedUtc: null)
+                        null,
+                        null)
                     : null);
         }
     }
@@ -114,7 +100,7 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
                     .Order(StringComparer.Ordinal)
                     .ToArray()
                 : [];
-            return ValueTask.FromResult(new CloudObjectListPage(keys, continuationToken: null));
+            return ValueTask.FromResult(new CloudObjectListPage(keys, null));
         }
     }
 
@@ -144,6 +130,24 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
         }
     }
 
+    public void Seed(string objectKey, ReadOnlySpan<byte> data)
+    {
+        lock (_gate)
+        {
+            _objects[objectKey] = (data.ToArray(), 1);
+        }
+    }
+
+    public byte[]? GetData(string objectKey)
+    {
+        lock (_gate)
+        {
+            return _objects.TryGetValue(objectKey, out var value)
+                ? value.Data.ToArray()
+                : null;
+        }
+    }
+
     static string FormatVersion(long version) =>
-        version.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        version.ToString(CultureInfo.InvariantCulture);
 }

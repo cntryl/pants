@@ -1,13 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsStorageVerificationHardeningTests
 {
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
     static readonly TimeSpan VerifierSafetyTimeout = TimeSpan.FromSeconds(10);
+
     static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -64,8 +65,9 @@ public sealed class PantsStorageVerificationHardeningTests
         var intent = $"[{intentEntry}]";
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "intent_log.json"), intent);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Contains(unsafeName, exception.Message, StringComparison.Ordinal);
     }
@@ -80,8 +82,8 @@ public sealed class PantsStorageVerificationHardeningTests
             directory.Path,
             file => file.Name = unsafeName);
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
     }
 
     [Fact]
@@ -92,8 +94,8 @@ public sealed class PantsStorageVerificationHardeningTests
             directory.Path,
             file => file.ContentCrc32C = null);
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
     }
 
     [Fact]
@@ -106,8 +108,8 @@ public sealed class PantsStorageVerificationHardeningTests
                 .Select(static value => (int)value)
                 .ToArray());
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
     }
 
     [Fact]
@@ -118,8 +120,8 @@ public sealed class PantsStorageVerificationHardeningTests
             directory.Path,
             file => file.LargestSequence = 8);
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
     }
 
     [Fact]
@@ -177,7 +179,7 @@ public sealed class PantsStorageVerificationHardeningTests
     public async Task ShouldHonorCallerTimeoutGivenVerifierBlocksBeforeReturning()
     {
         using var directory = new TemporaryDirectory();
-        using var release = new ManualResetEventSlim(initialState: false);
+        using var release = new ManualResetEventSlim(false);
         var barrierAcquired = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -208,10 +210,9 @@ public sealed class PantsStorageVerificationHardeningTests
             await barrierAcquired.Task.WaitAsync(AssertionTimeout);
             await started.Task.WaitAsync(AssertionTimeout);
             Assert.False(verification.IsCompleted);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => verification.WaitAsync(AssertionTimeout));
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                database.CreateColumnFamilyAsync("still-pinned").AsTask());
         }
         finally
         {
@@ -275,7 +276,7 @@ public sealed class PantsStorageVerificationHardeningTests
                 PantsEngineHealth.Healthy,
                 []);
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: verifier));
         var verification = database
@@ -284,10 +285,8 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.CreateColumnFamilyAsync("blocked").AsTask());
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.SetBackgroundCompactionAsync(false).AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() => database.CreateColumnFamilyAsync("blocked").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() => database.SetBackgroundCompactionAsync(false).AsTask());
         }
         finally
         {
@@ -322,12 +321,11 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => verification.WaitAsync(AssertionTimeout));
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                database.CreateColumnFamilyAsync("still-pinned").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
         finally
         {
@@ -365,8 +363,8 @@ public sealed class PantsStorageVerificationHardeningTests
             await started.Task.WaitAsync(AssertionTimeout);
             cancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verification);
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.CreateColumnFamilyAsync("still-pinned").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                database.CreateColumnFamilyAsync("still-pinned").AsTask());
         }
         finally
         {
@@ -389,7 +387,7 @@ public sealed class PantsStorageVerificationHardeningTests
             await release.Task;
             return HealthyReport();
         };
-        await using IPantsDatabase database = await PantsDatabase.OpenForTestingAsync(
+        await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(storageVerifier: verifier));
         var firstVerification = database
@@ -399,11 +397,10 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => database
-                    .VerifyStorageAsync(TimeSpan.FromMilliseconds(25))
-                    .AsTask()
-                    .WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => database
+                .VerifyStorageAsync(TimeSpan.FromMilliseconds(25))
+                .AsTask()
+                .WaitAsync(AssertionTimeout));
             Assert.Equal(1, Volatile.Read(ref invocations));
         }
         finally
@@ -445,8 +442,7 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await responseStarted.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => verification.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
             Assert.Equal(0, Volatile.Read(ref invocations));
         }
         finally
@@ -468,8 +464,7 @@ public sealed class PantsStorageVerificationHardeningTests
             PantsOpenOptions.Local(directory.Path),
             new PantsRuntimeDependencies(failpoint));
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask());
 
         Assert.Equal("barrier-released", (await database
             .CreateColumnFamilyAsync("barrier-released")).Name);
@@ -495,14 +490,12 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => verification.WaitAsync(AssertionTimeout));
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask());
-            await Assert.ThrowsAsync<PantsBusyException>(
-                () => database.CreateColumnFamilyAsync("closing").AsTask());
-            await Assert.ThrowsAsync<PantsLeaseHeldException>(
-                () => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() => database.CreateColumnFamilyAsync("closing").AsTask());
+            await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
+                PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
         }
         finally
         {
@@ -535,8 +528,7 @@ public sealed class PantsStorageVerificationHardeningTests
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(
-                () => verification.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
             var shortShutdown = database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask();
             longShutdown = database.ShutdownAsync(TimeSpan.FromSeconds(2)).AsTask();
             await Assert.ThrowsAsync<PantsTimeoutException>(() => shortShutdown);

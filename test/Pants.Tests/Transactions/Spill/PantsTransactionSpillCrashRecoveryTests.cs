@@ -1,8 +1,10 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsTransactionSpillCrashRecoveryTests
@@ -51,7 +53,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
-        throw new Xunit.Sdk.XunitException(
+        throw new XunitException(
             "The child commit returned without aborting before its commit marker.");
     }
 
@@ -116,8 +118,8 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         var start = new ProcessStartInfo
         {
             FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-            Environment.ProcessPath ??
-                "dotnet",
+                       Environment.ProcessPath ??
+                       "dotnet",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -133,7 +135,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         start.Environment[DatabasePathEnvironmentVariable] = databasePath;
         start.Environment[TriggerSentinelEnvironmentVariable] = sentinelPath;
         var child = Process.Start(start) ??
-            throw new InvalidOperationException("Could not start the transaction spill crash child.");
+                    throw new InvalidOperationException("Could not start the transaction spill crash child.");
         return (
             child,
             child.StandardOutput.ReadToEndAsync(),
@@ -176,7 +178,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             {
                 if (child.HasExited)
                 {
-                    throw new Xunit.Sdk.XunitException(
+                    throw new XunitException(
                         $"Transaction spill crash child exited with code {child.ExitCode} before readiness.");
                 }
 
@@ -185,7 +187,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Transaction spill crash child did not become ready within 30 seconds.",
                 exception);
         }
@@ -225,7 +227,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (exitTimeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Transaction spill crash child did not exit within 10 seconds after readiness.",
                 exception);
         }
@@ -245,7 +247,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Transaction spill crash process tree did not exit within the cleanup deadline.",
                 exception);
         }
@@ -281,7 +283,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 "Transaction spill crash child did not release the writer lock within 30 seconds.",
                 exception);
         }
@@ -293,14 +295,14 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
+                process.Kill(true);
             }
         }
         catch (InvalidOperationException)
         {
             // The process exited after HasExited was observed.
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
             // The bounded timeout remains the primary failure.
         }

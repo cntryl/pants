@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class NullPantsFailpointHandler : IPantsFailpointHandler
+sealed class NullPantsFailpointHandler : IPantsFailpointHandler
 {
-    private NullPantsFailpointHandler()
+    NullPantsFailpointHandler()
     {
     }
 

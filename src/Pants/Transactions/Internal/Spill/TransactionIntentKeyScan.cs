@@ -1,14 +1,16 @@
-namespace Cntryl.Pants;
+using System.Collections;
 
-internal sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
+namespace Cntryl.Pants.Transactions.Internal.Spill;
+
+sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
 {
-    readonly IReadOnlyList<IEnumerator<byte[]>> _sources;
+    readonly PantsScanDirection _direction;
     readonly byte[]?[] _heads;
     readonly bool[] _needsAdvance;
-    readonly PantsScanDirection _direction;
-    bool _primed;
-    bool _exhausted;
+    readonly IReadOnlyList<IEnumerator<byte[]>> _sources;
     int _disposed;
+    bool _exhausted;
+    bool _primed;
 
     public TransactionIntentKeyScan(
         IReadOnlyList<IEnumerator<byte[]>> sources,
@@ -22,7 +24,7 @@ internal sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
 
     public byte[] Current { get; private set; } = [];
 
-    object System.Collections.IEnumerator.Current => Current;
+    object IEnumerator.Current => Current;
 
     public bool MoveNext()
     {

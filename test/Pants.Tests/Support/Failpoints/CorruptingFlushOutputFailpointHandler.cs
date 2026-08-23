@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CorruptingFlushOutputFailpointHandler(string databasePath) : IPantsFailpointHandler
 {
@@ -24,6 +24,6 @@ sealed class CorruptingFlushOutputFailpointHandler(string databasePath) : IPants
         Assert.NotEqual(-1, original);
         stream.Position = 0;
         stream.WriteByte((byte)(original ^ 0xff));
-        stream.Flush(flushToDisk: true);
+        stream.Flush(true);
     }
 }

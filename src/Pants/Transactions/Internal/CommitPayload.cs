@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class CommitPayload
+sealed class CommitPayload
 {
     public CommitPayload(
         long transactionId,

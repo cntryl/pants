@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class MidgeWireGoldenTests
 {
@@ -97,8 +97,7 @@ public sealed class MidgeWireGoldenTests
         using (var handle = File.OpenHandle(
                    path,
                    FileMode.CreateNew,
-                   FileAccess.Write,
-                   FileShare.Read))
+                   FileAccess.Write))
         {
             MidgeWalCodec.AppendFrame(handle, 0, MidgeWalCodec.EncodeRecord(record));
         }

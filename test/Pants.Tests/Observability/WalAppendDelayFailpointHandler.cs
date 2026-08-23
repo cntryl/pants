@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 sealed class WalAppendDelayFailpointHandler(TimeSpan delay) : IPantsFailpointHandler
 {

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class PantsWalVerificationTailParityTests
 {
@@ -10,7 +10,7 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldAcceptIncompleteFinalActiveWalTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateWalAsync(directory.Path, commitCount: 2);
+        var walPath = await CreateWalAsync(directory.Path, 2);
         await TruncateFinalFrameAsync(walPath);
         var truncatedLength = new FileInfo(walPath).Length;
 
@@ -25,7 +25,7 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldAcceptZeroFilledFinalActiveWalTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateWalAsync(directory.Path, commitCount: 1);
+        var walPath = await CreateWalAsync(directory.Path, 1);
         await AppendZeroTailAsync(walPath);
         var preallocatedLength = new FileInfo(walPath).Length;
 
@@ -40,11 +40,12 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldRejectIncompleteFinalSealedWalTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateSealedWalAsync(directory.Path, commitCount: 2);
+        var walPath = await CreateSealedWalAsync(directory.Path, 2);
         await TruncateFinalFrameAsync(walPath);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -53,11 +54,12 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldRejectZeroFilledFinalSealedWalTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateSealedWalAsync(directory.Path, commitCount: 1);
+        var walPath = await CreateSealedWalAsync(directory.Path, 1);
         await AppendZeroTailAsync(walPath);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -66,13 +68,14 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldRejectChecksumCorruptionBeforeIncompleteActiveTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateWalAsync(directory.Path, commitCount: 2);
+        var walPath = await CreateWalAsync(directory.Path, 2);
         var bytes = await File.ReadAllBytesAsync(walPath);
         bytes[sizeof(uint)] ^= byte.MaxValue;
         await File.WriteAllBytesAsync(walPath, bytes[..^3]);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -81,15 +84,16 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldRejectStructuralCorruptionBeforeIncompleteActiveTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateWalAsync(directory.Path, commitCount: 2);
+        var walPath = await CreateWalAsync(directory.Path, 2);
         var bytes = await File.ReadAllBytesAsync(walPath);
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes,
             MidgeDiskFormat.WalMaximumRecordBytes + 1U);
         await File.WriteAllBytesAsync(walPath, bytes[..^3]);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -98,17 +102,18 @@ public sealed class PantsWalVerificationTailParityTests
     public async Task ShouldRejectCorruptedLengthHidingVerifiedActiveWalSuffixWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();
-        var walPath = await CreateWalAsync(directory.Path, commitCount: 3);
+        var walPath = await CreateWalAsync(directory.Path, 3);
         var bytes = await File.ReadAllBytesAsync(walPath);
         var firstPayloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
-        var secondFrameOffset = (2 * sizeof(uint)) + firstPayloadLength;
+        var secondFrameOffset = 2 * sizeof(uint) + firstPayloadLength;
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes.AsSpan(secondFrameOffset),
             checked((uint)bytes.Length));
         await File.WriteAllBytesAsync(walPath, bytes);
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }

@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Verification;
 
-internal delegate ValueTask PantsVerificationBarrierResponseDelegate();
+delegate ValueTask PantsVerificationBarrierResponseDelegate();

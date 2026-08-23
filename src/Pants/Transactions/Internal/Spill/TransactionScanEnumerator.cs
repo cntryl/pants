@@ -1,19 +1,21 @@
-namespace Cntryl.Pants;
+using System.Collections;
 
-internal sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
+namespace Cntryl.Pants.Transactions.Internal.Spill;
+
+sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
 {
-    readonly SortedDictionary<byte[], CellState> _snapshot;
-    readonly DateTimeOffset _snapshotTime;
-    readonly TransactionIntentReadView _intents;
-    readonly IEnumerator<byte[]> _snapshotKeys;
-    readonly IEnumerator<byte[]> _intentKeys;
     readonly PantsScanDirection _direction;
-    byte[]? _snapshotHead;
-    byte[]? _intentHead;
-    bool _initialized;
-    bool _advanceSnapshot;
+    readonly IEnumerator<byte[]> _intentKeys;
+    readonly TransactionIntentReadView _intents;
+    readonly SortedDictionary<byte[], CellState> _snapshot;
+    readonly IEnumerator<byte[]> _snapshotKeys;
+    readonly DateTimeOffset _snapshotTime;
     bool _advanceIntent;
+    bool _advanceSnapshot;
     int _disposed;
+    bool _initialized;
+    byte[]? _intentHead;
+    byte[]? _snapshotHead;
 
     public TransactionScanEnumerator(
         DatabaseSnapshot snapshot,
@@ -47,7 +49,7 @@ internal sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
 
     public PantsEntry Current { get; private set; }
 
-    object System.Collections.IEnumerator.Current => Current;
+    object IEnumerator.Current => Current;
 
     public bool MoveNext()
     {

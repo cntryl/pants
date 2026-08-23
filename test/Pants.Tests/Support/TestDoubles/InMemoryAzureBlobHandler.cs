@@ -3,23 +3,24 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Xml.Linq;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
 sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 {
-    readonly Lock _gate = new();
-    readonly Dictionary<string, (byte[] Data, long Version)> _objects = new(StringComparer.Ordinal);
     readonly TaskCompletionSource _failedWalWrite =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    int _failedWalWriteAttempts;
-    bool _failWalWrites;
-    bool _failMetadataWrites;
-    bool _acknowledgeWalWritesWithoutPersisting;
-    bool _acknowledgeWalCatalogWritesWithoutPersisting;
-    bool _acknowledgeSstWritesWithoutPersisting;
+
+    readonly Lock _gate = new();
+    readonly Dictionary<string, (byte[] Data, long Version)> _objects = new(StringComparer.Ordinal);
     bool _acknowledgeMetadataWritesWithoutPersisting;
-    bool _failSstList;
+    bool _acknowledgeSstWritesWithoutPersisting;
+    bool _acknowledgeWalCatalogWritesWithoutPersisting;
+    bool _acknowledgeWalWritesWithoutPersisting;
+    bool _failMetadataWrites;
     bool _failSstDeletes;
+    bool _failSstList;
+    bool _failWalWrites;
+    int _failedWalWriteAttempts;
     int _sstDeleteAttempts;
     int _unconditionalSstDeleteAttempts;
 
@@ -106,7 +107,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         {
             var value = _objects.Single(pair =>
                 pair.Key.Contains(pathFragment, StringComparison.Ordinal)).Value;
-            return System.Text.Encoding.UTF8.GetString(value.Data);
+            return Encoding.UTF8.GetString(value.Data);
         }
     }
 
@@ -118,7 +119,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 path.Contains(pathFragment, StringComparison.Ordinal));
             var current = _objects[key];
             _objects[key] = (
-                System.Text.Encoding.UTF8.GetBytes(value),
+                Encoding.UTF8.GetBytes(value),
                 current.Version + 1);
         }
     }

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime.Cloud;
 
 public sealed class CloudWorkSchedulerTests
 {
@@ -7,7 +7,7 @@ public sealed class CloudWorkSchedulerTests
     [Fact]
     public async Task ShouldCoalesceSignalsGivenCloudWorkIsAlreadyExecuting()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         var firstStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(
@@ -48,7 +48,7 @@ public sealed class CloudWorkSchedulerTests
     [Fact]
     public async Task ShouldRetryAutonomouslyGivenCloudWorkFails()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         var firstAttempted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCompleted = new TaskCompletionSource(
@@ -79,7 +79,7 @@ public sealed class CloudWorkSchedulerTests
     [Fact]
     public async Task ShouldCancelRetriedWorkGivenSchedulerIsDisposed()
     {
-        await using var worker = new RuntimeWorker(capacity: 1);
+        await using var worker = new RuntimeWorker(1);
         var secondStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCanceled = new TaskCompletionSource(

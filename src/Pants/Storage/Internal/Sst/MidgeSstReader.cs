@@ -1,17 +1,17 @@
 using Microsoft.Win32.SafeHandles;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed class MidgeSstReader : IDisposable
+sealed class MidgeSstReader : IDisposable
 {
-    private readonly SafeFileHandle _file;
-    private readonly long _fileLength;
-    private readonly (byte[] FirstKey, MidgeSstBlockHandle Handle)[] _index;
-    private readonly byte[]? _blockBlooms;
-    private readonly MidgeTrieIndex? _trieIndex;
-    private int _disposed;
+    readonly byte[]? _blockBlooms;
+    readonly SafeFileHandle _file;
+    readonly long _fileLength;
+    readonly (byte[] FirstKey, MidgeSstBlockHandle Handle)[] _index;
+    readonly MidgeTrieIndex? _trieIndex;
+    int _disposed;
 
-    private MidgeSstReader(
+    MidgeSstReader(
         SafeFileHandle file,
         long fileLength,
         (byte[] FirstKey, MidgeSstBlockHandle Handle)[] index,
@@ -26,6 +26,16 @@ internal sealed class MidgeSstReader : IDisposable
     }
 
     public int DataBlockCount => _index.Length;
+
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _file.Dispose();
+        }
+    }
 
     public byte[] GetFirstKey(int blockIndex)
     {
@@ -49,8 +59,6 @@ internal sealed class MidgeSstReader : IDisposable
         return _index[blockIndex].Handle;
     }
 
-    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
-
     public static MidgeSstReader Open(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -63,30 +71,30 @@ internal sealed class MidgeSstReader : IDisposable
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete,
                 FileOptions.RandomAccess);
-            long fileLength = RandomAccess.GetLength(file);
+            var fileLength = RandomAccess.GetLength(file);
             if (fileLength < MidgeDiskFormat.SstFooterSize)
             {
                 throw new PantsStorageException("SST is shorter than its V4 footer.");
             }
 
-            long footerOffset = fileLength - MidgeDiskFormat.SstFooterSize;
-            byte[] footer = PositionalFile.ReadExactly(
+            var footerOffset = fileLength - MidgeDiskFormat.SstFooterSize;
+            var footer = PositionalFile.ReadExactly(
                 file,
                 footerOffset,
                 MidgeDiskFormat.SstFooterSize);
             MidgeSstCodec.ValidateFooter(footer);
-            MidgeSstBlockHandle metadataHandle = MidgeSstCodec.ReadHandle(footer, 0);
-            MidgeSstBlockHandle indexHandle = MidgeSstCodec.ReadHandle(footer, 16);
-            MidgeSstBlockHandle? trieHandle = MidgeSstCodec.ReadOptionalHandle(footer, 32, "trie");
-            MidgeSstBlockHandle? bloomHandle = MidgeSstCodec.ReadOptionalHandle(
+            var metadataHandle = MidgeSstCodec.ReadHandle(footer, 0);
+            var indexHandle = MidgeSstCodec.ReadHandle(footer, 16);
+            var trieHandle = MidgeSstCodec.ReadOptionalHandle(footer, 32, "trie");
+            var bloomHandle = MidgeSstCodec.ReadOptionalHandle(
                 footer,
                 48,
                 "block bloom");
-            MidgeSstMetadata metadata = MidgeSstCodec.DecodeMetadata(
+            var metadata = MidgeSstCodec.DecodeMetadata(
                 MidgeSstCodec.ReadBlock(file, fileLength, metadataHandle));
-            (byte[] FirstKey, MidgeSstBlockHandle Handle)[] index = MidgeSstCodec.DecodeIndex(
+            var index = MidgeSstCodec.DecodeIndex(
                 MidgeSstCodec.ReadBlock(file, fileLength, indexHandle)).ToArray();
-            byte[]? blockBlooms = bloomHandle is { } bloom
+            var blockBlooms = bloomHandle is { } bloom
                 ? MidgeSstCodec.ReadBlock(file, fileLength, bloom)
                 : null;
             if (blockBlooms is not null)
@@ -94,10 +102,10 @@ internal sealed class MidgeSstReader : IDisposable
                 MidgeSstCodec.ValidateBlockBlooms(blockBlooms, index.Length);
             }
 
-            byte[]? trie = trieHandle is { } trieBlock
+            var trie = trieHandle is { } trieBlock
                 ? MidgeSstCodec.ReadBlock(file, fileLength, trieBlock)
                 : null;
-            MidgeTrieIndex? trieIndex = MidgeSstCodec.DecodeTrieIndex(
+            var trieIndex = MidgeSstCodec.DecodeTrieIndex(
                 metadata.IndexKind,
                 trie,
                 index);
@@ -135,8 +143,8 @@ internal sealed class MidgeSstReader : IDisposable
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
-        int trieCandidate = _trieIndex?.FindFloorBlock(key) ?? -1;
-        int candidate = trieCandidate >= 0
+        var trieCandidate = _trieIndex?.FindFloorBlock(key) ?? -1;
+        var candidate = trieCandidate >= 0
             ? trieCandidate
             : MidgeSstCodec.FindFloorBlock(_index, key);
         if (candidate < 0)
@@ -144,9 +152,9 @@ internal sealed class MidgeSstReader : IDisposable
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
-        bool mightContain = MidgeSstCodec.BloomMightContain(_blockBlooms, candidate, key);
-        MidgeSstBlockHandle candidateHandle = _index[candidate].Handle;
-        int blockSizeBytes = checked((int)candidateHandle.Size);
+        var mightContain = MidgeSstCodec.BloomMightContain(_blockBlooms, candidate, key);
+        var candidateHandle = _index[candidate].Handle;
+        var blockSizeBytes = checked((int)candidateHandle.Size);
         return mightContain
             ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
             : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
@@ -163,13 +171,5 @@ internal sealed class MidgeSstReader : IDisposable
         return MidgeSstCodec.ReadBlock(_file, _fileLength, _index[blockIndex].Handle);
     }
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            _file.Dispose();
-        }
-    }
-
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposed, this);
+    void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposed, this);
 }

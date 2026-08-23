@@ -1,11 +1,12 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class CompatibilityFixtureMetadataTests
 {
     const string PinnedMidgeSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
+
     const string PinnedMidgeDriverLockSha256 =
         "e1740e05b3ff66b7744432f7346b8c585d8c437d9d1b69cb7e405fea836b046b";
 

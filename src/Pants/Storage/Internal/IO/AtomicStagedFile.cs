@@ -2,9 +2,9 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.IO;
 
-internal static class AtomicStagedFile
+static class AtomicStagedFile
 {
     public static void Write(
         string path,
@@ -13,17 +13,17 @@ internal static class AtomicStagedFile
         Action? beforePublish = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        string fullPath = Path.GetFullPath(path);
-        string directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath) ??
+                        throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
         Directory.CreateDirectory(directory);
-        string temporary = Path.Combine(
+        var temporary = Path.Combine(
             directory,
             $".{Path.GetFileName(fullPath)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
 
         try
         {
-            using (Microsoft.Win32.SafeHandles.SafeFileHandle handle = File.OpenHandle(
+            using (var handle = File.OpenHandle(
                        temporary,
                        FileMode.CreateNew,
                        FileAccess.Write,
@@ -65,7 +65,7 @@ internal static class AtomicStagedFile
 
         File.Delete(fullPath);
         var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
+                        throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
         FlushParentDirectory(directory);
     }
 
@@ -75,7 +75,7 @@ internal static class AtomicStagedFile
         FlushParentDirectory(Path.GetFullPath(directory));
     }
 
-    private static void FlushParentDirectory(string directory)
+    static void FlushParentDirectory(string directory)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -83,7 +83,7 @@ internal static class AtomicStagedFile
             return;
         }
 
-        nint directoryUtf8 = Marshal.StringToCoTaskMemUTF8(directory);
+        var directoryUtf8 = Marshal.StringToCoTaskMemUTF8(directory);
         int descriptor;
         int openError;
         try
@@ -105,7 +105,7 @@ internal static class AtomicStagedFile
         {
             if (Fsync(descriptor) != 0)
             {
-                int fsyncError = Marshal.GetLastPInvokeError();
+                var fsyncError = Marshal.GetLastPInvokeError();
                 throw CreateUnixIOException("fsync", directory, fsyncError);
             }
         }
@@ -150,7 +150,7 @@ internal static class AtomicStagedFile
         }
     }
 
-    private static IOException CreateUnixIOException(string operation, string path, int error) =>
+    static IOException CreateUnixIOException(string operation, string path, int error) =>
         new(
             $"Could not {operation} directory '{path}': {new Win32Exception(error).Message}",
             error);
@@ -179,11 +179,11 @@ internal static class AtomicStagedFile
     static extern bool FlushWindowsFileBuffers(SafeFileHandle fileHandle);
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
-    private static extern int Open(nint path, int flags);
+    static extern int Open(nint path, int flags);
 
     [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
-    private static extern int Fsync(int fileDescriptor);
+    static extern int Fsync(int fileDescriptor);
 
     [DllImport("libc", EntryPoint = "close", SetLastError = true)]
-    private static extern int Close(int fileDescriptor);
+    static extern int Close(int fileDescriptor);
 }

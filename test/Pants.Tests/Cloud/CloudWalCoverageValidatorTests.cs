@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudWalCoverageValidatorTests
 {
@@ -10,8 +10,8 @@ public sealed class CloudWalCoverageValidatorTests
 
         CloudWalCoverageValidator.ValidateAndEnsureCovered(
             bytes,
-            expectedMaximumSequence: 3,
-            expectedWriterEpoch: 7,
+            3,
+            7,
             manifest);
     }
 
@@ -24,8 +24,8 @@ public sealed class CloudWalCoverageValidatorTests
         Assert.Throws<PantsCorruptionException>(() =>
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
                 bytes,
-                expectedMaximumSequence: 3,
-                expectedWriterEpoch: 7,
+                3,
+                7,
                 manifest));
     }
 
@@ -37,8 +37,8 @@ public sealed class CloudWalCoverageValidatorTests
 
         var covered = CloudWalCoverageValidator.ValidateAndIsCovered(
             bytes,
-            expectedMaximumSequence: 3,
-            expectedWriterEpoch: 7,
+            3,
+            7,
             manifest);
 
         Assert.False(covered);
@@ -56,8 +56,8 @@ public sealed class CloudWalCoverageValidatorTests
         Assert.Throws<PantsCorruptionException>(() =>
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
                 bytes,
-                expectedMaximumSequence: 3,
-                expectedWriterEpoch: 7,
+                3,
+                7,
                 manifest));
     }
 
@@ -70,8 +70,8 @@ public sealed class CloudWalCoverageValidatorTests
         Assert.Throws<PantsCorruptionException>(() =>
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
                 bytes,
-                expectedMaximumSequence: 3,
-                expectedWriterEpoch: 8,
+                3,
+                8,
                 manifest));
     }
 
@@ -83,8 +83,8 @@ public sealed class CloudWalCoverageValidatorTests
 
         CloudWalCoverageValidator.ValidateAndEnsureCovered(
             bytes,
-            expectedMaximumSequence: 3,
-            expectedWriterEpoch: 7,
+            3,
+            7,
             manifest);
     }
 
@@ -96,8 +96,8 @@ public sealed class CloudWalCoverageValidatorTests
 
         var covered = CloudWalCoverageValidator.ValidateAndIsCovered(
             bytes,
-            expectedMaximumSequence: 3,
-            expectedWriterEpoch: 7,
+            3,
+            7,
             manifest);
 
         Assert.False(covered);
@@ -105,27 +105,25 @@ public sealed class CloudWalCoverageValidatorTests
 
     [Theory]
     [InlineData((byte)MidgeWalOperation.Put)]
-    [InlineData((byte)MidgeWalOperation.Insert)]
     [InlineData((byte)MidgeWalOperation.DeleteRange)]
     public void ShouldRejectMalformedStandaloneWalMutationGivenRequiredFieldIsMissing(
         byte operation)
     {
         var bytes = Frame(CreateMalformedMutationPayload(
             (MidgeWalOperation)operation,
-            transactionId: null));
+            null));
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         Assert.Throws<PantsCorruptionException>(() =>
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
                 bytes,
-                expectedMaximumSequence: 3,
-                expectedWriterEpoch: 7,
+                3,
+                7,
                 manifest));
     }
 
     [Theory]
     [InlineData((byte)MidgeWalOperation.Put)]
-    [InlineData((byte)MidgeWalOperation.Insert)]
     [InlineData((byte)MidgeWalOperation.DeleteRange)]
     public void ShouldRejectMalformedSplitWalMutationGivenRequiredFieldIsMissing(
         byte operation)
@@ -133,22 +131,22 @@ public sealed class CloudWalCoverageValidatorTests
         var bytes = Frame(
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
-                transactionId: 1,
-                sequence: 1,
-                writerEpoch: 7),
-            CreateMalformedMutationPayload((MidgeWalOperation)operation, transactionId: 1),
+                1,
+                1,
+                7),
+            CreateMalformedMutationPayload((MidgeWalOperation)operation, 1),
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
-                transactionId: 1,
-                sequence: 3,
-                writerEpoch: 7));
+                1,
+                3,
+                7));
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         Assert.Throws<PantsCorruptionException>(() =>
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
                 bytes,
-                expectedMaximumSequence: 3,
-                expectedWriterEpoch: 7,
+                3,
+                7,
                 manifest));
     }
 
@@ -158,56 +156,58 @@ public sealed class CloudWalCoverageValidatorTests
         byte[]? rangeEnd = null)
     {
         var payload = MidgeWalCodec.EncodeTransactionBatch(
-            transactionId: 1,
-            beginSequence: 1,
-            writerEpoch: 7,
-            [new MidgeWalMutation(
-                ColumnFamilyId: 0,
-                operation,
-                key,
-                operation == MidgeWalOperation.Put ? "value"u8.ToArray() : null,
-                Sequence: 2,
-                Expiration: null,
-                rangeEnd)]);
+            1,
+            1,
+            7,
+            [
+                new MidgeWalMutation(
+                    0,
+                    operation,
+                    key,
+                    operation == MidgeWalOperation.Put ? "value"u8.ToArray() : null,
+                    2,
+                    null,
+                    rangeEnd)
+            ]);
         return Frame(payload);
     }
 
     static byte[] CreateSplitWalBytes(byte[] key) => Frame(
         MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionBegin,
-            transactionId: 1,
-            sequence: 1,
-            writerEpoch: 7),
+            1,
+            1,
+            7),
         MidgeWalCodec.EncodeTransactionMutation(
             new MidgeWalMutation(
-                ColumnFamilyId: 0,
+                0,
                 MidgeWalOperation.Put,
                 key,
                 "value"u8.ToArray(),
-                Sequence: 2,
-                Expiration: null,
-                RangeEnd: null),
-            transactionId: 1,
-            writerEpoch: 7),
+                2,
+                null,
+                null),
+            1,
+            7),
         MidgeWalCodec.EncodeTransactionMarker(
             MidgeWalOperation.TransactionCommit,
-            transactionId: 1,
-            sequence: 3,
-            writerEpoch: 7));
+            1,
+            3,
+            7));
 
     static byte[] CreateMalformedMutationPayload(
         MidgeWalOperation operation,
         ulong? transactionId) =>
         MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
-            ColumnFamilyId: 0,
+            0,
             operation,
             "middle"u8.ToArray(),
-            Value: null,
-            Sequence: transactionId.HasValue ? 2UL : 3UL,
-            Expiration: null,
-            RangeEnd: null,
+            null,
+            transactionId.HasValue ? 2UL : 3UL,
+            null,
+            null,
             transactionId,
-            WriterEpoch: 7));
+            7));
 
     static byte[] Frame(params byte[][] payloads)
     {

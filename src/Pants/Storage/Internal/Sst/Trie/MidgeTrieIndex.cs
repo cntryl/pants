@@ -1,10 +1,10 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Trie;
 
-internal sealed class MidgeTrieIndex
+sealed class MidgeTrieIndex
 {
-    private readonly KeyValuePair<byte[], int>[] _entries;
+    readonly KeyValuePair<byte[], int>[] _entries;
 
-    private MidgeTrieIndex(KeyValuePair<byte[], int>[] entries)
+    MidgeTrieIndex(KeyValuePair<byte[], int>[] entries)
     {
         _entries = entries;
     }
@@ -19,16 +19,16 @@ internal sealed class MidgeTrieIndex
         }
 
         using var output = new MemoryStream();
-        IReadOnlyList<MidgeTrieNode> nodes = builder.Finish();
+        var nodes = builder.Finish();
         WriteVarint(output, checked((ulong)nodes.Count));
-        foreach (MidgeTrieNode node in nodes)
+        foreach (var node in nodes)
         {
             WriteVarint(output, node.PrefixLength);
             WriteVarint(output, checked((ulong)node.KeyDelta.Length));
             output.Write(node.KeyDelta);
             WriteVarint(output, node.BlockId.HasValue ? checked(node.BlockId.Value + 1UL) : 0);
             WriteVarint(output, checked((ulong)node.Children.Count));
-            foreach (MidgeTrieEdge child in node.Children)
+            foreach (var child in node.Children)
             {
                 output.WriteByte(child.FirstByte);
                 WriteVarint(output, child.ChildIndex);
@@ -43,7 +43,7 @@ internal sealed class MidgeTrieIndex
         IReadOnlyList<byte[]> blockFirstKeys)
     {
         var cursor = 0;
-        int nodeCount = ReadInt32(bytes, ref cursor, "node count");
+        var nodeCount = ReadInt32(bytes, ref cursor, "node count");
         if (nodeCount <= 0 || nodeCount > (bytes.Length - cursor) / 4)
         {
             throw new PantsStorageException("SST trie node count is invalid.");
@@ -52,24 +52,24 @@ internal sealed class MidgeTrieIndex
         var nodes = new MidgeTrieNode[nodeCount];
         for (var index = 0; index < nodeCount; index++)
         {
-            ushort prefixLength = ReadUInt16(bytes, ref cursor, "prefix length");
-            int keyLength = ReadInt32(bytes, ref cursor, "key delta length");
+            var prefixLength = ReadUInt16(bytes, ref cursor, "prefix length");
+            var keyLength = ReadInt32(bytes, ref cursor, "key delta length");
             if (keyLength < 0 || keyLength > bytes.Length - cursor)
             {
                 throw new PantsStorageException("SST trie key delta is truncated.");
             }
 
-            byte[] keyDelta = bytes.Slice(cursor, keyLength).ToArray();
+            var keyDelta = bytes.Slice(cursor, keyLength).ToArray();
             cursor += keyLength;
-            ulong rawBlockId = ReadVarint(bytes, ref cursor);
+            var rawBlockId = ReadVarint(bytes, ref cursor);
             uint? blockId = rawBlockId switch
             {
                 0 => null,
-                > (ulong)uint.MaxValue => throw new PantsStorageException(
+                > uint.MaxValue => throw new PantsStorageException(
                     "SST trie block ID exceeds UInt32."),
                 _ => (uint)(rawBlockId - 1)
             };
-            int childCount = ReadInt32(bytes, ref cursor, "child count");
+            var childCount = ReadInt32(bytes, ref cursor, "child count");
             if (childCount < 0 || childCount > (bytes.Length - cursor) / 2)
             {
                 throw new PantsStorageException("SST trie child count is invalid.");
@@ -83,8 +83,8 @@ internal sealed class MidgeTrieIndex
                     throw new PantsStorageException("SST trie child edge is truncated.");
                 }
 
-                byte firstByte = bytes[cursor++];
-                uint childIndex = ReadUInt32(bytes, ref cursor, "child index");
+                var firstByte = bytes[cursor++];
+                var childIndex = ReadUInt32(bytes, ref cursor, "child index");
                 node.AddChild(new MidgeTrieEdge(firstByte, childIndex));
             }
 
@@ -102,7 +102,7 @@ internal sealed class MidgeTrieIndex
         CollectEntries(nodes, entries, blockFirstKeys.Count);
 
         entries.Sort(static (left, right) => ByteArrayComparer.Instance.Compare(left.Key, right.Key));
-        foreach (KeyValuePair<byte[], int> entry in entries)
+        foreach (var entry in entries)
         {
             if (!entry.Key.AsSpan().SequenceEqual(blockFirstKeys[entry.Value]))
             {
@@ -116,12 +116,12 @@ internal sealed class MidgeTrieIndex
     public int FindFloorBlock(ReadOnlySpan<byte> key)
     {
         var low = 0;
-        int high = _entries.Length - 1;
+        var high = _entries.Length - 1;
         var result = -1;
         while (low <= high)
         {
-            int middle = low + ((high - low) / 2);
-            int comparison = key.SequenceCompareTo(_entries[middle].Key);
+            var middle = low + (high - low) / 2;
+            var comparison = key.SequenceCompareTo(_entries[middle].Key);
             if (comparison < 0)
             {
                 high = middle - 1;
@@ -136,7 +136,7 @@ internal sealed class MidgeTrieIndex
         return result;
     }
 
-    private static void CollectEntries(
+    static void CollectEntries(
         MidgeTrieNode[] nodes,
         List<KeyValuePair<byte[], int>> entries,
         int blockCount)
@@ -144,7 +144,7 @@ internal sealed class MidgeTrieIndex
         var visited = new bool[nodes.Length];
         var pending = new Stack<(int NodeIndex, byte[] Prefix)>();
         pending.Push((0, []));
-        while (pending.TryPop(out (int NodeIndex, byte[] Prefix) current))
+        while (pending.TryPop(out var current))
         {
             if (visited[current.NodeIndex])
             {
@@ -152,8 +152,8 @@ internal sealed class MidgeTrieIndex
             }
 
             visited[current.NodeIndex] = true;
-            MidgeTrieNode node = nodes[current.NodeIndex];
-            byte[] key = new byte[checked(current.Prefix.Length + node.KeyDelta.Length)];
+            var node = nodes[current.NodeIndex];
+            var key = new byte[checked(current.Prefix.Length + node.KeyDelta.Length)];
             current.Prefix.CopyTo(key, 0);
             node.KeyDelta.CopyTo(key, current.Prefix.Length);
             if (node.BlockId is { } blockId)
@@ -166,10 +166,10 @@ internal sealed class MidgeTrieIndex
                 entries.Add(new KeyValuePair<byte[], int>(key, checked((int)blockId)));
             }
 
-            for (int childPosition = node.Children.Count - 1; childPosition >= 0; childPosition--)
+            for (var childPosition = node.Children.Count - 1; childPosition >= 0; childPosition--)
             {
-                MidgeTrieEdge edge = node.Children[childPosition];
-                int childIndex = checked((int)edge.ChildIndex);
+                var edge = node.Children[childPosition];
+                var childIndex = checked((int)edge.ChildIndex);
                 if (nodes[childIndex].KeyDelta[0] != edge.FirstByte)
                 {
                     throw new PantsStorageException("SST trie child edge is inconsistent.");
@@ -185,13 +185,13 @@ internal sealed class MidgeTrieIndex
         }
     }
 
-    private static void ValidateGraph(
+    static void ValidateGraph(
         MidgeTrieNode[] nodes,
         Span<int> inboundEdges)
     {
         for (var nodeIndex = 0; nodeIndex < nodes.Length; nodeIndex++)
         {
-            MidgeTrieNode node = nodes[nodeIndex];
+            var node = nodes[nodeIndex];
             if (nodeIndex == 0)
             {
                 if (node.PrefixLength != 0 || node.KeyDelta.Length != 0)
@@ -206,7 +206,7 @@ internal sealed class MidgeTrieIndex
 
             for (var childPosition = 0; childPosition < node.Children.Count; childPosition++)
             {
-                MidgeTrieEdge edge = node.Children[childPosition];
+                var edge = node.Children[childPosition];
                 if (childPosition > 0 &&
                     node.Children[childPosition - 1].FirstByte >= edge.FirstByte)
                 {
@@ -232,7 +232,7 @@ internal sealed class MidgeTrieIndex
         }
     }
 
-    private static void WriteVarint(Stream output, ulong value)
+    static void WriteVarint(Stream output, ulong value)
     {
         while (value >= 0x80)
         {
@@ -243,7 +243,7 @@ internal sealed class MidgeTrieIndex
         output.WriteByte((byte)value);
     }
 
-    private static ulong ReadVarint(ReadOnlySpan<byte> bytes, ref int cursor)
+    static ulong ReadVarint(ReadOnlySpan<byte> bytes, ref int cursor)
     {
         ulong result = 0;
         for (var shift = 0; shift < 64; shift += 7)
@@ -253,7 +253,7 @@ internal sealed class MidgeTrieIndex
                 throw new PantsStorageException("SST trie varint is truncated.");
             }
 
-            byte value = bytes[cursor++];
+            var value = bytes[cursor++];
             result |= (ulong)(value & 0x7f) << shift;
             if ((value & 0x80) == 0)
             {
@@ -264,9 +264,9 @@ internal sealed class MidgeTrieIndex
         throw new PantsStorageException("SST trie varint overflows 64 bits.");
     }
 
-    private static int ReadInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
+    static int ReadInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
-        ulong value = ReadVarint(bytes, ref cursor);
+        var value = ReadVarint(bytes, ref cursor);
         if (value > int.MaxValue)
         {
             throw new PantsStorageException($"SST trie {field} exceeds Int32.");
@@ -275,9 +275,9 @@ internal sealed class MidgeTrieIndex
         return (int)value;
     }
 
-    private static uint ReadUInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
+    static uint ReadUInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
-        ulong value = ReadVarint(bytes, ref cursor);
+        var value = ReadVarint(bytes, ref cursor);
         if (value > uint.MaxValue)
         {
             throw new PantsStorageException($"SST trie {field} exceeds UInt32.");
@@ -286,9 +286,9 @@ internal sealed class MidgeTrieIndex
         return (uint)value;
     }
 
-    private static ushort ReadUInt16(ReadOnlySpan<byte> bytes, ref int cursor, string field)
+    static ushort ReadUInt16(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
-        ulong value = ReadVarint(bytes, ref cursor);
+        var value = ReadVarint(bytes, ref cursor);
         if (value > ushort.MaxValue)
         {
             throw new PantsStorageException($"SST trie {field} exceeds UInt16.");

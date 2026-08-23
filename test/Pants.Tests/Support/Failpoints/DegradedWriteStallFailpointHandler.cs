@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class DegradedWriteStallFailpointHandler : IPantsFailpointHandler, IDisposable
 {
@@ -6,20 +6,18 @@ sealed class DegradedWriteStallFailpointHandler : IPantsFailpointHandler, IDispo
 
     readonly TaskCompletionSource _flushEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
-    readonly ManualResetEventSlim _flushRelease = new(initialState: false);
+
+    readonly ManualResetEventSlim _flushRelease = new(false);
     int _checkpointArmed;
     int _checkpointHit;
     int _flushArmed;
     int _flushHit;
 
-    public void FailNextCheckpoint() => Volatile.Write(ref _checkpointArmed, 1);
-
-    public void BlockNextFlushPublication() => Volatile.Write(ref _flushArmed, 1);
-
-    public async Task WaitForFlushAsync(TimeSpan timeout) =>
-        await _flushEntered.Task.WaitAsync(timeout);
-
-    public void ReleaseFlush() => _flushRelease.Set();
+    public void Dispose()
+    {
+        _flushRelease.Set();
+        _flushRelease.Dispose();
+    }
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -44,9 +42,12 @@ sealed class DegradedWriteStallFailpointHandler : IPantsFailpointHandler, IDispo
         }
     }
 
-    public void Dispose()
-    {
-        _flushRelease.Set();
-        _flushRelease.Dispose();
-    }
+    public void FailNextCheckpoint() => Volatile.Write(ref _checkpointArmed, 1);
+
+    public void BlockNextFlushPublication() => Volatile.Write(ref _flushArmed, 1);
+
+    public async Task WaitForFlushAsync(TimeSpan timeout) =>
+        await _flushEntered.Task.WaitAsync(timeout);
+
+    public void ReleaseFlush() => _flushRelease.Set();
 }

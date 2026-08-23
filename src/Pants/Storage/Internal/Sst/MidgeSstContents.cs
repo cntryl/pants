@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst;
 
-internal sealed record MidgeSstContents(
+sealed record MidgeSstContents(
     IReadOnlyList<MidgeSstEntry> Entries,
     IReadOnlyList<MidgeRangeTombstone> RangeTombstones,
     int DataBlockCount);

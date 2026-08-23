@@ -1,10 +1,27 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal sealed class MidgeWalRecoveryStateMachine : IDisposable
+sealed class MidgeWalRecoveryStateMachine : IDisposable
 {
     readonly Dictionary<(ulong WriterEpoch, ulong TransactionId), MidgeWalRecoverySpool>
         _openTransactions = [];
+
     bool _disposed;
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        foreach (var spool in _openTransactions.Values)
+        {
+            spool.Dispose();
+        }
+
+        _openTransactions.Clear();
+    }
 
     public void Accept(
         MidgeWalRecord record,
@@ -102,21 +119,5 @@ internal sealed class MidgeWalRecoveryStateMachine : IDisposable
         }
 
         apply(mutation, commitSequence);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        foreach (var spool in _openTransactions.Values)
-        {
-            spool.Dispose();
-        }
-
-        _openTransactions.Clear();
     }
 }

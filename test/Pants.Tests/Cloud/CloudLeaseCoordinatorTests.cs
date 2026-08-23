@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using System.Text;
+
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudLeaseCoordinatorTests
 {
@@ -23,8 +25,7 @@ public sealed class CloudLeaseCoordinatorTests
             TimeSpan.FromSeconds(1));
         Assert.Equal(1UL, await first.AcquireAsync(CancellationToken.None));
 
-        await Assert.ThrowsAsync<PantsLeaseHeldException>(
-            () => second.AcquireAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsLeaseHeldException>(() => second.AcquireAsync(CancellationToken.None).AsTask());
         clock.UtcNow += TimeSpan.FromSeconds(12);
         Assert.Equal(2UL, await second.AcquireAsync(CancellationToken.None));
 
@@ -50,8 +51,8 @@ public sealed class CloudLeaseCoordinatorTests
         await lease.AcquireAsync(CancellationToken.None);
         store.IndeterminateRead = true;
 
-        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(
-            () => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
 
         Assert.False(lease.IsHealthy);
         Assert.Throws<PantsFencedException>(lease.EnsureValid);
@@ -75,8 +76,7 @@ public sealed class CloudLeaseCoordinatorTests
         clock.UtcNow += TimeSpan.FromSeconds(5);
         store.AfterNextRead = () => clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
 
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() => lease.RenewAsync(CancellationToken.None).AsTask());
 
         Assert.Equal(0, store.ReplaceAttempts);
         Assert.False(lease.IsHealthy);
@@ -114,8 +114,7 @@ public sealed class CloudLeaseCoordinatorTests
         Assert.False(lease.IsHealthy);
         allowRenewal.SetResult();
 
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => renewal);
+        await Assert.ThrowsAsync<PantsFencedException>(() => renewal);
 
         Assert.NotNull(store.Lease);
         Assert.True(store.Lease.ExpiresAtUtc + TimeSpan.FromSeconds(1) < clock.UtcNow);
@@ -123,10 +122,8 @@ public sealed class CloudLeaseCoordinatorTests
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, leaseLosses);
         Assert.Throws<PantsFencedException>(lease.EnsureValid);
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => lease.RenewAsync(CancellationToken.None).AsTask());
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => lease.AcquireAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() => lease.AcquireAsync(CancellationToken.None).AsTask());
         Assert.Equal(2, store.ReplaceAttempts);
         Assert.Equal(1, leaseLosses);
     }
@@ -197,8 +194,8 @@ public sealed class CloudLeaseCoordinatorTests
         clock.UtcNow += TimeSpan.FromSeconds(5);
         store.IndeterminateReplace = true;
 
-        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(
-            () => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
 
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, store.ReplaceAttempts);
@@ -223,8 +220,8 @@ public sealed class CloudLeaseCoordinatorTests
         store.IndeterminateReplace = true;
         store.AfterNextReplace = () => store.IndeterminateRead = true;
 
-        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(
-            () => lease.RenewAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
 
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, store.ReplaceAttempts);
@@ -271,7 +268,7 @@ public sealed class CloudLeaseCoordinatorTests
             TimeSpan.FromSeconds(1));
 
         Assert.Equal(1UL, await lease.AcquireAsync(CancellationToken.None));
-        var document = System.Text.Encoding.UTF8.GetString(objects.Data.Span);
+        var document = Encoding.UTF8.GetString(objects.Data.Span);
         Assert.Contains("epoch: 1\n", document, StringComparison.Ordinal);
         Assert.Contains("holder_id: holder@host\n", document, StringComparison.Ordinal);
         Assert.Contains("owner_token: ", document, StringComparison.Ordinal);

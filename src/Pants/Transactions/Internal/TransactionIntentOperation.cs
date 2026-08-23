@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed class TransactionIntentOperation
+sealed class TransactionIntentOperation
 {
     public TransactionIntentOperation(
         ulong ordinal,
@@ -22,13 +22,13 @@ internal sealed class TransactionIntentOperation
         Value = value;
         TimeToLive = timeToLive;
         ExpirationUnixMilliseconds = expirationUnixMilliseconds ??
-            (expiryUtc is { } expiration
-                ? PantsUnixTimestamp.FromDateTimeOffset(expiration)
-                : null);
+                                     (expiryUtc is { } expiration
+                                         ? PantsUnixTimestamp.FromDateTimeOffset(expiration)
+                                         : null);
         ExpiryUtc = expiryUtc ??
-            (expirationUnixMilliseconds is { } rawExpiration
-                ? PantsUnixTimestamp.ToDateTimeOffsetSaturating(rawExpiration)
-                : null);
+                    (expirationUnixMilliseconds is { } rawExpiration
+                        ? PantsUnixTimestamp.ToDateTimeOffsetSaturating(rawExpiration)
+                        : null);
         InsertOnly = insertOnly;
     }
 

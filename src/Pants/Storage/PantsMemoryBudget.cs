@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage;
 
 public readonly record struct PantsMemoryBudget
 {
-    private PantsMemoryBudget(long? bytes)
+    PantsMemoryBudget(long? bytes)
     {
         Bytes = bytes;
     }

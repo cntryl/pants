@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal sealed record SealedWalSegment(
+sealed record SealedWalSegment(
     ulong SegmentId,
     ulong WriterEpoch,
     ulong MaximumSequence,

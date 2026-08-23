@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsPointReadDiagnosticsTests
 {
@@ -123,7 +123,7 @@ public sealed class PantsPointReadDiagnosticsTests
             PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "diagnostics/")
                 .WithSimulatedCloudLocalStorageBudget(HybridLocalBudgetBytes)
                 .WithBackgroundCompaction(false));
-        var expected = CreateValue(256 * 1024, seed: 83);
+        var expected = CreateValue(256 * 1024, 83);
         await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
         Assert.Empty(LocalSsts(directory.Path));
         await using var reader = await database.BeginTransactionAsync(

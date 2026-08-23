@@ -1,5 +1,5 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal sealed record CloudObject(
+sealed record CloudObject(
     ReadOnlyMemory<byte> Data,
     string Version);

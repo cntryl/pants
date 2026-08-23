@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 static class SimulatedCloudSstGarbageCollector
 {
@@ -110,7 +110,7 @@ static class SimulatedCloudSstGarbageCollector
         var quarantinePath = $"{path}.gc-{Guid.NewGuid():N}";
         try
         {
-            File.Move(path, quarantinePath, overwrite: false);
+            File.Move(path, quarantinePath, false);
             if (!StringComparer.Ordinal.Equals(
                     CreateVersion(File.ReadAllBytes(quarantinePath)),
                     expectedVersion))
@@ -144,7 +144,7 @@ static class SimulatedCloudSstGarbageCollector
 
         try
         {
-            File.Move(quarantinePath, path, overwrite: false);
+            File.Move(quarantinePath, path, false);
         }
         catch (IOException)
         {

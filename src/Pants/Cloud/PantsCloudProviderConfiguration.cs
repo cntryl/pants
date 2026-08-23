@@ -1,8 +1,8 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud;
 
 public abstract record PantsCloudProviderConfiguration
 {
-    private PantsCloudProviderConfiguration()
+    PantsCloudProviderConfiguration()
     {
     }
 

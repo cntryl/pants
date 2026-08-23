@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Sst.Index;
 
-internal sealed record KeyStructurePrefixHeat(byte[] Prefix, int Count);
+sealed record KeyStructurePrefixHeat(byte[] Prefix, int Count);

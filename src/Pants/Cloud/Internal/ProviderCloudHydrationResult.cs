@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed record ProviderCloudHydrationResult(
     IReadOnlyDictionary<ulong, ProviderPublishedWalSegment> PublishedWalSegments,

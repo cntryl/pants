@@ -1,8 +1,8 @@
 using System.Text;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Objects;
 
-internal static class CloudObjectStoreExtensions
+static class CloudObjectStoreExtensions
 {
     const int MaximumListPages = 10_000;
     const int MaximumListItems = 1_000_000;

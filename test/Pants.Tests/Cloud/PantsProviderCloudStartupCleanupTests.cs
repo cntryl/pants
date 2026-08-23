@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsProviderCloudStartupCleanupTests
 {
@@ -25,10 +25,9 @@ public sealed class PantsProviderCloudStartupCleanupTests
             .WithRecoveryPolicy(PantsRecoveryPolicy.Strict)
             .WithBackgroundCompaction(false);
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => PantsDatabase.OpenForTestingAsync(
-                recoveryOptions,
-                dependencies).AsTask());
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => PantsDatabase.OpenForTestingAsync(
+            recoveryOptions,
+            dependencies).AsTask());
 
         await using var salvaged = await PantsDatabase.OpenForTestingAsync(
             recoveryOptions.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage),
@@ -52,8 +51,8 @@ public sealed class PantsProviderCloudStartupCleanupTests
         var options = PantsOpenOptions.Cloud(cache.Path, location)
             .WithBackgroundCompaction(false);
 
-        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(
-            () => PantsDatabase.OpenForTestingAsync(options, dependencies).AsTask());
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            PantsDatabase.OpenForTestingAsync(options, dependencies).AsTask());
 
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = false;
         await using var corrected = await PantsDatabase.OpenForTestingAsync(

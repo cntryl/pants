@@ -1,19 +1,19 @@
 using System.Threading.Channels;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
+sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 {
     readonly Channel<RuntimeWorkerCommand> _commands;
     readonly CancellationTokenSource _lifetimeCancellation = new();
     readonly Task _loopTask;
-    int _queueDepth;
-    int _inFlight;
-    int _outstanding;
+    long _completed;
     int _disposed;
     long _enqueued;
-    long _completed;
     long _failures;
+    int _inFlight;
+    int _outstanding;
+    int _queueDepth;
 
     public RuntimeWorker(int capacity)
     {
@@ -25,6 +25,18 @@ internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
             AllowSynchronousContinuations = false
         });
         _loopTask = Task.Run(RunAsync);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _commands.Writer.TryComplete();
+        await _loopTask.ConfigureAwait(false);
+        _lifetimeCancellation.Dispose();
     }
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
@@ -63,7 +75,7 @@ internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
         var command = await EnqueueCoreAsync(
                 operation,
                 cancellationToken,
-                executionCancellationToken: default)
+                default)
             .ConfigureAwait(false);
         return command.Task;
     }
@@ -124,18 +136,6 @@ internal sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
                 return ValueTask.CompletedTask;
             },
             cancellationToken);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        _commands.Writer.TryComplete();
-        await _loopTask.ConfigureAwait(false);
-        _lifetimeCancellation.Dispose();
     }
 
     async Task RunAsync()

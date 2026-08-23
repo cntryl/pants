@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Flush;
 
 sealed record FrozenMemtableFlush(
     long Id,

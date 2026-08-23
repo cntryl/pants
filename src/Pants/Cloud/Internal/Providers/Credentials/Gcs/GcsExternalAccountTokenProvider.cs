@@ -3,9 +3,9 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal sealed class GcsExternalAccountTokenProvider(
+sealed class GcsExternalAccountTokenProvider(
     HttpClient httpClient,
     TimeSpan timeout)
 {
@@ -13,6 +13,7 @@ internal sealed class GcsExternalAccountTokenProvider(
     [
         "https://www.googleapis.com/auth/devstorage.full_control"
     ];
+
     readonly HttpClient _httpClient = httpClient;
     readonly TimeSpan _timeout = timeout;
 

@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Hybrid;
 
 sealed class HybridCacheManager
 {
-    readonly HybridStorageBudgetPolicy _policy;
     readonly IPantsFailpointHandler _failpoints;
+    readonly HybridStorageBudgetPolicy _policy;
     int _pendingEvictions;
 
     public HybridCacheManager(
@@ -73,8 +73,8 @@ sealed class HybridCacheManager
             }
 
             var bytes = await fetch(name, cancellationToken).ConfigureAwait(false) ??
-                throw new PantsRecoveryFailedException(
-                    $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
+                        throw new PantsRecoveryFailedException(
+                            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
             store.HydrateLocalSst(name, bytes.Span);
         }
     }

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Exceptions;
 
 public abstract class PantsException : Exception
 {
@@ -52,13 +52,13 @@ public abstract class PantsException : Exception
 
     internal static PantsException FromIOException(IOException exception)
     {
-        int nativeCode = exception.HResult & 0xffff;
-        string message = exception.Message;
-        string normalized = message.ToUpperInvariant();
+        var nativeCode = exception.HResult & 0xffff;
+        var message = exception.Message;
+        var normalized = message.ToUpperInvariant();
         return nativeCode is 28 or 112 ||
-            normalized.Contains("NO SPACE", StringComparison.Ordinal) ||
-            normalized.Contains("DISK FULL", StringComparison.Ordinal)
-                ? new PantsNoSpaceException(message, exception)
-                : new PantsIOException(message, exception);
+               normalized.Contains("NO SPACE", StringComparison.Ordinal) ||
+               normalized.Contains("DISK FULL", StringComparison.Ordinal)
+            ? new PantsNoSpaceException(message, exception)
+            : new PantsIOException(message, exception);
     }
 }

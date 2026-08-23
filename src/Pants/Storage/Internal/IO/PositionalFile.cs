@@ -1,29 +1,29 @@
 using Microsoft.Win32.SafeHandles;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.IO;
 
-internal static class PositionalFile
+static class PositionalFile
 {
     public static byte[] ReadAllBytes(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        using SafeFileHandle handle = File.OpenHandle(
+        using var handle = File.OpenHandle(
             path,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
             FileOptions.RandomAccess);
-        long length = RandomAccess.GetLength(handle);
+        var length = RandomAccess.GetLength(handle);
         if (length > Array.MaxLength)
         {
             throw new PantsStorageException($"File '{path}' is too large to materialize.");
         }
 
-        byte[] bytes = GC.AllocateUninitializedArray<byte>(checked((int)length));
+        var bytes = GC.AllocateUninitializedArray<byte>(checked((int)length));
         long offset = 0;
         while (offset < length)
         {
-            int read = RandomAccess.Read(handle, bytes.AsSpan(checked((int)offset)), offset);
+            var read = RandomAccess.Read(handle, bytes.AsSpan(checked((int)offset)), offset);
             if (read == 0)
             {
                 throw new EndOfStreamException($"File '{path}' changed while it was being read.");
@@ -40,11 +40,11 @@ internal static class PositionalFile
         ArgumentNullException.ThrowIfNull(handle);
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        byte[] bytes = GC.AllocateUninitializedArray<byte>(length);
+        var bytes = GC.AllocateUninitializedArray<byte>(length);
         var consumed = 0;
         while (consumed < bytes.Length)
         {
-            int read = RandomAccess.Read(
+            var read = RandomAccess.Read(
                 handle,
                 bytes.AsSpan(consumed),
                 checked(offset + consumed));
@@ -68,12 +68,10 @@ internal static class PositionalFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(buffers);
-        using SafeFileHandle handle = File.OpenHandle(
+        using var handle = File.OpenHandle(
             path,
             FileMode.OpenOrCreate,
-            FileAccess.Write,
-            FileShare.Read,
-            FileOptions.None);
+            FileAccess.Write);
         RandomAccess.Write(handle, buffers, RandomAccess.GetLength(handle));
         afterWrite?.Invoke();
         beforeFlush?.Invoke();

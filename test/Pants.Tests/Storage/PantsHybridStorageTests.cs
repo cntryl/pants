@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsHybridStorageTests
 {
@@ -9,7 +9,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path, 8 * 1024 * 1024);
-        await PutAsync(database, "resident", CreateValue(128 * 1024, seed: 11));
+        await PutAsync(database, "resident", CreateValue(128 * 1024, 11));
         await database.FlushAsync(database.DefaultColumnFamily);
 
         var metrics = await database.GetRuntimeMetricsAsync();
@@ -25,7 +25,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        var value = CreateValue(256 * 1024, seed: 17);
+        var value = CreateValue(256 * 1024, 17);
         await PutAsync(database, "large", value);
 
         await database.FlushAsync(database.DefaultColumnFamily);
@@ -42,7 +42,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        var value = CreateValue(256 * 1024, seed: 23);
+        var value = CreateValue(256 * 1024, 23);
         await PutAsync(database, "pressure", value);
         await using var snapshot = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
@@ -53,8 +53,8 @@ public sealed class PantsHybridStorageTests
             PantsTransactionMode.ReadWrite);
         blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
 
-        await Assert.ThrowsAsync<PantsNoSpaceException>(
-            () => blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+            blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
 
         Assert.Single(LocalSsts(directory.Path));
         Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).NoSpaceEvents);
@@ -65,7 +65,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await PutAsync(database, "pressure", CreateValue(256 * 1024, seed: 29));
+        await PutAsync(database, "pressure", CreateValue(256 * 1024, 29));
         var snapshot = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
@@ -75,8 +75,8 @@ public sealed class PantsHybridStorageTests
                          PantsTransactionMode.ReadWrite))
         {
             blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
-            await Assert.ThrowsAsync<PantsNoSpaceException>(
-                () => blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
         }
 
         await snapshot.DisposeAsync();
@@ -113,7 +113,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await PutAsync(database, "evicted", CreateValue(256 * 1024, seed: 31));
+        await PutAsync(database, "evicted", CreateValue(256 * 1024, 31));
         await database.FlushAsync(database.DefaultColumnFamily);
         Assert.Empty(LocalSsts(directory.Path));
         await using var reader = await database.BeginTransactionAsync(
@@ -132,7 +132,7 @@ public sealed class PantsHybridStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await PutAsync(database, "persisted", CreateValue(256 * 1024, seed: 37));
+            await PutAsync(database, "persisted", CreateValue(256 * 1024, 37));
             await database.FlushAsync(database.DefaultColumnFamily);
             Assert.Empty(LocalSsts(directory.Path));
         }
@@ -156,10 +156,9 @@ public sealed class PantsHybridStorageTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
             new PantsRuntimeDependencies(failpoints));
-        await PutAsync(database, "retained", CreateValue(256 * 1024, seed: 41));
+        await PutAsync(database, "retained", CreateValue(256 * 1024, 41));
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         Assert.Single(LocalSsts(directory.Path));
         Assert.Empty(CloudSsts(directory.Path));
@@ -178,10 +177,9 @@ public sealed class PantsHybridStorageTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
             new PantsRuntimeDependencies(failpoints));
-        await PutAsync(database, "ordered", CreateValue(256 * 1024, seed: 47));
+        await PutAsync(database, "ordered", CreateValue(256 * 1024, 47));
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
 
         Assert.Single(CloudSsts(directory.Path));
         Assert.Single(LocalSsts(directory.Path));
@@ -192,7 +190,7 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await PutAsync(database, "pinned", CreateValue(256 * 1024, seed: 43));
+        await PutAsync(database, "pinned", CreateValue(256 * 1024, 43));
         await using var snapshot = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class PantsWalWriterEpochRecoveryTests
 {
@@ -14,9 +14,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalAsync(
             directory.Path,
-            CreatePut("legacy", "preserved", sequence: 1, writerEpoch: 1),
-            CreatePut("target", "fresh", sequence: 10, writerEpoch: 2),
-            CreatePut("target", "stale", sequence: 2, writerEpoch: 1));
+            CreatePut("legacy", "preserved", 1, 1),
+            CreatePut("target", "fresh", 10, 2),
+            CreatePut("target", "stale", 2, 1));
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var database = await OpenAsync(directory.Path, recoveryPolicy);
@@ -36,8 +36,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalAsync(
             directory.Path,
-            CreatePut("stale-first", "stale", sequence: 3, writerEpoch: 1),
-            CreatePut("fresh-second", "fresh", sequence: 2, writerEpoch: 2));
+            CreatePut("stale-first", "stale", 3, 1),
+            CreatePut("fresh-second", "fresh", 2, 2));
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
@@ -56,10 +56,10 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await WriteWalFileAsync(
             directory.Path,
             "00000000000000000001.wal",
-            CreatePut("stale-sealed", "stale", sequence: 3, writerEpoch: 1));
+            CreatePut("stale-sealed", "stale", 3, 1));
         await WriteWalAsync(
             directory.Path,
-            CreatePut("fresh-active", "fresh", sequence: 2, writerEpoch: 2));
+            CreatePut("fresh-active", "fresh", 2, 2));
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
@@ -81,31 +81,31 @@ public sealed class PantsWalWriterEpochRecoveryTests
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
                 transactionId,
-                sequence: 1,
-                writerEpoch: 11),
+                1,
+                11),
             MidgeWalCodec.EncodeTransactionMutation(
-                CreateMutation("orphaned", "hidden", sequence: 2),
+                CreateMutation("orphaned", "hidden", 2),
                 transactionId,
-                writerEpoch: 11),
+                11),
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionBegin,
                 transactionId,
-                sequence: 3,
-                writerEpoch: 12),
+                3,
+                12),
             MidgeWalCodec.EncodeTransactionMutation(
-                CreateMutation("committed", "visible", sequence: 4),
+                CreateMutation("committed", "visible", 4),
                 transactionId,
-                writerEpoch: 12),
+                12),
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
                 transactionId,
-                sequence: 5,
-                writerEpoch: 12),
+                5,
+                12),
             MidgeWalCodec.EncodeTransactionMarker(
                 MidgeWalOperation.TransactionCommit,
                 transactionId,
-                sequence: 6,
-                writerEpoch: 11));
+                6,
+                11));
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
@@ -123,12 +123,13 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalWithCorruptTailAsync(
             directory.Path,
-            CreatePut("legacy", "preserved", sequence: 1, writerEpoch: 1),
-            CreatePut("target", "fresh", sequence: 10, writerEpoch: 2),
-            CreatePut("target", "stale", sequence: 2, writerEpoch: 1));
+            CreatePut("legacy", "preserved", 1, 1),
+            CreatePut("target", "fresh", 10, 2),
+            CreatePut("target", "stale", 2, 1));
 
-        var strict = await Assert.ThrowsAnyAsync<PantsException>(
-            () => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        var strict =
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
         Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
 
         await using var salvaged = await OpenAsync(directory.Path, PantsRecoveryPolicy.Salvage);
@@ -149,8 +150,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalWithCorruptedLengthBeforeValidSuffixAsync(directory.Path);
 
-        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
 
         Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
     }
@@ -183,8 +184,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalWithDuplicateLogicalVersionAsync(directory.Path, duplicateValue);
 
-        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
 
         Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
     }
@@ -215,15 +216,15 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalAsync(
             directory.Path,
-            CreateDelete("duplicate", sequence: 7, writerEpoch: 1),
+            CreateDelete("duplicate", 7, 1),
             MidgeWalCodec.EncodeTransactionBatch(
-                transactionId: 9,
-                beginSequence: 6,
-                writerEpoch: 1,
-                [CreateDeleteMutation("duplicate", sequence: 0)]));
+                9,
+                6,
+                1,
+                [CreateDeleteMutation("duplicate", 0)]));
 
-        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-            () => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
 
         Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
     }
@@ -235,8 +236,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalWithDuplicateLogicalVersionAsync(directory.Path, "conflicting");
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -251,8 +253,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
             Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
             CreateDuplicateLogicalVersionWal("conflicting"));
 
-        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(
-            () => database.VerifyStorageAsync(TimeSpan.FromSeconds(2)).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+                database.VerifyStorageAsync(TimeSpan.FromSeconds(2)).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -312,8 +315,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalAsync(
             directory.Path,
-            CreatePut("first", "one", checked((ulong)firstSequence), writerEpoch: 1),
-            CreatePut("second", "two", checked((ulong)secondSequence), writerEpoch: 1));
+            CreatePut("first", "one", checked((ulong)firstSequence), 1),
+            CreatePut("second", "two", checked((ulong)secondSequence), 1));
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
@@ -386,10 +389,10 @@ public sealed class PantsWalWriterEpochRecoveryTests
             TestBytes.FromString(key),
             TestBytes.FromString(value),
             sequence,
-            Expiration: null,
-            RangeEnd: null,
-            TransactionId: null,
-            WriterEpoch: writerEpoch));
+            null,
+            null,
+            null,
+            writerEpoch));
 
     static MidgeWalMutation CreateMutation(
         string key,
@@ -401,29 +404,29 @@ public sealed class PantsWalWriterEpochRecoveryTests
         TestBytes.FromString(key),
         TestBytes.FromString(value),
         sequence,
-        Expiration: null,
-        RangeEnd: null);
+        null,
+        null);
 
     static byte[] CreateDelete(string key, ulong sequence, ulong writerEpoch) =>
         MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
             0,
             MidgeWalOperation.Delete,
             TestBytes.FromString(key),
-            Value: null,
+            null,
             sequence,
-            Expiration: null,
-            RangeEnd: null,
-            TransactionId: null,
-            WriterEpoch: writerEpoch));
+            null,
+            null,
+            null,
+            writerEpoch));
 
     static MidgeWalMutation CreateDeleteMutation(string key, ulong sequence) => new(
-        ColumnFamilyId: 0,
+        0,
         MidgeWalOperation.Delete,
         TestBytes.FromString(key),
-        Value: null,
+        null,
         sequence,
-        Expiration: null,
-        RangeEnd: null);
+        null,
+        null);
 
     static Task WriteWalAsync(string path, params byte[][] payloads) =>
         WriteWalFileAsync(path, "wal.log", payloads);
@@ -434,7 +437,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
     static async Task WriteWalWithCorruptTailAsync(string path, params byte[][] payloads)
     {
         var bytes = Frame(payloads);
-        var corruptPayload = CreatePut("corrupt", "tail", sequence: 11, writerEpoch: 2);
+        var corruptPayload = CreatePut("corrupt", "tail", 11, 2);
         using var stream = new MemoryStream(bytes.Length + corruptPayload.Length + 8);
         stream.Write(bytes);
         MidgeDiskFormat.WriteUInt32(stream, checked((uint)corruptPayload.Length));
@@ -445,11 +448,11 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
     static Task WriteWalWithCorruptedLengthBeforeValidSuffixAsync(string path)
     {
-        var prefix = Frame([CreatePut("prefix", "preserved", sequence: 1, writerEpoch: 1)]);
+        var prefix = Frame([CreatePut("prefix", "preserved", 1, 1)]);
         var corruptLength = Frame(
-            [CreatePut("corrupt-length", "discarded", sequence: 2, writerEpoch: 1)]);
+            [CreatePut("corrupt-length", "discarded", 2, 1)]);
         var hiddenSuffix = Frame(
-            [CreatePut("hidden-suffix", "discarded", sequence: 3, writerEpoch: 1)]);
+            [CreatePut("hidden-suffix", "discarded", 3, 1)]);
         var bytes = new byte[prefix.Length + corruptLength.Length + hiddenSuffix.Length];
         prefix.CopyTo(bytes, 0);
         corruptLength.CopyTo(bytes, prefix.Length);
@@ -473,14 +476,14 @@ public sealed class PantsWalWriterEpochRecoveryTests
             CreatePut(
                 "duplicate",
                 "original",
-                sequence: 7,
-                writerEpoch: 1,
+                7,
+                1,
                 columnFamilyId),
             MidgeWalCodec.EncodeTransactionBatch(
-                transactionId: 9,
-                beginSequence: 6,
-                writerEpoch: 1,
-                [CreateMutation("duplicate", duplicateValue, sequence: 0, columnFamilyId)])
+                9,
+                6,
+                1,
+                [CreateMutation("duplicate", duplicateValue, 0, columnFamilyId)])
         ]);
 
     static void DeleteSealedWalSegments(string path)
@@ -500,8 +503,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
     {
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
         {
-            var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
-                () => OpenAsync(path, recoveryPolicy).AsTask());
+            var exception =
+                await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => OpenAsync(path, recoveryPolicy).AsTask());
             Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
             return;
         }

@@ -1,5 +1,5 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Leases;
 
-internal sealed record CloudLeaseSnapshot(
+sealed record CloudLeaseSnapshot(
     CloudLeaseRecord Lease,
     string Version);

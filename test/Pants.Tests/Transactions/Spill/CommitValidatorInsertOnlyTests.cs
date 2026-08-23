@@ -1,13 +1,12 @@
 using System.Runtime.CompilerServices;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 public sealed class CommitValidatorInsertOnlyTests
 {
-    static readonly ColumnFamilyIdentity Family = new(0, "default", 0);
-
     const int DistinctLargeKeyBytes = 32 * 1_024;
     const int DistinctLargeKeyCount = 96;
+    static readonly ColumnFamilyIdentity Family = new(0, "default", 0);
 
     [Fact]
     public void ShouldTraverseSpilledSourceOnceGivenManyInsertOnlyOperations()
@@ -20,12 +19,12 @@ public sealed class CommitValidatorInsertOnlyTests
                 checked((ulong)index),
                 Family,
                 $"key-{index:000}",
-                insertOnly: true))
+                true))
             .ToArray());
         var inner = new TransactionOperationSource(
             store,
             [],
-            checked((ulong)operationCount),
+            checked(operationCount),
             DateTimeOffset.UnixEpoch);
         var source = new CountingTransactionOperationSource(inner);
         var state = CreateState();
@@ -73,7 +72,7 @@ public sealed class CommitValidatorInsertOnlyTests
         var inner = new TransactionOperationSource(
             store,
             [],
-            checked((ulong)operationCount),
+            checked(operationCount),
             DateTimeOffset.UnixEpoch);
         var source = new CountingTransactionOperationSource(inner);
         var state = CreateState();
@@ -94,7 +93,7 @@ public sealed class CommitValidatorInsertOnlyTests
         var source = CreateSource(
             Put(0, Family, "key"),
             DeleteRange(1, Family, "a", "z"),
-            Put(2, Family, "key", insertOnly: true));
+            Put(2, Family, "key", true));
 
         CommitValidator.Validate(state, CreatePayload(state, source));
     }
@@ -105,11 +104,11 @@ public sealed class CommitValidatorInsertOnlyTests
         var state = CreateState();
         state.FamilyData[Family]["key"u8.ToArray()] = new CellState(
             "existing"u8.ToArray(),
-            writeSequence: 1,
-            expiresAtUtc: null);
+            1,
+            null);
         var source = CreateSource(
             DeleteRange(0, Family, "a", "z"),
-            Put(1, Family, "key", insertOnly: true));
+            Put(1, Family, "key", true));
 
         CommitValidator.Validate(state, CreatePayload(state, source));
     }
@@ -121,7 +120,7 @@ public sealed class CommitValidatorInsertOnlyTests
         var source = CreateSource(
             DeleteRange(0, Family, "a", "z"),
             Put(1, Family, "key"),
-            Put(2, Family, "key", insertOnly: true));
+            Put(2, Family, "key", true));
 
         var error = Assert.Throws<PantsInvalidArgumentException>(() =>
             CommitValidator.Validate(state, CreatePayload(state, source)));
@@ -137,7 +136,7 @@ public sealed class CommitValidatorInsertOnlyTests
         var source = CreateSource(
             Put(0, Family, "key"),
             Delete(1, Family, "key"),
-            Put(2, Family, "key", insertOnly: true));
+            Put(2, Family, "key", true));
 
         CommitValidator.Validate(state, CreatePayload(state, source));
     }
@@ -163,7 +162,7 @@ public sealed class CommitValidatorInsertOnlyTests
         ITransactionOperationSource operations,
         PantsConflictPolicy conflictPolicy = PantsConflictPolicy.LastWriteWins) =>
         new(
-            transactionId: 1,
+            1,
             PantsTransactionMode.ReadWrite,
             conflictPolicy,
             DateTimeOffset.UnixEpoch,
@@ -173,7 +172,7 @@ public sealed class CommitValidatorInsertOnlyTests
 
     static TransactionOperationSource CreateSource(params TransactionIntentOperation[] operations) =>
         new(
-            spillStore: null,
+            null,
             operations,
             checked((ulong)operations.Length),
             DateTimeOffset.UnixEpoch);
@@ -188,10 +187,10 @@ public sealed class CommitValidatorInsertOnlyTests
             CommitOperationKind.Put,
             family,
             TestBytes.FromString(key),
-            endExclusive: null,
+            null,
             "value"u8.ToArray(),
-            timeToLive: null,
-            expiryUtc: null,
+            null,
+            null,
             insertOnly);
 
     static TransactionIntentOperation Delete(
@@ -203,11 +202,11 @@ public sealed class CommitValidatorInsertOnlyTests
             CommitOperationKind.Delete,
             family,
             TestBytes.FromString(key),
-            endExclusive: null,
-            value: null,
-            timeToLive: null,
-            expiryUtc: null,
-            insertOnly: false);
+            null,
+            null,
+            null,
+            null,
+            false);
 
     static TransactionIntentOperation DeleteRange(
         ulong ordinal,
@@ -220,10 +219,10 @@ public sealed class CommitValidatorInsertOnlyTests
             family,
             TestBytes.FromString(start),
             TestBytes.FromString(end),
-            value: null,
-            timeToLive: null,
-            expiryUtc: null,
-            insertOnly: false);
+            null,
+            null,
+            null,
+            false);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void WriteDistinctLargeInsertRun(TransactionSpillStore store)
@@ -238,11 +237,11 @@ public sealed class CommitValidatorInsertOnlyTests
                     CommitOperationKind.Put,
                     Family,
                     key,
-                    endExclusive: null,
+                    null,
                     "value"u8.ToArray(),
-                    timeToLive: null,
-                    expiryUtc: null,
-                    insertOnly: true);
+                    null,
+                    null,
+                    true);
             })
             .ToArray();
         store.WriteRun(operations);

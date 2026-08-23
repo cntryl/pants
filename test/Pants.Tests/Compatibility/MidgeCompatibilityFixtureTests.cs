@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class MidgeCompatibilityFixtureTests
 {
@@ -51,10 +51,11 @@ public sealed class MidgeCompatibilityFixtureTests
     {
         using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory("v2_empty_db");
 
-        var verifyError = await Assert.ThrowsAsync<PantsCompatibilityException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-        var openError = await Assert.ThrowsAsync<PantsCompatibilityException>(
-            () => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
+        var verifyError =
+            await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var openError = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
+            PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
 
         Assert.Equal(PantsErrorCode.CompatibilityError, verifyError.Code);
         Assert.Equal(PantsErrorCode.CompatibilityError, openError.Code);
@@ -65,10 +66,11 @@ public sealed class MidgeCompatibilityFixtureTests
     {
         using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory("future_v4");
 
-        var verifyError = await Assert.ThrowsAsync<PantsCompatibilityException>(
-            () => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-        var openError = await Assert.ThrowsAsync<PantsCompatibilityException>(
-            () => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
+        var verifyError =
+            await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
+                PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        var openError = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
+            PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
 
         Assert.Equal(PantsErrorCode.CompatibilityError, verifyError.Code);
         Assert.Equal(PantsErrorCode.CompatibilityError, openError.Code);

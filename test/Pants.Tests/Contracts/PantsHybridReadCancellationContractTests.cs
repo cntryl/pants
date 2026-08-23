@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsHybridReadCancellationContractTests
 {
@@ -11,7 +11,7 @@ public sealed class PantsHybridReadCancellationContractTests
     {
         using var directory = new TemporaryDirectory();
         using var handler = new GatedSstReadHttpHandler(new InMemoryAzureBlobHandler());
-        using var client = new HttpClient(handler, disposeHandler: false);
+        using var client = new HttpClient(handler, false);
         await using var database = await CreateProviderDatabaseWithMissingLocalSstAsync(
             directory.Path,
             client);
@@ -27,8 +27,9 @@ public sealed class PantsHybridReadCancellationContractTests
             await handler.WaitUntilRequestStartsAsync(AssertionTimeout);
             cancellation.Cancel();
 
-            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => read.WaitAsync(PromptCancellationTimeout));
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    read.WaitAsync(PromptCancellationTimeout));
             Assert.Equal(cancellation.Token, exception.CancellationToken);
         }
         finally
@@ -65,8 +66,7 @@ public sealed class PantsHybridReadCancellationContractTests
             failpoint.Release();
         }
 
-        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => read.WaitAsync(AssertionTimeout));
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(AssertionTimeout));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
     }
 
@@ -96,8 +96,8 @@ public sealed class PantsHybridReadCancellationContractTests
             failpoint.Release();
         }
 
-        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => moveNext.WaitAsync(AssertionTimeout));
+        var exception =
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(AssertionTimeout));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
     }
 
@@ -115,7 +115,7 @@ public sealed class PantsHybridReadCancellationContractTests
             await using var writer = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
                 PantsTransactionMode.ReadWrite);
-            writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, seed: 97));
+            writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 97));
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.FlushAsync(database.DefaultColumnFamily);
             Assert.Empty(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"));
@@ -147,7 +147,7 @@ public sealed class PantsHybridReadCancellationContractTests
             await using var writer = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
                 PantsTransactionMode.ReadWrite);
-            writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, seed: 101));
+            writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 101));
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.FlushAsync(database.DefaultColumnFamily);
             File.Delete(Assert.Single(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst")));

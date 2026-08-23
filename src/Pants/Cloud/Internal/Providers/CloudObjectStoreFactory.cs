@@ -1,10 +1,12 @@
-namespace Cntryl.Pants;
+using System.Net;
 
-internal static class CloudObjectStoreFactory
+namespace Cntryl.Pants.Cloud.Internal.Providers;
+
+static class CloudObjectStoreFactory
 {
-    private static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
+    static readonly HttpClient SharedHttpClient = new(new SocketsHttpHandler
     {
-        AutomaticDecompression = System.Net.DecompressionMethods.All,
+        AutomaticDecompression = DecompressionMethods.All,
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
         PooledConnectionLifetime = TimeSpan.FromMinutes(10),
         MaxConnectionsPerServer = 64
@@ -40,5 +42,4 @@ internal static class CloudObjectStoreFactory
             _ => throw new PantsNotSupportedException("The cloud provider is unsupported.")
         };
     }
-
 }

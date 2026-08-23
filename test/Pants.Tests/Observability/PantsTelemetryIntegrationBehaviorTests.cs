@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsTelemetryIntegrationBehaviorTests
 {
@@ -12,7 +12,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         await using var database = await OpenAsync(mode, directory.Path);
         var family = await database.CreateColumnFamilyAsync("test");
         var records = CreateRecords("metrics_read_key_", 0, 50, _ => "metric_value"u8.ToArray());
-        await WriteBatchAsync(database, family, mode, records, flush: true);
+        await WriteBatchAsync(database, family, mode, records, true);
 
         await AssertRecordsAsync(database, family, records);
     }
@@ -31,7 +31,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
             100,
             _ => "metric_write_value"u8.ToArray());
 
-        await WriteBatchAsync(database, family, mode, records, flush: false);
+        await WriteBatchAsync(database, family, mode, records, false);
 
         await AssertRecordsAsync(database, family, records);
     }
@@ -46,8 +46,8 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         var family = await database.CreateColumnFamilyAsync("test");
         var first = CreateRecords("compact_metric_key_", 0, 100, _ => "gen1"u8.ToArray());
         var second = CreateRecords("compact_metric_key_", 100, 100, _ => "gen2"u8.ToArray());
-        await WriteBatchAsync(database, family, mode, first, flush: true);
-        await WriteBatchAsync(database, family, mode, second, flush: true);
+        await WriteBatchAsync(database, family, mode, first, true);
+        await WriteBatchAsync(database, family, mode, second, true);
 
         await database.CompactAllAsync();
 
@@ -64,7 +64,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         await using var database = await OpenAsync(mode, directory.Path);
         var family = await database.CreateColumnFamilyAsync("test");
         var records = CreateRecords("cache_metric_key_", 0, 100, _ => "cached_value"u8.ToArray());
-        await WriteBatchAsync(database, family, mode, records, flush: true);
+        await WriteBatchAsync(database, family, mode, records, true);
         var warmupRecords = records[..50];
         await AssertRecordsAsync(database, family, warmupRecords);
         var afterWarmup = await database.GetReadPathDiagnosticsAsync();
@@ -89,7 +89,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
             100,
             _ => Enumerable.Repeat((byte)'W', 1024).ToArray());
 
-        await WriteBatchAsync(database, family, mode, records, flush: true);
+        await WriteBatchAsync(database, family, mode, records, true);
 
         await AssertRecordsAsync(database, family, [records[0], records[^1]]);
     }
@@ -103,12 +103,12 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         await using var database = await OpenAsync(mode, directory.Path);
         var family = await database.CreateColumnFamilyAsync("test");
         var initial = CreateRecords("reset_metric_key_", 0, 50, _ => "value"u8.ToArray());
-        await WriteBatchAsync(database, family, mode, initial, flush: false);
+        await WriteBatchAsync(database, family, mode, initial, false);
         var followUp = new KeyValuePair<byte[], byte[]>(
             "single_key"u8.ToArray(),
             "single_value"u8.ToArray());
 
-        await WriteBatchAsync(database, family, mode, [followUp], flush: false);
+        await WriteBatchAsync(database, family, mode, [followUp], false);
 
         await AssertRecordsAsync(database, family, initial.Append(followUp));
     }

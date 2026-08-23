@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests;
+using System.Text;
+using Xunit.Sdk;
+
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsCloudEventualFlushTests
 {
@@ -8,7 +11,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldBatchWritesWhenUsingCloudMode()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 128, maximumPendingWrites: 4);
+        var policy = CreatePolicy(128, 4);
         await using var database = await OpenAsync(directory.Path, policy);
 
         for (var index = 0; index < 3; index++)
@@ -39,7 +42,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldFlushCloudSegmentsOnShutdown()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 128, maximumPendingWrites: int.MaxValue);
+        var policy = CreatePolicy(128, int.MaxValue);
         var options = CreateOptions(directory.Path, policy);
         await using var database = await PantsDatabase.OpenAsync(options);
         await CommitAsync(
@@ -65,9 +68,9 @@ public sealed class PantsCloudEventualFlushTests
     {
         using var directory = new TemporaryDirectory();
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: int.MaxValue,
-            maximumDelay: TimeSpan.FromMilliseconds(50));
+            128,
+            int.MaxValue,
+            TimeSpan.FromMilliseconds(50));
         await using var database = await OpenAsync(directory.Path, policy);
 
         await CommitAsync(
@@ -88,9 +91,9 @@ public sealed class PantsCloudEventualFlushTests
         using var directory = new TemporaryDirectory();
         var failpoints = new OneShotCloudWalSealFailureHandler();
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: int.MaxValue,
-            maximumDelay: TimeSpan.FromMilliseconds(25));
+            128,
+            int.MaxValue,
+            TimeSpan.FromMilliseconds(25));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -124,9 +127,9 @@ public sealed class PantsCloudEventualFlushTests
         using var directory = new TemporaryDirectory();
         var failpoints = new OneShotCloudWalSealFailureHandler();
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: 1,
-            maximumDelay: TimeSpan.FromHours(1));
+            128,
+            1,
+            TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -161,9 +164,9 @@ public sealed class PantsCloudEventualFlushTests
         var failpoints = new OneShotCloudWalSealFailureHandler(
             PantsFailpoint.AfterWalRotation);
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: 1,
-            maximumDelay: TimeSpan.FromHours(1));
+            128,
+            1,
+            TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -203,9 +206,9 @@ public sealed class PantsCloudEventualFlushTests
             PantsFailpoint.AfterCloudWalSealFlush,
             static () => new PantsFencedException("Injected cloud authority loss."));
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: 1,
-            maximumDelay: TimeSpan.FromHours(1));
+            128,
+            1,
+            TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -235,9 +238,9 @@ public sealed class PantsCloudEventualFlushTests
         var failpoints = new OneShotCloudWalSealFailureHandler(
             PantsFailpoint.AfterWalRotation);
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: 1,
-            maximumDelay: TimeSpan.FromHours(1));
+            128,
+            1,
+            TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -276,9 +279,9 @@ public sealed class PantsCloudEventualFlushTests
         using var replacement = new TemporaryDirectory();
         var failpoints = new RetryingCloudWalUploadFailpointHandler();
         var policy = CreatePolicy(
-            segmentGap: 128,
-            maximumPendingWrites: 1,
-            maximumDelay: TimeSpan.FromHours(1));
+            128,
+            1,
+            TimeSpan.FromHours(1));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new PantsRuntimeDependencies(failpoints));
@@ -331,7 +334,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldEventuallyPublishSstGivenManyCloudBufferedWritesWhenMemtableNeverReachesSizeThreshold()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 4, maximumPendingWrites: 1);
+        var policy = CreatePolicy(4, 1);
         await using var database = await OpenAsync(directory.Path, policy);
 
         for (var index = 0; index < 3; index++)
@@ -362,7 +365,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldEventuallyPublishSstGivenManyCloudStrictWritesWhenMemtableNeverReachesSizeThreshold()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 4, maximumPendingWrites: 10_000);
+        var policy = CreatePolicy(4, 10_000);
         await using var database = await OpenAsync(directory.Path, policy);
 
         for (var index = 0; index < 4; index++)
@@ -383,7 +386,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldPublishLightlyWrittenColumnFamilyGivenBusyNeighborWhenCloudSegmentGapFlushRuns()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 4, maximumPendingWrites: 1);
+        var policy = CreatePolicy(4, 1);
         await using var database = await OpenAsync(directory.Path, policy);
         var light = await database.CreateColumnFamilyAsync("light");
         var busy = await database.CreateColumnFamilyAsync("busy");
@@ -408,7 +411,7 @@ public sealed class PantsCloudEventualFlushTests
     public async Task ShouldResetMemtableWalGapAfterReopenBeforeNewSegmentChurn()
     {
         using var directory = new TemporaryDirectory();
-        var policy = CreatePolicy(segmentGap: 128, maximumPendingWrites: 1);
+        var policy = CreatePolicy(128, 1);
         var options = CreateOptions(directory.Path, policy);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
@@ -440,7 +443,7 @@ public sealed class PantsCloudEventualFlushTests
         await using var transaction = await database.BeginTransactionAsync(
             family,
             PantsTransactionMode.ReadWrite);
-        transaction.Put(System.Text.Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
+        transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
         await transaction.CommitAsync(writeOptions);
     }
 
@@ -467,7 +470,7 @@ public sealed class PantsCloudEventualFlushTests
         }
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 $"Cloud metrics did not converge: sequence={last?.CurrentSequence}, " +
                 $"segment={last?.WalCurrentSegmentId}, pending={last?.WalPendingWrites}, " +
                 $"cloud={last?.WalCloudDurableSequence}, uploads={last?.PendingCloudUploads}, " +
@@ -496,10 +499,10 @@ public sealed class PantsCloudEventualFlushTests
         long segmentGap,
         int maximumPendingWrites,
         TimeSpan? maximumDelay = null) => new(
-        EventualFlushSegmentGap: segmentGap,
-        WalSealMinimumSegmentBytes: long.MaxValue,
-        WalSealMaximumFlushDelay: maximumDelay ?? TimeSpan.FromHours(1),
-        WalSealMaximumPendingWrites: maximumPendingWrites);
+        segmentGap,
+        long.MaxValue,
+        maximumDelay ?? TimeSpan.FromHours(1),
+        maximumPendingWrites);
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,

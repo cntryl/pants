@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal;
 
-internal static class PantsWireBytes
+static class PantsWireBytes
 {
     public static byte[] Copy(ReadOnlyMemory<byte> source) => source.ToArray();
 }

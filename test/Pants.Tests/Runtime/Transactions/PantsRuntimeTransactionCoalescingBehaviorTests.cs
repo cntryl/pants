@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using System.Globalization;
+
+namespace Cntryl.Pants.Tests.Runtime.Transactions;
 
 public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
 {
@@ -64,7 +66,7 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         for (var index = 0; index < operationCount; index++)
         {
             await CommitAsync(database, family, "counter", index.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
+                CultureInfo.InvariantCulture));
         }
 
         await using var reader = await database.BeginTransactionAsync(

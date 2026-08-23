@@ -1,12 +1,12 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Contracts;
 
 public sealed class PantsTransactionContractTests
 {
     [Fact]
     public async Task ShouldMakeCommittedWriteVisibleToLaterSnapshot()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -14,10 +14,10 @@ public sealed class PantsTransactionContractTests
             await writer.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? value = await reader.GetAsync(TestBytes.FromString("key"));
+        var value = await reader.GetAsync(TestBytes.FromString("key"));
 
         Assert.NotNull(value);
         Assert.Equal("value", TestBytes.ToText(value.Value));
@@ -26,13 +26,13 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldPreserveFrozenSnapshotAndReadOwnWrites()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction older = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var older = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         Assert.Null(await older.GetAsync(TestBytes.FromString("key")));
 
-        await using (IPantsTransaction newer = await database.BeginTransactionAsync(
+        await using (var newer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -42,18 +42,18 @@ public sealed class PantsTransactionContractTests
 
         Assert.Null(await older.GetAsync(TestBytes.FromString("key")));
         older.Put(TestBytes.FromString("key"), TestBytes.FromString("mine"));
-        ReadOnlyMemory<byte>? own = await older.GetAsync(TestBytes.FromString("key"));
+        var own = await older.GetAsync(TestBytes.FromString("key"));
         Assert.Equal("mine", TestBytes.ToText(own!.Value));
     }
 
     [Fact]
     public async Task ShouldResolveOverlappingWritersByCommitOrderByDefault()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction first = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var first = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
-        await using IPantsTransaction second = await database.BeginTransactionAsync(
+        await using var second = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         first.Put(TestBytes.FromString("key"), TestBytes.FromString("first"));
@@ -62,7 +62,7 @@ public sealed class PantsTransactionContractTests
         await first.CommitAsync(PantsWriteOptions.Sync);
         await second.CommitAsync(PantsWriteOptions.Sync);
 
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
@@ -73,11 +73,11 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldAbortOverlappingWriterWhenStrictConflictPolicyIsSelected()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction first = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var first = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
-        await using IPantsTransaction second = await database.BeginTransactionAsync(
+        await using var second = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         second.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
@@ -85,8 +85,8 @@ public sealed class PantsTransactionContractTests
         second.Put(TestBytes.FromString("key"), TestBytes.FromString("second"));
         await first.CommitAsync(PantsWriteOptions.Sync);
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(
-            () => second.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            second.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
         Assert.IsType<PantsWriteConflictException>(error);
@@ -95,8 +95,8 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldValidateAssertionAgainstStartSnapshotAtCommit()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (IPantsTransaction seed = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var seed = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -104,22 +104,22 @@ public sealed class PantsTransactionContractTests
             await seed.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("new"));
         transaction.AssertValue(TestBytes.FromString("key"), TestBytes.FromString("wrong"));
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(
-            () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
     }
 
     [Fact]
     public async Task ShouldApplyLastStagedIntentForPointAndRangeOperations()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("a"), TestBytes.FromString("first"));
@@ -135,12 +135,12 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldRejectMutationsInReadOnlyTransaction()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
-        PantsException error = Assert.ThrowsAny<PantsException>(() =>
+        var error = Assert.ThrowsAny<PantsException>(() =>
             transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value")));
 
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
@@ -149,10 +149,10 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldCopyInputsAndOutputsAtOwnershipBoundaries()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        byte[] key = TestBytes.FromString("key");
-        byte[] value = TestBytes.FromString("value");
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        var key = TestBytes.FromString("key");
+        var value = TestBytes.FromString("value");
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -162,11 +162,11 @@ public sealed class PantsTransactionContractTests
             await writer.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? observed = await reader.GetAsync(TestBytes.FromString("key"));
-        byte[] callerOwned = observed!.Value.ToArray();
+        var observed = await reader.GetAsync(TestBytes.FromString("key"));
+        var callerOwned = observed!.Value.ToArray();
         callerOwned[0] = (byte)'X';
 
         Assert.Equal("value", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("key")))!.Value));
@@ -175,16 +175,16 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldRequireTtlToHaveWholeSecondPrecision()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
 
-        PantsException fractional = Assert.ThrowsAny<PantsException>(() => transaction.Put(
+        var fractional = Assert.ThrowsAny<PantsException>(() => transaction.Put(
             TestBytes.FromString("key"),
             TestBytes.FromString("value"),
             TimeSpan.FromMilliseconds(1500)));
-        PantsException negative = Assert.ThrowsAny<PantsException>(() => transaction.Put(
+        var negative = Assert.ThrowsAny<PantsException>(() => transaction.Put(
             TestBytes.FromString("key"),
             TestBytes.FromString("value"),
             TimeSpan.FromSeconds(-1)));
@@ -197,9 +197,9 @@ public sealed class PantsTransactionContractTests
     public async Task ShouldStartEveryStagedTtlAtOneCommitTime()
     {
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithTtlClock(clock));
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("a"u8.ToArray(), "a"u8.ToArray(), TimeSpan.FromSeconds(1));
@@ -209,7 +209,7 @@ public sealed class PantsTransactionContractTests
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
         clock.UtcNow = clock.UtcNow.AddSeconds(1);
 
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("a"u8.ToArray()));
@@ -220,15 +220,15 @@ public sealed class PantsTransactionContractTests
     public async Task ShouldKeepPendingTtlVisibleUntilCommit()
     {
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithTtlClock(clock));
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray(), TimeSpan.FromSeconds(1));
         clock.UtcNow = clock.UtcNow.AddDays(1);
 
-        ReadOnlyMemory<byte>? value = await transaction.GetAsync("key"u8.ToArray());
+        var value = await transaction.GetAsync("key"u8.ToArray());
 
         Assert.Equal("value", TestBytes.ToText(value!.Value));
     }
@@ -237,9 +237,9 @@ public sealed class PantsTransactionContractTests
     public async Task ShouldNotReExposeExpiredValueWhenClockMovesBackward()
     {
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithTtlClock(clock));
-        await using (IPantsTransaction writer = await database.BeginTransactionAsync(
+        await using (var writer = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -248,7 +248,7 @@ public sealed class PantsTransactionContractTests
         }
 
         clock.UtcNow = clock.UtcNow.AddSeconds(1);
-        await using (IPantsTransaction expired = await database.BeginTransactionAsync(
+        await using (var expired = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadOnly))
         {
@@ -256,7 +256,7 @@ public sealed class PantsTransactionContractTests
         }
 
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddMilliseconds(500);
-        await using IPantsTransaction afterSkew = await database.BeginTransactionAsync(
+        await using var afterSkew = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await afterSkew.GetAsync("key"u8.ToArray()));
@@ -265,14 +265,14 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction pointWriter = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var pointWriter = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         pointWriter.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         pointWriter.Put("middle"u8.ToArray(), "value"u8.ToArray());
 
-        await using (IPantsTransaction rangeWriter = await database.BeginTransactionAsync(
+        await using (var rangeWriter = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -280,16 +280,16 @@ public sealed class PantsTransactionContractTests
             await rangeWriter.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(
-            () => pointWriter.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            pointWriter.CommitAsync(PantsWriteOptions.Buffered).AsTask());
         Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
     }
 
     [Fact]
     public async Task ShouldEnforceEveryAssertionWhenTheSameKeyIsAssertedTwice()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (IPantsTransaction seed = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var seed = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -297,13 +297,13 @@ public sealed class PantsTransactionContractTests
             await seed.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.AssertValue("key"u8.ToArray(), "value"u8.ToArray());
         transaction.AssertValue("key"u8.ToArray(), "different"u8.ToArray());
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
             transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
         Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
@@ -312,8 +312,8 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldAbortAssertionCoveredByARecentRangeDelete()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (IPantsTransaction seed = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var seed = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -321,11 +321,11 @@ public sealed class PantsTransactionContractTests
             await seed.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using IPantsTransaction asserting = await database.BeginTransactionAsync(
+        await using var asserting = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         asserting.AssertValue("middle"u8.ToArray(), "value"u8.ToArray());
-        await using (IPantsTransaction deleting = await database.BeginTransactionAsync(
+        await using (var deleting = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -333,7 +333,7 @@ public sealed class PantsTransactionContractTests
             await deleting.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        PantsException error = await Assert.ThrowsAnyAsync<PantsException>(() =>
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() =>
             asserting.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
         Assert.Equal(PantsErrorCode.WriteConflict, error.Code);
@@ -342,8 +342,8 @@ public sealed class PantsTransactionContractTests
     [Fact]
     public async Task ShouldReleaseSnapshotWhenRollbackIsCanceledBeforeAdmission()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         using var cancellation = new CancellationTokenSource();

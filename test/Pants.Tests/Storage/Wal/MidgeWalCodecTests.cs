@@ -1,11 +1,11 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Storage.Wal;
 
 public sealed class MidgeWalCodecTests
 {
     [Fact]
     public void ShouldRejectTransactionBatchGivenEmptyOperationCount()
     {
-        var record = CreateBatch(operationCount: 0, []);
+        var record = CreateBatch(0, []);
 
         var exception = Assert.Throws<PantsStorageException>(() =>
             MidgeWalCodec.DecodeTransactionBatch(record, out _, out _));
@@ -16,7 +16,7 @@ public sealed class MidgeWalCodecTests
     [Fact]
     public void ShouldRejectTransactionBatchBeforeAllocationGivenHugeCountAndNoRecords()
     {
-        var record = CreateBatch(operationCount: 10_000_000, []);
+        var record = CreateBatch(10_000_000, []);
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
 
         var exception = Assert.Throws<PantsStorageException>(() =>
@@ -33,7 +33,7 @@ public sealed class MidgeWalCodecTests
     [Fact]
     public void ShouldRejectTransactionBatchBeforeDecodingGivenRecordBelowExactMinimumLength()
     {
-        var record = CreateBatch(operationCount: 1, new byte[19]);
+        var record = CreateBatch(1, new byte[19]);
 
         var exception = Assert.Throws<PantsStorageException>(() =>
             MidgeWalCodec.DecodeTransactionBatch(record, out _, out _));
@@ -59,14 +59,14 @@ public sealed class MidgeWalCodecTests
         batch.Write(records);
 
         return new MidgeWalRecord(
-            ColumnFamilyId: 0,
+            0,
             MidgeWalOperation.TransactionBatch,
             "txn"u8.ToArray(),
             batch.ToArray(),
             commitSequence,
-            Expiration: null,
-            RangeEnd: null,
+            null,
+            null,
             transactionId,
-            WriterEpoch: 9);
+            9);
     }
 }

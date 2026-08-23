@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal interface IRuntimeCommand
+interface IRuntimeCommand
 {
     ValueTask ExecuteAsync(PantsRuntimeState state);
 }

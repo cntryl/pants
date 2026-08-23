@@ -8,15 +8,15 @@ public sealed class PantsDependencyInjectionTests
     [Fact]
     public async Task AddPantsRegistersOneLazyAsyncDatabaseProvider()
     {
-        PantsOpenOptions options = PantsOpenOptions.InMemory();
+        var options = PantsOpenOptions.InMemory();
         var services = new ServiceCollection();
 
         services.AddPants(options);
 
-        await using ServiceProvider serviceProvider = services.BuildServiceProvider();
-        IPantsDatabaseProvider provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
-        IPantsDatabase first = await provider.GetDatabaseAsync();
-        IPantsDatabase second = await provider.GetDatabaseAsync();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
+        var first = await provider.GetDatabaseAsync();
+        var second = await provider.GetDatabaseAsync();
 
         Assert.Same(first, second);
         Assert.Same(options, first.Options);
@@ -33,16 +33,16 @@ public sealed class PantsDependencyInjectionTests
         services.AddSingleton<IPantsDatabaseFactory>(databaseFactory);
         services.AddPants(PantsOpenOptions.InMemory());
 
-        await using ServiceProvider serviceProvider = services.BuildServiceProvider();
-        IPantsDatabaseProvider provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
+        await using var serviceProvider = services.BuildServiceProvider();
+        var provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => provider.GetDatabaseAsync(cancellation.Token).AsTask());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            provider.GetDatabaseAsync(cancellation.Token).AsTask());
 
         databaseFactory.AllowOpen();
-        IPantsDatabase database = await provider.GetDatabaseAsync();
+        var database = await provider.GetDatabaseAsync();
 
         Assert.NotNull(database);
         Assert.Equal(1, databaseFactory.OpenCount);
@@ -53,14 +53,13 @@ public sealed class PantsDependencyInjectionTests
     {
         var services = new ServiceCollection();
         services.AddPants(PantsOpenOptions.InMemory());
-        ServiceProvider serviceProvider = services.BuildServiceProvider();
-        IPantsDatabaseProvider provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
-        IPantsDatabase database = await provider.GetDatabaseAsync();
+        var serviceProvider = services.BuildServiceProvider();
+        var provider = serviceProvider.GetRequiredService<IPantsDatabaseProvider>();
+        var database = await provider.GetDatabaseAsync();
 
         await serviceProvider.DisposeAsync();
 
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]
@@ -70,13 +69,13 @@ public sealed class PantsDependencyInjectionTests
         services.AddKeyedPants("primary", PantsOpenOptions.InMemory());
         services.AddKeyedPants("secondary", PantsOpenOptions.InMemory());
 
-        await using ServiceProvider serviceProvider = services.BuildServiceProvider();
-        IPantsDatabaseProvider primaryProvider =
+        await using var serviceProvider = services.BuildServiceProvider();
+        var primaryProvider =
             serviceProvider.GetRequiredKeyedService<IPantsDatabaseProvider>("primary");
-        IPantsDatabaseProvider secondaryProvider =
+        var secondaryProvider =
             serviceProvider.GetRequiredKeyedService<IPantsDatabaseProvider>("secondary");
-        IPantsDatabase primary = await primaryProvider.GetDatabaseAsync();
-        IPantsDatabase secondary = await secondaryProvider.GetDatabaseAsync();
+        var primary = await primaryProvider.GetDatabaseAsync();
+        var secondary = await secondaryProvider.GetDatabaseAsync();
 
         Assert.NotSame(primaryProvider, secondaryProvider);
         Assert.NotSame(primary, secondary);

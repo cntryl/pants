@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Observability;
 
 public sealed class PantsRuntimeMetricsCancellationContractTests
 {
@@ -24,8 +24,8 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => database.GetRuntimeMetricsAsync(canceled.Token).AsTask());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            database.GetRuntimeMetricsAsync(canceled.Token).AsTask());
 
         Assert.Equal(PantsEngineHealth.Healthy, (await database.GetRuntimeMetricsAsync()).Health);
     }
@@ -37,8 +37,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         await database.ShutdownAsync(TimeSpan.FromSeconds(2));
 
-        await Assert.ThrowsAsync<PantsAbortedException>(
-            () => database.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]
@@ -56,8 +55,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         {
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
             deadline.CancelAfter(TimeSpan.FromMilliseconds(100));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => request.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(AssertionTimeout));
         }
         finally
         {
@@ -117,8 +115,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
                 }
 
                 deadline.CancelAfter(TimeSpan.FromMilliseconds(100));
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                    () => request.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(AssertionTimeout));
             }
         }
         finally

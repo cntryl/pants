@@ -1,9 +1,9 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
 sealed class MidgeWalWriterEpochFrontiers
 {
-    readonly SortedDictionary<ulong, ulong> _firstSequenceByEpoch = [];
     readonly SortedDictionary<ulong, ulong> _firstOrdinalByEpoch = [];
+    readonly SortedDictionary<ulong, ulong> _firstSequenceByEpoch = [];
 
     public void Record(MidgeWalRecord record, ulong ordinal)
     {

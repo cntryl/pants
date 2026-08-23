@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class PantsSimulatedCloudTests
 {
@@ -8,21 +8,21 @@ public sealed class PantsSimulatedCloudTests
     public async Task ShouldPublishCloudStrictCommitThroughEpochScopedCatalog()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await OpenAsync(directory.Path);
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("cloud/key"u8.ToArray(), "cloud/value"u8.ToArray());
 
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
 
-        string catalogPath = Path.Combine(
+        var catalogPath = Path.Combine(
             directory.Path,
             "cloud_store",
             "wal",
             "publication-catalog.v1.json");
-        using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllBytesAsync(catalogPath));
-        JsonElement publication = catalog.RootElement
+        using var catalog = JsonDocument.Parse(await File.ReadAllBytesAsync(catalogPath));
+        var publication = catalog.RootElement
             .GetProperty("segments")
             .GetProperty("1");
         Assert.Equal(1UL, catalog.RootElement.GetProperty("fencing_epoch").GetUInt64());
@@ -47,9 +47,9 @@ public sealed class PantsSimulatedCloudTests
     public async Task ShouldRecoverCloudCommitAfterLosingLocalCache()
     {
         using var directory = new TemporaryDirectory();
-        await using (IPantsDatabase database = await OpenAsync(directory.Path))
+        await using (var database = await OpenAsync(directory.Path))
         {
-            await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+            await using var transaction = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("remote/key"u8.ToArray(), "remote/value"u8.ToArray());
@@ -58,11 +58,11 @@ public sealed class PantsSimulatedCloudTests
 
         RemoveLocalCache(directory.Path);
 
-        await using IPantsDatabase recovered = await OpenAsync(directory.Path);
-        await using IPantsTransaction reader = await recovered.BeginTransactionAsync(
+        await using var recovered = await OpenAsync(directory.Path);
+        await using var reader = await recovered.BeginTransactionAsync(
             recovered.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
-        ReadOnlyMemory<byte>? value = await reader.GetAsync("remote/key"u8.ToArray());
+        var value = await reader.GetAsync("remote/key"u8.ToArray());
         Assert.Equal("remote/value", TestBytes.ToText(value!.Value));
     }
 
@@ -70,8 +70,8 @@ public sealed class PantsSimulatedCloudTests
     public async Task ShouldMirrorFlushedSstAndRecoveryMetadata()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
-        await using (IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await OpenAsync(directory.Path);
+        await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -98,20 +98,20 @@ public sealed class PantsSimulatedCloudTests
     public async Task ShouldAllowReadOnlyCommitWithoutACloudWriteDurabilityPolicy()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await OpenAsync(directory.Path);
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await OpenAsync(directory.Path);
+        await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
 
-    private static ValueTask<IPantsDatabase> OpenAsync(string path) =>
+    static ValueTask<IPantsDatabase> OpenAsync(string path) =>
         PantsDatabase.OpenAsync(PantsOpenOptions.SimulatedCloud(path, "pants-tests", "database/"));
 
-    private static void RemoveLocalCache(string root)
+    static void RemoveLocalCache(string root)
     {
-        foreach (string path in Directory.EnumerateFileSystemEntries(root))
+        foreach (var path in Directory.EnumerateFileSystemEntries(root))
         {
             if (Path.GetFileName(path) == "cloud_store")
             {
@@ -120,7 +120,7 @@ public sealed class PantsSimulatedCloudTests
 
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(path, true);
             }
             else
             {

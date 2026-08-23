@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
-internal sealed class StaticS3CredentialProvider(S3Credentials credentials) : IS3CredentialProvider
+sealed class StaticS3CredentialProvider(S3Credentials credentials) : IS3CredentialProvider
 {
     readonly S3Credentials _credentials = credentials;
 

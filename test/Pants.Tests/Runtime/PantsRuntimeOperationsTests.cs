@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 public sealed class PantsRuntimeOperationsTests
 {
@@ -6,20 +6,20 @@ public sealed class PantsRuntimeOperationsTests
     public async Task ShouldFlushOnlyRequestedColumnFamily()
     {
         using var directory = new TemporaryDirectory();
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(
+        await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        IPantsColumnFamily flushed = await database.CreateColumnFamilyAsync("flushed");
-        IPantsColumnFamily pending = await database.CreateColumnFamilyAsync("pending");
+        var flushed = await database.CreateColumnFamilyAsync("flushed");
+        var pending = await database.CreateColumnFamilyAsync("pending");
         await PutAsync(database, flushed, "flushed-key", "flushed-value");
         await PutAsync(database, pending, "pending-key", "pending-value");
-        long bytesBefore = (await database.GetRuntimeMetricsAsync()).TotalMemtableBytes;
+        var bytesBefore = (await database.GetRuntimeMetricsAsync()).TotalMemtableBytes;
 
         await database.FlushAsync(flushed);
 
         var metrics = await database.GetRuntimeMetricsAsync();
         Assert.InRange(metrics.TotalMemtableBytes, 1, bytesBefore - 1);
         await database.DropColumnFamilyAsync(flushed);
-        PantsBusyException error = await Assert.ThrowsAsync<PantsBusyException>(() =>
+        var error = await Assert.ThrowsAsync<PantsBusyException>(() =>
             database.DropColumnFamilyAsync(pending).AsTask());
         Assert.Equal(PantsErrorCode.Busy, error.Code);
     }
@@ -28,12 +28,12 @@ public sealed class PantsRuntimeOperationsTests
     public async Task ShouldAutoFlushLocalMemtableAtConfiguredThreshold()
     {
         using var directory = new TemporaryDirectory();
-        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+        var options = PantsOpenOptions.Local(directory.Path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(8 * 1024))
             .WithMemtableLimits(2 * 1024, 1024)
             .WithTransactionMemoryPool(2 * 1024);
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(options);
-        await using (IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
         {
@@ -46,7 +46,7 @@ public sealed class PantsRuntimeOperationsTests
 
         await database.FlushAsync(database.DefaultColumnFamily);
         var metrics = await database.GetRuntimeMetricsAsync();
-        bool cleared = await database.WaitForWriteStallClearAsync(
+        var cleared = await database.WaitForWriteStallClearAsync(
             database.DefaultColumnFamily,
             TimeSpan.Zero);
 
@@ -62,12 +62,12 @@ public sealed class PantsRuntimeOperationsTests
     public async Task ShouldRelieveConcurrentLocalWritePressureWithoutAStickyStall()
     {
         using var directory = new TemporaryDirectory();
-        PantsOpenOptions options = PantsOpenOptions.Local(directory.Path)
+        var options = PantsOpenOptions.Local(directory.Path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(256 * 1024))
             .WithMemtableLimits(64 * 1024, 16 * 1024)
             .WithTransactionMemoryPool(64 * 1024)
             .WithBackgroundCompaction(false);
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(options);
+        await using var database = await PantsDatabase.OpenAsync(options);
 
         await Task.WhenAll(Enumerable.Range(0, 200).Select(index =>
             PutWithWriteStallRetryAsync(
@@ -78,10 +78,10 @@ public sealed class PantsRuntimeOperationsTests
         Assert.True(await database.WaitForWriteStallClearAsync(
             database.DefaultColumnFamily,
             TimeSpan.FromSeconds(2)));
-        PantsRuntimeMetrics metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.GetRuntimeMetricsAsync();
         Assert.False(metrics.WriteStalled);
         Assert.True(metrics.SstCount >= 2);
-        await using IPantsTransaction reader = await database.BeginTransactionAsync(
+        await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync(TestBytes.FromString("key-000")));
@@ -147,13 +147,13 @@ public sealed class PantsRuntimeOperationsTests
         throw new InvalidOperationException("Write pressure did not clear within 16 attempts.");
     }
 
-    private static async ValueTask PutAsync(
+    static async ValueTask PutAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         string key,
         string value)
     {
-        await using IPantsTransaction transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.BeginTransactionAsync(
             columnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
@@ -163,14 +163,14 @@ public sealed class PantsRuntimeOperationsTests
     [Fact]
     public async Task ShouldValidateWriteStallWaitArgumentsAndColumnFamilyHandle()
     {
-        await using IPantsDatabase database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        IPantsColumnFamily family = await database.CreateColumnFamilyAsync("temporary");
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        var family = await database.CreateColumnFamilyAsync("temporary");
         await database.DropColumnFamilyAsync(family);
 
-        PantsException stale = await Assert.ThrowsAnyAsync<PantsException>(() => database
+        var stale = await Assert.ThrowsAnyAsync<PantsException>(() => database
             .WaitForWriteStallClearAsync(family, TimeSpan.Zero)
             .AsTask());
-        PantsException timeout = await Assert.ThrowsAnyAsync<PantsException>(() => database
+        var timeout = await Assert.ThrowsAnyAsync<PantsException>(() => database
             .WaitForWriteStallClearAsync(
                 database.DefaultColumnFamily,
                 TimeSpan.FromTicks(-1))

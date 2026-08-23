@@ -1,9 +1,9 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CompactionCheckpointFailpointHandler : IPantsFailpointHandler
 {
-    int _publicationObserved;
     int _checkpointHit;
+    int _publicationObserved;
 
     public void Hit(PantsFailpoint failpoint)
     {

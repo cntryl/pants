@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
-internal interface IGcsTokenProvider
+interface IGcsTokenProvider
 {
     ValueTask<string> GetTokenAsync(CancellationToken cancellationToken);
 }

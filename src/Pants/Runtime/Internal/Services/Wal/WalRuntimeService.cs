@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 
 sealed class WalRuntimeService(
     int capacity,
@@ -21,7 +21,7 @@ sealed class WalRuntimeService(
                 cancellationToken)
             .ConfigureAwait(false);
         return result.Commit ??
-            throw new PantsInternalException("A WAL write returned no commit result.");
+               throw new PantsInternalException("A WAL write returned no commit result.");
     }
 
     public async ValueTask<TimeSpan> FlushDurabilityBoundaryAsync(
@@ -33,7 +33,7 @@ sealed class WalRuntimeService(
                 cancellationToken)
             .ConfigureAwait(false);
         return result.FsyncElapsed ??
-            throw new PantsInternalException("A WAL fsync returned no elapsed duration.");
+               throw new PantsInternalException("A WAL fsync returned no elapsed duration.");
     }
 
     public async ValueTask<WalCommitGroupResult> AppendCommitGroupAsync(
@@ -52,7 +52,7 @@ sealed class WalRuntimeService(
                 cancellationToken)
             .ConfigureAwait(false);
         return result.CommitGroup ??
-            throw new PantsInternalException("A coalesced WAL write returned no group result.");
+               throw new PantsInternalException("A coalesced WAL write returned no group result.");
     }
 
     public async ValueTask<SealedWalSegment?> SealCloudWalAsync(
@@ -107,7 +107,7 @@ sealed class WalRuntimeService(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var store = diskStore ??
-            throw new PantsInternalException("A WAL runtime request requires local storage.");
+                    throw new PantsInternalException("A WAL runtime request requires local storage.");
         return request switch
         {
             AppendWalCommitRuntimeRequest append => AppendCommit(store, append),

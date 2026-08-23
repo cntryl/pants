@@ -1,32 +1,11 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CloudCompactionFailpointHandler : IPantsFailpointHandler
 {
     readonly Lock _gate = new();
-    PantsFailpoint? _target;
     Action? _beforeFailure;
     bool _shouldThrow;
-
-    public void Arm(PantsFailpoint target, Action? beforeFailure = null)
-    {
-        lock (_gate)
-        {
-            _target = target;
-            _beforeFailure = beforeFailure;
-            _shouldThrow = true;
-        }
-    }
-
-    public void ArmCallback(PantsFailpoint target, Action callback)
-    {
-        ArgumentNullException.ThrowIfNull(callback);
-        lock (_gate)
-        {
-            _target = target;
-            _beforeFailure = callback;
-            _shouldThrow = false;
-        }
-    }
+    PantsFailpoint? _target;
 
     public void Hit(PantsFailpoint failpoint)
     {
@@ -50,6 +29,27 @@ sealed class CloudCompactionFailpointHandler : IPantsFailpointHandler
         if (shouldThrow)
         {
             throw new IOException($"Injected failure at {failpoint}.");
+        }
+    }
+
+    public void Arm(PantsFailpoint target, Action? beforeFailure = null)
+    {
+        lock (_gate)
+        {
+            _target = target;
+            _beforeFailure = beforeFailure;
+            _shouldThrow = true;
+        }
+    }
+
+    public void ArmCallback(PantsFailpoint target, Action callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (_gate)
+        {
+            _target = target;
+            _beforeFailure = callback;
+            _shouldThrow = false;
         }
     }
 }

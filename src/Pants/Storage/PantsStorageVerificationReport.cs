@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage;
 
 public sealed record PantsStorageVerificationReport(
     long ManifestEpoch,

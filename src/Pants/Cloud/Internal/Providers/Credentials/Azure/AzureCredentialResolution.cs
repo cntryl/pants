@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 
-internal sealed record AzureCredentialResolution(
+sealed record AzureCredentialResolution(
     string Account,
     Uri Endpoint,
     AzureResolvedCredential Credential);

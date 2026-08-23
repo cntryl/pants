@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class CloudDdlTwoPhaseTests
 {
@@ -10,8 +10,8 @@ public sealed class CloudDdlTwoPhaseTests
         var registry = new CloudDdlRegistry();
         var canonical = CloudDdlJson.SerializeRegistry(registry);
 
-        var first = CloudDdlFence.Encode(canonical, writerEpoch: 1);
-        var second = CloudDdlFence.Encode(first, writerEpoch: 2);
+        var first = CloudDdlFence.Encode(canonical, 1);
+        var second = CloudDdlFence.Encode(first, 2);
 
         Assert.False(first.AsSpan().SequenceEqual(second));
         Assert.Equal(registry.Epoch, CloudDdlJson.DeserializeRegistry(first).Epoch);
@@ -63,8 +63,7 @@ public sealed class CloudDdlTwoPhaseTests
             CreateOptions(directory.Path),
             new PantsRuntimeDependencies(failpoints));
 
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => database.CreateColumnFamilyAsync("cas-retry").AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-retry").AsTask());
         Assert.Null(await database.GetColumnFamilyAsync("cas-retry"));
         Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
 
@@ -87,8 +86,7 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new PantsRuntimeDependencies(failpoints)))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CreateColumnFamilyAsync("cas-reopen").AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-reopen").AsTask());
             Assert.Null(await database.GetColumnFamilyAsync("cas-reopen"));
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
@@ -115,8 +113,8 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new PantsRuntimeDependencies(failpoints)))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(
-                () => database.CreateColumnFamilyAsync("torn-prepare").AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.CreateColumnFamilyAsync("torn-prepare").AsTask());
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
@@ -362,16 +360,16 @@ public sealed class CloudDdlTwoPhaseTests
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await database.GetColumnFamilyAsync(family.Name));
 
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
         Assert.NotNull(await database.GetColumnFamilyAsync(family.Name));
         await using (var transaction = await database.BeginTransactionAsync(
                          active,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
-            await Assert.ThrowsAsync<PantsFencedException>(
-                () => transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
         }
 
         await database.DropColumnFamilyAsync(active);
@@ -408,8 +406,8 @@ public sealed class CloudDdlTwoPhaseTests
             new PantsRuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await database.GetColumnFamilyAsync(family.Name));
-        await Assert.ThrowsAsync<PantsFencedException>(
-            () => database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
 
         var maintenance = compact
             ? database.CompactAllAsync().AsTask()

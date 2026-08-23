@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal;
 
 sealed record ProviderPublishedWalSegment
 {
@@ -8,13 +8,11 @@ sealed record ProviderPublishedWalSegment
 
     public ulong WriterEpoch { get; init; }
 
-    [JsonPropertyName("max_sequence")]
-    public ulong MaximumSequence { get; init; }
+    [JsonPropertyName("max_sequence")] public ulong MaximumSequence { get; init; }
 
     public ulong SizeBytes { get; init; }
 
-    [JsonPropertyName("content_crc32c")]
-    public uint ContentCrc32C { get; init; }
+    [JsonPropertyName("content_crc32c")] public uint ContentCrc32C { get; init; }
 
     public string ObjectKey { get; init; } = string.Empty;
 }

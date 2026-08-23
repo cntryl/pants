@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Runtime;
 
 public sealed class PantsStartupResidueCleanupTests
 {
@@ -13,7 +13,7 @@ public sealed class PantsStartupResidueCleanupTests
         var residue = Path.Combine(directory.Path, "cloud_recovery", "nested", "stale.sst");
         Directory.CreateDirectory(Path.GetDirectoryName(residue)!);
         await File.WriteAllTextAsync(residue, "stale");
-        var failpoint = new NthStartupResidueDeleteFailpointHandler(failAtHit: 1);
+        var failpoint = new NthStartupResidueDeleteFailpointHandler(1);
 
         await using var reopened = await OpenAsync(options, failpoint);
 
@@ -30,7 +30,7 @@ public sealed class PantsStartupResidueCleanupTests
         await CreateDatabaseAsync(options);
         var residue = Path.Combine(directory.Path, "sst", "orphan.sst.tmp");
         await File.WriteAllTextAsync(residue, "stale");
-        var failpoint = new NthStartupResidueDeleteFailpointHandler(failAtHit: 2);
+        var failpoint = new NthStartupResidueDeleteFailpointHandler(2);
 
         await using var reopened = await OpenAsync(options, failpoint);
 
@@ -47,7 +47,7 @@ public sealed class PantsStartupResidueCleanupTests
         await CreateDatabaseAsync(options);
         var residue = Path.Combine(directory.Path, "startup-residue.tmp");
         await File.WriteAllTextAsync(residue, "stale");
-        var failpoint = new NthStartupResidueDeleteFailpointHandler(failAtHit: 2);
+        var failpoint = new NthStartupResidueDeleteFailpointHandler(2);
 
         await using var reopened = await OpenAsync(options, failpoint);
 
@@ -70,7 +70,7 @@ public sealed class PantsStartupResidueCleanupTests
             "unpublished.sst");
         Directory.CreateDirectory(Path.GetDirectoryName(residue)!);
         await File.WriteAllTextAsync(residue, "stale");
-        var failpoint = new NthStartupResidueDeleteFailpointHandler(failAtHit: 1);
+        var failpoint = new NthStartupResidueDeleteFailpointHandler(1);
 
         await using var reopened = await OpenAsync(options, failpoint);
 
@@ -87,7 +87,7 @@ public sealed class PantsStartupResidueCleanupTests
         await CreateDatabaseAsync(options);
         var residue = Path.Combine(directory.Path, "sst", "orphan.sst");
         await File.WriteAllTextAsync(residue, "stale");
-        var failpoint = new NthStartupResidueDeleteFailpointHandler(failAtHit: 2);
+        var failpoint = new NthStartupResidueDeleteFailpointHandler(2);
 
         await using var reopened = await OpenAsync(options, failpoint);
 

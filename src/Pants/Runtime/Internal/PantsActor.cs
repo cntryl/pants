@@ -3,72 +3,74 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class PantsActor : IAsyncDisposable
 {
     static readonly TimeSpan ProviderStartupCleanupTimeout = TimeSpan.FromSeconds(1);
     static readonly TimeSpan InitialCloudWalSealRetryDelay = TimeSpan.FromMilliseconds(25);
     static readonly TimeSpan MaximumCloudWalSealRetryDelay = TimeSpan.FromSeconds(1);
-
-    readonly PantsRuntimeState _state;
-    readonly PantsOpenOptions _options;
-    readonly RuntimeTelemetry _telemetry;
-    readonly WalMetricsRecorder _walMetrics;
-    readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
-    readonly PantsStorageVerificationDelegate _storageVerifier;
-    readonly PantsVerificationBarrierResponseDelegate _verificationBarrierResponse;
-    readonly IPantsFailpointHandler _failpoints;
-    readonly TimeProvider _runtimeTimeProvider;
-    readonly Channel<IRuntimeCommand> _commands;
-    readonly WalRuntimeService _walRuntime;
-    readonly FlushRuntimeService _flushRuntime;
-    readonly ImmutableFlushPipeline _immutableFlushPipeline;
-    readonly CompactionRuntimeService _compactionRuntime;
-    readonly RuntimeWorker _manifestWorker;
-    readonly RuntimeWorker _garbageCollectionWorker;
-    readonly RuntimeWorker _cloudWorker;
-    readonly CloudWorkScheduler _cloudWalDrainScheduler;
-    readonly CloudWorkScheduler _cloudMaintenanceScheduler;
-    readonly CancellationTokenSource _loopCancellation = new();
-    readonly Task _loopTask;
-    readonly LocalDiskStore? _diskStore;
-    readonly ICloudPersistence? _cloudPersistence;
     readonly CloudCompactionOutputPublisher? _cloudCompactionOutputPublisher;
     readonly CloudDdlCoordinator? _cloudDdlCoordinator;
-    readonly CloudWalSealController? _cloudWalSealController;
-    readonly CloudWalUploadTracker _cloudWalUploads;
-    readonly CloudMemtableSegmentTracker? _cloudMemtableSegments;
     readonly CloudFlushRetryScheduler _cloudFlushRetries;
-    readonly Lock _cloudWalSealDeadlineGate = new();
-    readonly HashSet<Task> _cloudWalSealDeadlineTasks = [];
-    readonly ConcurrentDictionary<ColumnFamilyIdentity, byte> _writeStallHints =
-        new(ColumnFamilyIdentityComparer.Instance);
-    readonly HybridCacheManager? _hybridCache;
     readonly CloudLeaseCoordinator? _cloudLease;
     readonly CancellationTokenSource? _cloudLeaseCancellation;
     readonly Task? _cloudLeaseHeartbeat;
+    readonly CloudWorkScheduler _cloudMaintenanceScheduler;
+    readonly CloudMemtableSegmentTracker? _cloudMemtableSegments;
     readonly bool _cloudMode;
-    DatabaseSnapshot _currentSnapshot;
-    PantsRuntimeMetrics _publishedRuntimeMetrics = new();
-    int _queuedCommands;
+    readonly ICloudPersistence? _cloudPersistence;
+    readonly CloudWorkScheduler _cloudWalDrainScheduler;
+    readonly CloudWalSealController? _cloudWalSealController;
+    readonly Lock _cloudWalSealDeadlineGate = new();
+    readonly HashSet<Task> _cloudWalSealDeadlineTasks = [];
+    readonly CloudWalUploadTracker _cloudWalUploads;
+    readonly RuntimeWorker _cloudWorker;
+    readonly Channel<IRuntimeCommand> _commands;
+    readonly CompactionRuntimeService _compactionRuntime;
+    readonly LocalDiskStore? _diskStore;
+    readonly IPantsFailpointHandler _failpoints;
+    readonly FlushRuntimeService _flushRuntime;
+    readonly RuntimeWorker _garbageCollectionWorker;
+    readonly HybridCacheManager? _hybridCache;
+    readonly ImmutableFlushPipeline _immutableFlushPipeline;
+    readonly CancellationTokenSource _loopCancellation = new();
+    readonly Task _loopTask;
+    readonly RuntimeWorker _manifestWorker;
+    readonly PantsOpenOptions _options;
+    readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
+    readonly TimeProvider _runtimeTimeProvider;
+
+    readonly PantsRuntimeState _state;
+    readonly PantsStorageVerificationDelegate _storageVerifier;
+    readonly RuntimeTelemetry _telemetry;
+    readonly PantsVerificationBarrierResponseDelegate _verificationBarrierResponse;
+    readonly WalMetricsRecorder _walMetrics;
+    readonly WalRuntimeService _walRuntime;
+    readonly bool _workersStarted;
+
+    readonly ConcurrentDictionary<ColumnFamilyIdentity, byte> _writeStallHints =
+        new(ColumnFamilyIdentityComparer.Instance);
+
     int _activeCompactionRequests;
-    int _disposed;
-    int _persistenceAnomaly;
-    int _deferredCompactionScheduled;
-    bool _shutdownRequested;
-    bool _shutdownPreparationCompleted;
-    OnlineVerificationBarrier? _verificationBarrier;
-    TaskCompletionSource? _verificationMaintenanceCompletion;
-    long _nextVerificationBarrierToken;
-    bool _garbageCollectionPending;
-    bool _recoveredMemtableFlushPending;
-    bool _cloudWalSealPending;
     bool _backgroundCompactionEnabled;
     bool _backgroundCompactionPending;
-    bool _readAmplificationCompactionPending;
-    readonly bool _workersStarted;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
+    bool _cloudWalSealPending;
+    DatabaseSnapshot _currentSnapshot;
+    int _deferredCompactionScheduled;
+    int _disposed;
+    bool _garbageCollectionPending;
+    long _nextVerificationBarrierToken;
+    int _persistenceAnomaly;
+    PantsRuntimeMetrics _publishedRuntimeMetrics = new();
+    int _queuedCommands;
+    bool _readAmplificationCompactionPending;
+    bool _recoveredMemtableFlushPending;
+    bool _shutdownPreparationCompleted;
+    bool _shutdownRequested;
+    OnlineVerificationBarrier? _verificationBarrier;
+    TaskCompletionSource? _verificationMaintenanceCompletion;
     long _walCloudDurableSequence;
 
     public PantsActor(
@@ -117,6 +119,7 @@ sealed class PantsActor : IAsyncDisposable
                 {
                     _state.MarkSalvageMode();
                 }
+
                 try
                 {
                     _diskStore = LocalDiskStore.Open(
@@ -156,6 +159,7 @@ sealed class PantsActor : IAsyncDisposable
                     CleanupFailedDiskStartup(_diskStore);
                     throw;
                 }
+
                 break;
             case PantsStorageConfiguration.Cloud cloud:
                 var walStore = CloudObjectStoreFactory.Create(
@@ -193,6 +197,7 @@ sealed class PantsActor : IAsyncDisposable
                     {
                         _state.MarkSalvageMode();
                     }
+
                     _diskStore = LocalDiskStore.Open(
                         cloud.LocalCachePath,
                         _state,
@@ -250,6 +255,7 @@ sealed class PantsActor : IAsyncDisposable
                         _cloudLeaseHeartbeat);
                     throw;
                 }
+
                 break;
             default:
                 throw PantsException.Create(PantsErrorCode.NotSupported, "Unknown storage backend.");
@@ -375,7 +381,7 @@ sealed class PantsActor : IAsyncDisposable
             if (_cloudLease is not null)
             {
                 CleanupFailedProviderStartup(
-                    _cloudLease,
+                    (CloudLeaseCoordinator)_cloudLease,
                     _diskStore,
                     _cloudLeaseCancellation,
                     _cloudLeaseHeartbeat);
@@ -387,6 +393,71 @@ sealed class PantsActor : IAsyncDisposable
 
             throw;
         }
+    }
+
+    public bool IsPrimaryLeaseHealthy =>
+        (_diskStore?.IsLeaseHealthy ?? true) && (_cloudLease?.IsHealthy ?? true);
+
+    bool UsesBackgroundImmutableFlushes =>
+        _diskStore is not null && _options.Storage is PantsStorageConfiguration.Local;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        var cloudWalSealDeadlineTasks = CancelCloudWalSealDeadlinesForDisposal();
+        if (cloudWalSealDeadlineTasks.Length != 0)
+        {
+            try
+            {
+                await Task.WhenAll(cloudWalSealDeadlineTasks).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                Volatile.Write(ref _persistenceAnomaly, 1);
+            }
+        }
+
+        await _cloudFlushRetries.DisposeAsync().ConfigureAwait(false);
+        _commands.Writer.TryComplete();
+        await _loopTask.ConfigureAwait(false);
+        await _cloudWalDrainScheduler.DisposeAsync().ConfigureAwait(false);
+        await _cloudMaintenanceScheduler.DisposeAsync().ConfigureAwait(false);
+        await _cloudWorker.DisposeAsync().ConfigureAwait(false);
+        await _walRuntime.DisposeAsync().ConfigureAwait(false);
+        await _flushRuntime.DisposeAsync().ConfigureAwait(false);
+        await _compactionRuntime.DisposeAsync().ConfigureAwait(false);
+        await _manifestWorker.DisposeAsync().ConfigureAwait(false);
+        await _garbageCollectionWorker.DisposeAsync().ConfigureAwait(false);
+        if (_cloudLeaseCancellation is not null)
+        {
+            await _cloudLeaseCancellation.CancelAsync().ConfigureAwait(false);
+        }
+
+        if (_cloudLeaseHeartbeat is not null)
+        {
+            await _cloudLeaseHeartbeat.ConfigureAwait(false);
+        }
+
+        if (_cloudLease is not null)
+        {
+            try
+            {
+                await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (PantsException)
+            {
+                // A failed release leaves the bounded lease to expire naturally.
+            }
+        }
+
+        _cloudLeaseCancellation?.Dispose();
+        _cloudLease?.Dispose();
+        _diskStore?.Dispose();
+        _loopCancellation.Dispose();
     }
 
     static void CleanupFailedDiskStartup(LocalDiskStore? diskStore)
@@ -445,9 +516,6 @@ sealed class PantsActor : IAsyncDisposable
             // Startup cleanup must not replace the original failure.
         }
     }
-
-    public bool IsPrimaryLeaseHealthy =>
-        (_diskStore?.IsLeaseHealthy ?? true) && (_cloudLease?.IsHealthy ?? true);
 
     public bool IsSupported(PantsDurability durability) => _cloudMode
         ? durability is PantsDurability.BestEffort or PantsDurability.CloudAsync or PantsDurability.CloudStrict
@@ -531,7 +599,7 @@ sealed class PantsActor : IAsyncDisposable
             {
                 await WaitForColumnFamilyFlushAsync(
                         identity,
-                        retryFailures: false,
+                        false,
                         cancellationToken)
                     .ConfigureAwait(false);
                 _failpoints.Hit(PantsFailpoint.BeforeDropAdmission);
@@ -914,7 +982,7 @@ sealed class PantsActor : IAsyncDisposable
                         var result = await _compactionRuntime
                             .CompactAsync(
                                 state,
-                                force: true,
+                                true,
                                 _cloudCompactionOutputPublisher,
                                 cancellationToken: CancellationToken.None)
                             .ConfigureAwait(false);
@@ -923,7 +991,6 @@ sealed class PantsActor : IAsyncDisposable
                             Volatile.Write(ref _persistenceAnomaly, 1);
                             MarkPersistenceAnomaly(state);
                         }
-
                     }
 
                     await MirrorCloudStorageAsync().ConfigureAwait(false);
@@ -1038,7 +1105,7 @@ sealed class PantsActor : IAsyncDisposable
                 await FreezeAndScheduleFlushAsync(
                         state,
                         family,
-                        rejectWhenQueueFull: false)
+                        false)
                     .ConfigureAwait(false);
             }
 
@@ -1077,7 +1144,7 @@ sealed class PantsActor : IAsyncDisposable
                 return ValueTask.FromResult(metrics);
             },
             cancellationToken,
-            allowPostAdmissionCancellation: true);
+            true);
     }
 
     public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
@@ -1100,7 +1167,7 @@ sealed class PantsActor : IAsyncDisposable
         _ = await RecordPointReadCoreAsync(
             columnFamily,
             key,
-            captureDiagnostics: false,
+            false,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -1111,7 +1178,7 @@ sealed class PantsActor : IAsyncDisposable
         await RecordPointReadCoreAsync(
             columnFamily,
             key,
-            captureDiagnostics: true,
+            true,
             cancellationToken).ConfigureAwait(false) ??
         throw new PantsInternalException("Point-read diagnostics were not captured.");
 
@@ -1306,7 +1373,7 @@ sealed class PantsActor : IAsyncDisposable
                     if (_verificationBarrier is not null)
                     {
                         return (
-                            Barrier: (OnlineVerificationBarrier?)null,
+                            Barrier: null,
                             RetryAfter: (Task?)_verificationBarrier.Released,
                             LayoutBusy: false);
                     }
@@ -1314,7 +1381,7 @@ sealed class PantsActor : IAsyncDisposable
                     if (_verificationMaintenanceCompletion is { } maintenanceCompletion)
                     {
                         return (
-                            Barrier: (OnlineVerificationBarrier?)null,
+                            Barrier: null,
                             RetryAfter: (Task?)maintenanceCompletion.Task,
                             LayoutBusy: false);
                     }
@@ -1322,8 +1389,8 @@ sealed class PantsActor : IAsyncDisposable
                     if (HasLayoutMutationInFlight(state))
                     {
                         return (
-                            Barrier: (OnlineVerificationBarrier?)null,
-                            RetryAfter: (Task?)null,
+                            Barrier: null,
+                            RetryAfter: null,
                             LayoutBusy: true);
                     }
 
@@ -1569,65 +1636,6 @@ sealed class PantsActor : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        var cloudWalSealDeadlineTasks = CancelCloudWalSealDeadlinesForDisposal();
-        if (cloudWalSealDeadlineTasks.Length != 0)
-        {
-            try
-            {
-                await Task.WhenAll(cloudWalSealDeadlineTasks).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                Volatile.Write(ref _persistenceAnomaly, 1);
-            }
-        }
-
-        await _cloudFlushRetries.DisposeAsync().ConfigureAwait(false);
-        _commands.Writer.TryComplete();
-        await _loopTask.ConfigureAwait(false);
-        await _cloudWalDrainScheduler.DisposeAsync().ConfigureAwait(false);
-        await _cloudMaintenanceScheduler.DisposeAsync().ConfigureAwait(false);
-        await _cloudWorker.DisposeAsync().ConfigureAwait(false);
-        await _walRuntime.DisposeAsync().ConfigureAwait(false);
-        await _flushRuntime.DisposeAsync().ConfigureAwait(false);
-        await _compactionRuntime.DisposeAsync().ConfigureAwait(false);
-        await _manifestWorker.DisposeAsync().ConfigureAwait(false);
-        await _garbageCollectionWorker.DisposeAsync().ConfigureAwait(false);
-        if (_cloudLeaseCancellation is not null)
-        {
-            await _cloudLeaseCancellation.CancelAsync().ConfigureAwait(false);
-        }
-
-        if (_cloudLeaseHeartbeat is not null)
-        {
-            await _cloudLeaseHeartbeat.ConfigureAwait(false);
-        }
-
-        if (_cloudLease is not null)
-        {
-            try
-            {
-                await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (PantsException)
-            {
-                // A failed release leaves the bounded lease to expire naturally.
-            }
-        }
-
-        _cloudLeaseCancellation?.Dispose();
-        _cloudLease?.Dispose();
-        _diskStore?.Dispose();
-        _loopCancellation.Dispose();
-    }
-
     static async Task RunCloudLeaseHeartbeatAsync(
         CloudLeaseCoordinator lease,
         TimeSpan interval,
@@ -1793,9 +1801,9 @@ sealed class PantsActor : IAsyncDisposable
     async Task RunLoopAsync()
     {
         var commitCoalescer = new CommitCoalescer(
-            enabled: _diskStore is not null &&
-                _cloudPersistence is null &&
-                _options.FlushAfterWalRecords == 0,
+            _diskStore is not null &&
+            _cloudPersistence is null &&
+            _options.FlushAfterWalRecords == 0,
             _options.MemtableSizeLimitBytes,
             _telemetry,
             (commits, state, durability, beforeSync) => _walRuntime.AppendCommitGroupAsync(
@@ -1852,7 +1860,7 @@ sealed class PantsActor : IAsyncDisposable
         CommitCoalescer commitCoalescer)
     {
         var diskStore = _diskStore ??
-            throw new PantsInternalException("A coalesced commit requires persistent storage.");
+                        throw new PantsInternalException("A coalesced commit requires persistent storage.");
         var preparedCommands = new List<CommitRuntimeCommand>(commits.Count);
         var stagedBytesByFamily = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
@@ -1903,7 +1911,7 @@ sealed class PantsActor : IAsyncDisposable
         }
 
         var durability = groupDurability ??
-            throw new PantsInternalException("A coalesced commit group has no durability policy.");
+                         throw new PantsInternalException("A coalesced commit group has no durability policy.");
         IReadOnlyList<PreparedCoalescedCommit> prepared;
         try
         {
@@ -1924,7 +1932,7 @@ sealed class PantsActor : IAsyncDisposable
 
             foreach (var command in preparedCommands)
             {
-                command.Fail(state, exception, recordNoSpaceEvent: false);
+                command.Fail(state, exception, false);
             }
 
             if (exception is WalCommitGroupRollbackException)
@@ -2158,7 +2166,7 @@ sealed class PantsActor : IAsyncDisposable
                     storageChanged = _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
             var requiresCloudMaintenance = _cloudPersistence is not null &&
-                (storageChanged || _cloudPersistence.HasPersistenceAnomaly);
+                                           (storageChanged || _cloudPersistence.HasPersistenceAnomaly);
             if (durability == PantsDurability.CloudAsync)
             {
                 if (requiresCloudMaintenance)
@@ -2220,7 +2228,7 @@ sealed class PantsActor : IAsyncDisposable
         PantsDurability durability)
     {
         var diskStore = _diskStore ??
-            throw new PantsInternalException("Persistent commit has no disk store.");
+                        throw new PantsInternalException("Persistent commit has no disk store.");
         var result = await _walRuntime.AppendCommitAsync(
                 payload,
                 state,
@@ -2255,7 +2263,7 @@ sealed class PantsActor : IAsyncDisposable
         if (_cloudPersistence is not null && durability == PantsDurability.CloudAsync)
         {
             var controller = _cloudWalSealController ??
-                throw new PantsInternalException("CloudAsync has no WAL seal controller.");
+                             throw new PantsInternalException("CloudAsync has no WAL seal controller.");
             RecordCloudWalWrite(controller, payload);
             if (controller.ShouldSeal(diskStore.ActiveWalBytes))
             {
@@ -2283,7 +2291,7 @@ sealed class PantsActor : IAsyncDisposable
     async ValueTask CompleteCloudStrictCommitAsync(CommitPayload payload)
     {
         var controller = _cloudWalSealController ??
-            throw new PantsInternalException("CloudStrict has no WAL seal controller.");
+                         throw new PantsInternalException("CloudStrict has no WAL seal controller.");
         RecordCloudWalWrite(controller, payload);
 
         CloudWalSealResult seal;
@@ -2539,7 +2547,7 @@ sealed class PantsActor : IAsyncDisposable
     {
         EnsureCloudWriteAuthorityValid();
         var persistence = _cloudPersistence ??
-            throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
+                          throw new PantsInternalException("Cloud WAL publication has no persistence backend.");
         var started = Stopwatch.GetTimestamp();
         _telemetry.RecordCloudAsyncWalUploadStarted();
         try
@@ -2557,6 +2565,7 @@ sealed class PantsActor : IAsyncDisposable
             _telemetry.RecordCloudAsyncWalUploadFailed();
             throw;
         }
+
         _telemetry.RecordCloudAsyncWalUploadCompleted(Stopwatch.GetElapsedTime(started));
         EnsureCloudWriteAuthorityValid();
         Volatile.Write(
@@ -2656,7 +2665,7 @@ sealed class PantsActor : IAsyncDisposable
         LocalDiskStore diskStore)
     {
         if (_options.Storage is not PantsStorageConfiguration.Local ||
-            UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0 ||
+            (UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0) ||
             diskStore.ActiveWalBytes < _options.WalBufferSizeBytes)
         {
             return;
@@ -2766,7 +2775,7 @@ sealed class PantsActor : IAsyncDisposable
                         await FreezeAndScheduleFlushAsync(
                                 state,
                                 family,
-                                rejectWhenQueueFull: false)
+                                false)
                             .ConfigureAwait(false);
                     }
                 }
@@ -2807,7 +2816,7 @@ sealed class PantsActor : IAsyncDisposable
             _ = await FreezeAndScheduleFlushAsync(
                     state,
                     family,
-                    rejectWhenQueueFull: false)
+                    false)
                 .ConfigureAwait(false);
         }
     }
@@ -2856,13 +2865,10 @@ sealed class PantsActor : IAsyncDisposable
             _ = await FreezeAndScheduleFlushAsync(
                     state,
                     family,
-                    rejectWhenQueueFull: false)
+                    false)
                 .ConfigureAwait(false);
         }
     }
-
-    bool UsesBackgroundImmutableFlushes =>
-        _diskStore is not null && _options.Storage is PantsStorageConfiguration.Local;
 
     async ValueTask FlushImmutableMemtableAsync(
         ColumnFamilyIdentity identity,
@@ -2876,7 +2882,7 @@ sealed class PantsActor : IAsyncDisposable
                 EnsureCloudWriteAuthorityValid();
                 ValidateActiveFamily(state, identity);
                 _ = await FreezeAndScheduleFlushAsync(state, identity).ConfigureAwait(false);
-                await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                await ScheduleNextImmutableFlushAttemptAsync(state, true)
                     .ConfigureAwait(false);
                 return state.ImmutableMemtableFlushes.Values
                     .Where(flush => flush.Frozen.ColumnFamily == identity)
@@ -2902,7 +2908,7 @@ sealed class PantsActor : IAsyncDisposable
                     .ToArray();
                 if (retryFailures)
                 {
-                    await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                    await ScheduleNextImmutableFlushAttemptAsync(state, true)
                         .ConfigureAwait(false);
                 }
 
@@ -2924,7 +2930,7 @@ sealed class PantsActor : IAsyncDisposable
         }
 
         var diskStore = _diskStore ??
-            throw new PantsInternalException("An immutable flush requires local storage.");
+                        throw new PantsInternalException("An immutable flush requires local storage.");
         var sizeBytes = state.ActiveMemtableBytes.GetValueOrDefault(identity);
         if (sizeBytes == 0)
         {
@@ -2958,7 +2964,7 @@ sealed class PantsActor : IAsyncDisposable
         _telemetry.RecordFlushEnqueued();
         state.SignalWritePressureChanged();
         _backgroundCompactionPending |= _backgroundCompactionEnabled;
-        await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: false)
+        await ScheduleNextImmutableFlushAttemptAsync(state, false)
             .ConfigureAwait(false);
         PublishSnapshot(state);
         return flush;
@@ -3033,7 +3039,7 @@ sealed class PantsActor : IAsyncDisposable
                     _ = await FreezeAndScheduleFlushAsync(
                             state,
                             identity,
-                            rejectWhenQueueFull: false)
+                            false)
                         .ConfigureAwait(false);
                 }
 
@@ -3045,19 +3051,19 @@ sealed class PantsActor : IAsyncDisposable
                 }
 
                 PublishSnapshot(state);
-                current.CompleteAttempt(failure: null);
+                current.CompleteAttempt(null);
                 if (!state.IsShuttingDown)
                 {
                     await ScheduleNextImmutableFlushAttemptAsync(
                             state,
-                            retryFailure: false)
+                            false)
                         .ConfigureAwait(false);
                 }
 
                 return !state.IsShuttingDown &&
-                    state.ImmutableMemtableFlushes.Count == 0 &&
-                    (_backgroundCompactionPending ||
-                     _readAmplificationCompactionPending);
+                       state.ImmutableMemtableFlushes.Count == 0 &&
+                       (_backgroundCompactionPending ||
+                        _readAmplificationCompactionPending);
             },
             CancellationToken.None).ConfigureAwait(false);
         if (shouldRunDeferredCompaction)
@@ -3089,7 +3095,7 @@ sealed class PantsActor : IAsyncDisposable
 
                 await ScheduleNextImmutableFlushAttemptAsync(
                         state,
-                        retryFailure: true)
+                        true)
                     .ConfigureAwait(false);
                 return true;
             },
@@ -3103,7 +3109,7 @@ sealed class PantsActor : IAsyncDisposable
             var attempts = await SendAsync<IReadOnlyList<Task<Exception?>>>(
                 async state =>
                 {
-                    await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                    await ScheduleNextImmutableFlushAttemptAsync(state, true)
                         .ConfigureAwait(false);
                     var flushes = state.ImmutableMemtableFlushes.Values.ToArray();
 
@@ -3147,7 +3153,7 @@ sealed class PantsActor : IAsyncDisposable
                     _ = await FreezeAndScheduleFlushAsync(state, family).ConfigureAwait(false);
                 }
 
-                await ScheduleNextImmutableFlushAttemptAsync(state, retryFailure: true)
+                await ScheduleNextImmutableFlushAttemptAsync(state, true)
                     .ConfigureAwait(false);
 
                 return state.ImmutableMemtableFlushes.Values
@@ -3231,9 +3237,9 @@ sealed class PantsActor : IAsyncDisposable
         var result = await _compactionRuntime
             .CompactAsync(
                 state,
-                force: false,
+                false,
                 _cloudCompactionOutputPublisher,
-                flushMutableOperations: !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes)
             .ConfigureAwait(false);
 
         if (result.PersistenceAnomaly)
@@ -3285,9 +3291,9 @@ sealed class PantsActor : IAsyncDisposable
         var result = await _compactionRuntime
             .CompactAsync(
                 state,
-                force: true,
+                true,
                 _cloudCompactionOutputPublisher,
-                flushMutableOperations: !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
         {
@@ -3324,8 +3330,8 @@ sealed class PantsActor : IAsyncDisposable
                 async state =>
                 {
                     if (state.IsShuttingDown ||
-                        !_backgroundCompactionPending &&
-                        !_readAmplificationCompactionPending)
+                        (!_backgroundCompactionPending &&
+                         !_readAmplificationCompactionPending))
                     {
                         return true;
                     }
@@ -3478,6 +3484,7 @@ sealed class PantsActor : IAsyncDisposable
         {
             _telemetry.RecordCloudUploadCompleted();
         }
+
         if (persistence.HasPersistenceAnomaly)
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
@@ -3532,7 +3539,7 @@ sealed class PantsActor : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var persistence = _cloudPersistence ??
-            throw new PantsInternalException("Hybrid cache hydration has no cloud backend.");
+                          throw new PantsInternalException("Hybrid cache hydration has no cloud backend.");
         var result = (ReadOnlyMemory<byte>?)null;
         await _cloudWorker.ExecuteAsync(
                 async workerCancellationToken =>
@@ -3773,7 +3780,7 @@ sealed class PantsActor : IAsyncDisposable
 
         try
         {
-            var maintenance = await SendAsync<OnlineVerificationMaintenance?>(
+            var maintenance = await SendAsync(
                 _ =>
                 {
                     if (_verificationBarrier?.Token != barrier.Token)
@@ -3854,7 +3861,7 @@ sealed class PantsActor : IAsyncDisposable
                         {
                             await ScheduleNextImmutableFlushAttemptAsync(
                                     state,
-                                    retryFailure: true)
+                                    true)
                                 .ConfigureAwait(false);
                         }
                         catch (Exception)
@@ -3865,8 +3872,8 @@ sealed class PantsActor : IAsyncDisposable
 
                         return (
                             Compaction: state.ImmutableMemtableFlushes.Count == 0 &&
-                                (_backgroundCompactionPending ||
-                                 _readAmplificationCompactionPending),
+                                        (_backgroundCompactionPending ||
+                                         _readAmplificationCompactionPending),
                             CloudWalSeal: maintenance.ScheduleCloudWalSeal);
                     }
                     finally

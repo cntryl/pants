@@ -1,8 +1,9 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class GcsCredentialSourceTests
@@ -26,7 +27,7 @@ public sealed class GcsCredentialSourceTests
         });
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "oauth.example.test"
-                ? GcsTokenResponse("adc-token", expiresIn: 3600)
+                ? GcsTokenResponse("adc-token", 3600)
                 : GcsObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -56,7 +57,7 @@ public sealed class GcsCredentialSourceTests
             }));
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "oauth.example.test"
-                ? GcsTokenResponse("service-token", expiresIn: 3600)
+                ? GcsTokenResponse("service-token", 3600)
                 : GcsObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -83,7 +84,7 @@ public sealed class GcsCredentialSourceTests
         var issued = 0;
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "oauth.example.test"
-                ? GcsTokenResponse($"refreshed-token-{++issued}", expiresIn: 60)
+                ? GcsTokenResponse($"refreshed-token-{++issued}", 60)
                 : GcsObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -94,8 +95,7 @@ public sealed class GcsCredentialSourceTests
         Assert.NotNull(await store.GetAsync("second", CancellationToken.None));
 
         Assert.Equal(2, issued);
-        var objects = handler.Requests.Where(
-            static request => request.Uri.Host == "gcs.example.test").ToArray();
+        var objects = handler.Requests.Where(static request => request.Uri.Host == "gcs.example.test").ToArray();
         Assert.Equal("Bearer refreshed-token-1", objects[0].Header("Authorization"));
         Assert.Equal("Bearer refreshed-token-2", objects[1].Header("Authorization"));
     }
@@ -109,7 +109,7 @@ public sealed class GcsCredentialSourceTests
         });
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "metadata.example.test"
-                ? GcsTokenResponse("metadata-token", expiresIn: 3600)
+                ? GcsTokenResponse("metadata-token", 3600)
                 : GcsObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(new PantsGcsCredentialSource.MetadataServer(), client);
@@ -132,7 +132,8 @@ public sealed class GcsCredentialSourceTests
             JsonSerializer.Serialize(new
             {
                 type = "external_account",
-                audience = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/provider",
+                audience =
+                    "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/provider",
                 subject_token_type = "urn:ietf:params:oauth:token-type:jwt",
                 token_url = "https://sts.example.test/v1/token",
                 credential_source = new
@@ -147,7 +148,7 @@ public sealed class GcsCredentialSourceTests
         });
         using var handler = new CredentialHttpHandler((request, _) =>
             request.Uri.Host == "sts.example.test"
-                ? GcsTokenResponse("federated-token", expiresIn: 3600)
+                ? GcsTokenResponse("federated-token", 3600)
                 : GcsObjectResponse());
         using var client = new HttpClient(handler);
         var store = CreateStore(
@@ -157,7 +158,8 @@ public sealed class GcsCredentialSourceTests
         Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
 
         Assert.Contains("subject_token=external-subject", handler.Requests[0].Body, StringComparison.Ordinal);
-        Assert.Contains("requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token", handler.Requests[0].Body, StringComparison.Ordinal);
+        Assert.Contains("requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+            handler.Requests[0].Body, StringComparison.Ordinal);
         Assert.Equal("Bearer federated-token", handler.Requests[1].Header("Authorization"));
     }
 
@@ -185,8 +187,8 @@ public sealed class GcsCredentialSourceTests
             new PantsGcsCredentialSource.AuthorizedUserJsonFile(credentialPath),
             client);
 
-        var exception = await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        var exception =
+            await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
 
         Assert.DoesNotContain(clientSecret, exception.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(returnedToken, exception.ToString(), StringComparison.Ordinal);
@@ -202,18 +204,16 @@ public sealed class GcsCredentialSourceTests
             credentialPath,
             "client-secret",
             "refresh-token");
-        using var handler = new CredentialHttpHandler(
-            static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("[]")
-            });
+        using var handler = new CredentialHttpHandler(static (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("[]")
+        });
         using var client = new HttpClient(handler);
         var store = CreateStore(
             new PantsGcsCredentialSource.AuthorizedUserJsonFile(credentialPath),
             client);
 
-        await Assert.ThrowsAsync<PantsIOException>(
-            () => store.GetAsync("object", CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() => store.GetAsync("object", CancellationToken.None).AsTask());
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public sealed class GcsCredentialSourceTests
         [
             new PantsGcsCredentialSource.BearerToken(secret),
             new PantsGcsCredentialSource.HmacKey(access, secret),
-            new GcsCredential(access, secret, TokenProvider: null)
+            new GcsCredential(access, secret, null)
         ];
 
         Assert.All(sources, source =>
@@ -238,15 +238,15 @@ public sealed class GcsCredentialSourceTests
     static GcsObjectStore CreateStore(
         PantsGcsCredentialSource source,
         HttpClient client) => new(
-            new PantsCloudProviderConfiguration.Gcs(
-                "bucket",
-                "project",
-                new Uri("https://gcs.example.test"),
-                PantsGcsApiStyle.Json,
-                source),
-            string.Empty,
-            client,
-            TimeSpan.FromSeconds(5));
+        new PantsCloudProviderConfiguration.Gcs(
+            "bucket",
+            "project",
+            new Uri("https://gcs.example.test"),
+            PantsGcsApiStyle.Json,
+            source),
+        string.Empty,
+        client,
+        TimeSpan.FromSeconds(5));
 
     static EnvironmentVariableScope SetGcsEnvironment(
         IReadOnlyDictionary<string, string?> overrides)
@@ -267,22 +267,22 @@ public sealed class GcsCredentialSourceTests
         string path,
         string clientSecret,
         string refreshToken) => await File.WriteAllTextAsync(
-            path,
-            JsonSerializer.Serialize(new Dictionary<string, string>
-            {
-                ["type"] = "authorized_user",
-                ["client_id"] = "client",
-                ["client_secret"] = clientSecret,
-                ["refresh_token"] = refreshToken,
-                ["token_uri"] = "https://oauth.example.test/token"
-            }));
+        path,
+        JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["type"] = "authorized_user",
+            ["client_id"] = "client",
+            ["client_secret"] = clientSecret,
+            ["refresh_token"] = refreshToken,
+            ["token_uri"] = "https://oauth.example.test/token"
+        }));
 
     static HttpResponseMessage GcsObjectResponse()
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new ByteArrayContent("value"u8.ToArray()),
-            Headers = { ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"etag\"") }
+            Headers = { ETag = new EntityTagHeaderValue("\"etag\"") }
         };
         response.Headers.TryAddWithoutValidation("x-goog-generation", "1");
         return response;

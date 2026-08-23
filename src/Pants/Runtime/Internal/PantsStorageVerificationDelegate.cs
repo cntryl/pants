@@ -1,5 +1,5 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal delegate ValueTask<PantsStorageVerificationReport> PantsStorageVerificationDelegate(
+delegate ValueTask<PantsStorageVerificationReport> PantsStorageVerificationDelegate(
     string path,
     CancellationToken cancellationToken);

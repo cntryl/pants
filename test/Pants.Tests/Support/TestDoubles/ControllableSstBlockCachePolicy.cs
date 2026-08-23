@@ -1,8 +1,8 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class ControllableSstBlockCachePolicy : ISstBlockCachePolicy
+sealed class ControllableSstBlockCachePolicy : ISstBlockCachePolicy
 {
-    private readonly LinkedList<SstBlockCacheKey> _keys = [];
+    readonly LinkedList<SstBlockCacheKey> _keys = [];
 
     public ManualResetEventSlim AccessEntered { get; } = new();
 

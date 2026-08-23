@@ -28,6 +28,8 @@ csharp_prefer_braces = true:warning
 csharp_prefer_simple_using_statement = true:warning
 csharp_style_namespace_declarations = file_scoped:warning
 csharp_using_directive_placement = outside_namespace:warning
+dotnet_style_namespace_match_folder = true:warning
+
 csharp_style_prefer_primary_constructors = false:silent
 csharp_style_prefer_utf8_string_literals = true:suggestion
 csharp_style_implicit_object_creation_when_type_is_apparent = true:warning
@@ -49,3 +51,6 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+[src/Pants.DependencyInjection/PantsServiceCollectionExtensions.cs]
+dotnet_diagnostic.IDE0130.severity = none

@@ -1,14 +1,14 @@
 using System.Collections.Concurrent;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Cache;
 
-internal sealed class SstBlockCacheShard
+sealed class SstBlockCacheShard
 {
-    private readonly ConcurrentDictionary<SstBlockCacheKey, SstBlockCacheEntry> _entries = [];
-    private readonly ISstBlockCachePolicy _policy;
-    private readonly long _capacityBytes;
-    private readonly object _mutationGate = new();
-    private long _usedBytes;
+    readonly long _capacityBytes;
+    readonly ConcurrentDictionary<SstBlockCacheKey, SstBlockCacheEntry> _entries = [];
+    readonly object _mutationGate = new();
+    readonly ISstBlockCachePolicy _policy;
+    long _usedBytes;
 
     public SstBlockCacheShard(long capacityBytes, ISstBlockCachePolicy policy)
     {
@@ -31,7 +31,7 @@ internal sealed class SstBlockCacheShard
 
         lock (_mutationGate)
         {
-            if (!_entries.TryGetValue(key, out SstBlockCacheEntry? current))
+            if (!_entries.TryGetValue(key, out var current))
             {
                 entry = null;
                 return false;
@@ -50,7 +50,7 @@ internal sealed class SstBlockCacheShard
             return false;
         }
 
-        byte[] ownedContent = content.ToArray();
+        var ownedContent = content.ToArray();
         lock (_mutationGate)
         {
             if (_entries.ContainsKey(key))
@@ -85,8 +85,7 @@ internal sealed class SstBlockCacheShard
     {
         lock (_mutationGate)
         {
-            foreach (SstBlockCacheKey key in _entries.Keys.Where(
-                         key => StringComparer.Ordinal.Equals(key.FileName, fileName)))
+            foreach (var key in _entries.Keys.Where(key => StringComparer.Ordinal.Equals(key.FileName, fileName)))
             {
                 RemoveCore(key);
             }
@@ -98,17 +97,17 @@ internal sealed class SstBlockCacheShard
             .ThenBy(static key => key.BlockIndex)
             .ToArray();
 
-    private bool TryEvictOne()
+    bool TryEvictOne()
     {
-        int maximumAttempts = checked(_entries.Count + 1);
+        var maximumAttempts = checked(_entries.Count + 1);
         for (var attempt = 0; attempt < maximumAttempts; attempt++)
         {
-            if (!_policy.TrySelectVictim(out SstBlockCacheKey victim))
+            if (!_policy.TrySelectVictim(out var victim))
             {
                 return false;
             }
 
-            if (_entries.TryRemove(victim, out SstBlockCacheEntry? removed))
+            if (_entries.TryRemove(victim, out var removed))
             {
                 _usedBytes = checked(_usedBytes - removed.SizeBytes);
                 _policy.RecordRemoval(victim);
@@ -121,9 +120,9 @@ internal sealed class SstBlockCacheShard
         return false;
     }
 
-    private void RemoveCore(SstBlockCacheKey key)
+    void RemoveCore(SstBlockCacheKey key)
     {
-        if (_entries.TryRemove(key, out SstBlockCacheEntry? removed))
+        if (_entries.TryRemove(key, out var removed))
         {
             _usedBytes = checked(_usedBytes - removed.SizeBytes);
         }

@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Storage.Internal.Wal;
 
-internal sealed record MidgeWalMutation(
+sealed record MidgeWalMutation(
     uint ColumnFamilyId,
     MidgeWalOperation Operation,
     byte[] Key,

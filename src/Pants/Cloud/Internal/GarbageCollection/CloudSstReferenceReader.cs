@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 static class CloudSstReferenceReader
 {
@@ -10,7 +10,7 @@ static class CloudSstReferenceReader
         var manifest = CloudManifestReader.ReadManifest(localRoot);
         if (manifest is not null)
         {
-            AddManifestNames(manifest, names);
+            AddManifestNames((MidgeManifest)manifest, names);
         }
 
         var sstDirectory = Path.Combine(localRoot, "sst");

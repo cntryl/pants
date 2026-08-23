@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal sealed class DatabaseSnapshot
+sealed class DatabaseSnapshot
 {
     public DatabaseSnapshot(
         long sequence,

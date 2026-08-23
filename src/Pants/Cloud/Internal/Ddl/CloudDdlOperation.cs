@@ -1,12 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 sealed class CloudDdlOperation
 {
-    [JsonPropertyName("op_id")]
-    public string OperationId { get; set; } = string.Empty;
+    [JsonPropertyName("op_id")] public string OperationId { get; set; } = string.Empty;
 
     public JsonElement Edit { get; set; }
 

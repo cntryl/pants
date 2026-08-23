@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed record TransactionSpillRangeNode(
+sealed record TransactionSpillRangeNode(
     ulong Ordinal,
     ulong Left,
     ulong Right,

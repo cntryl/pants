@@ -1,6 +1,6 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Transactions;
 
-internal sealed class CommitCoalescer(
+sealed class CommitCoalescer(
     bool enabled,
     long memtableSizeLimitBytes,
     RuntimeTelemetry telemetry,

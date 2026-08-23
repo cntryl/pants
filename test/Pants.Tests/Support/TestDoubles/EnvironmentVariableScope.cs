@@ -1,6 +1,6 @@
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants.Tests.Support.TestDoubles;
 
-internal sealed class EnvironmentVariableScope : IDisposable
+sealed class EnvironmentVariableScope : IDisposable
 {
     readonly Dictionary<string, string?> _originalValues;
 

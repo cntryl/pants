@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal;
 
-internal readonly record struct ColumnFamilyIdentity(uint Id, string Name, int Generation);
+readonly record struct ColumnFamilyIdentity(uint Id, string Name, int Generation);

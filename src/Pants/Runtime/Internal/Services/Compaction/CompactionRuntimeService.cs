@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Runtime.Internal.Services.Compaction;
 
 sealed class CompactionRuntimeService(
     int capacity,
@@ -29,7 +29,7 @@ sealed class CompactionRuntimeService(
         CancellationToken cancellationToken)
     {
         var store = diskStore ??
-            throw new PantsInternalException("A compaction runtime request requires local storage.");
+                    throw new PantsInternalException("A compaction runtime request requires local storage.");
         try
         {
             Volatile.Write(

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Observability;
 
 public sealed record PantsReadPathDiagnostics
 {

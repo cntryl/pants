@@ -1,3 +1,3 @@
-namespace Cntryl.Pants;
+namespace Cntryl.Pants.Transactions.Internal;
 
-internal sealed record TransactionSpillRun(string Path, string RangePath, int RecordCount);
+sealed record TransactionSpillRun(string Path, string RangePath, int RecordCount);
