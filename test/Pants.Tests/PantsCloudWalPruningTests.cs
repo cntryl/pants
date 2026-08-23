@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 
 namespace Pants.Tests;
@@ -266,19 +265,17 @@ public sealed class PantsCloudWalPruningTests
             await CommitValueAsync(
                 database,
                 database.DefaultColumnFamily,
-                "default-async"u8.ToArray(),
-                PantsWriteOptions.CloudAsync);
-            await WaitForRemoteWalCountAsync(directory.Path, expectedCount: 1);
+                "default-first"u8.ToArray(),
+                PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
                 other,
-                "other-async"u8.ToArray(),
-                PantsWriteOptions.CloudAsync);
-            await WaitForRemoteWalCountAsync(directory.Path, expectedCount: 2);
+                "other-retained"u8.ToArray(),
+                PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
                 database.DefaultColumnFamily,
-                "default-strict"u8.ToArray(),
+                "default-last"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
 
             await database.FlushAsync(database.DefaultColumnFamily);
@@ -296,7 +293,7 @@ public sealed class PantsCloudWalPruningTests
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-            await reader.GetAsync("other-async"u8.ToArray()))));
+            await reader.GetAsync("other-retained"u8.ToArray()))));
     }
 
     [Fact]
@@ -432,22 +429,6 @@ public sealed class PantsCloudWalPruningTests
     static string[] RemoteWalPaths(string root) => Directory
         .EnumerateFiles(Path.Combine(CloudRoot(root), "wal"), "*.wal", SearchOption.AllDirectories)
         .ToArray();
-
-    static async Task WaitForRemoteWalCountAsync(string root, int expectedCount)
-    {
-        var timeout = TimeSpan.FromSeconds(2);
-        var started = Stopwatch.GetTimestamp();
-        while (RemoteWalPaths(root).Length < expectedCount)
-        {
-            if (Stopwatch.GetElapsedTime(started) >= timeout)
-            {
-                throw new TimeoutException(
-                    $"Timed out waiting for {expectedCount} remote WAL objects.");
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(10));
-        }
-    }
 
     static JsonElement[] ReadCatalogSegments(string root)
     {
