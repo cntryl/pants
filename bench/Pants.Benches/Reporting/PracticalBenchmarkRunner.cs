@@ -19,10 +19,10 @@ static class PracticalBenchmarkRunner
         }
 
         var scenarios = BenchmarkInventory.DiscoverScenarioIds();
-        if (scenarios.Count != 153 || scenarios.Distinct(StringComparer.Ordinal).Count() != scenarios.Count)
+        if (scenarios.Count != 155 || scenarios.Distinct(StringComparer.Ordinal).Count() != scenarios.Count)
         {
             Console.Error.WriteLine(
-                $"Practical inventory must contain 153 unique scenarios; discovered {scenarios.Count}.");
+                $"Practical inventory must contain 155 unique scenarios; discovered {scenarios.Count}.");
             return 1;
         }
 
