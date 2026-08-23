@@ -4,7 +4,7 @@ sealed record FrozenMemtableFlush(
     long Id,
     ColumnFamilyIdentity ColumnFamily,
     uint ColumnFamilyId,
-    IReadOnlyList<MidgeWalMutation> Operations,
+    IReadOnlyList<WalMutation> Operations,
     ulong SstSequence,
     ulong FrontierSequence,
     long SizeBytes)

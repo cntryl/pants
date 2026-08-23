@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class DeferredCompactionRaceFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -24,19 +24,19 @@ sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, ID
         _releaseReset.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         switch (failpoint)
         {
-            case PantsFailpoint.BeforeCompactionAdmission
+            case Failpoint.BeforeCompactionAdmission
                 when Interlocked.CompareExchange(ref _compactionHit, 1, 0) == 0:
                 Block(_compactionAdmission, _releaseCompaction, failpoint);
                 break;
-            case PantsFailpoint.BeforeFlushPublication
+            case Failpoint.BeforeFlushPublication
                 when Interlocked.Increment(ref _flushHits) == 2:
                 Block(_flushPublication, _releaseFlush, failpoint);
                 break;
-            case PantsFailpoint.BeforeDeferredCompactionSignalReset
+            case Failpoint.BeforeDeferredCompactionSignalReset
                 when Interlocked.CompareExchange(ref _resetHit, 1, 0) == 0:
                 Block(_signalReset, _releaseReset, failpoint);
                 break;
@@ -64,7 +64,7 @@ sealed class DeferredCompactionRaceFailpointHandler : IPantsFailpointHandler, ID
     static void Block(
         TaskCompletionSource entered,
         ManualResetEventSlim release,
-        PantsFailpoint failpoint)
+        Failpoint failpoint)
     {
         entered.TrySetResult();
         if (!release.Wait(MaximumBlockTime))

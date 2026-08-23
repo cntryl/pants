@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Runtime.Internal;
 
-sealed class NullPantsFailpointHandler : IPantsFailpointHandler
+sealed class NullPantsFailpointHandler : IFailpointHandler
 {
     NullPantsFailpointHandler()
     {
@@ -8,7 +8,7 @@ sealed class NullPantsFailpointHandler : IPantsFailpointHandler
 
     public static NullPantsFailpointHandler Instance { get; } = new();
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
     }
 }

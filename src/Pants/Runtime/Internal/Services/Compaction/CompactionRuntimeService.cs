@@ -11,7 +11,7 @@ sealed class CompactionRuntimeService(
     public int CompactingSsts => Volatile.Read(ref _compactingSsts);
 
     public ValueTask<CompactionResult> CompactAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations = true,

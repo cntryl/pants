@@ -257,7 +257,7 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, header, "Transaction spill header is truncated.");
         if (!header[..8].SequenceEqual(RunMagic) ||
             BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 2 ||
-            MidgeDiskFormat.Crc32C(header[..44]) !=
+            DiskFormat.Crc32C(header[..44]) !=
             BinaryPrimitives.ReadUInt32LittleEndian(header[44..]))
         {
             throw PantsException.Create(
@@ -531,7 +531,7 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, header, "Transaction range index header is truncated.");
         if (!header[..8].SequenceEqual(RangeMagic) ||
             BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 1 ||
-            MidgeDiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
+            DiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
@@ -674,7 +674,7 @@ sealed class TransactionSpillStore : IDisposable
             using var payload = new MemoryStream();
             WriteLength(payload, key.Length);
             payload.Write(key);
-            MidgeDiskFormat.WriteUInt64(payload, offset);
+            DiskFormat.WriteUInt64(payload, offset);
             WriteFrame(stream, payload.GetBuffer().AsSpan(0, checked((int)payload.Length)));
         }
 
@@ -685,7 +685,7 @@ sealed class TransactionSpillStore : IDisposable
         BinaryPrimitives.WriteUInt64LittleEndian(header[20..], ordinalTableOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(header[28..], sparseIndexOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(header[36..], checked((ulong)sparseEntries.Count));
-        BinaryPrimitives.WriteUInt32LittleEndian(header[44..], MidgeDiskFormat.Crc32C(header[..44]));
+        BinaryPrimitives.WriteUInt32LittleEndian(header[44..], DiskFormat.Crc32C(header[..44]));
         stream.Position = 0;
         stream.Write(header);
         stream.Flush(true);
@@ -706,7 +706,7 @@ sealed class TransactionSpillStore : IDisposable
             ReadExactly(stream, header, "Transaction spill header is truncated.");
             if (!header[..8].SequenceEqual(RunMagic) ||
                 BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 2 ||
-                MidgeDiskFormat.Crc32C(header[..44]) != BinaryPrimitives.ReadUInt32LittleEndian(header[44..]))
+                DiskFormat.Crc32C(header[..44]) != BinaryPrimitives.ReadUInt32LittleEndian(header[44..]))
             {
                 throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill header is invalid.");
             }
@@ -812,7 +812,7 @@ sealed class TransactionSpillStore : IDisposable
     static void WriteOperationFrame(Stream stream, TransactionIntentOperation operation)
     {
         using var payload = new MemoryStream();
-        MidgeDiskFormat.WriteUInt64(payload, operation.Ordinal);
+        DiskFormat.WriteUInt64(payload, operation.Ordinal);
         payload.WriteByte(operation.Kind switch
         {
             CommitOperationKind.Put when operation.InsertOnly => 1,
@@ -821,9 +821,9 @@ sealed class TransactionSpillStore : IDisposable
             CommitOperationKind.DeleteRange => 3,
             _ => throw PantsException.Create(PantsErrorCode.Internal, "Transaction intent kind is invalid.")
         });
-        MidgeDiskFormat.WriteUInt32(payload, operation.Family.Id);
+        DiskFormat.WriteUInt32(payload, operation.Family.Id);
         payload.WriteByte(operation.TimeToLive.HasValue ? (byte)1 : (byte)0);
-        MidgeDiskFormat.WriteUInt64(
+        DiskFormat.WriteUInt64(
             payload,
             operation.TimeToLive.HasValue
                 ? checked((ulong)operation.TimeToLive.Value.TotalSeconds)
@@ -925,7 +925,7 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, frameHeader, "Transaction spill frame header is truncated.");
         var payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(frameHeader));
         var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(frameHeader[4..]);
-        if (payloadLength > MidgeDiskFormat.WalMaximumRecordBytes)
+        if (payloadLength > DiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
@@ -1044,7 +1044,7 @@ sealed class TransactionSpillStore : IDisposable
         string message)
     {
         ReadExactly(stream, destination, message);
-        checksum = MidgeDiskFormat.Crc32CAppend(checksum, destination);
+        checksum = DiskFormat.Crc32CAppend(checksum, destination);
     }
 
     static void WriteRangeFile(string path, IReadOnlyList<TransactionIntentOperation> operations)
@@ -1073,7 +1073,7 @@ sealed class TransactionSpillStore : IDisposable
             BinaryPrimitives.WriteUInt64LittleEndian(entry, offset);
             BinaryPrimitives.WriteUInt32LittleEndian(
                 entry.AsSpan(8),
-                MidgeDiskFormat.Crc32C(entry.AsSpan(0, 8)));
+                DiskFormat.Crc32C(entry.AsSpan(0, 8)));
             stream.Write(entry);
         }
 
@@ -1082,7 +1082,7 @@ sealed class TransactionSpillStore : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(header[8..], 1);
         BinaryPrimitives.WriteUInt64LittleEndian(header[12..], checked((ulong)nodes.Length));
         BinaryPrimitives.WriteUInt64LittleEndian(header[20..], nodeSectionOffset);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[28..], MidgeDiskFormat.Crc32C(header[..28]));
+        BinaryPrimitives.WriteUInt32LittleEndian(header[28..], DiskFormat.Crc32C(header[..28]));
         stream.Position = 0;
         stream.Write(header);
         stream.Flush(true);
@@ -1175,7 +1175,7 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, header, "Transaction range index header is truncated.");
         if (!header[..8].SequenceEqual(RangeMagic) ||
             BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 1 ||
-            MidgeDiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
+            DiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction range index header is invalid.");
         }
@@ -1207,7 +1207,7 @@ sealed class TransactionSpillStore : IDisposable
         {
             stream.Position = checked((long)(RangeHeaderLength + index * RangeTableEntryLength));
             ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
-            if (MidgeDiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
+            if (DiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
             {
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
@@ -1410,7 +1410,7 @@ sealed class TransactionSpillStore : IDisposable
         stream.Position = checked((long)(RangeHeaderLength + nodeIndex * RangeTableEntryLength));
         Span<byte> entry = stackalloc byte[RangeTableEntryLength];
         ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
-        if (MidgeDiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
+        if (DiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
@@ -1526,9 +1526,9 @@ sealed class TransactionSpillStore : IDisposable
     static void WriteRangeNodeFrame(Stream stream, TransactionSpillRangeNode node)
     {
         using var payload = new MemoryStream();
-        MidgeDiskFormat.WriteUInt64(payload, node.Ordinal);
-        MidgeDiskFormat.WriteUInt64(payload, node.Left);
-        MidgeDiskFormat.WriteUInt64(payload, node.Right);
+        DiskFormat.WriteUInt64(payload, node.Ordinal);
+        DiskFormat.WriteUInt64(payload, node.Left);
+        DiskFormat.WriteUInt64(payload, node.Right);
         WriteLength(payload, node.Start.Length);
         payload.Write(node.Start);
         WriteLength(payload, node.End.Length);
@@ -1540,13 +1540,13 @@ sealed class TransactionSpillStore : IDisposable
 
     static void WriteFrame(Stream stream, ReadOnlySpan<byte> payload)
     {
-        if (payload.Length > MidgeDiskFormat.WalMaximumRecordBytes)
+        if (payload.Length > DiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.ResourceLimit("A transaction spill frame exceeds the 64 MiB limit.");
         }
 
-        MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-        MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+        DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+        DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
         stream.Write(payload);
     }
 
@@ -1556,14 +1556,14 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, header, "Transaction spill frame header is truncated.");
         var length = BinaryPrimitives.ReadUInt32LittleEndian(header);
         var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
-        if (length > MidgeDiskFormat.WalMaximumRecordBytes)
+        if (length > DiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill frame exceeds the limit.");
         }
 
         var payload = GC.AllocateUninitializedArray<byte>(checked((int)length));
         ReadExactly(stream, payload, "Transaction spill frame is truncated.");
-        if (MidgeDiskFormat.Crc32C(payload) != expectedChecksum)
+        if (DiskFormat.Crc32C(payload) != expectedChecksum)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill frame checksum does not match.");
         }
@@ -1606,14 +1606,14 @@ sealed class TransactionSpillStore : IDisposable
 
     static void ReadExactly(Stream stream, Span<byte> destination, string message)
     {
-        if (!MidgeDiskFormat.ReadExactly(stream, destination))
+        if (!DiskFormat.ReadExactly(stream, destination))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, message);
         }
     }
 
     static void WriteLength(Stream stream, int length) =>
-        MidgeDiskFormat.WriteUInt32(stream, checked((uint)length));
+        DiskFormat.WriteUInt32(stream, checked((uint)length));
 
     static void DeleteIfPresent(string path)
     {

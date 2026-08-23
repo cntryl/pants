@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Observability;
 
-sealed class RuntimeMetricsResponseFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class RuntimeMetricsResponseFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -16,9 +16,9 @@ sealed class RuntimeMetricsResponseFailpointHandler : IPantsFailpointHandler, ID
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeRuntimeMetricsResponse ||
+        if (failpoint != Failpoint.BeforeRuntimeMetricsResponse ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;

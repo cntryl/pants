@@ -5,7 +5,7 @@ public sealed class CloudWalCoverageValidatorTests
     [Fact]
     public void ShouldAcceptWalMutationGivenManifestFileCoversSequenceAndKey()
     {
-        var bytes = CreateWalBytes(MidgeWalOperation.Put, "middle"u8.ToArray());
+        var bytes = CreateWalBytes(WalOperation.Put, "middle"u8.ToArray());
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         CloudWalCoverageValidator.ValidateAndEnsureCovered(
@@ -18,7 +18,7 @@ public sealed class CloudWalCoverageValidatorTests
     [Fact]
     public void ShouldRejectWalMutationGivenKeyOutsideManifestFileRange()
     {
-        var bytes = CreateWalBytes(MidgeWalOperation.Put, "zulu-plus"u8.ToArray());
+        var bytes = CreateWalBytes(WalOperation.Put, "zulu-plus"u8.ToArray());
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         Assert.Throws<PantsCorruptionException>(() =>
@@ -32,7 +32,7 @@ public sealed class CloudWalCoverageValidatorTests
     [Fact]
     public void ShouldReportValidWalAsUncoveredGivenKeyOutsideManifestFileRange()
     {
-        var bytes = CreateWalBytes(MidgeWalOperation.Put, "zulu-plus"u8.ToArray());
+        var bytes = CreateWalBytes(WalOperation.Put, "zulu-plus"u8.ToArray());
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         var covered = CloudWalCoverageValidator.ValidateAndIsCovered(
@@ -48,7 +48,7 @@ public sealed class CloudWalCoverageValidatorTests
     public void ShouldRejectWalRangeTombstoneGivenEndOutsideManifestFileRange()
     {
         var bytes = CreateWalBytes(
-            MidgeWalOperation.DeleteRange,
+            WalOperation.DeleteRange,
             "middle"u8.ToArray(),
             "zulu-plus"u8.ToArray());
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
@@ -64,7 +64,7 @@ public sealed class CloudWalCoverageValidatorTests
     [Fact]
     public void ShouldRejectWalGivenFrameWriterEpochDiffersFromCatalog()
     {
-        var bytes = CreateWalBytes(MidgeWalOperation.Put, "middle"u8.ToArray());
+        var bytes = CreateWalBytes(WalOperation.Put, "middle"u8.ToArray());
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
         Assert.Throws<PantsCorruptionException>(() =>
@@ -104,13 +104,13 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     [Theory]
-    [InlineData((byte)MidgeWalOperation.Put)]
-    [InlineData((byte)MidgeWalOperation.DeleteRange)]
+    [InlineData((byte)WalOperation.Put)]
+    [InlineData((byte)WalOperation.DeleteRange)]
     public void ShouldRejectMalformedStandaloneWalMutationGivenRequiredFieldIsMissing(
         byte operation)
     {
         var bytes = Frame(CreateMalformedMutationPayload(
-            (MidgeWalOperation)operation,
+            (WalOperation)operation,
             null));
         var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
 
@@ -123,20 +123,20 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     [Theory]
-    [InlineData((byte)MidgeWalOperation.Put)]
-    [InlineData((byte)MidgeWalOperation.DeleteRange)]
+    [InlineData((byte)WalOperation.Put)]
+    [InlineData((byte)WalOperation.DeleteRange)]
     public void ShouldRejectMalformedSplitWalMutationGivenRequiredFieldIsMissing(
         byte operation)
     {
         var bytes = Frame(
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionBegin,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
                 1,
                 1,
                 7),
-            CreateMalformedMutationPayload((MidgeWalOperation)operation, 1),
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionCommit,
+            CreateMalformedMutationPayload((WalOperation)operation, 1),
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionCommit,
                 1,
                 3,
                 7));
@@ -151,20 +151,20 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     static byte[] CreateWalBytes(
-        MidgeWalOperation operation,
+        WalOperation operation,
         byte[] key,
         byte[]? rangeEnd = null)
     {
-        var payload = MidgeWalCodec.EncodeTransactionBatch(
+        var payload = WalCodec.EncodeTransactionBatch(
             1,
             1,
             7,
             [
-                new MidgeWalMutation(
+                new WalMutation(
                     0,
                     operation,
                     key,
-                    operation == MidgeWalOperation.Put ? "value"u8.ToArray() : null,
+                    operation == WalOperation.Put ? "value"u8.ToArray() : null,
                     2,
                     null,
                     rangeEnd)
@@ -173,15 +173,15 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     static byte[] CreateSplitWalBytes(byte[] key) => Frame(
-        MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionBegin,
+        WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionBegin,
             1,
             1,
             7),
-        MidgeWalCodec.EncodeTransactionMutation(
-            new MidgeWalMutation(
+        WalCodec.EncodeTransactionMutation(
+            new WalMutation(
                 0,
-                MidgeWalOperation.Put,
+                WalOperation.Put,
                 key,
                 "value"u8.ToArray(),
                 2,
@@ -189,16 +189,16 @@ public sealed class CloudWalCoverageValidatorTests
                 null),
             1,
             7),
-        MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionCommit,
+        WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionCommit,
             1,
             3,
             7));
 
     static byte[] CreateMalformedMutationPayload(
-        MidgeWalOperation operation,
+        WalOperation operation,
         ulong? transactionId) =>
-        MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
+        WalCodec.EncodeRecord(new WalRecord(
             0,
             operation,
             "middle"u8.ToArray(),
@@ -214,20 +214,20 @@ public sealed class CloudWalCoverageValidatorTests
         using var stream = new MemoryStream();
         foreach (var payload in payloads)
         {
-            MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
 
         return stream.ToArray();
     }
 
-    static MidgeManifest CreateManifest(byte[] smallestKey, byte[] largestKey) => new()
+    static ManifestState CreateManifest(byte[] smallestKey, byte[] largestKey) => new()
     {
         LastPersistedSequence = 3,
         Files =
         [
-            new MidgeFileMeta
+            new FileMeta
             {
                 Name = "00000000000000000001.sst",
                 ColumnFamilyId = 0,

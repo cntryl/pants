@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class HybridHydrationFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class HybridHydrationFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -16,9 +16,9 @@ sealed class HybridHydrationFailpointHandler : IPantsFailpointHandler, IDisposab
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeHybridSstHydration ||
+        if (failpoint != Failpoint.BeforeHybridSstHydration ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;

@@ -25,9 +25,9 @@ public sealed class CompactionMergerTests
     [Fact]
     public void ShouldDropEligibleRangeTombstoneAndCoveredOlderValues()
     {
-        var contents = new MidgeSstContents(
+        var contents = new SstContents(
             [Entry("b", "value", 1), Entry("z", "kept", 1)],
-            [new MidgeRangeTombstone(TestBytes.FromString("a"), TestBytes.FromString("c"), 2)],
+            [new RangeTombstone(TestBytes.FromString("a"), TestBytes.FromString("c"), 2)],
             1);
 
         var result = CompactionMerger.Merge(
@@ -42,9 +42,9 @@ public sealed class CompactionMergerTests
     [Fact]
     public void ShouldRetainRangeTombstoneWithoutWholeFamilyCoverage()
     {
-        var contents = new MidgeSstContents(
+        var contents = new SstContents(
             [],
-            [new MidgeRangeTombstone(TestBytes.FromString("a"), TestBytes.FromString("c"), 2)],
+            [new RangeTombstone(TestBytes.FromString("a"), TestBytes.FromString("c"), 2)],
             1);
 
         var result = CompactionMerger.Merge(
@@ -54,9 +54,9 @@ public sealed class CompactionMergerTests
         Assert.Single(result.RangeTombstones);
     }
 
-    static MidgeSstContents Contents(params MidgeSstEntry[] entries) => new(entries, [], 1);
+    static SstContents Contents(params SstEntry[] entries) => new(entries, [], 1);
 
-    static MidgeSstEntry Entry(
+    static SstEntry Entry(
         string key,
         string? value,
         ulong sequence,

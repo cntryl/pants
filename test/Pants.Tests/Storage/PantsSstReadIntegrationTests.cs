@@ -91,7 +91,7 @@ public sealed class PantsSstReadIntegrationTests
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
 
-        await Assert.ThrowsAsync<PantsStorageException>(() =>
+        await Assert.ThrowsAsync<StorageException>(() =>
             transaction.GetAsync("corrupt-key"u8.ToArray()).AsTask());
     }
 
@@ -112,7 +112,7 @@ public sealed class PantsSstReadIntegrationTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
 
-        await Assert.ThrowsAsync<PantsStorageException>(async () =>
+        await Assert.ThrowsAsync<StorageException>(async () =>
         {
             await foreach (var _ in scan)
             {

@@ -14,7 +14,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateProviderLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
 
         await using (var database = await OpenProviderAsync(
                          firstCache.Path,
@@ -119,7 +119,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     static ValueTask<IPantsDatabase> OpenProviderAsync(
         string cachePath,
         PantsCloudStorageLocation location,
-        PantsRuntimeDependencies dependencies) =>
+        RuntimeDependencies dependencies) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cachePath, location)
                 .WithBackgroundCompaction(false),

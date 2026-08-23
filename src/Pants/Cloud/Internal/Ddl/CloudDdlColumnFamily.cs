@@ -27,7 +27,7 @@ sealed class CloudDdlColumnFamily
         Reclaimed = Reclaimed
     };
 
-    public static CloudDdlColumnFamily FromManifest(MidgeColumnFamilyMeta metadata) => new()
+    public static CloudDdlColumnFamily FromManifest(ColumnFamilyMeta metadata) => new()
     {
         Id = metadata.Id,
         Name = metadata.Name,

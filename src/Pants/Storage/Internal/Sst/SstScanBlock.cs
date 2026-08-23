@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 sealed class SstScanBlock
 {
     public SstScanBlock(
-        MidgeSstReader reader,
+        SstReader reader,
         int blockIndex,
         byte[] firstKey,
         byte[]? nextFirstKey)
@@ -14,7 +14,7 @@ sealed class SstScanBlock
         NextFirstKey = nextFirstKey;
     }
 
-    public MidgeSstReader Reader { get; }
+    public SstReader Reader { get; }
 
     public int BlockIndex { get; }
 

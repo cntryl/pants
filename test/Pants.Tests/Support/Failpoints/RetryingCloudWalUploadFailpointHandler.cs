@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class RetryingCloudWalUploadFailpointHandler : IPantsFailpointHandler
+sealed class RetryingCloudWalUploadFailpointHandler : IFailpointHandler
 {
     readonly TaskCompletionSource _failed = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -10,9 +10,9 @@ sealed class RetryingCloudWalUploadFailpointHandler : IPantsFailpointHandler
 
     public int FailureCount => Volatile.Read(ref _failureCount);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeCloudWalUpload ||
+        if (failpoint != Failpoint.BeforeCloudWalUpload ||
             Volatile.Read(ref _failuresEnabled) == 0)
         {
             return;

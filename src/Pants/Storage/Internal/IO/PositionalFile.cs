@@ -16,7 +16,7 @@ static class PositionalFile
         var length = RandomAccess.GetLength(handle);
         if (length > Array.MaxLength)
         {
-            throw new PantsStorageException($"File '{path}' is too large to materialize.");
+            throw new StorageException($"File '{path}' is too large to materialize.");
         }
 
         var bytes = GC.AllocateUninitializedArray<byte>(checked((int)length));

@@ -1,8 +1,8 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class FlushPipelineFailpointHandler(
-    PantsFailpoint target,
-    bool throwOnHit = false) : IPantsFailpointHandler, IDisposable
+    Failpoint target,
+    bool throwOnHit = false) : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -20,7 +20,7 @@ sealed class FlushPipelineFailpointHandler(
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint != target || Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {

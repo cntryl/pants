@@ -22,7 +22,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         ColumnFamilyIdentity family,
         DateTimeOffset snapshotTime,
         TransactionIntentReadView intents,
-        PantsScanBounds bounds)
+        ScanBounds bounds)
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
         {

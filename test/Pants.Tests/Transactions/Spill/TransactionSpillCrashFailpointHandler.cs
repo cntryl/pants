@@ -3,14 +3,14 @@ using System.Text;
 namespace Cntryl.Pants.Tests.Transactions.Spill;
 
 sealed class TransactionSpillCrashFailpointHandler(
-    PantsFailpoint target,
+    Failpoint target,
     string sentinelPath,
     string scenario,
-    string trigger) : IPantsFailpointHandler
+    string trigger) : IFailpointHandler
 {
     int _armed = 1;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint != target || Interlocked.Exchange(ref _armed, 0) != 1)
         {

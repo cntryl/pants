@@ -3,11 +3,11 @@ namespace Cntryl.Pants.Runtime.Internal;
 sealed class RuntimeCommand<T> : IRuntimeCommand
 {
     readonly CancellationToken _callerCancellationToken;
-    readonly Func<PantsRuntimeState, ValueTask<T>> _operation;
+    readonly Func<RuntimeState, ValueTask<T>> _operation;
     readonly RuntimeResponseSlot<T> _response = new();
 
     public RuntimeCommand(
-        Func<PantsRuntimeState, ValueTask<T>> operation,
+        Func<RuntimeState, ValueTask<T>> operation,
         CancellationToken callerCancellationToken)
     {
         _operation = operation;
@@ -16,7 +16,7 @@ sealed class RuntimeCommand<T> : IRuntimeCommand
 
     public Task<T> Response => _response.Response;
 
-    public async ValueTask ExecuteAsync(PantsRuntimeState state)
+    public async ValueTask ExecuteAsync(RuntimeState state)
     {
         try
         {

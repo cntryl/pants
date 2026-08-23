@@ -124,18 +124,18 @@ public sealed class PantsDurabilityParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.BeforeWalAppend))]
-    [InlineData(nameof(PantsFailpoint.MidWalAppend))]
-    [InlineData(nameof(PantsFailpoint.AfterWalAppend))]
-    [InlineData(nameof(PantsFailpoint.BeforeWalFlush))]
+    [InlineData(nameof(Failpoint.BeforeWalAppend))]
+    [InlineData(nameof(Failpoint.MidWalAppend))]
+    [InlineData(nameof(Failpoint.AfterWalAppend))]
+    [InlineData(nameof(Failpoint.BeforeWalFlush))]
     public async Task ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var failpoint = Enum.Parse<PantsFailpoint>(failpointName);
+        var failpoint = Enum.Parse<Failpoint>(failpointName);
         var handler = new OneShotFailpointHandler(failpoint);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await using var transaction = await database.BeginTransactionAsync(
                 database.DefaultColumnFamily,
@@ -158,18 +158,18 @@ public sealed class PantsDurabilityParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.BeforeWalAppend))]
-    [InlineData(nameof(PantsFailpoint.MidWalAppend))]
-    [InlineData(nameof(PantsFailpoint.AfterWalAppend))]
-    [InlineData(nameof(PantsFailpoint.BeforeWalFlush))]
+    [InlineData(nameof(Failpoint.BeforeWalAppend))]
+    [InlineData(nameof(Failpoint.MidWalAppend))]
+    [InlineData(nameof(Failpoint.AfterWalAppend))]
+    [InlineData(nameof(Failpoint.BeforeWalFlush))]
     public async Task ShouldNotRecoverRejectedCommitGivenLaterSyncSucceeds(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var failpoint = Enum.Parse<PantsFailpoint>(failpointName);
+        var failpoint = Enum.Parse<Failpoint>(failpointName);
         var handler = new OneShotFailpointHandler(failpoint);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await using (var rejected = await database.BeginTransactionAsync(
                              database.DefaultColumnFamily,
@@ -193,10 +193,10 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldAcknowledgeSyncGivenAfterWalFlushHookFails()
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(PantsFailpoint.AfterWalFlush);
+        var handler = new OneShotFailpointHandler(Failpoint.AfterWalFlush);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await CommitValueAsync(database, "durable", "value");
 
@@ -215,12 +215,12 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldAcknowledgeSyncGivenWalRotationFailsAfterDurabilityBoundary()
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeWalRotation);
+        var handler = new OneShotFailpointHandler(Failpoint.BeforeWalRotation);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path)
                              .WithBackgroundCompaction(false)
                              .WithWalBufferSize(1),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await CommitValueAsync(database, "rotation-authoritative", "first");
 
@@ -241,12 +241,12 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldAcknowledgeSyncGivenWalRecordThresholdFlushFailsAfterDurabilityBoundary()
     {
         using var directory = new TemporaryDirectory();
-        var handler = new OneShotFailpointHandler(PantsFailpoint.BeforeWalRecordThresholdFlush);
+        var handler = new OneShotFailpointHandler(Failpoint.BeforeWalRecordThresholdFlush);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path)
                              .WithBackgroundCompaction(false)
                              .WithFlushAfterWalRecordsForTesting(1),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await CommitValueAsync(database, "threshold-authoritative", "value");
 
@@ -262,17 +262,17 @@ public sealed class PantsDurabilityParityTests
     }
 
     [Theory]
-    [InlineData(nameof(PantsFailpoint.AfterFlushOutputDurable))]
-    [InlineData(nameof(PantsFailpoint.BeforeFlushManifestPublish))]
-    [InlineData(nameof(PantsFailpoint.AfterFlushManifestPublish))]
+    [InlineData(nameof(Failpoint.AfterFlushOutputDurable))]
+    [InlineData(nameof(Failpoint.BeforeFlushManifestPublish))]
+    [InlineData(nameof(Failpoint.AfterFlushManifestPublish))]
     public async Task ShouldRecoverReadableDataAtEveryFlushPublicationBoundary(string failpointName)
     {
         using var directory = new TemporaryDirectory();
-        var failpoint = Enum.Parse<PantsFailpoint>(failpointName);
+        var failpoint = Enum.Parse<Failpoint>(failpointName);
         var handler = new OneShotFailpointHandler(failpoint);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path),
-                         new PantsRuntimeDependencies(handler)))
+                         new RuntimeDependencies(handler)))
         {
             await CommitValueAsync(database, "key", "value");
             await Assert.ThrowsAnyAsync<PantsException>(() =>
@@ -311,11 +311,11 @@ public sealed class PantsDurabilityParityTests
     {
         using var directory = new TemporaryDirectory();
         var handler = new OneShotFailpointHandler(
-            PantsFailpoint.BeforeWalAppend,
+            Failpoint.BeforeWalAppend,
             static failpoint => new PantsNoSpaceException($"No space at {failpoint}."));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(handler));
+            new RuntimeDependencies(handler));
         await using (var rejected = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -363,12 +363,12 @@ public sealed class PantsDurabilityParityTests
     }
 
     sealed class OneShotFailpointHandler(
-        PantsFailpoint target,
-        Func<PantsFailpoint, Exception>? exceptionFactory = null) : IPantsFailpointHandler
+        Failpoint target,
+        Func<Failpoint, Exception>? exceptionFactory = null) : IFailpointHandler
     {
         int _triggered;
 
-        public void Hit(PantsFailpoint failpoint)
+        public void Hit(Failpoint failpoint)
         {
             if (failpoint == target && Interlocked.Exchange(ref _triggered, 1) == 0)
             {

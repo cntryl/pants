@@ -9,5 +9,5 @@ sealed class SstBlockCacheEntry(byte[] content)
     public ReadOnlyMemory<byte> Content => _content;
 
     public bool ContainsKey(ReadOnlySpan<byte> key) =>
-        MidgeSstCodec.DataBlockContainsKey(_content, key);
+        SstCodec.DataBlockContainsKey(_content, key);
 }

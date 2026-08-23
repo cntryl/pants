@@ -38,7 +38,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(databasePath)
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(handler));
+            new RuntimeDependencies(handler));
         var transactions = new IPantsTransaction[CommitCount];
         for (var index = 0; index < transactions.Length; index++)
         {
@@ -123,7 +123,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(databasePath)
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(handler));
+            new RuntimeDependencies(handler));
         await using (var pendingFlush = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -195,7 +195,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(databasePath)
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(new WalRollbackFailureFailpointHandler()));
+            new RuntimeDependencies(new WalRollbackFailureFailpointHandler()));
         await using (var rejected = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -405,7 +405,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     {
         Assert.NotEqual(0, child.ExitCode);
         var expected =
-            $"trigger={PantsFailpoint.AfterCoalescedWalDurabilityBoundary}\n" +
+            $"trigger={Failpoint.AfterCoalescedWalDurabilityBoundary}\n" +
             $"expected-commits={CommitCount}\n";
         var sentinelPath = Path.Combine(databasePath, SentinelFileName);
         var actual = File.Exists(sentinelPath)

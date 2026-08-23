@@ -1,19 +1,19 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CompactionCheckpointFailpointHandler : IPantsFailpointHandler
+sealed class CompactionCheckpointFailpointHandler : IFailpointHandler
 {
     int _checkpointHit;
     int _publicationObserved;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.AfterCompactionManifestPublish)
+        if (failpoint == Failpoint.AfterCompactionManifestPublish)
         {
             Volatile.Write(ref _publicationObserved, 1);
             return;
         }
 
-        if (failpoint == PantsFailpoint.BeforeManifestCheckpointReplace &&
+        if (failpoint == Failpoint.BeforeManifestCheckpointReplace &&
             Volatile.Read(ref _publicationObserved) != 0 &&
             Interlocked.CompareExchange(ref _checkpointHit, 1, 0) == 0)
         {

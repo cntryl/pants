@@ -4,7 +4,7 @@ sealed class CloudSstGarbageCollector
 {
     readonly Func<CancellationToken, ValueTask<CloudSstRetentionProof>> _captureProofAsync;
     readonly Action _ensureAuthority;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
     readonly Func<IReadOnlySet<string>> _readLocalProtectedNames;
     readonly ICloudObjectStore _sstStore;
 
@@ -13,7 +13,7 @@ sealed class CloudSstGarbageCollector
         Func<CancellationToken, ValueTask<CloudSstRetentionProof>> captureProofAsync,
         Func<IReadOnlySet<string>> readLocalProtectedNames,
         Action ensureAuthority,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         _sstStore = sstStore;
         _captureProofAsync = captureProofAsync;
@@ -78,7 +78,7 @@ sealed class CloudSstGarbageCollector
                 }
 
                 _ensureAuthority();
-                _failpoints.Hit(PantsFailpoint.BeforeCloudSstGarbageCollectionDelete);
+                _failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
                 var outcome = await _sstStore.DeleteAsync(
                     objectKey,
                     new CloudObjectDeleteCondition.IfVersion(objectIdentity.Version),

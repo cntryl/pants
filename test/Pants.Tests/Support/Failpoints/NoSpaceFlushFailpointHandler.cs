@@ -1,15 +1,15 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class NoSpaceFlushFailpointHandler : IPantsFailpointHandler
+sealed class NoSpaceFlushFailpointHandler : IFailpointHandler
 {
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
 
     int _armed = 1;
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeFlushBuild ||
+        if (failpoint != Failpoint.BeforeFlushBuild ||
             Volatile.Read(ref _armed) == 0)
         {
             return;

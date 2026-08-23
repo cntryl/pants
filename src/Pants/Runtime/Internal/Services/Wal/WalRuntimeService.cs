@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 sealed class WalRuntimeService(
     int capacity,
     LocalDiskStore? diskStore,
-    IPantsFailpointHandler failpoints,
+    IFailpointHandler failpoints,
     WalMetricsRecorder metrics,
     Action? validateCloudWriteAuthority = null)
     : ChannelRuntimeService<WalRuntimeRequest, WalRuntimeResult>(capacity)
@@ -12,7 +12,7 @@ sealed class WalRuntimeService(
 
     public async ValueTask<WalCommitResult> AppendCommitAsync(
         CommitPayload payload,
-        PantsRuntimeState state,
+        RuntimeState state,
         PantsDurability durability,
         CancellationToken cancellationToken = default)
     {
@@ -25,7 +25,7 @@ sealed class WalRuntimeService(
     }
 
     public async ValueTask<TimeSpan> FlushDurabilityBoundaryAsync(
-        PantsFailpoint? beforeBoundary = null,
+        Failpoint? beforeBoundary = null,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(
@@ -38,9 +38,9 @@ sealed class WalRuntimeService(
 
     public async ValueTask<WalCommitGroupResult> AppendCommitGroupAsync(
         IReadOnlyList<WalCommitGroupEntry> commits,
-        PantsRuntimeState state,
+        RuntimeState state,
         PantsDurability durability,
-        PantsFailpoint beforeSync,
+        Failpoint beforeSync,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(

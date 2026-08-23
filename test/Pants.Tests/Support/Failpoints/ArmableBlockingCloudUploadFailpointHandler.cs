@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class ArmableBlockingCloudUploadFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class ArmableBlockingCloudUploadFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -17,9 +17,9 @@ sealed class ArmableBlockingCloudUploadFailpointHandler : IPantsFailpointHandler
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeCloudUpload ||
+        if (failpoint != Failpoint.BeforeCloudUpload ||
             Volatile.Read(ref _armed) == 0 ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {

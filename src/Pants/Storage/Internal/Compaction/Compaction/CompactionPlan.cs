@@ -7,4 +7,4 @@ sealed record CompactionPlan(
     long? SnapshotHorizon,
     bool PointTombstoneGcEligible,
     bool RangeTombstoneGcEligible,
-    IReadOnlyList<MidgeFileMeta> Inputs);
+    IReadOnlyList<FileMeta> Inputs);

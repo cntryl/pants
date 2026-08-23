@@ -2,6 +2,6 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 
 sealed record AppendWalCommitGroupRuntimeRequest(
     IReadOnlyList<WalCommitGroupEntry> Commits,
-    PantsRuntimeState State,
+    RuntimeState State,
     PantsDurability Durability,
-    PantsFailpoint BeforeSync) : WalRuntimeRequest;
+    Failpoint BeforeSync) : WalRuntimeRequest;

@@ -5,12 +5,12 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
     readonly TaskCompletionSource<bool> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    readonly Func<PantsRuntimeState, ValueTask<bool>> _operation;
+    readonly Func<RuntimeState, ValueTask<bool>> _operation;
 
     public CommitRuntimeCommand(
         PantsWriteOptions writeOptions,
         CommitPayload payload,
-        Func<PantsRuntimeState, ValueTask<bool>> operation)
+        Func<RuntimeState, ValueTask<bool>> operation)
     {
         WriteOptions = writeOptions;
         Payload = payload;
@@ -23,7 +23,7 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
 
     public Task<bool> Task => _completion.Task;
 
-    public async ValueTask ExecuteAsync(PantsRuntimeState state)
+    public async ValueTask ExecuteAsync(RuntimeState state)
     {
         try
         {
@@ -38,7 +38,7 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
     public void Complete(bool result) => _completion.TrySetResult(result);
 
     public void Fail(
-        PantsRuntimeState state,
+        RuntimeState state,
         Exception exception,
         bool recordNoSpaceEvent = true)
     {

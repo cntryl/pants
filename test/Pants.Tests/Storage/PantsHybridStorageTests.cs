@@ -152,10 +152,10 @@ public sealed class PantsHybridStorageTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new HybridEvictionFailpointHandler(
-            PantsFailpoint.BeforeCloudUpload);
+            Failpoint.BeforeCloudUpload);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await PutAsync(database, "retained", CreateValue(256 * 1024, 41));
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
@@ -173,10 +173,10 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldPublishSstBeforeEvictingLocalCacheFile()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new HybridEvictionFailpointHandler(PantsFailpoint.AfterCloudUpload);
+        var failpoints = new HybridEvictionFailpointHandler(Failpoint.AfterCloudUpload);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await PutAsync(database, "ordered", CreateValue(256 * 1024, 47));
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());

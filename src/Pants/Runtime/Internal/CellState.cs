@@ -7,7 +7,7 @@ sealed class CellState
             value,
             writeSequence,
             expiresAtUtc is { } expiration
-                ? PantsUnixTimestamp.FromDateTimeOffset(expiration)
+                ? UnixTimestamp.FromDateTimeOffset(expiration)
                 : null)
     {
     }
@@ -26,7 +26,7 @@ sealed class CellState
     public ulong? ExpirationUnixMilliseconds { get; }
 
     public bool IsExpired(DateTimeOffset now) =>
-        PantsUnixTimestamp.IsExpired(ExpirationUnixMilliseconds, now);
+        UnixTimestamp.IsExpired(ExpirationUnixMilliseconds, now);
 
     internal static CellState FromUnixMilliseconds(
         byte[]? value,

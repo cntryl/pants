@@ -154,11 +154,11 @@ public sealed class CommitValidatorInsertOnlyTests
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
     }
 
-    static PantsRuntimeState CreateState() =>
+    static RuntimeState CreateState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
 
     static CommitPayload CreatePayload(
-        PantsRuntimeState state,
+        RuntimeState state,
         ITransactionOperationSource operations,
         PantsConflictPolicy conflictPolicy = PantsConflictPolicy.LastWriteWins) =>
         new(

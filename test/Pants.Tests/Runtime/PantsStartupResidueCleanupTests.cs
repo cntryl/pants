@@ -107,8 +107,8 @@ public sealed class PantsStartupResidueCleanupTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,
-        IPantsFailpointHandler failpoints) =>
+        IFailpointHandler failpoints) =>
         PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
 }

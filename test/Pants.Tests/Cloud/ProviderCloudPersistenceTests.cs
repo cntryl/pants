@@ -5,6 +5,57 @@ namespace Cntryl.Pants.Tests.Cloud;
 
 public sealed class ProviderCloudPersistenceTests
 {
+    static readonly JsonSerializerOptions CatalogJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
+
+    [Fact]
+    public async Task ShouldHydrateSegmentGivenCatalogEntryHasSegmentIdZero()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var sstStore = new SnapshotConsistencyCloudObjectStore();
+        var controlStore = new SnapshotConsistencyCloudObjectStore();
+        var segmentBytes = "wal-segment-zero"u8.ToArray();
+        var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(1, 0);
+        walStore.Seed(objectKey, segmentBytes);
+        var catalog = new ProviderWalCatalog
+        {
+            FencingEpoch = 1,
+            Segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>
+            {
+                [0] = new ProviderPublishedWalSegment
+                {
+                    SegmentId = 0,
+                    WriterEpoch = 1,
+                    MaximumSequence = 1,
+                    SizeBytes = checked((ulong)segmentBytes.Length),
+                    ContentCrc32C = DiskFormat.Crc32C(segmentBytes),
+                    ObjectKey = objectKey
+                }
+            }
+        };
+        walStore.Seed(
+            PantsCloudObjectLayout.WalCatalogObjectKey,
+            JsonSerializer.SerializeToUtf8Bytes(catalog, CatalogJsonOptions));
+
+        var result = await ProviderCloudPersistence.HydrateLocalCacheAsync(
+            cache.Path,
+            walStore,
+            sstStore,
+            controlStore,
+            PantsRecoveryPolicy.Strict,
+            CancellationToken.None);
+
+        Assert.False(result.RequiresSalvage);
+        Assert.True(result.PublishedWalSegments.ContainsKey(0));
+        Assert.True(File.Exists(Path.Combine(
+            cache.Path,
+            "wal",
+            "00000000000000000000.wal")));
+    }
+
     [Fact]
     public async Task ShouldSkipControlPublicationGivenRemoteBytesAlreadyMatch()
     {
@@ -216,7 +267,7 @@ public sealed class ProviderCloudPersistenceTests
         using var secondCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
 
         await using (var first = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation()),
@@ -249,7 +300,7 @@ public sealed class ProviderCloudPersistenceTests
 
         await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
-            new PantsRuntimeDependencies(cloudHttpClient: client)).AsTask());
+            new RuntimeDependencies(cloudHttpClient: client)).AsTask());
     }
 
     [Fact]
@@ -263,7 +314,7 @@ public sealed class ProviderCloudPersistenceTests
             .WithTtlClock(clock);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         var initialSequence = (await database.GetRuntimeMetricsAsync()).CurrentSequence;
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
@@ -294,7 +345,7 @@ public sealed class ProviderCloudPersistenceTests
                 int.MaxValue));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         ttlClock.UtcNow += TimeSpan.FromHours(2);
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
@@ -316,7 +367,7 @@ public sealed class ProviderCloudPersistenceTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateAzureLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(cache.Path, location),
                          dependencies))
@@ -349,7 +400,7 @@ public sealed class ProviderCloudPersistenceTests
         using var client = new HttpClient(handler);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -374,7 +425,7 @@ public sealed class ProviderCloudPersistenceTests
         using var client = new HttpClient(handler);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -397,7 +448,7 @@ public sealed class ProviderCloudPersistenceTests
         using var cache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
             dependencies);
@@ -434,7 +485,7 @@ public sealed class ProviderCloudPersistenceTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateAzureLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         var options = PantsOpenOptions.Cloud(cache.Path, location)
             .WithBackgroundCompaction(false)
             .WithCloudWritePolicy(new PantsCloudWritePolicy(
@@ -478,7 +529,7 @@ public sealed class ProviderCloudPersistenceTests
         using var replacementCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         var options = PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation());
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
@@ -518,7 +569,7 @@ public sealed class ProviderCloudPersistenceTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateAzureLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
 
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(firstCache.Path, location),
@@ -550,7 +601,7 @@ public sealed class ProviderCloudPersistenceTests
         using var secondCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation()),
                          dependencies))
@@ -585,7 +636,7 @@ public sealed class ProviderCloudPersistenceTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = CreateAzureLocation();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(cache.Path, location)
                              .WithBackgroundCompaction(false),
@@ -616,7 +667,7 @@ public sealed class ProviderCloudPersistenceTests
         using var cache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: client);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),

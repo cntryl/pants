@@ -86,5 +86,5 @@ sealed class TransactionOperationSource : ITransactionOperationSource
             null,
             null,
             operation.InsertOnly,
-            PantsUnixTimestamp.ExpirationFromTimeToLive(_commitTime, operation.TimeToLive));
+            UnixTimestamp.ExpirationFromTimeToLive(_commitTime, operation.TimeToLive));
 }

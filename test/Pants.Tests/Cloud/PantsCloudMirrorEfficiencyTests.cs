@@ -6,7 +6,7 @@ public sealed class PantsCloudMirrorEfficiencyTests
     public async Task ShouldNotMirrorCloudStorageGivenTransactionsCompleteWithoutWrites()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new CountingFailpointHandler(PantsFailpoint.BeforeCloudUpload);
+        var failpoints = new CountingFailpointHandler(Failpoint.BeforeCloudUpload);
         await using var database = await OpenSeededAsync(directory.Path, failpoints);
         var baseline = failpoints.HitCount;
 
@@ -44,7 +44,7 @@ public sealed class PantsCloudMirrorEfficiencyTests
     public async Task ShouldNotRepublishImmutableSstGivenCloudMirrorHasNoChanges()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new CountingFailpointHandler(PantsFailpoint.BeforeCloudUpload);
+        var failpoints = new CountingFailpointHandler(Failpoint.BeforeCloudUpload);
         await using var database = await OpenSeededAsync(directory.Path, failpoints);
         var baseline = failpoints.HitCount;
         var remoteSst = Assert.Single(Directory.GetFiles(
@@ -70,12 +70,12 @@ public sealed class PantsCloudMirrorEfficiencyTests
 
     static async ValueTask<IPantsDatabase> OpenSeededAsync(
         string path,
-        IPantsFailpointHandler failpoints)
+        IFailpointHandler failpoints)
     {
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(path, "pants-tests", "mirror-efficiency/")
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))

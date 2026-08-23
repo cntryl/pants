@@ -6,17 +6,17 @@ sealed class CommitCoalescer(
     RuntimeTelemetry telemetry,
     Func<
         IReadOnlyList<WalCommitGroupEntry>,
-        PantsRuntimeState,
+        RuntimeState,
         PantsDurability,
-        PantsFailpoint,
+        Failpoint,
         ValueTask<WalCommitGroupResult>> appendGroupAsync,
-    Action<PantsRuntimeState, TransactionIntentOperation, long> applyOperation)
+    Action<RuntimeState, TransactionIntentOperation, long> applyOperation)
 {
     public bool CanAttempt(IReadOnlyCollection<CommitRuntimeCommand> commits) =>
         enabled && commits.Count > 1;
 
     public bool TryStage(
-        PantsRuntimeState state,
+        RuntimeState state,
         CommitRuntimeCommand command,
         PantsDurability? groupDurability,
         Dictionary<ColumnFamilyIdentity, long> stagedBytesByFamily)
@@ -76,15 +76,15 @@ sealed class CommitCoalescer(
     }
 
     public static IReadOnlyList<PreparedCoalescedCommit> CreatePreparedCommits(
-        PantsRuntimeState state,
+        RuntimeState state,
         IReadOnlyList<CommitRuntimeCommand> commands) =>
         CoalescedCommitApplyPreflight.Create(state, commands);
 
     public async ValueTask AppendAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         IReadOnlyList<PreparedCoalescedCommit> prepared,
         PantsDurability durability,
-        PantsFailpoint beforeSync)
+        Failpoint beforeSync)
     {
         if (prepared.Count == 0 ||
             durability is not (PantsDurability.Sync or PantsDurability.Buffered) ||
@@ -108,7 +108,7 @@ sealed class CommitCoalescer(
     }
 
     public void Apply(
-        PantsRuntimeState state,
+        RuntimeState state,
         IReadOnlyList<PreparedCoalescedCommit> prepared)
     {
         foreach (var commit in prepared)

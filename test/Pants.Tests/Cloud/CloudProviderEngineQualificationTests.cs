@@ -154,7 +154,7 @@ public sealed class CloudProviderEngineQualificationTests
     {
         using var sourceCache = new TemporaryDirectory();
         using var replacementCache = new TemporaryDirectory();
-        var dependencies = new PantsRuntimeDependencies(cloudHttpClient: cloudHttpClient);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: cloudHttpClient);
         var options = PantsOpenOptions.CloudMulti(sourceCache.Path, topology)
             .WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))

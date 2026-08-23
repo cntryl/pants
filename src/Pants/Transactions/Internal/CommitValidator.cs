@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Transactions.Internal;
 
 static class CommitValidator
 {
-    public static void Validate(PantsRuntimeState state, CommitPayload payload)
+    public static void Validate(RuntimeState state, CommitPayload payload)
     {
         foreach (var (identity, assertions) in payload.Asserts)
         {
@@ -54,7 +54,7 @@ static class CommitValidator
     }
 
     static void ValidateWriteConflict(
-        PantsRuntimeState state,
+        RuntimeState state,
         CommitPayload payload,
         TransactionIntentOperation operation)
     {
@@ -102,7 +102,7 @@ static class CommitValidator
     }
 
     static bool ResolvePriorExists(
-        PantsRuntimeState state,
+        RuntimeState state,
         CommitPayload payload,
         TransactionIntentOperation operation,
         DateTimeOffset now)
@@ -120,7 +120,7 @@ static class CommitValidator
     }
 
     static void ValidateActiveFamily(
-        PantsRuntimeState state,
+        RuntimeState state,
         ColumnFamilyIdentity identity)
     {
         if (!state.ActiveFamilyVersions.TryGetValue(identity.Name, out var generation) ||
@@ -134,7 +134,7 @@ static class CommitValidator
     }
 
     static SortedDictionary<byte[], CellState> GetFamily(
-        PantsRuntimeState state,
+        RuntimeState state,
         ColumnFamilyIdentity identity) =>
         state.FamilyData.TryGetValue(identity, out var family)
             ? family

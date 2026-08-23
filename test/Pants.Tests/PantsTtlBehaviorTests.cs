@@ -231,7 +231,7 @@ public sealed class PantsTtlBehaviorTests
             var persistedTtl = Directory
                 .GetFiles(Path.Combine(directory.Path, "sst"), "*.sst")
                 .Select(File.ReadAllBytes)
-                .Select(MidgeSstCodec.Decode)
+                .Select(SstCodec.Decode)
                 .SelectMany(static contents => contents.Entries)
                 .Single(static entry => entry.Key.AsSpan().SequenceEqual("max-ttl"u8));
             Assert.Equal(ulong.MaxValue, persistedTtl.Expiration);

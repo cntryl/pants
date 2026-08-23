@@ -24,7 +24,7 @@ public sealed class CompactionOutputPartitionerTests
         var merged = new CompactionMergeResult(
             [Entry("a", 1), Entry("b", 2), Entry("c", 3)],
             [
-                new MidgeRangeTombstone(
+                new RangeTombstone(
                     TestBytes.FromString("0"),
                     TestBytes.FromString("z"),
                     4)
@@ -40,7 +40,7 @@ public sealed class CompactionOutputPartitionerTests
         Assert.Equal("c", TestBytes.ToText(Assert.Single(partitions[2].RangeTombstones).Start));
     }
 
-    static MidgeSstEntry Entry(string key, ulong sequence) => new(
+    static SstEntry Entry(string key, ulong sequence) => new(
         TestBytes.FromString(key),
         TestBytes.FromString("v"),
         sequence,

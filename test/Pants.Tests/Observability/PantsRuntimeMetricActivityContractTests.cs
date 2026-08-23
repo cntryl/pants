@@ -32,7 +32,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         var timeProvider = new ManualTimeProvider();
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(2 * 1024 * 1024))
             .WithMemtableLimits(512 * 1024, flushThresholdBytes)
@@ -41,7 +41,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .WithTtlClock(clock);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 runtimeTimeProvider: timeProvider));
         var family = await database.CreateColumnFamilyAsync("timed-stall");
@@ -90,7 +90,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         var timeProvider = new ManualTimeProvider();
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeFlushManifestPublish);
+            Failpoint.BeforeFlushManifestPublish);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(2 * 1024 * 1024))
             .WithMemtableLimits(512 * 1024, flushThresholdBytes)
@@ -99,7 +99,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .WithTtlClock(clock);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 failpoint,
                 runtimeTimeProvider: timeProvider));
         var family = await database.CreateColumnFamilyAsync("between-reads");
@@ -130,13 +130,13 @@ public sealed class PantsRuntimeMetricActivityContractTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionManifestPublish);
+            Failpoint.BeforeCompactionManifestPublish);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitAndFlushAsync(database, "first");
         await CommitAndFlushAsync(database, "second");
         Task? firstCompaction = null;
@@ -180,13 +180,13 @@ public sealed class PantsRuntimeMetricActivityContractTests
     public async Task ShouldExposePendingCloudUploadGivenPublicationIsBlocked()
     {
         using var directory = new TemporaryDirectory();
-        using var failpoint = new FlushPipelineFailpointHandler(PantsFailpoint.AfterCloudUpload);
+        using var failpoint = new FlushPipelineFailpointHandler(Failpoint.AfterCloudUpload);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-pending-cloud/")
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -226,7 +226,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
     public async Task ShouldCountCloudWriteStallGivenUploadQueueIsFull()
     {
         using var directory = new TemporaryDirectory();
-        using var failpoint = new FlushPipelineFailpointHandler(PantsFailpoint.AfterCloudWalUpload);
+        using var failpoint = new FlushPipelineFailpointHandler(Failpoint.AfterCloudWalUpload);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-cloud-stall/")
             .WithCoordinatorQueueCapacityForTesting(1)
@@ -238,7 +238,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitCloudAsync(database, "occupy-upload-queue");
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
         await using var blocked = await database.BeginTransactionAsync(
@@ -264,7 +264,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
     public async Task ShouldRejectCloudWritePromptlyGivenTwoUploadObligationsFillCapacity()
     {
         using var directory = new TemporaryDirectory();
-        using var failpoint = new FlushPipelineFailpointHandler(PantsFailpoint.AfterCloudWalUpload);
+        using var failpoint = new FlushPipelineFailpointHandler(Failpoint.AfterCloudWalUpload);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-cloud-stall-capacity-two/")
             .WithCoordinatorQueueCapacityForTesting(2)
@@ -276,7 +276,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitCloudAsync(database, "first-upload");
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
         try
@@ -320,7 +320,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeCompactionManifestPublish);
+            Failpoint.BeforeCompactionManifestPublish);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-compaction-stall/")
             .WithCoordinatorQueueCapacityForTesting(1)
@@ -328,7 +328,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         await CommitCloudAndFlushAsync(database, "first");
         await CommitCloudAndFlushAsync(database, "second");
         await using var blocked = await database.BeginTransactionAsync(
@@ -361,14 +361,14 @@ public sealed class PantsRuntimeMetricActivityContractTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            PantsFailpoint.BeforeHybridSstEviction);
+            Failpoint.BeforeHybridSstEviction);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-hybrid-eviction/")
             .WithSimulatedCloudLocalStorageBudget(128 * 1024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         var value = new byte[256 * 1024];
         new Random(17).NextBytes(value);
         await using (var transaction = await database.BeginTransactionAsync(

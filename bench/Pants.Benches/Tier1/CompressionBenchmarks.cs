@@ -14,21 +14,21 @@ public class CompressionBenchmarks : Tier1Benchmark
     public void Setup()
     {
         _block = BenchmarkData.Value(64 * 1024);
-        _lz4 = MidgeSstBlockCodec.CompressWithTrailer(_block, MidgeCompressionAlgorithm.Lz4);
-        _zstd3 = MidgeSstBlockCodec.CompressWithTrailer(_block, MidgeCompressionAlgorithm.Zstd3);
+        _lz4 = SstBlockCodec.CompressWithTrailer(_block, CompressionAlgorithm.Lz4);
+        _zstd3 = SstBlockCodec.CompressWithTrailer(_block, CompressionAlgorithm.Zstd3);
     }
 
     [Benchmark]
     public byte[] CompressLz4() =>
-        MidgeSstBlockCodec.CompressWithTrailer(_block, MidgeCompressionAlgorithm.Lz4);
+        SstBlockCodec.CompressWithTrailer(_block, CompressionAlgorithm.Lz4);
 
     [Benchmark]
     public byte[] CompressZstd3() =>
-        MidgeSstBlockCodec.CompressWithTrailer(_block, MidgeCompressionAlgorithm.Zstd3);
+        SstBlockCodec.CompressWithTrailer(_block, CompressionAlgorithm.Zstd3);
 
     [Benchmark]
-    public byte[] DecompressLz4() => MidgeSstBlockCodec.DecompressWithTrailer(_lz4);
+    public byte[] DecompressLz4() => SstBlockCodec.DecompressWithTrailer(_lz4);
 
     [Benchmark]
-    public byte[] DecompressZstd3() => MidgeSstBlockCodec.DecompressWithTrailer(_zstd3);
+    public byte[] DecompressZstd3() => SstBlockCodec.DecompressWithTrailer(_zstd3);
 }

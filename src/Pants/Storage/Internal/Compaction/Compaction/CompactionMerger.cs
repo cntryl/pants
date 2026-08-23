@@ -3,7 +3,7 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 static class CompactionMerger
 {
     public static CompactionMergeResult Merge(
-        IEnumerable<MidgeSstContents> contents,
+        IEnumerable<SstContents> contents,
         CompactionPlan plan)
     {
         ulong? horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : null;
@@ -34,8 +34,8 @@ static class CompactionMerger
         return new CompactionMergeResult(entries, retainedRanges);
     }
 
-    static List<MidgeSstEntry> RetainVersions(
-        IEnumerable<MidgeSstEntry> orderedEntries,
+    static List<SstEntry> RetainVersions(
+        IEnumerable<SstEntry> orderedEntries,
         ulong? horizon,
         bool tombstoneGcEligible)
     {
@@ -69,7 +69,7 @@ static class CompactionMerger
     static bool CanDrop(ulong sequence, ulong? horizon, bool eligible) =>
         eligible && (horizon is null || sequence <= horizon.Value);
 
-    static bool Covers(MidgeRangeTombstone range, MidgeSstEntry entry) =>
+    static bool Covers(RangeTombstone range, SstEntry entry) =>
         entry.Sequence < range.Sequence &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.Start) >= 0 &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.End) < 0;

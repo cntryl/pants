@@ -59,7 +59,7 @@ public sealed class PantsCommitCoalescingTests
         using var failpoints = new CoalescedCommitSyncFailureFailpointHandler();
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>(commitCount);
             for (var index = 0; index < commitCount; index++)
@@ -133,7 +133,7 @@ public sealed class PantsCommitCoalescingTests
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
                 .WithWalBufferSize(1),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>(commitCount);
         for (var index = 0; index < commitCount; index++)
         {
@@ -178,11 +178,11 @@ public sealed class PantsCommitCoalescingTests
         const int commitCount = 3;
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
-            PantsFailpoint.AfterWalAppend,
+            Failpoint.AfterWalAppend,
             2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>(commitCount);
             for (var index = 0; index < commitCount; index++)
@@ -266,7 +266,7 @@ public sealed class PantsCommitCoalescingTests
         using var failpoints = new CoalescedCommitFailureFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
         for (var index = 0; index < 8; index++)
         {
@@ -307,7 +307,7 @@ public sealed class PantsCommitCoalescingTests
         using var failpoints = new CoalescedCommitSyncFailureFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
         for (var index = 0; index < 16; index++)
         {
@@ -361,7 +361,7 @@ public sealed class PantsCommitCoalescingTests
         using var failpoints = new CoalescedCommitSyncFailureFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         await using var first = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -406,11 +406,11 @@ public sealed class PantsCommitCoalescingTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
-            PantsFailpoint.AfterWalAppend,
+            Failpoint.AfterWalAppend,
             2);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
         for (var index = 0; index < 3; index++)
         {
@@ -460,11 +460,11 @@ public sealed class PantsCommitCoalescingTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
-            PantsFailpoint.AfterWalAppend,
+            Failpoint.AfterWalAppend,
             2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
             for (var index = 0; index < 3; index++)
@@ -518,11 +518,11 @@ public sealed class PantsCommitCoalescingTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
-            PantsFailpoint.MidWalAppend,
+            Failpoint.MidWalAppend,
             2);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
             for (var index = 0; index < 3; index++)
@@ -582,7 +582,7 @@ public sealed class PantsCommitCoalescingTests
                 .WithMemoryBudget(PantsMemoryBudget.FromBytes(16 * 1_024))
                 .WithMemtableLimits(4 * 1_024)
                 .WithTransactionMemoryPool(1_024),
-            new PantsRuntimeDependencies(failpoints));
+            new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
         for (var transactionIndex = 0; transactionIndex < 2; transactionIndex++)
         {
@@ -622,7 +622,7 @@ public sealed class PantsCommitCoalescingTests
         using var failpoints = new CoalescedCommitFailureFailpointHandler();
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var staleFamily = await database.CreateColumnFamilyAsync("stale-middle");
             await using var first = await database.BeginTransactionAsync(
@@ -671,10 +671,10 @@ public sealed class PantsCommitCoalescingTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
-            PantsFailpoint.AfterCoalescedWalDurabilityBoundary);
+            Failpoint.AfterCoalescedWalDurabilityBoundary);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
-                         new PantsRuntimeDependencies(failpoints)))
+                         new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
             for (var index = 0; index < 2; index++)

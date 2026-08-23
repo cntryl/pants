@@ -4,14 +4,14 @@ sealed class SstScanReadValidator : IScanReadValidator
 {
     readonly IReadOnlyList<SstScanBlock> _blocks;
     readonly int _candidateSsts;
-    readonly IReadOnlyList<MidgeSstReader> _readers;
+    readonly IReadOnlyList<SstReader> _readers;
     readonly RuntimeTelemetry _telemetry;
     int _dataBlocksRead;
     int _disposed;
 
     public SstScanReadValidator(
         RuntimeTelemetry telemetry,
-        IReadOnlyList<MidgeSstReader> readers,
+        IReadOnlyList<SstReader> readers,
         IReadOnlyList<SstScanBlock> blocks,
         int candidateSsts)
     {

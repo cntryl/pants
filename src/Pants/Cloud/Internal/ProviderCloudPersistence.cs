@@ -43,7 +43,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        IPantsFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
@@ -122,7 +122,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 if (publishedSegment.WriterEpoch == segment.WriterEpoch &&
                     publishedSegment.MaximumSequence == segment.MaximumSequence &&
                     publishedSegment.SizeBytes == checked((ulong)segment.Bytes.Length) &&
-                    publishedSegment.ContentCrc32C == MidgeDiskFormat.Crc32C(segment.Bytes) &&
+                    publishedSegment.ContentCrc32C == DiskFormat.Crc32C(segment.Bytes) &&
                     StringComparer.Ordinal.Equals(publishedSegment.ObjectKey, objectKey))
                 {
                     _lease.EnsureValid();
@@ -141,7 +141,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     WriterEpoch = segment.WriterEpoch,
                     MaximumSequence = segment.MaximumSequence,
                     SizeBytes = checked((ulong)segment.Bytes.Length),
-                    ContentCrc32C = MidgeDiskFormat.Crc32C(segment.Bytes),
+                    ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
                     ObjectKey = objectKey
                 }
             };
@@ -416,7 +416,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 $"Published cloud WAL object '{segment.ObjectKey}' is missing.");
             var bytes = remote.Data;
             if (checked((ulong)bytes.Length) != segment.SizeBytes ||
-                MidgeDiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
+                DiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
             {
                 if (recoveryPolicy == PantsRecoveryPolicy.Strict)
                 {
@@ -547,7 +547,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     async ValueTask PublishSstAsync(
         string name,
         byte[]? localBytes,
-        MidgeFileMeta[] proofs,
+        FileMeta[] proofs,
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
@@ -761,7 +761,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
 
         var dependencyGuards = await ValidateManifestDependenciesAsync(
-            (MidgeManifest)manifest,
+            (ManifestState)manifest,
             metadata,
             cancellationToken).ConfigureAwait(false);
 
@@ -916,7 +916,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             $"Published cloud WAL object '{segment.ObjectKey}' is missing during pruning.");
         _lease.EnsureValid();
         if (checked((ulong)remote.Data.Length) != segment.SizeBytes ||
-            MidgeDiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
+            DiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
         {
             throw new PantsCorruptionException(
                 $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
@@ -926,7 +926,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     }
 
     async ValueTask<IReadOnlyList<CloudObjectIdentityGuard>> ValidateManifestDependenciesAsync(
-        MidgeManifest manifest,
+        ManifestState manifest,
         CloudControlMetadataSnapshot metadata,
         CancellationToken cancellationToken)
     {
@@ -1020,7 +1020,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ProviderPublishedWalSegment segment,
         ulong fencingEpoch)
     {
-        if (segmentId == 0 || segment.WriterEpoch == 0 ||
+        if (segment.WriterEpoch == 0 ||
             segment.SegmentId != segmentId || segment.WriterEpoch > fencingEpoch ||
             segment.SizeBytes == 0 || segment.ObjectKey != PantsCloudObjectLayout.WalSegmentObjectKey(
                 segment.WriterEpoch,

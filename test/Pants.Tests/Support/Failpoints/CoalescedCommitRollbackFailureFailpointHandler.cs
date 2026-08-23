@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class CoalescedCommitRollbackFailureFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class CoalescedCommitRollbackFailureFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -17,32 +17,32 @@ sealed class CoalescedCommitRollbackFailureFailpointHandler : IPantsFailpointHan
         _runtimeBarrierRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeRuntimeMetricsResponse &&
+        if (failpoint == Failpoint.BeforeRuntimeMetricsResponse &&
             Interlocked.Exchange(ref _runtimeBarrierArmed, 0) == 1)
         {
             _runtimeBarrierEntered.TrySetResult();
             if (!_runtimeBarrierRelease.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException(
-                    $"Timed out waiting to release {PantsFailpoint.BeforeRuntimeMetricsResponse}.");
+                    $"Timed out waiting to release {Failpoint.BeforeRuntimeMetricsResponse}.");
             }
 
             return;
         }
 
-        if (failpoint == PantsFailpoint.AfterWalAppend &&
+        if (failpoint == Failpoint.AfterWalAppend &&
             Interlocked.Increment(ref _appendHits) == 2)
         {
             throw new PantsNoSpaceException(
-                $"Injected failure at {PantsFailpoint.AfterWalAppend} hit 2.");
+                $"Injected failure at {Failpoint.AfterWalAppend} hit 2.");
         }
 
-        if (failpoint == PantsFailpoint.BeforeCoalescedWalRollback)
+        if (failpoint == Failpoint.BeforeCoalescedWalRollback)
         {
             throw new IOException(
-                $"Injected failure at {PantsFailpoint.BeforeCoalescedWalRollback}.");
+                $"Injected failure at {Failpoint.BeforeCoalescedWalRollback}.");
         }
     }
 

@@ -183,12 +183,12 @@ public sealed class PantsStorageVerificationHardeningTests
         var barrierAcquired = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsVerificationBarrierResponseDelegate barrierResponse = () =>
+        VerificationBarrierResponseDelegate barrierResponse = () =>
         {
             barrierAcquired.SetResult();
             return ValueTask.CompletedTask;
         };
-        PantsStorageVerificationDelegate verifier = (_, _) =>
+        StorageVerificationDelegate verifier = (_, _) =>
         {
             started.SetResult();
             if (!release.Wait(VerifierSafetyTimeout, CancellationToken.None))
@@ -200,7 +200,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 storageVerifier: verifier,
                 verificationBarrierResponse: barrierResponse));
         var verification = database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask();
@@ -228,7 +228,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(directory.Path, "verification", "cloud/"),
-            new PantsRuntimeDependencies(storageVerifier: (_, _) =>
+            new RuntimeDependencies(storageVerifier: (_, _) =>
                 ValueTask.FromResult(HealthyReport())));
 
         var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
@@ -242,7 +242,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: (_, _) =>
+            new RuntimeDependencies(storageVerifier: (_, _) =>
                 ValueTask.FromResult(HealthyReport())));
         var sstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
         await File.WriteAllTextAsync(Path.Combine(sstDirectory.FullName, "orphan.sst"), "orphan");
@@ -258,7 +258,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, cancellationToken) =>
+        StorageVerificationDelegate verifier = async (_, cancellationToken) =>
         {
             started.SetResult();
             await release.Task.WaitAsync(cancellationToken);
@@ -278,7 +278,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var verification = database
             .VerifyStorageAsync(TimeSpan.FromSeconds(5))
             .AsTask();
@@ -303,7 +303,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             started.SetResult();
             await release.Task;
@@ -311,7 +311,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
@@ -344,7 +344,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             started.SetResult();
             await release.Task;
@@ -352,7 +352,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         using var cancellation = new CancellationTokenSource();
         var verification = database
             .VerifyStorageAsync(TimeSpan.FromSeconds(5), cancellation.Token)
@@ -380,7 +380,7 @@ public sealed class PantsStorageVerificationHardeningTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var invocations = 0;
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             Interlocked.Increment(ref invocations);
             started.SetResult();
@@ -389,7 +389,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var firstVerification = database
             .VerifyStorageAsync(TimeSpan.FromSeconds(5))
             .AsTask();
@@ -421,20 +421,20 @@ public sealed class PantsStorageVerificationHardeningTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseResponse = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsVerificationBarrierResponseDelegate barrierResponse = async () =>
+        VerificationBarrierResponseDelegate barrierResponse = async () =>
         {
             responseStarted.SetResult();
             await releaseResponse.Task;
         };
         var invocations = 0;
-        PantsStorageVerificationDelegate verifier = (_, _) =>
+        StorageVerificationDelegate verifier = (_, _) =>
         {
             Interlocked.Increment(ref invocations);
             return ValueTask.FromResult(HealthyReport());
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(
+            new RuntimeDependencies(
                 storageVerifier: verifier,
                 verificationBarrierResponse: barrierResponse));
         var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
@@ -459,10 +459,10 @@ public sealed class PantsStorageVerificationHardeningTests
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new ArmableFailpointHandler();
-        failpoint.Arm(PantsFailpoint.BeforeVerificationBarrierResponse);
+        failpoint.Arm(Failpoint.BeforeVerificationBarrierResponse);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
 
         await Assert.ThrowsAsync<PantsIOException>(() => database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask());
 
@@ -476,7 +476,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             started.SetResult();
             await release.Task;
@@ -484,7 +484,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         try
@@ -513,7 +513,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        PantsStorageVerificationDelegate verifier = async (_, _) =>
+        StorageVerificationDelegate verifier = async (_, _) =>
         {
             started.SetResult();
             await release.Task;
@@ -521,7 +521,7 @@ public sealed class PantsStorageVerificationHardeningTests
         };
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(storageVerifier: verifier));
+            new RuntimeDependencies(storageVerifier: verifier));
         var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         var longShutdown = Task.CompletedTask;
@@ -616,20 +616,20 @@ public sealed class PantsStorageVerificationHardeningTests
 
     static async Task WriteSingleSstFixtureAsync(
         string path,
-        Action<MidgeFileMeta>? configure = null)
+        Action<FileMeta>? configure = null)
     {
         var key = "key"u8.ToArray();
-        var bytes = MidgeSstCodec.Encode(
-            [new MidgeSstEntry(key, "value"u8.ToArray(), 7, null, false)],
+        var bytes = SstCodec.Encode(
+            [new SstEntry(key, "value"u8.ToArray(), 7, null, false)],
             [],
             PantsPerformanceGoal.Latency);
         const string name = "000000_00_00000000000000000001.sst";
-        var file = new MidgeFileMeta
+        var file = new FileMeta
         {
             Name = name,
             Level = 0,
             SizeBytes = checked((ulong)bytes.Length),
-            ContentCrc32C = MidgeDiskFormat.Crc32C(bytes),
+            ContentCrc32C = DiskFormat.Crc32C(bytes),
             ColumnFamilyId = 0,
             SstSequence = 1,
             SmallestKey = key.Select(static value => (int)value).ToArray(),
@@ -638,7 +638,7 @@ public sealed class PantsStorageVerificationHardeningTests
             LargestSequence = 7
         };
         configure?.Invoke(file);
-        var manifest = new MidgeManifest
+        var manifest = new ManifestState
         {
             LastPersistedSequence = 7,
             Files = [file],

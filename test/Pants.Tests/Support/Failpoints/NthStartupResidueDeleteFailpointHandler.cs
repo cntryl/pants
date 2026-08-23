@@ -1,16 +1,16 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class NthStartupResidueDeleteFailpointHandler(int failAtHit) :
-    IPantsFailpointHandler
+    IFailpointHandler
 {
     int _failureCount;
     int _hitCount;
 
     public int FailureCount => Volatile.Read(ref _failureCount);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeStartupResidueDelete ||
+        if (failpoint != Failpoint.BeforeStartupResidueDelete ||
             Interlocked.Increment(ref _hitCount) != failAtHit)
         {
             return;

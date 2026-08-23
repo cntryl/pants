@@ -19,7 +19,7 @@ public sealed class PantsCloudWalPruningTests
             "database");
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, location).WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await using (var transaction = await database.BeginTransactionAsync(
                          database.DefaultColumnFamily,
                          PantsTransactionMode.ReadWrite))
@@ -48,7 +48,7 @@ public sealed class PantsCloudWalPruningTests
             .WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(cloudHttpClient: client)))
+                         new RuntimeDependencies(cloudHttpClient: client)))
         {
             var other = await database.CreateColumnFamilyAsync("provider-other");
             await CommitValueAsync(
@@ -73,7 +73,7 @@ public sealed class PantsCloudWalPruningTests
         ResetDirectory(Path.Combine(cache.Path, "wal"));
         await using (var reopened = await PantsDatabase.OpenForTestingAsync(
                          options,
-                         new PantsRuntimeDependencies(cloudHttpClient: client)))
+                         new RuntimeDependencies(cloudHttpClient: client)))
         {
             await reopened.FlushAsync(reopened.DefaultColumnFamily);
             Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -83,7 +83,7 @@ public sealed class PantsCloudWalPruningTests
         ResetDirectory(Path.Combine(cache.Path, "wal"));
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             options,
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         var recoveredOther = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await recovered.GetColumnFamilyAsync("provider-other"));
         await using var reader = await recovered.BeginTransactionAsync(
@@ -103,7 +103,7 @@ public sealed class PantsCloudWalPruningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await CommitProviderValueAsync(database);
         handler.AcknowledgeSstWritesWithoutPersisting = true;
 
@@ -123,7 +123,7 @@ public sealed class PantsCloudWalPruningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await CommitProviderValueAsync(database);
         handler.AcknowledgeMetadataWritesWithoutPersisting = true;
 
@@ -143,7 +143,7 @@ public sealed class PantsCloudWalPruningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
                 .WithBackgroundCompaction(false),
-            new PantsRuntimeDependencies(cloudHttpClient: client));
+            new RuntimeDependencies(cloudHttpClient: client));
         await CommitProviderValueAsync(database);
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
 

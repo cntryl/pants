@@ -95,20 +95,20 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         Assert.Null(failure);
     }
 
-    static (MidgeFileMeta Metadata, byte[] Bytes) CreateSst(ulong sequence, byte[] key)
+    static (FileMeta Metadata, byte[] Bytes) CreateSst(ulong sequence, byte[] key)
     {
-        var bytes = MidgeSstCodec.Encode(
-            [new MidgeSstEntry(key, "value"u8.ToArray(), sequence, null, false)],
+        var bytes = SstCodec.Encode(
+            [new SstEntry(key, "value"u8.ToArray(), sequence, null, false)],
             [],
             PantsPerformanceGoal.Latency);
         var name = $"000000_00_{sequence:00000000000000000000}.sst";
         return (
-            new MidgeFileMeta
+            new FileMeta
             {
                 Name = name,
                 Level = 0,
                 SizeBytes = checked((ulong)bytes.Length),
-                ContentCrc32C = MidgeDiskFormat.Crc32C(bytes),
+                ContentCrc32C = DiskFormat.Crc32C(bytes),
                 ColumnFamilyId = 0,
                 SstSequence = sequence,
                 SmallestKey = key.Select(static value => (int)value).ToArray(),
@@ -121,7 +121,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static void WriteLocalFixture(
         string root,
-        IReadOnlyList<(MidgeFileMeta Metadata, byte[] Bytes)> ssts)
+        IReadOnlyList<(FileMeta Metadata, byte[] Bytes)> ssts)
     {
         Directory.CreateDirectory(Path.Combine(root, "sst"));
         File.WriteAllText(Path.Combine(root, "FORMAT"), "midge-format-version=3\n");
@@ -137,8 +137,8 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static void AddSstAndAdvanceManifest(
         string root,
-        (MidgeFileMeta Metadata, byte[] Bytes) first,
-        (MidgeFileMeta Metadata, byte[] Bytes) second)
+        (FileMeta Metadata, byte[] Bytes) first,
+        (FileMeta Metadata, byte[] Bytes) second)
     {
         WriteSst(root, second);
         WriteManifest(root, [first.Metadata, second.Metadata]);
@@ -146,14 +146,14 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static void WriteSst(
         string root,
-        (MidgeFileMeta Metadata, byte[] Bytes) sst) =>
+        (FileMeta Metadata, byte[] Bytes) sst) =>
         AtomicStagedFile.Write(
             Path.Combine(root, "sst", sst.Metadata.Name),
             sst.Bytes);
 
-    static void WriteManifest(string root, MidgeFileMeta[] files)
+    static void WriteManifest(string root, FileMeta[] files)
     {
-        var manifest = new MidgeManifest
+        var manifest = new ManifestState
         {
             LastPersistedSequence = files.Length == 0
                 ? 0

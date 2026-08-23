@@ -1,7 +1,7 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class PersistentThrowingFlushFailpointHandler(PantsFailpoint target) :
-    IPantsFailpointHandler
+sealed class PersistentThrowingFlushFailpointHandler(Failpoint target) :
+    IFailpointHandler
 {
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -11,7 +11,7 @@ sealed class PersistentThrowingFlushFailpointHandler(PantsFailpoint target) :
 
     public int HitCount => Volatile.Read(ref _hits);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
         if (failpoint != target || Volatile.Read(ref _armed) == 0)
         {

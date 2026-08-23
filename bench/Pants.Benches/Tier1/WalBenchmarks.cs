@@ -5,38 +5,38 @@ namespace Cntryl.Pants.Benches.Tier1;
 
 public class WalBenchmarks : Tier1Benchmark
 {
-    MidgeWalRecord _delete = null!;
-    MidgeWalRecord _mediumPut = null!;
-    MidgeWalRecord _smallPut = null!;
+    WalRecord _delete = null!;
+    WalRecord _mediumPut = null!;
+    WalRecord _smallPut = null!;
     byte[] _encodedMediumPut = null!;
     byte[] _encodedSmallPut = null!;
 
     [GlobalSetup]
     public void Setup()
     {
-        _smallPut = Record(MidgeWalOperation.Put, BenchmarkData.Value(64));
-        _mediumPut = Record(MidgeWalOperation.Put, BenchmarkData.Value(4 * 1024));
-        _delete = Record(MidgeWalOperation.Delete, null);
-        _encodedSmallPut = MidgeWalCodec.EncodeRecord(_smallPut);
-        _encodedMediumPut = MidgeWalCodec.EncodeRecord(_mediumPut);
+        _smallPut = Record(WalOperation.Put, BenchmarkData.Value(64));
+        _mediumPut = Record(WalOperation.Put, BenchmarkData.Value(4 * 1024));
+        _delete = Record(WalOperation.Delete, null);
+        _encodedSmallPut = WalCodec.EncodeRecord(_smallPut);
+        _encodedMediumPut = WalCodec.EncodeRecord(_mediumPut);
     }
 
     [Benchmark]
-    public byte[] EncodeSmallPut() => MidgeWalCodec.EncodeRecord(_smallPut);
+    public byte[] EncodeSmallPut() => WalCodec.EncodeRecord(_smallPut);
 
     [Benchmark]
-    public byte[] EncodeMediumPut() => MidgeWalCodec.EncodeRecord(_mediumPut);
+    public byte[] EncodeMediumPut() => WalCodec.EncodeRecord(_mediumPut);
 
     [Benchmark]
-    public byte[] EncodeDelete() => MidgeWalCodec.EncodeRecord(_delete);
+    public byte[] EncodeDelete() => WalCodec.EncodeRecord(_delete);
 
     [Benchmark]
-    public object DecodeSmallPut() => MidgeWalCodec.DecodeRecord(_encodedSmallPut);
+    public object DecodeSmallPut() => WalCodec.DecodeRecord(_encodedSmallPut);
 
     [Benchmark]
-    public object DecodeMediumPut() => MidgeWalCodec.DecodeRecord(_encodedMediumPut);
+    public object DecodeMediumPut() => WalCodec.DecodeRecord(_encodedMediumPut);
 
-    static MidgeWalRecord Record(MidgeWalOperation operation, byte[]? value) => new(
+    static WalRecord Record(WalOperation operation, byte[]? value) => new(
         1,
         operation,
         BenchmarkData.Key(1),

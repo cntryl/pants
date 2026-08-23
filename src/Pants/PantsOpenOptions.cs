@@ -118,6 +118,8 @@ public sealed class PantsOpenOptions
 
     public TimeSpan LeaseClockSkewTolerance => _configuration.LeaseClockSkewTolerance;
 
+    public ulong MinimumEpoch => _configuration.MinimumEpoch;
+
     public Action? LeaseLossCallback => _configuration.LeaseLossCallback;
 
     public IPantsClock TtlClock => _configuration.TtlClock;
@@ -212,6 +214,9 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithLeaseClockSkewTolerance(TimeSpan tolerance) =>
         With(_configuration with { LeaseClockSkewTolerance = tolerance });
+
+    public PantsOpenOptions WithMinimumEpoch(ulong minimumEpoch) =>
+        With(_configuration with { MinimumEpoch = minimumEpoch });
 
     public PantsOpenOptions WithTtlClock(IPantsClock clock) =>
         With(_configuration with
@@ -474,7 +479,8 @@ public sealed class PantsOpenOptions
         IPantsClock TtlClock,
         PantsCompactionConfiguration? Compaction,
         int CoordinatorQueueCapacity,
-        int FlushAfterWalRecords)
+        int FlushAfterWalRecords,
+        ulong MinimumEpoch)
     {
         public static Configuration Default(PantsStorageConfiguration storage) => new(
             storage,
@@ -496,6 +502,7 @@ public sealed class PantsOpenOptions
             SystemPantsClock.Instance,
             null,
             128,
+            0,
             0);
     }
 }

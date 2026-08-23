@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
-sealed class VerificationCompactionRaceFailpointHandler : IPantsFailpointHandler, IDisposable
+sealed class VerificationCompactionRaceFailpointHandler : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
 
@@ -16,9 +16,9 @@ sealed class VerificationCompactionRaceFailpointHandler : IPantsFailpointHandler
         _release.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeCompactionAdmission ||
+        if (failpoint != Failpoint.BeforeCompactionAdmission ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;

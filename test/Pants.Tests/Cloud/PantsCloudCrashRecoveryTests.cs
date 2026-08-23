@@ -33,9 +33,9 @@ public sealed class PantsCloudCrashRecoveryTests
             StringComparer.Ordinal.Equals(scenario, PublishedSstScenario) ||
             StringComparer.Ordinal.Equals(scenario, LocalWalScenario));
         var dependencies = StringComparer.Ordinal.Equals(scenario, LocalWalScenario)
-            ? new PantsRuntimeDependencies(
-                new CrashChildFailpointHandler(PantsFailpoint.BeforeCloudWalUpload))
-            : PantsRuntimeDependencies.Default;
+            ? new RuntimeDependencies(
+                new CrashChildFailpointHandler(Failpoint.BeforeCloudWalUpload))
+            : RuntimeDependencies.Default;
         await using var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
 
         if (StringComparer.Ordinal.Equals(scenario, PublishedSstScenario))
@@ -561,7 +561,7 @@ public sealed class PantsCloudCrashRecoveryTests
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        MidgeWalFrameReader.Visit(
+        WalFrameReader.Visit(
             stream,
             (record, _) => writerEpochs.Add(record.WriterEpoch));
         return Assert.Single(writerEpochs);

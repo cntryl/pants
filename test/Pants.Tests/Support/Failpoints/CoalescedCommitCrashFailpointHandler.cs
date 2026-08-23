@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class CoalescedCommitCrashFailpointHandler(
     string sentinelPath,
-    int expectedCommitCount) : IPantsFailpointHandler, IDisposable
+    int expectedCommitCount) : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(30);
 
@@ -21,29 +21,29 @@ sealed class CoalescedCommitCrashFailpointHandler(
         _runtimeBarrierRelease.Dispose();
     }
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint == PantsFailpoint.BeforeRuntimeMetricsResponse &&
+        if (failpoint == Failpoint.BeforeRuntimeMetricsResponse &&
             Interlocked.Exchange(ref _runtimeBarrierArmed, 0) == 1)
         {
             _runtimeBarrierEntered.TrySetResult();
             if (!_runtimeBarrierRelease.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException(
-                    $"Timed out waiting to release {PantsFailpoint.BeforeRuntimeMetricsResponse}.");
+                    $"Timed out waiting to release {Failpoint.BeforeRuntimeMetricsResponse}.");
             }
 
             return;
         }
 
-        if (failpoint != PantsFailpoint.AfterCoalescedWalDurabilityBoundary ||
+        if (failpoint != Failpoint.AfterCoalescedWalDurabilityBoundary ||
             Interlocked.Exchange(ref _crashArmed, 0) != 1)
         {
             return;
         }
 
         var sentinel = Encoding.UTF8.GetBytes(
-            $"trigger={PantsFailpoint.AfterCoalescedWalDurabilityBoundary}\n" +
+            $"trigger={Failpoint.AfterCoalescedWalDurabilityBoundary}\n" +
             $"expected-commits={expectedCommitCount}\n");
         using (var stream = new FileStream(
                    sentinelPath,
@@ -63,7 +63,7 @@ sealed class CoalescedCommitCrashFailpointHandler(
         AtomicStagedFile.FlushDirectory(parent);
 
         Environment.FailFast(
-            $"Injected crash at {PantsFailpoint.AfterCoalescedWalDurabilityBoundary}.");
+            $"Injected crash at {Failpoint.AfterCoalescedWalDurabilityBoundary}.");
     }
 
     public async Task WaitForRuntimeBarrierAsync(TimeSpan timeout) =>

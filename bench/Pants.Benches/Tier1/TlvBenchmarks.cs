@@ -5,9 +5,9 @@ namespace Cntryl.Pants.Benches.Tier1;
 
 public class TlvBenchmarks : Tier1Benchmark
 {
-    MidgeWalRecord _record8 = null!;
-    MidgeWalRecord _record64 = null!;
-    MidgeWalRecord _record256 = null!;
+    WalRecord _record8 = null!;
+    WalRecord _record64 = null!;
+    WalRecord _record256 = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -18,17 +18,17 @@ public class TlvBenchmarks : Tier1Benchmark
     }
 
     [Benchmark]
-    public byte[] EncodeField8B() => MidgeWalCodec.EncodeRecord(_record8);
+    public byte[] EncodeField8B() => WalCodec.EncodeRecord(_record8);
 
     [Benchmark]
-    public byte[] EncodeField64B() => MidgeWalCodec.EncodeRecord(_record64);
+    public byte[] EncodeField64B() => WalCodec.EncodeRecord(_record64);
 
     [Benchmark]
-    public byte[] EncodeField256B() => MidgeWalCodec.EncodeRecord(_record256);
+    public byte[] EncodeField256B() => WalCodec.EncodeRecord(_record256);
 
-    static MidgeWalRecord Record(int valueSize) => new(
+    static WalRecord Record(int valueSize) => new(
         1,
-        MidgeWalOperation.Put,
+        WalOperation.Put,
         BenchmarkData.Key(1),
         BenchmarkData.Value(valueSize),
         1,

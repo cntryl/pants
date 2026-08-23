@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Cntryl.Pants.Storage.Internal;
 
@@ -18,18 +19,18 @@ sealed class LocalDiskStore : IDisposable
 
     readonly SstBlockCache _blockCache;
     readonly PantsCompactionConfiguration _compaction;
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
     readonly Dictionary<ColumnFamilyIdentity, uint> _familyIds = new(ColumnFamilyIdentityComparer.Instance);
     readonly HashSet<long> _frozenFlushIds = [];
     readonly string _intentPath;
-    readonly MidgeFileLease _lease;
+    readonly FileLease _lease;
     readonly FileStream _lockStream;
-    readonly MidgeManifest _manifest;
+    readonly ManifestState _manifest;
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
     readonly string _manifestPath;
     readonly string _manifestSnapshotPath;
-    readonly List<MidgeWalMutation> _mutableOperations = [];
+    readonly List<WalMutation> _mutableOperations = [];
     readonly PantsPerformanceGoal _performanceGoal;
     readonly SstReaderCache _readerCache = new();
     readonly PantsRecoveryPolicy _recoveryPolicy;
@@ -57,12 +58,12 @@ sealed class LocalDiskStore : IDisposable
     LocalDiskStore(
         string root,
         FileStream lockStream,
-        MidgeFileLease lease,
+        FileLease lease,
         FileStream walStream,
-        MidgeManifest manifest,
+        ManifestState manifest,
         PantsRecoveryPolicy recoveryPolicy,
         PantsPerformanceGoal performanceGoal,
-        IPantsFailpointHandler failpoints,
+        IFailpointHandler failpoints,
         PantsCompactionConfiguration compaction,
         long targetSstSizeBytes,
         PantsBlockCachePolicy blockCachePolicy,
@@ -192,7 +193,7 @@ sealed class LocalDiskStore : IDisposable
             lock (_walStateGate)
             {
                 return checked(
-                    GetLocalFileBytes(_walDirectory, "*.wal") +
+                    GetLocalFileBytes(EnumerateSealedWalSegmentPaths(_walDirectory)) +
                     GetExistingFileBytes(_walPath));
             }
         }
@@ -216,7 +217,7 @@ sealed class LocalDiskStore : IDisposable
         _lockStream.Dispose();
     }
 
-    static ulong GetManifestVisibleSequenceFloor(MidgeManifest manifest) =>
+    static ulong GetManifestVisibleSequenceFloor(ManifestState manifest) =>
         Math.Max(
             manifest.LastPersistedSequence,
             manifest.Files
@@ -224,7 +225,7 @@ sealed class LocalDiskStore : IDisposable
                 .DefaultIfEmpty()
                 .Max());
 
-    public int CountCompactionInputs(PantsRuntimeState state, bool force)
+    public int CountCompactionInputs(RuntimeState state, bool force)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var snapshotHorizon = state.ActiveSnapshots
@@ -240,7 +241,7 @@ sealed class LocalDiskStore : IDisposable
                 force)?.Inputs.Count ?? 0);
     }
 
-    public PantsEngineHealth GetHealth(PantsRuntimeState state)
+    public PantsEngineHealth GetHealth(RuntimeState state)
     {
         if (state.Health != PantsEngineHealth.Healthy)
         {
@@ -265,7 +266,7 @@ sealed class LocalDiskStore : IDisposable
             .ToArray();
     }
 
-    public bool CollectObsoleteFiles(PantsRuntimeState state)
+    public bool CollectObsoleteFiles(RuntimeState state)
     {
         ThrowIfDisposed();
         ThrowIfWalWriteFailed();
@@ -317,13 +318,13 @@ sealed class LocalDiskStore : IDisposable
         return true;
     }
 
-    public MidgeColumnFamilyMeta GetColumnFamilyMetadata(ColumnFamilyIdentity identity)
+    public ColumnFamilyMeta GetColumnFamilyMetadata(ColumnFamilyIdentity identity)
     {
         var metadata = GetColumnFamiliesSnapshot().Single(family => family.Id == identity.Id);
         return metadata.Clone();
     }
 
-    public IReadOnlyList<MidgeColumnFamilyMeta> GetColumnFamilyMetadataSnapshot() =>
+    public IReadOnlyList<ColumnFamilyMeta> GetColumnFamilyMetadataSnapshot() =>
         GetColumnFamiliesSnapshot();
 
     public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
@@ -351,7 +352,7 @@ sealed class LocalDiskStore : IDisposable
 
     public IReadOnlyList<string> GetScanSstNames(
         ColumnFamilyIdentity columnFamily,
-        PantsScanBounds bounds) =>
+        ScanBounds bounds) =>
         GetManifestFilesSnapshot()
             .Where(file =>
                 file.ColumnFamilyId == columnFamily.Id &&
@@ -380,14 +381,14 @@ sealed class LocalDiskStore : IDisposable
         var metadata = GetManifestSst(name);
         if (checked((ulong)bytes.Length) != metadata.SizeBytes ||
             (metadata.ContentCrc32C.HasValue &&
-             MidgeDiskFormat.Crc32C(bytes) != metadata.ContentCrc32C.Value))
+             DiskFormat.Crc32C(bytes) != metadata.ContentCrc32C.Value))
         {
             throw new PantsCorruptionException(
                 $"Cloud SST '{name}' does not match its manifest metadata.");
         }
 
         var bytesCopy = bytes.ToArray();
-        _ = MidgeSstCodec.Decode(bytesCopy);
+        _ = SstCodec.Decode(bytesCopy);
         var path = Path.Combine(_sstDirectory, name);
         if (File.Exists(path))
         {
@@ -516,7 +517,7 @@ sealed class LocalDiskStore : IDisposable
                     var blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
                     dataBlocksRead = checked(dataBlocksRead + 1);
                     sstDataBlocksRead = 1;
-                    containsKey = MidgeSstCodec.DataBlockContainsKey(blockContent, keyCopy);
+                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
                     _ = _blockCache.Add(cacheKey, blockContent);
                 }
 
@@ -569,9 +570,9 @@ sealed class LocalDiskStore : IDisposable
     public IScanReadValidator CreateScanReadValidator(
         RuntimeTelemetry telemetry,
         ColumnFamilyIdentity columnFamily,
-        PantsScanBounds bounds)
+        ScanBounds bounds)
     {
-        var readers = new List<MidgeSstReader>();
+        var readers = new List<SstReader>();
         var blocks = new List<SstScanBlock>();
         try
         {
@@ -581,7 +582,7 @@ sealed class LocalDiskStore : IDisposable
                          file.LargestKey is not null &&
                          bounds.Overlaps(GetMetadataKey(file.SmallestKey), GetMetadataKey(file.LargestKey))))
             {
-                var reader = MidgeSstReader.Open(Path.Combine(_sstDirectory, file.Name));
+                var reader = SstReader.Open(Path.Combine(_sstDirectory, file.Name));
                 readers.Add(reader);
                 for (var blockIndex = 0; blockIndex < reader.DataBlockCount; blockIndex++)
                 {
@@ -615,13 +616,13 @@ sealed class LocalDiskStore : IDisposable
 
     public static LocalDiskStore Open(
         string directory,
-        PantsRuntimeState state,
+        RuntimeState state,
         ulong minimumWriterEpoch = 0,
         PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict,
         PantsPerformanceGoal performanceGoal = PantsPerformanceGoal.Latency,
         TimeSpan? leaseClockSkewTolerance = null,
         Action? leaseLossCallback = null,
-        IPantsFailpointHandler? failpoints = null,
+        IFailpointHandler? failpoints = null,
         PantsCompactionConfiguration? compaction = null,
         long targetSstSizeBytes = 128L * 1024 * 1024,
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
@@ -637,7 +638,7 @@ sealed class LocalDiskStore : IDisposable
         var root = Path.GetFullPath(directory);
         FileStream? lockStream = null;
         FileStream? walStream = null;
-        MidgeFileLease? lease = null;
+        FileLease? lease = null;
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         try
         {
@@ -657,7 +658,7 @@ sealed class LocalDiskStore : IDisposable
                     exception);
             }
 
-            lease = MidgeFileLease.Acquire(
+            lease = FileLease.Acquire(
                 root,
                 minimumWriterEpoch,
                 leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
@@ -693,6 +694,7 @@ sealed class LocalDiskStore : IDisposable
                 manifest,
                 recoveryPolicy,
                 state);
+            ValidateManifestSstNames(manifest);
             lease.EnsureValid();
             CleanStartupResidue(
                 root,
@@ -750,7 +752,7 @@ sealed class LocalDiskStore : IDisposable
             walStream?.Dispose();
             lease?.Dispose();
             lockStream?.Dispose();
-            throw new PantsStorageException($"Could not open Pants database at '{root}'.", ex);
+            throw new StorageException($"Could not open Pants database at '{root}'.", ex);
         }
     }
 
@@ -770,11 +772,11 @@ sealed class LocalDiskStore : IDisposable
 
     static void CleanStartupResidue(
         string root,
-        MidgeManifest manifest,
-        PantsRuntimeState state,
+        ManifestState manifest,
+        RuntimeState state,
         bool preserveUnownedSsts,
-        IPantsFailpointHandler failpoints,
-        MidgeFileLease lease)
+        IFailpointHandler failpoints,
+        FileLease lease)
     {
         var sstDirectory = Path.Combine(root, "sst");
         var stagingDirectory = Path.Combine(sstDirectory, ".flush-staging");
@@ -832,10 +834,10 @@ sealed class LocalDiskStore : IDisposable
     static void DeleteStartupResidue(
         IEnumerable<string> paths,
         string directory,
-        PantsRuntimeState state,
+        RuntimeState state,
         StartupCleanupFailureDisposition failureDisposition,
-        IPantsFailpointHandler failpoints,
-        MidgeFileLease lease)
+        IFailpointHandler failpoints,
+        FileLease lease)
     {
         lease.EnsureValid();
         var candidates = Array.Empty<string>();
@@ -855,7 +857,7 @@ sealed class LocalDiskStore : IDisposable
             try
             {
                 lease.EnsureValid();
-                failpoints.Hit(PantsFailpoint.BeforeStartupResidueDelete);
+                failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
                 lease.EnsureValid();
                 File.Delete(path);
                 deleted = true;
@@ -886,10 +888,10 @@ sealed class LocalDiskStore : IDisposable
     static void DeleteStartupResidueDirectory(
         string path,
         string parentDirectory,
-        PantsRuntimeState state,
+        RuntimeState state,
         StartupCleanupFailureDisposition failureDisposition,
-        IPantsFailpointHandler failpoints,
-        MidgeFileLease lease)
+        IFailpointHandler failpoints,
+        FileLease lease)
     {
         lease.EnsureValid();
         if (!Directory.Exists(path))
@@ -899,7 +901,7 @@ sealed class LocalDiskStore : IDisposable
 
         try
         {
-            failpoints.Hit(PantsFailpoint.BeforeStartupResidueDelete);
+            failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
             lease.EnsureValid();
             Directory.Delete(path, true);
             lease.EnsureValid();
@@ -914,7 +916,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     static void HandleStartupCleanupFailure(
-        PantsRuntimeState state,
+        RuntimeState state,
         StartupCleanupFailureDisposition failureDisposition)
     {
         if (failureDisposition == StartupCleanupFailureDisposition.WarningOnly)
@@ -930,12 +932,13 @@ sealed class LocalDiskStore : IDisposable
 
     static void AdvanceNextWalSequencePastSealedSegments(
         string walDirectory,
-        MidgeManifest manifest)
+        ManifestState manifest)
     {
-        var maximumSegmentId = Directory
-            .EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
-            .Select(static path => Path.GetFileNameWithoutExtension(path))
-            .Select(static name => ulong.TryParse(name, out var segmentId) ? segmentId : 0)
+        var maximumSegmentId = EnumerateSealedWalSegmentPaths(walDirectory)
+            .Select(static path =>
+                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
+                    ? segmentId
+                    : 0)
             .DefaultIfEmpty()
             .Max();
         if (maximumSegmentId == ulong.MaxValue)
@@ -977,7 +980,7 @@ sealed class LocalDiskStore : IDisposable
             });
 
     public JsonElement CreateDropColumnFamilyEdit(
-        PantsRuntimeState state,
+        RuntimeState state,
         ColumnFamilyIdentity identity)
     {
         var snapshot = Volatile.Read(ref _manifestReadSnapshot);
@@ -988,7 +991,7 @@ sealed class LocalDiskStore : IDisposable
             _lease.EnsureValid();
             if (!_familyIds.TryGetValue(identity, out var id))
             {
-                throw new PantsStorageException(
+                throw new StorageException(
                     $"Column family '{identity}' has no persistent Midge identity.");
             }
 
@@ -1012,7 +1015,7 @@ sealed class LocalDiskStore : IDisposable
             Volatile.Read(ref _manifestReadSnapshot).ColumnFamilies,
             edit);
 
-    public void CommitColumnFamilyEdit(PantsRuntimeState state, JsonElement edit)
+    public void CommitColumnFamilyEdit(RuntimeState state, JsonElement edit)
     {
         ThrowIfDisposed();
         ThrowIfWalWriteFailed();
@@ -1024,15 +1027,15 @@ sealed class LocalDiskStore : IDisposable
             return;
         }
 
-        _failpoints.Hit(PantsFailpoint.BeforeDdlLocalCommit);
+        _failpoints.Hit(Failpoint.BeforeDdlLocalCommit);
         DurablyApplyManifestEdit(edit);
-        _failpoints.Hit(PantsFailpoint.AfterDdlLocalJournalBeforeVisibility);
+        _failpoints.Hit(Failpoint.AfterDdlLocalJournalBeforeVisibility);
         ApplyColumnFamilyEditVisibility(state, edit);
         SaveManifestCheckpoint();
     }
 
     public void AdoptRemoteCommittedColumnFamilyEdit(
-        PantsRuntimeState state,
+        RuntimeState state,
         JsonElement edit)
     {
         ThrowIfDisposed();
@@ -1047,7 +1050,7 @@ sealed class LocalDiskStore : IDisposable
         ApplyColumnFamilyEditVisibility(state, edit);
     }
 
-    public void ApplyColumnFamilyEditVisibility(PantsRuntimeState state, JsonElement edit)
+    public void ApplyColumnFamilyEditVisibility(RuntimeState state, JsonElement edit)
     {
         ThrowIfDisposed();
         ThrowIfWalWriteFailed();
@@ -1102,7 +1105,7 @@ sealed class LocalDiskStore : IDisposable
         _familyIds.Remove(droppedIdentity);
     }
 
-    public void DropColumnFamily(PantsRuntimeState state, ColumnFamilyIdentity identity)
+    public void DropColumnFamily(RuntimeState state, ColumnFamilyIdentity identity)
     {
         lock (_walStateGate)
         {
@@ -1113,7 +1116,7 @@ sealed class LocalDiskStore : IDisposable
                 _lease.EnsureValid();
                 if (!_familyIds.TryGetValue(identity, out var id))
                 {
-                    throw new PantsStorageException(
+                    throw new StorageException(
                         $"Column family '{identity}' has no persistent Midge identity.");
                 }
 
@@ -1142,7 +1145,7 @@ sealed class LocalDiskStore : IDisposable
 
     public WalCommitResult AppendCommit(
         CommitPayload payload,
-        PantsRuntimeState state,
+        RuntimeState state,
         PantsDurability durability,
         WalMetricsRecorder? metrics = null)
     {
@@ -1169,7 +1172,7 @@ sealed class LocalDiskStore : IDisposable
             {
                 try
                 {
-                    _failpoints.Hit(PantsFailpoint.BeforeWalRollback);
+                    _failpoints.Hit(Failpoint.BeforeWalRollback);
                     RollBackWalAppend(
                         state,
                         walLength,
@@ -1196,7 +1199,7 @@ sealed class LocalDiskStore : IDisposable
 
     public WalCommitGroupResult AppendCommitGroup(
         IReadOnlyList<WalCommitGroupEntry> commits,
-        PantsRuntimeState state,
+        RuntimeState state,
         PantsDurability durability,
         Action beforeSync,
         WalMetricsRecorder? metrics = null)
@@ -1245,27 +1248,27 @@ sealed class LocalDiskStore : IDisposable
                 }
 
                 var appendStarted = Stopwatch.GetTimestamp();
-                MidgeWalCodec.AppendFrames(
+                WalCodec.AppendFrames(
                     _walStream.SafeFileHandle,
                     walLength,
                     prepared.Select(static commit => commit.Payload).ToArray(),
-                    () => _failpoints.Hit(PantsFailpoint.MidWalAppend));
+                    () => _failpoints.Hit(Failpoint.MidWalAppend));
                 var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
                 metrics?.RecordAppend(appendElapsed);
                 _walRecords = checked(_walRecords + prepared.Count);
                 RecordWalAppend(state.Sequence, prepared.Count);
                 foreach (var commit in prepared)
                 {
-                    _failpoints.Hit(PantsFailpoint.AfterWalAppend);
+                    _failpoints.Hit(Failpoint.AfterWalAppend);
                     _mutableOperations.AddRange(commit.Mutations);
                     _unflushedCommitSequence = checked((ulong)commit.Sequence);
                 }
 
                 if (durability == PantsDurability.Sync)
                 {
-                    _failpoints.Hit(PantsFailpoint.BeforeWalFlush);
+                    _failpoints.Hit(Failpoint.BeforeWalFlush);
                     _walStream.Flush(false);
-                    _failpoints.Hit(PantsFailpoint.AfterWalFlush);
+                    _failpoints.Hit(Failpoint.AfterWalFlush);
                     beforeSync();
                     _lease.EnsureValid();
                     var syncStarted = Stopwatch.GetTimestamp();
@@ -1307,7 +1310,7 @@ sealed class LocalDiskStore : IDisposable
 
     PreparedWalCommit PrepareResidentWalCommit(
         CommitPayload payload,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         if (payload.IsSpilled)
         {
@@ -1321,17 +1324,17 @@ sealed class LocalDiskStore : IDisposable
             payload.Operations.Count == ulong.MaxValue ||
             beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
         {
-            throw new PantsStorageException("The transaction sequence range is exhausted.");
+            throw new StorageException("The transaction sequence range is exhausted.");
         }
 
         var commitSequence = beginSequence + payload.Operations.Count + 1;
         var sequence = checked((long)commitSequence);
         _nextSequence = commitSequence;
         state.Sequence = sequence;
-        _failpoints.Hit(PantsFailpoint.BeforeWalAppend);
+        _failpoints.Hit(Failpoint.BeforeWalAppend);
         var mutations = ReadMutations(payload, beginSequence);
-        _failpoints.Hit(PantsFailpoint.BeforeDirectTransactionCommitMarker);
-        var walPayload = MidgeWalCodec.EncodeTransactionBatch(
+        _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
+        var walPayload = WalCodec.EncodeTransactionBatch(
             checked((ulong)payload.TransactionId),
             beginSequence,
             _lease.Epoch,
@@ -1341,7 +1344,7 @@ sealed class LocalDiskStore : IDisposable
 
     WalCommitResult AppendCommitCore(
         CommitPayload payload,
-        PantsRuntimeState state,
+        RuntimeState state,
         PantsDurability durability,
         out long reservedSequence,
         WalMetricsRecorder? metrics,
@@ -1361,18 +1364,18 @@ sealed class LocalDiskStore : IDisposable
         if (payload.Operations.Count == ulong.MaxValue ||
             beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
         {
-            throw new PantsStorageException("The transaction sequence range is exhausted.");
+            throw new StorageException("The transaction sequence range is exhausted.");
         }
 
         var commitSequence = beginSequence + payload.Operations.Count + 1;
         reservedSequence = checked((long)commitSequence);
         _nextSequence = commitSequence;
         state.Sequence = reservedSequence;
-        List<MidgeWalMutation>? residentMutations = null;
+        List<WalMutation>? residentMutations = null;
         var appendElapsed = TimeSpan.Zero;
         if (durability != PantsDurability.BestEffort)
         {
-            _failpoints.Hit(PantsFailpoint.BeforeWalAppend);
+            _failpoints.Hit(Failpoint.BeforeWalAppend);
             var walRecordsBeforeAppend = _walRecords;
             var appendStarted = Stopwatch.GetTimestamp();
             if (payload.IsSpilled)
@@ -1397,7 +1400,7 @@ sealed class LocalDiskStore : IDisposable
             RecordWalAppend(
                 reservedSequence,
                 checked(_walRecords - walRecordsBeforeAppend));
-            _failpoints.Hit(PantsFailpoint.AfterWalAppend);
+            _failpoints.Hit(Failpoint.AfterWalAppend);
         }
 
         if (residentMutations is not null)
@@ -1417,7 +1420,7 @@ sealed class LocalDiskStore : IDisposable
         if (durability != PantsDurability.BestEffort &&
             (durability == PantsDurability.Sync || flushBufferedWrites))
         {
-            _failpoints.Hit(PantsFailpoint.BeforeWalFlush);
+            _failpoints.Hit(Failpoint.BeforeWalFlush);
             var flushStarted = Stopwatch.GetTimestamp();
             _walStream.Flush(durability == PantsDurability.Sync);
             var flushElapsed = Stopwatch.GetElapsedTime(flushStarted);
@@ -1429,7 +1432,7 @@ sealed class LocalDiskStore : IDisposable
 
             try
             {
-                _failpoints.Hit(PantsFailpoint.AfterWalFlush);
+                _failpoints.Hit(Failpoint.AfterWalFlush);
             }
             catch (Exception exception)
             {
@@ -1441,7 +1444,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void RollBackWalCommitGroup(
-        PantsRuntimeState state,
+        RuntimeState state,
         long walLength,
         long reservedSequence,
         ulong unflushedCommitSequence,
@@ -1451,7 +1454,7 @@ sealed class LocalDiskStore : IDisposable
     {
         try
         {
-            _failpoints.Hit(PantsFailpoint.BeforeCoalescedWalRollback);
+            _failpoints.Hit(Failpoint.BeforeCoalescedWalRollback);
             RollBackWalAppend(
                 state,
                 walLength,
@@ -1475,7 +1478,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void RollBackWalAppend(
-        PantsRuntimeState state,
+        RuntimeState state,
         long walLength,
         long reservedSequence,
         ulong unflushedCommitSequence,
@@ -1502,7 +1505,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void RestoreWalAppendState(
-        PantsRuntimeState state,
+        RuntimeState state,
         long reservedSequence,
         ulong unflushedCommitSequence,
         int walRecords,
@@ -1565,10 +1568,10 @@ sealed class LocalDiskStore : IDisposable
     void AppendDirectTransaction(
         ulong transactionId,
         ulong beginSequence,
-        IReadOnlyList<MidgeWalMutation> mutations)
+        IReadOnlyList<WalMutation> mutations)
     {
-        _failpoints.Hit(PantsFailpoint.BeforeDirectTransactionCommitMarker);
-        var payload = MidgeWalCodec.EncodeTransactionBatch(
+        _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
+        var payload = WalCodec.EncodeTransactionBatch(
             transactionId,
             beginSequence,
             _lease.Epoch,
@@ -1577,7 +1580,7 @@ sealed class LocalDiskStore : IDisposable
         AppendWalFrame(
             ref offset,
             payload,
-            () => _failpoints.Hit(PantsFailpoint.MidWalAppend));
+            () => _failpoints.Hit(Failpoint.MidWalAppend));
     }
 
     void AppendSpilledTransaction(
@@ -1589,8 +1592,8 @@ sealed class LocalDiskStore : IDisposable
         var offset = _walStream.Length;
         AppendWalFrame(
             ref offset,
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionBegin,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
                 transactionId,
                 beginSequence,
                 _lease.Epoch));
@@ -1601,32 +1604,32 @@ sealed class LocalDiskStore : IDisposable
                 checked(beginSequence + operation.Ordinal + 1));
             AppendWalFrame(
                 ref offset,
-                MidgeWalCodec.EncodeTransactionMutation(
+                WalCodec.EncodeTransactionMutation(
                     mutation,
                     transactionId,
                     _lease.Epoch));
         });
 
-        _failpoints.Hit(PantsFailpoint.BeforeSpilledTransactionCommitMarker);
+        _failpoints.Hit(Failpoint.BeforeSpilledTransactionCommitMarker);
         AppendWalFrame(
             ref offset,
-            MidgeWalCodec.EncodeTransactionMarker(
-                MidgeWalOperation.TransactionCommit,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionCommit,
                 transactionId,
                 commitSequence,
                 _lease.Epoch));
     }
 
-    List<MidgeWalMutation> ReadMutations(
+    List<WalMutation> ReadMutations(
         CommitPayload payload,
         ulong beginSequence)
     {
         if (payload.Operations.Count > int.MaxValue)
         {
-            throw new PantsStorageException("The transaction contains too many resident operations.");
+            throw new StorageException("The transaction contains too many resident operations.");
         }
 
-        var mutations = new List<MidgeWalMutation>((int)payload.Operations.Count);
+        var mutations = new List<WalMutation>((int)payload.Operations.Count);
         payload.Operations.ForEach(operation =>
             mutations.Add(CreateMutation(
                 operation,
@@ -1634,18 +1637,18 @@ sealed class LocalDiskStore : IDisposable
         return mutations;
     }
 
-    MidgeWalMutation CreateMutation(
+    WalMutation CreateMutation(
         TransactionIntentOperation operation,
         ulong sequence) =>
         new(
             ResolveFamilyId(operation.Family),
             operation.Kind switch
             {
-                CommitOperationKind.Put when operation.InsertOnly => MidgeWalOperation.Insert,
-                CommitOperationKind.Put => MidgeWalOperation.Put,
-                CommitOperationKind.Delete => MidgeWalOperation.Delete,
-                CommitOperationKind.DeleteRange => MidgeWalOperation.DeleteRange,
-                _ => throw new PantsStorageException(
+                CommitOperationKind.Put when operation.InsertOnly => WalOperation.Insert,
+                CommitOperationKind.Put => WalOperation.Put,
+                CommitOperationKind.Delete => WalOperation.Delete,
+                CommitOperationKind.DeleteRange => WalOperation.DeleteRange,
+                _ => throw new StorageException(
                     $"Unsupported WAL operation '{operation.Kind}'.")
             },
             operation.Key.ToArray(),
@@ -1656,7 +1659,7 @@ sealed class LocalDiskStore : IDisposable
 
     void AppendWalFrame(ref long offset, byte[] payload, Action? afterPartialPayload = null)
     {
-        MidgeWalCodec.AppendFrame(
+        WalCodec.AppendFrame(
             _walStream.SafeFileHandle,
             offset,
             payload,
@@ -1665,7 +1668,7 @@ sealed class LocalDiskStore : IDisposable
         _walRecords = checked(_walRecords + 1);
     }
 
-    public void Flush(PantsRuntimeState state)
+    public void Flush(RuntimeState state)
     {
         lock (_walStateGate)
         {
@@ -1673,7 +1676,7 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    public void Flush(PantsRuntimeState state, ColumnFamilyIdentity identity)
+    public void Flush(RuntimeState state, ColumnFamilyIdentity identity)
     {
         lock (_walStateGate)
         {
@@ -1734,7 +1737,7 @@ sealed class LocalDiskStore : IDisposable
         ThrowIfDisposed();
         ThrowIfWalWriteFailed();
         _lease.EnsureValid();
-        _failpoints.Hit(PantsFailpoint.BeforeFlushBuild);
+        _failpoints.Hit(Failpoint.BeforeFlushBuild);
         _lease.EnsureValid();
         return BuildFlushPlan(
             frozen.Operations,
@@ -1757,7 +1760,7 @@ sealed class LocalDiskStore : IDisposable
             file.Name == frozen.SstName);
         if (published is not null)
         {
-            _failpoints.Hit(PantsFailpoint.BeforePublishedFlushRetryValidation);
+            _failpoints.Hit(Failpoint.BeforePublishedFlushRetryValidation);
             ValidatePublishedFlushOutput(frozen, published, plan);
             _lease.EnsureValid();
             CompleteFrozenFlush(frozen);
@@ -1765,7 +1768,7 @@ sealed class LocalDiskStore : IDisposable
             return new FlushPublicationResult(false);
         }
 
-        _failpoints.Hit(PantsFailpoint.BeforeFlushPublication);
+        _failpoints.Hit(Failpoint.BeforeFlushPublication);
         _lease.EnsureValid();
         var persistenceAnomaly = PublishFlushPlan(
             plan,
@@ -1856,7 +1859,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void FlushOperations(
-        IReadOnlyList<MidgeWalMutation> operations,
+        IReadOnlyList<WalMutation> operations,
         ulong? persistedSequence)
     {
         ThrowIfWalWriteFailed();
@@ -1868,7 +1871,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     FlushPublicationPlan BuildFlushPlan(
-        IReadOnlyList<MidgeWalMutation> operations,
+        IReadOnlyList<WalMutation> operations,
         uint? assignedFamilyId = null,
         ulong? assignedSequence = null,
         ulong? flushFrontierSequence = null,
@@ -1885,25 +1888,25 @@ sealed class LocalDiskStore : IDisposable
             }
 
             var entries = familyGroup
-                .Where(operation => operation.Operation != MidgeWalOperation.DeleteRange)
-                .Select(operation => new MidgeSstEntry(
+                .Where(operation => operation.Operation != WalOperation.DeleteRange)
+                .Select(operation => new SstEntry(
                     operation.Key,
                     operation.Value,
                     operation.Sequence,
                     operation.Expiration,
-                    operation.Operation == MidgeWalOperation.Delete))
+                    operation.Operation == WalOperation.Delete))
                 .ToList();
             var ranges = familyGroup
                 .Where(operation =>
-                    operation.Operation == MidgeWalOperation.DeleteRange && operation.RangeEnd is not null)
-                .Select(operation => new MidgeRangeTombstone(operation.Key, operation.RangeEnd!, operation.Sequence))
+                    operation.Operation == WalOperation.DeleteRange && operation.RangeEnd is not null)
+                .Select(operation => new RangeTombstone(operation.Key, operation.RangeEnd!, operation.Sequence))
                 .ToList();
             var output = StageSst(
                 familyGroup.Key,
                 0,
                 entries,
                 ranges,
-                PantsFailpoint.AfterFlushOutputDurable,
+                Failpoint.AfterFlushOutputDurable,
                 assignedFamilyId == familyGroup.Key ? assignedSequence : null,
                 stagingIdentity);
             var metadata = output.Metadata;
@@ -1944,14 +1947,14 @@ sealed class LocalDiskStore : IDisposable
             snapshot.NextSstSequences.GetValueOrDefault(familyId, 1UL));
     }
 
-    MidgeFileMeta[] GetManifestFilesSnapshot()
+    FileMeta[] GetManifestFilesSnapshot()
     {
         return Volatile.Read(ref _manifestReadSnapshot).Files
             .Select(static file => file.Clone())
             .ToArray();
     }
 
-    MidgeColumnFamilyMeta[] GetColumnFamiliesSnapshot()
+    ColumnFamilyMeta[] GetColumnFamiliesSnapshot()
     {
         return Volatile.Read(ref _manifestReadSnapshot).ColumnFamilies
             .Select(static family => family.Clone())
@@ -1971,15 +1974,15 @@ sealed class LocalDiskStore : IDisposable
                 FinalizeStagedSst(output);
             }
 
-            _failpoints.Hit(PantsFailpoint.BeforeFlushDirectorySync);
+            _failpoints.Hit(Failpoint.BeforeFlushDirectorySync);
             AtomicStagedFile.FlushDirectory(_sstDirectory);
-            _failpoints.Hit(PantsFailpoint.AfterFlushFinalizationBeforeIntent);
+            _failpoints.Hit(Failpoint.AfterFlushFinalizationBeforeIntent);
             _lease.EnsureValid();
             UpsertFlushIntents(plan);
-            _failpoints.Hit(PantsFailpoint.BeforeFlushManifestPublish);
+            _failpoints.Hit(Failpoint.BeforeFlushManifestPublish);
             _lease.EnsureValid();
             DurablyApplyManifestBatch(plan.Edits);
-            _failpoints.Hit(PantsFailpoint.AfterFlushManifestPublish);
+            _failpoints.Hit(Failpoint.AfterFlushManifestPublish);
             if (persistedSequence.HasValue)
             {
                 _manifest.LastPersistedSequence = Math.Max(
@@ -2087,7 +2090,7 @@ sealed class LocalDiskStore : IDisposable
             if (forCloudUpload)
             {
                 FlushWalForCloudUpload(metrics);
-                _failpoints.Hit(PantsFailpoint.AfterCloudWalSealFlush);
+                _failpoints.Hit(Failpoint.AfterCloudWalSealFlush);
                 _lease.EnsureValid();
                 validateCloudWriteAuthority?.Invoke();
             }
@@ -2097,7 +2100,7 @@ sealed class LocalDiskStore : IDisposable
             }
         }
 
-        _failpoints.Hit(PantsFailpoint.BeforeWalRotation);
+        _failpoints.Hit(Failpoint.BeforeWalRotation);
         _walStream.Dispose();
         lock (_manifestGate)
         {
@@ -2108,7 +2111,7 @@ sealed class LocalDiskStore : IDisposable
             SealedWalSegment? segment = null;
             try
             {
-                _failpoints.Hit(PantsFailpoint.AfterWalRotationStreamDisposed);
+                _failpoints.Hit(Failpoint.AfterWalRotationStreamDisposed);
                 File.Move(_walPath, sealedPath, false);
                 segment = ReadSealedWalSegment(sealedPath, forCloudUpload);
                 _manifest.NextWalSeq = checked(segmentId + 1);
@@ -2120,7 +2123,7 @@ sealed class LocalDiskStore : IDisposable
                     FileShare.Read);
                 _walStream = replacementStream;
                 _walRecords = 0;
-                _failpoints.Hit(PantsFailpoint.AfterWalRotation);
+                _failpoints.Hit(Failpoint.AfterWalRotation);
                 return segment;
             }
             catch (Exception rotationFailure)
@@ -2154,7 +2157,7 @@ sealed class LocalDiskStore : IDisposable
 
                 try
                 {
-                    _failpoints.Hit(PantsFailpoint.BeforeWalRotationRecoveryStreamReopen);
+                    _failpoints.Hit(Failpoint.BeforeWalRotationRecoveryStreamReopen);
                     var recoveryStream = new FileStream(
                         _walPath,
                         FileMode.OpenOrCreate,
@@ -2208,8 +2211,12 @@ sealed class LocalDiskStore : IDisposable
     {
         ThrowIfDisposed();
         _lease.EnsureValid();
-        return Directory.EnumerateFiles(_walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
-            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+        return EnumerateSealedWalSegmentPaths(_walDirectory)
+            .OrderBy(static path =>
+                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
+                    ? segmentId
+                    : ulong.MaxValue)
+            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
             .Select(static path => ReadSealedWalSegment(path))
             .ToArray();
     }
@@ -2226,12 +2233,42 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
+    // Midge's current writer names sealed segments "{segmentId:00000000000000000000}.wal".
+    // Older writers instead used "wal_{segmentId:000000}.log". A reader must still recognize
+    // that legacy shape on decode, though the current writer never emits it.
+    static readonly Regex LegacyWalSegmentFileNameRegex =
+        new(@"^wal_(\d{6})\.log$", RegexOptions.Compiled);
+
+    static IEnumerable<string> EnumerateSealedWalSegmentPaths(string walDirectory) =>
+        Directory.EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+            .Concat(Directory
+                .EnumerateFiles(walDirectory, "wal_*.log", SearchOption.TopDirectoryOnly)
+                .Where(static path =>
+                    LegacyWalSegmentFileNameRegex.IsMatch(Path.GetFileName(path))));
+
+    static bool TryParseSealedWalSegmentId(string fileName, out ulong segmentId)
+    {
+        if (ulong.TryParse(Path.GetFileNameWithoutExtension(fileName), out segmentId))
+        {
+            return true;
+        }
+
+        var match = LegacyWalSegmentFileNameRegex.Match(fileName);
+        if (match.Success && ulong.TryParse(match.Groups[1].Value, out segmentId))
+        {
+            return true;
+        }
+
+        segmentId = 0;
+        return false;
+    }
+
     static SealedWalSegment ReadSealedWalSegment(
         string path,
         bool requireSingleWriterEpoch = true)
     {
         var fileName = Path.GetFileName(path);
-        if (!ulong.TryParse(Path.GetFileNameWithoutExtension(fileName), out var segmentId))
+        if (!TryParseSealedWalSegmentId(fileName, out var segmentId))
         {
             throw new PantsCorruptionException($"Sealed WAL name '{fileName}' is invalid.");
         }
@@ -2241,20 +2278,20 @@ sealed class LocalDiskStore : IDisposable
         ulong? writerEpoch = null;
         try
         {
-            MidgeWalFrameReader.Visit(
+            WalFrameReader.Visit(
                 bytes,
                 (record, _) =>
                 {
-                    if (record.Operation == MidgeWalOperation.TransactionBatch)
+                    if (record.Operation == WalOperation.TransactionBatch)
                     {
-                        MidgeWalCodec.ValidateTransactionBatch(record);
+                        WalCodec.ValidateTransactionBatch(record);
                     }
 
                     if (requireSingleWriterEpoch &&
                         writerEpoch.HasValue &&
                         writerEpoch.Value != record.WriterEpoch)
                     {
-                        throw new PantsStorageException(
+                        throw new StorageException(
                             $"Sealed WAL '{fileName}' contains mixed writer epochs.");
                     }
 
@@ -2282,7 +2319,7 @@ sealed class LocalDiskStore : IDisposable
             bytes);
     }
 
-    public PantsStorageLayout GetStorageLayout(PantsRuntimeState state)
+    public PantsStorageLayout GetStorageLayout(RuntimeState state)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var levels = manifest.Files
@@ -2335,7 +2372,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     public long Compact(
-        PantsRuntimeState state,
+        RuntimeState state,
         bool force,
         bool continueCompacting = false) =>
         CompactAsync(
@@ -2352,7 +2389,7 @@ sealed class LocalDiskStore : IDisposable
             .BytesRewritten;
 
     public ValueTask<CompactionResult> CompactAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         CancellationToken cancellationToken = default) =>
@@ -2366,7 +2403,7 @@ sealed class LocalDiskStore : IDisposable
             cancellationToken);
 
     public ValueTask<CompactionResult> CompactAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
@@ -2382,7 +2419,7 @@ sealed class LocalDiskStore : IDisposable
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
-        PantsRuntimeState state,
+        RuntimeState state,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
@@ -2428,12 +2465,12 @@ sealed class LocalDiskStore : IDisposable
             hasCompactionPlan = true;
 
             var contents = plan.Inputs
-                .Select(input => MidgeSstCodec.Decode(
+                .Select(input => SstCodec.Decode(
                     PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
                 .ToArray();
             var merged = CompactionMerger.Merge(contents, plan);
             var partitions = CompactionOutputPartitioner.Partition(merged, _targetSstSizeBytes);
-            var outputs = new List<MidgeFileMeta>(partitions.Count);
+            var outputs = new List<FileMeta>(partitions.Count);
             var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
                 familyId,
                 out var nextOutputSequence)
@@ -2447,7 +2484,7 @@ sealed class LocalDiskStore : IDisposable
                     plan.TargetLevel,
                     partition.Entries,
                     partition.RangeTombstones,
-                    PantsFailpoint.AfterCompactionOutputDurable,
+                    Failpoint.AfterCompactionOutputDurable,
                     checked(firstOutputSequence + (ulong)outputIndex));
                 outputs.Add(output);
                 outputNames.Add(output.Name);
@@ -2506,7 +2543,7 @@ sealed class LocalDiskStore : IDisposable
         _lease.EnsureValid();
         if (outputNames.Count > 0)
         {
-            _failpoints.Hit(PantsFailpoint.BeforeCompactionDirectorySync);
+            _failpoints.Hit(Failpoint.BeforeCompactionDirectorySync);
             AtomicStagedFile.FlushDirectory(_sstDirectory);
             _lease.EnsureValid();
         }
@@ -2524,7 +2561,7 @@ sealed class LocalDiskStore : IDisposable
         var persistenceAnomaly = false;
         lock (_manifestGate)
         {
-            _failpoints.Hit(PantsFailpoint.BeforeCompactionManifestPublish);
+            _failpoints.Hit(Failpoint.BeforeCompactionManifestPublish);
             _lease.EnsureValid();
             DurablyApplyManifestBatch(edits);
             if (hasCompactionPlan)
@@ -2532,7 +2569,7 @@ sealed class LocalDiskStore : IDisposable
                 publicationCompleted?.Invoke(outputBytes);
             }
 
-            _failpoints.Hit(PantsFailpoint.AfterCompactionManifestPublish);
+            _failpoints.Hit(Failpoint.AfterCompactionManifestPublish);
             _lease.EnsureValid();
             TransitionCompactionIntents(intents, "ManifestPublished");
             try
@@ -2592,7 +2629,7 @@ sealed class LocalDiskStore : IDisposable
         _blockCache.RemoveFile(name);
     }
 
-    MidgeFileMeta GetManifestSst(string name)
+    FileMeta GetManifestSst(string name)
     {
         var safeName = ValidateSstName(name);
         return Volatile.Read(ref _manifestReadSnapshot).Files.SingleOrDefault(file =>
@@ -2602,11 +2639,11 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void Recover(
-        PantsRuntimeState state,
+        RuntimeState state,
         IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts)
     {
         RestoreColumnFamilies(state);
-        var recoveredOperations = new List<MidgeWalMutation>();
+        var recoveredOperations = new List<WalMutation>();
         foreach (var file in _manifest.Files.ToArray())
         {
             try
@@ -2617,24 +2654,24 @@ sealed class LocalDiskStore : IDisposable
                     ? PositionalFile.ReadAllBytes(path)
                     : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
                         ? recovered.ToArray()
-                        : throw new PantsStorageException($"Manifest SST '{file.Name}' is missing.");
-                if (file.ContentCrc32C.HasValue && MidgeDiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                        : throw new StorageException($"Manifest SST '{file.Name}' is missing.");
+                if (file.ContentCrc32C.HasValue && DiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
                 {
-                    throw new PantsStorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
+                    throw new StorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
                 }
 
-                var contents = MidgeSstCodec.Decode(bytes);
-                recoveredOperations.AddRange(contents.Entries.Select(entry => new MidgeWalMutation(
+                var contents = SstCodec.Decode(bytes);
+                recoveredOperations.AddRange(contents.Entries.Select(entry => new WalMutation(
                     file.ColumnFamilyId,
-                    entry.IsDelete ? MidgeWalOperation.Delete : MidgeWalOperation.Put,
+                    entry.IsDelete ? WalOperation.Delete : WalOperation.Put,
                     entry.Key,
                     entry.Value,
                     entry.Sequence,
                     entry.Expiration,
                     null)));
-                recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new MidgeWalMutation(
+                recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new WalMutation(
                     file.ColumnFamilyId,
-                    MidgeWalOperation.DeleteRange,
+                    WalOperation.DeleteRange,
                     range.Start,
                     null,
                     range.Sequence,
@@ -2662,7 +2699,7 @@ sealed class LocalDiskStore : IDisposable
         state.Sequence = checked((long)_nextSequence);
     }
 
-    void ReplayWal(PantsRuntimeState state)
+    void ReplayWal(RuntimeState state)
     {
         var persistedFamilySequences = _manifest.Files
             .Where(static file => file.LargestSequence.HasValue)
@@ -2671,14 +2708,17 @@ sealed class LocalDiskStore : IDisposable
                 static group => group.Key,
                 static group => group.Max(file => file.LargestSequence!.Value));
         var activeFamilyIds = _familyIds.Values.ToHashSet();
-        var sealedSegments = Directory
-            .EnumerateFiles(_walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
+        var sealedSegments = EnumerateSealedWalSegmentPaths(_walDirectory)
             .Where(static path => Path.GetFileName(path) != "wal.log")
-            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .OrderBy(static path =>
+                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
+                    ? segmentId
+                    : ulong.MaxValue)
+            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
             .ToArray();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
-        using var recovery = new MidgeWalRecoveryStateMachine();
-        var recoveredVersions = new MidgeWalRecoveredVersionTracker();
+        using var recovery = new WalRecoveryStateMachine();
+        var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
         for (var index = 0; index < sealedSegments.Length; index++)
         {
@@ -2731,11 +2771,11 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    MidgeWalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
-        PantsRuntimeState state,
+    WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
+        RuntimeState state,
         IReadOnlyList<string> sealedSegments)
     {
-        var frontiers = new MidgeWalWriterEpochFrontiers();
+        var frontiers = new WalWriterEpochFrontiers();
         var ordinal = 0UL;
         foreach (var sealedSegment in sealedSegments)
         {
@@ -2774,12 +2814,12 @@ sealed class LocalDiskStore : IDisposable
     }
 
     WalReplayOutcome ReplayWalStream(
-        PantsRuntimeState state,
+        RuntimeState state,
         FileStream stream,
         bool allowIncompleteTail,
-        MidgeWalRecoveryStateMachine recovery,
-        MidgeWalRecoveredVersionTracker recoveredVersions,
-        MidgeWalWriterEpochFrontiers writerEpochFrontiers,
+        WalRecoveryStateMachine recovery,
+        WalRecoveredVersionTracker recoveredVersions,
+        WalWriterEpochFrontiers writerEpochFrontiers,
         ref ulong replayOrdinal,
         IReadOnlyDictionary<uint, ulong> persistedFamilySequences,
         HashSet<uint> activeFamilyIds)
@@ -2795,11 +2835,11 @@ sealed class LocalDiskStore : IDisposable
                     return true;
                 }
 
-                state.RecordWalRecovery(MidgeWalRecordMetrics.GetLogicalByteCount(record));
+                state.RecordWalRecovery(WalRecordMetrics.GetLogicalByteCount(record));
                 _nextSequence = Math.Max(_nextSequence, record.Sequence);
                 try
                 {
-                    var recoveredMutations = new List<(MidgeWalMutation Mutation, ulong CommitSequence)>();
+                    var recoveredMutations = new List<(WalMutation Mutation, ulong CommitSequence)>();
                     recovery.Accept(
                         record,
                         (mutation, commitSequence) =>
@@ -2838,17 +2878,17 @@ sealed class LocalDiskStore : IDisposable
             });
 
     WalReplayOutcome VisitWalStream(
-        PantsRuntimeState state,
+        RuntimeState state,
         FileStream stream,
         bool allowIncompleteTail,
         ref ulong recordOrdinal,
-        Func<MidgeWalRecord, int, ulong, bool> visitor)
+        Func<WalRecord, int, ulong, bool> visitor)
     {
         Span<byte> header = stackalloc byte[8];
         while (stream.Position < stream.Length)
         {
             var recordStart = stream.Position;
-            if (!MidgeDiskFormat.ReadExactly(stream, header))
+            if (!DiskFormat.ReadExactly(stream, header))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
@@ -2859,7 +2899,7 @@ sealed class LocalDiskStore : IDisposable
             }
 
             var length = BinaryPrimitives.ReadUInt32LittleEndian(header);
-            if (length > MidgeDiskFormat.WalMaximumRecordBytes)
+            if (length > DiskFormat.WalMaximumRecordBytes)
             {
                 return HandleWalCorruption(
                     state,
@@ -2869,7 +2909,7 @@ sealed class LocalDiskStore : IDisposable
             if (length > stream.Length - stream.Position)
             {
                 if (allowIncompleteTail &&
-                    MidgeWalFrameReader.ContainsVerifiedFrameInRemainingBytes(stream))
+                    WalFrameReader.ContainsVerifiedFrameInRemainingBytes(stream))
                 {
                     return HandleWalCorruption(
                         state,
@@ -2880,20 +2920,20 @@ sealed class LocalDiskStore : IDisposable
             }
 
             var payload = new byte[length];
-            if (!MidgeDiskFormat.ReadExactly(stream, payload))
+            if (!DiskFormat.ReadExactly(stream, payload))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
 
-            if (MidgeDiskFormat.Crc32C(payload) != BinaryPrimitives.ReadUInt32LittleEndian(header[4..]))
+            if (DiskFormat.Crc32C(payload) != BinaryPrimitives.ReadUInt32LittleEndian(header[4..]))
             {
                 return HandleWalCorruption(state, "WAL frame CRC32C mismatch.");
             }
 
-            MidgeWalRecord record;
+            WalRecord record;
             try
             {
-                record = MidgeWalCodec.DecodeRecord(payload);
+                record = WalCodec.DecodeRecord(payload);
             }
             catch (PantsException exception)
             {
@@ -2916,8 +2956,8 @@ sealed class LocalDiskStore : IDisposable
     }
 
     void RecordRecoveredMemtableBytes(
-        PantsRuntimeState state,
-        IReadOnlyList<MidgeWalMutation> mutations)
+        RuntimeState state,
+        IReadOnlyList<WalMutation> mutations)
     {
         var identities = _familyIds.ToDictionary(
             static pair => pair.Value,
@@ -2941,7 +2981,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     WalReplayOutcome HandleIncompleteWalTail(
-        PantsRuntimeState state,
+        RuntimeState state,
         FileStream stream,
         long validLength,
         bool allowIncompleteTail)
@@ -2958,7 +2998,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     WalReplayOutcome HandleWalCorruption(
-        PantsRuntimeState state,
+        RuntimeState state,
         string message,
         Exception? innerException = null)
     {
@@ -3001,7 +3041,7 @@ sealed class LocalDiskStore : IDisposable
         _walRecords = 0;
     }
 
-    void RestoreColumnFamilies(PantsRuntimeState state)
+    void RestoreColumnFamilies(RuntimeState state)
     {
         state.FamilyGeneration.Clear();
         state.ActiveFamilyVersions.Clear();
@@ -3010,9 +3050,9 @@ sealed class LocalDiskStore : IDisposable
         state.ActiveMemtableBytes.Clear();
         if (!_manifest.ColumnFamilies.Any(family => family.Id == 0 && family.Name == "default"))
         {
-            var defaultIdentity = new ColumnFamilyIdentity(0, "default", PantsRuntimeState.DefaultFamilyVersion);
-            state.FamilyGeneration["default"] = PantsRuntimeState.DefaultFamilyVersion;
-            state.ActiveFamilyVersions["default"] = PantsRuntimeState.DefaultFamilyVersion;
+            var defaultIdentity = new ColumnFamilyIdentity(0, "default", RuntimeState.DefaultFamilyVersion);
+            state.FamilyGeneration["default"] = RuntimeState.DefaultFamilyVersion;
+            state.ActiveFamilyVersions["default"] = RuntimeState.DefaultFamilyVersion;
             state.FamilyData[defaultIdentity] = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
             state.RangeTombstones[defaultIdentity] = [];
             state.ActiveMemtableBytes[defaultIdentity] = 0;
@@ -3042,7 +3082,7 @@ sealed class LocalDiskStore : IDisposable
 
         if (!state.ActiveFamilyVersions.ContainsKey("default"))
         {
-            throw new PantsStorageException("Midge manifest does not contain the active default column family.");
+            throw new StorageException("Midge manifest does not contain the active default column family.");
         }
 
         state.NextColumnFamilyId = _manifest.ColumnFamilies.Count == 0
@@ -3050,7 +3090,7 @@ sealed class LocalDiskStore : IDisposable
             : checked(_manifest.ColumnFamilies.Max(family => family.Id) + 1);
     }
 
-    void ApplyMutations(PantsRuntimeState state, IEnumerable<MidgeWalMutation> mutations)
+    void ApplyMutations(RuntimeState state, IEnumerable<WalMutation> mutations)
     {
         var identityById = _familyIds.ToDictionary(pair => pair.Value, pair => pair.Key);
         foreach (var mutation in mutations)
@@ -3063,17 +3103,17 @@ sealed class LocalDiskStore : IDisposable
 
             switch (mutation.Operation)
             {
-                case MidgeWalOperation.Put:
-                case MidgeWalOperation.Insert:
+                case WalOperation.Put:
+                case WalOperation.Insert:
                     family[mutation.Key] = CellState.FromUnixMilliseconds(
                         mutation.Value?.ToArray(),
                         checked((long)mutation.Sequence),
                         mutation.Expiration);
                     break;
-                case MidgeWalOperation.Delete:
+                case WalOperation.Delete:
                     family.Remove(mutation.Key);
                     break;
-                case MidgeWalOperation.DeleteRange when mutation.RangeEnd is not null:
+                case WalOperation.DeleteRange when mutation.RangeEnd is not null:
                     state.RangeTombstones[identity].Add(new CommittedRangeTombstone(
                         mutation.Key.ToArray(),
                         mutation.RangeEnd.ToArray(),
@@ -3090,12 +3130,12 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    MidgeFileMeta CreateSst(
+    FileMeta CreateSst(
         uint familyId,
         uint level,
-        IReadOnlyList<MidgeSstEntry> entries,
-        IReadOnlyList<MidgeRangeTombstone> ranges,
-        PantsFailpoint outputDurableFailpoint,
+        IReadOnlyList<SstEntry> entries,
+        IReadOnlyList<RangeTombstone> ranges,
+        Failpoint outputDurableFailpoint,
         ulong? assignedSequence = null)
     {
         var output = StageSst(
@@ -3114,9 +3154,9 @@ sealed class LocalDiskStore : IDisposable
     StagedSstOutput StageSst(
         uint familyId,
         uint level,
-        IReadOnlyList<MidgeSstEntry> entries,
-        IReadOnlyList<MidgeRangeTombstone> ranges,
-        PantsFailpoint outputDurableFailpoint,
+        IReadOnlyList<SstEntry> entries,
+        IReadOnlyList<RangeTombstone> ranges,
+        Failpoint outputDurableFailpoint,
         ulong? assignedSequence,
         string? stagingIdentity)
     {
@@ -3126,7 +3166,7 @@ sealed class LocalDiskStore : IDisposable
                            ? nextSequence
                            : 1UL);
         var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
-        var bytes = MidgeSstCodec.Encode(entries, ranges, _performanceGoal);
+        var bytes = SstCodec.Encode(entries, ranges, _performanceGoal);
         var stagingPrefix = string.IsNullOrEmpty(stagingIdentity)
             ? _lease.Epoch.ToString(CultureInfo.InvariantCulture)
             : stagingIdentity;
@@ -3148,12 +3188,12 @@ sealed class LocalDiskStore : IDisposable
             .ToList();
         var allSequences = entries.Select(entry => entry.Sequence).Concat(ranges.Select(range => range.Sequence))
             .ToList();
-        var metadata = new MidgeFileMeta
+        var metadata = new FileMeta
         {
             Name = name,
             Level = level,
             SizeBytes = checked((ulong)bytes.Length),
-            ContentCrc32C = MidgeDiskFormat.Crc32C(bytes),
+            ContentCrc32C = DiskFormat.Crc32C(bytes),
             ColumnFamilyId = familyId,
             SstSequence = sequence,
             SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
@@ -3192,7 +3232,7 @@ sealed class LocalDiskStore : IDisposable
 
     static void ValidatePublishedFlushOutput(
         FrozenMemtableFlush frozen,
-        MidgeFileMeta published,
+        FileMeta published,
         FlushPublicationPlan plan)
     {
         var output = AssertSingleFlushOutput(frozen, plan);
@@ -3227,13 +3267,13 @@ sealed class LocalDiskStore : IDisposable
     {
         var bytes = PositionalFile.ReadAllBytes(output.FinalPath);
         if (output.Metadata.SizeBytes != checked((ulong)bytes.Length) ||
-            output.Metadata.ContentCrc32C != MidgeDiskFormat.Crc32C(bytes))
+            output.Metadata.ContentCrc32C != DiskFormat.Crc32C(bytes))
         {
             throw new PantsCorruptionException(
                 $"Published SST '{output.Metadata.Name}' content does not match its build output.");
         }
 
-        _ = MidgeSstCodec.Decode(bytes);
+        _ = SstCodec.Decode(bytes);
     }
 
     static StagedSstOutput AssertSingleFlushOutput(
@@ -3251,7 +3291,7 @@ sealed class LocalDiskStore : IDisposable
         return plan.Outputs[0];
     }
 
-    static bool HasSameFlushMetadata(MidgeFileMeta left, MidgeFileMeta right) =>
+    static bool HasSameFlushMetadata(FileMeta left, FileMeta right) =>
         left.Name == right.Name &&
         left.Level == right.Level &&
         left.SizeBytes == right.SizeBytes &&
@@ -3269,7 +3309,7 @@ sealed class LocalDiskStore : IDisposable
             ? right is null
             : right is not null && left.AsSpan().SequenceEqual(right);
 
-    static Dictionary<string, object?> CreateIntentFileMetadata(MidgeFileMeta metadata) => new()
+    static Dictionary<string, object?> CreateIntentFileMetadata(FileMeta metadata) => new()
     {
         ["name"] = metadata.Name,
         ["level"] = metadata.Level,
@@ -3294,8 +3334,8 @@ sealed class LocalDiskStore : IDisposable
             AtomicStagedFile.Write(
                 _intentPath,
                 JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions),
-                beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeIntentLogReplace));
-            _failpoints.Hit(PantsFailpoint.AfterIntentLogReplace);
+                beforePublish: () => _failpoints.Hit(Failpoint.BeforeIntentLogReplace));
+            _failpoints.Hit(Failpoint.AfterIntentLogReplace);
         }
     }
 
@@ -3668,13 +3708,13 @@ sealed class LocalDiskStore : IDisposable
             },
             JsonOptions);
         var marker = EncodeManifestJournalRecord(9, markerPayload);
-        _failpoints.Hit(PantsFailpoint.BeforeManifestJournalAppend);
+        _failpoints.Hit(Failpoint.BeforeManifestJournalAppend);
         PositionalFile.AppendAndFlush(
             _manifestJournalPath,
             [record, marker],
-            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalAppend),
-            () => _failpoints.Hit(PantsFailpoint.BeforeManifestJournalSync),
-            () => _failpoints.Hit(PantsFailpoint.AfterManifestJournalSync));
+            () => _failpoints.Hit(Failpoint.AfterManifestJournalAppend),
+            () => _failpoints.Hit(Failpoint.BeforeManifestJournalSync),
+            () => _failpoints.Hit(Failpoint.AfterManifestJournalSync));
 
         ApplyManifestEdit(_manifest, edit, recordType);
         _manifest.EditCheckpointId = editId;
@@ -3708,10 +3748,10 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(
             _manifestSnapshotPath,
             json,
-            beforePublish: () => _failpoints.Hit(PantsFailpoint.BeforeManifestCheckpointReplace));
+            beforePublish: () => _failpoints.Hit(Failpoint.BeforeManifestCheckpointReplace));
         AtomicStagedFile.Write(_manifestJournalPath, []);
         AtomicStagedFile.Write(_manifestPath, json);
-        _failpoints.Hit(PantsFailpoint.AfterManifestCheckpointReplace);
+        _failpoints.Hit(Failpoint.AfterManifestCheckpointReplace);
     }
 
     void RefreshManifestReadSnapshot() =>
@@ -3720,7 +3760,7 @@ sealed class LocalDiskStore : IDisposable
     void RotateWal()
     {
         ThrowIfWalWriteFailed();
-        _failpoints.Hit(PantsFailpoint.BeforeWalRotation);
+        _failpoints.Hit(Failpoint.BeforeWalRotation);
         _walStream.Dispose();
         using (var truncate = new FileStream(_walPath, FileMode.Create, FileAccess.Write, FileShare.Read))
         {
@@ -3730,23 +3770,20 @@ sealed class LocalDiskStore : IDisposable
         _walStream = new FileStream(_walPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
         _walRecords = 0;
         _walPendingWrites = 0;
-        foreach (var sealedSegment in Directory.EnumerateFiles(
-                     _walDirectory,
-                     "*.wal",
-                     SearchOption.TopDirectoryOnly))
+        foreach (var sealedSegment in EnumerateSealedWalSegmentPaths(_walDirectory))
         {
             File.Delete(sealedSegment);
         }
 
-        _failpoints.Hit(PantsFailpoint.AfterWalRotation);
+        _failpoints.Hit(Failpoint.AfterWalRotation);
     }
 
     uint ResolveFamilyId(ColumnFamilyIdentity identity) =>
         _familyIds.TryGetValue(identity, out var id)
             ? id
-            : throw new PantsStorageException($"Column family '{identity}' has no persistent Midge identity.");
+            : throw new StorageException($"Column family '{identity}' has no persistent Midge identity.");
 
-    static bool IsWithinFileRange(MidgeFileMeta file, ReadOnlySpan<byte> key)
+    static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
     {
         if (file.SmallestKey is null || file.LargestKey is null)
         {
@@ -3789,17 +3826,17 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(path, Encoding.UTF8.GetBytes(expected));
     }
 
-    static MidgeManifest LoadManifest(
+    static ManifestState LoadManifest(
         string root,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var snapshot = Path.Combine(root, "manifest.snapshot.json");
         var legacy = Path.Combine(root, "manifest.json");
         var sources = new[] { snapshot, legacy }.Where(File.Exists).ToArray();
         if (sources.Length == 0)
         {
-            return MidgeManifest.CreateInitial();
+            return ManifestState.CreateInitial();
         }
 
         Exception? failure = null;
@@ -3807,7 +3844,7 @@ sealed class LocalDiskStore : IDisposable
         {
             try
             {
-                var manifest = JsonSerializer.Deserialize<MidgeManifest>(
+                var manifest = JsonSerializer.Deserialize<ManifestState>(
                     File.ReadAllBytes(source),
                     JsonOptions) ?? throw new JsonException("Midge manifest is empty.");
                 if (failure is not null)
@@ -3833,19 +3870,64 @@ sealed class LocalDiskStore : IDisposable
             }
         }
 
-        return MidgeManifest.CreateInitial();
+        return ManifestState.CreateInitial();
+    }
+
+    static void ValidateManifestSstNames(ManifestState manifest)
+    {
+        try
+        {
+            foreach (var file in manifest.Files)
+            {
+                ValidateSstName(file.Name);
+            }
+
+            foreach (var family in manifest.ColumnFamilies)
+            {
+                foreach (var name in family.DroppedSstNames)
+                {
+                    ValidateSstName(name);
+                }
+            }
+
+            if (manifest.CloudCheckpoint is JsonElement checkpoint &&
+                checkpoint.ValueKind == JsonValueKind.Object &&
+                checkpoint.TryGetProperty("covering_ssts", out var coveringSsts) &&
+                coveringSsts.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var name in coveringSsts.EnumerateArray())
+                {
+                    ValidateSstName(name.GetString() ?? string.Empty);
+                }
+            }
+        }
+        catch (StorageException exception)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest contains an unsafe SST name.",
+                exception);
+        }
     }
 
     static bool ValidateRecoveryMetadata(
         string root,
-        MidgeManifest manifest,
+        ManifestState manifest,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
         try
         {
-            ReplayManifestJournal(File.ReadAllBytes(journalPath), manifest);
+            var journalBytes = File.ReadAllBytes(journalPath);
+            ReplayManifestJournal(journalBytes, manifest, out var durableByteLength);
+            if (durableByteLength < journalBytes.Length)
+            {
+                // A torn tail: repair the journal on disk to the durable prefix before any
+                // future append is allowed to proceed, using the same staged fsync+rename
+                // write already used for the manifest snapshot.
+                AtomicStagedFile.Write(journalPath, journalBytes.AsSpan(0, durableByteLength));
+            }
         }
         catch (Exception exception) when (exception is PantsException or IOException)
         {
@@ -3884,10 +3966,10 @@ sealed class LocalDiskStore : IDisposable
 
     static bool ReplayIntentLog(
         string root,
-        MidgeManifest manifest,
+        ManifestState manifest,
         JsonElement intentLog,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var entryCount = intentLog.GetArrayLength();
         if (entryCount == 0)
@@ -3975,11 +4057,11 @@ sealed class LocalDiskStore : IDisposable
 
     static bool ReplayFlushIntent(
         string root,
-        MidgeManifest manifest,
+        ManifestState manifest,
         JsonElement intent,
         string phase,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var metadataElement = intent.TryGetProperty("file_meta", out var fileMetadata)
             ? fileMetadata
@@ -4012,11 +4094,11 @@ sealed class LocalDiskStore : IDisposable
 
     static bool ReplayCompactionIntent(
         string root,
-        MidgeManifest manifest,
+        ManifestState manifest,
         JsonElement intent,
         string phase,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var removed = GetStringArray(intent, "removed");
         if (removed.Length == 0)
@@ -4110,10 +4192,10 @@ sealed class LocalDiskStore : IDisposable
             state);
     }
 
-    static MidgeFileMeta ParseIntentFileMetadata(JsonElement element)
+    static FileMeta ParseIntentFileMetadata(JsonElement element)
     {
         var name = ValidateSstName(GetRequiredString(element, "name"));
-        return new MidgeFileMeta
+        return new FileMeta
         {
             Name = name,
             Level = GetRequiredUInt32(element, "level"),
@@ -4129,10 +4211,10 @@ sealed class LocalDiskStore : IDisposable
 
     static bool PublishRecoveredIntentSst(
         string root,
-        MidgeManifest manifest,
-        MidgeFileMeta metadata,
+        ManifestState manifest,
+        FileMeta metadata,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         if (!ValidateIntentSst(root, metadata, recoveryPolicy, state))
         {
@@ -4145,9 +4227,9 @@ sealed class LocalDiskStore : IDisposable
 
     static bool DeleteUnpublishedIntentSst(
         string root,
-        MidgeFileMeta metadata,
+        FileMeta metadata,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var path = Path.Combine(root, "sst", metadata.Name);
         if (!File.Exists(path))
@@ -4161,9 +4243,9 @@ sealed class LocalDiskStore : IDisposable
 
     static bool ValidateIntentSst(
         string root,
-        MidgeFileMeta metadata,
+        FileMeta metadata,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         var path = Path.Combine(root, "sst", metadata.Name);
         try
@@ -4171,7 +4253,7 @@ sealed class LocalDiskStore : IDisposable
             var bytes = PositionalFile.ReadAllBytes(path);
             if ((metadata.SizeBytes != 0 && metadata.SizeBytes != checked((ulong)bytes.Length)) ||
                 (metadata.ContentCrc32C.HasValue &&
-                 metadata.ContentCrc32C.Value != MidgeDiskFormat.Crc32C(bytes)))
+                 metadata.ContentCrc32C.Value != DiskFormat.Crc32C(bytes)))
             {
                 return HandleIntentRecoveryIssue(
                     $"Recovery intent SST '{metadata.Name}' does not match its publication proof.",
@@ -4179,7 +4261,7 @@ sealed class LocalDiskStore : IDisposable
                     state);
             }
 
-            _ = MidgeSstCodec.Decode(bytes);
+            _ = SstCodec.Decode(bytes);
             return true;
         }
         catch (Exception exception) when (exception is IOException or PantsException)
@@ -4195,7 +4277,7 @@ sealed class LocalDiskStore : IDisposable
         string root,
         string name,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         try
         {
@@ -4214,7 +4296,7 @@ sealed class LocalDiskStore : IDisposable
     static bool HandleIntentRecoveryIssue(
         string message,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state)
+        RuntimeState state)
     {
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
         {
@@ -4230,7 +4312,7 @@ sealed class LocalDiskStore : IDisposable
         string strictMessage,
         byte[] replacement,
         PantsRecoveryPolicy recoveryPolicy,
-        PantsRuntimeState state,
+        RuntimeState state,
         Exception exception)
     {
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
@@ -4243,11 +4325,12 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(path, replacement);
     }
 
-    internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes) => _ = ReadDurableJournalRecords(bytes);
+    internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes) =>
+        _ = ReadDurableJournalRecords(bytes, out _);
 
-    static void ReplayManifestJournal(ReadOnlySpan<byte> bytes, MidgeManifest manifest)
+    static void ReplayManifestJournal(ReadOnlySpan<byte> bytes, ManifestState manifest, out int durableByteLength)
     {
-        var records = ReadDurableJournalRecords(bytes);
+        var records = ReadDurableJournalRecords(bytes, out durableByteLength);
         var nextLegacyEditId = manifest.EditCheckpointId;
         foreach (var record in records)
         {
@@ -4277,11 +4360,12 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    static JournalRecord[] ReadDurableJournalRecords(ReadOnlySpan<byte> bytes)
+    static JournalRecord[] ReadDurableJournalRecords(ReadOnlySpan<byte> bytes, out int durableByteLength)
     {
         var cursor = 0;
         var pending = new List<JournalRecord>();
         var durableCount = 0;
+        durableByteLength = 0;
         while (cursor < bytes.Length)
         {
             var remaining = bytes.Length - cursor;
@@ -4299,7 +4383,7 @@ sealed class LocalDiskStore : IDisposable
             }
 
             var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(cursor + 1)..]);
-            if (payloadLength > MidgeDiskFormat.WalMaximumRecordBytes)
+            if (payloadLength > DiskFormat.WalMaximumRecordBytes)
             {
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
@@ -4338,6 +4422,7 @@ sealed class LocalDiskStore : IDisposable
             if (recordType == 9)
             {
                 durableCount = pending.Count;
+                durableByteLength = cursor + recordLength;
             }
             else
             {
@@ -4351,7 +4436,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     static void ApplyManifestEdit(
-        MidgeManifest manifest,
+        ManifestState manifest,
         JsonElement edit,
         byte recordType)
     {
@@ -4386,15 +4471,19 @@ sealed class LocalDiskStore : IDisposable
         {
             case "AddSst":
                 {
-                    var metadata = value.Deserialize<MidgeFileMeta>(JsonOptions) ??
+                    var metadata = value.Deserialize<FileMeta>(JsonOptions) ??
                                    throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty.");
+                    ValidateSstName(metadata.Name);
                     manifest.Files.RemoveAll(file => file.Name == metadata.Name);
                     manifest.Files.Add(metadata);
                     break;
                 }
             case "RemoveSst":
-                manifest.Files.RemoveAll(file => file.Name == GetRequiredString(value, "name"));
-                break;
+                {
+                    var name = ValidateSstName(GetRequiredString(value, "name"));
+                    manifest.Files.RemoveAll(file => file.Name == name);
+                    break;
+                }
             case "CreateColumnFamily":
                 {
                     var id = GetRequiredUInt32(value, "id");
@@ -4403,7 +4492,7 @@ sealed class LocalDiskStore : IDisposable
                     var existing = manifest.ColumnFamilies.SingleOrDefault(family => family.Id == id);
                     if (existing is null)
                     {
-                        manifest.ColumnFamilies.Add(new MidgeColumnFamilyMeta
+                        manifest.ColumnFamilies.Add(new ColumnFamilyMeta
                         {
                             Id = id,
                             Name = name,
@@ -4427,12 +4516,12 @@ sealed class LocalDiskStore : IDisposable
                     manifest,
                     GetRequiredUInt32(value, "id"),
                     GetRequiredUInt64(value, "drop_sequence"),
-                    GetStringArray(value, "dropped_sst_names"));
+                    GetValidatedSstNameArray(value, "dropped_sst_names"));
                 break;
             case "ReclaimColumnFamily":
                 {
                     var id = GetRequiredUInt32(value, "id");
-                    var names = GetStringArray(value, "names");
+                    var names = GetValidatedSstNameArray(value, "names");
                     manifest.Files.RemoveAll(file => names.Contains(file.Name, StringComparer.Ordinal));
                     var family = manifest.ColumnFamilies.SingleOrDefault(candidate => candidate.Id == id);
                     if (family is not null)
@@ -4458,8 +4547,22 @@ sealed class LocalDiskStore : IDisposable
                     break;
                 }
             case "SetCloudCheckpoint":
-                manifest.CloudCheckpoint = JsonSerializer.Deserialize<object>(value.GetRawText(), JsonOptions);
-                break;
+                {
+                    _ = GetValidatedSstNameArray(value, "covering_ssts");
+                    var incomingSequence = GetRequiredUInt64(value, "checkpoint_sequence");
+                    var currentSequence = manifest.CloudCheckpoint is JsonElement currentCheckpoint &&
+                                           currentCheckpoint.ValueKind == JsonValueKind.Object &&
+                                           currentCheckpoint.TryGetProperty("checkpoint_sequence", out var currentSequenceElement) &&
+                                           currentSequenceElement.TryGetUInt64(out var currentSequenceValue)
+                        ? currentSequenceValue
+                        : (ulong?)null;
+                    if (currentSequence is null || incomingSequence >= currentSequence.Value)
+                    {
+                        manifest.CloudCheckpoint = JsonSerializer.Deserialize<object>(value.GetRawText(), JsonOptions);
+                    }
+
+                    break;
+                }
             case "Batch":
                 foreach (var nested in value.EnumerateArray())
                 {
@@ -4475,7 +4578,7 @@ sealed class LocalDiskStore : IDisposable
     }
 
     static void ApplyDropColumnFamily(
-        MidgeManifest manifest,
+        ManifestState manifest,
         uint id,
         ulong dropSequence,
         string[] droppedNames)
@@ -4583,6 +4686,9 @@ sealed class LocalDiskStore : IDisposable
         return value.EnumerateArray().Select(static item => item.GetString() ?? string.Empty).ToArray();
     }
 
+    static string[] GetValidatedSstNameArray(JsonElement element, string name) =>
+        GetStringArray(element, name).Select(ValidateSstName).ToArray();
+
     static uint Crc32(ReadOnlySpan<byte> bytes)
     {
         var crc = uint.MaxValue;
@@ -4620,21 +4726,22 @@ sealed class LocalDiskStore : IDisposable
             name != Path.GetFileName(name) ||
             !name.EndsWith(".sst", StringComparison.Ordinal) ||
             name.Contains(':') ||
-            name.Contains('\\'))
+            name.Contains('\\') ||
+            name.Contains('\0'))
         {
-            throw new PantsStorageException($"Manifest SST name '{name}' is unsafe.");
+            throw new StorageException($"Manifest SST name '{name}' is unsafe.");
         }
 
         return name;
     }
 
-    static long GetLocalFileBytes(string directory, string pattern)
+    static long GetLocalFileBytes(string directory, string pattern) =>
+        GetLocalFileBytes(Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly));
+
+    static long GetLocalFileBytes(IEnumerable<string> paths)
     {
         var total = 0L;
-        foreach (var path in Directory.EnumerateFiles(
-                     directory,
-                     pattern,
-                     SearchOption.TopDirectoryOnly))
+        foreach (var path in paths)
         {
             try
             {

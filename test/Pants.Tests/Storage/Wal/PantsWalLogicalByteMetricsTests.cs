@@ -6,7 +6,7 @@ public sealed class PantsWalLogicalByteMetricsTests
     public async Task ShouldCountPutKeyAndValueBytesExactlyWhenVerifyingAndRecovering()
     {
         var record = CreateRecord(
-            MidgeWalOperation.Put,
+            WalOperation.Put,
             "alpha",
             "bravo",
             1);
@@ -18,7 +18,7 @@ public sealed class PantsWalLogicalByteMetricsTests
     public async Task ShouldCountDeleteRangeBoundaryBytesExactlyWhenVerifyingAndRecovering()
     {
         var record = CreateRecord(
-            MidgeWalOperation.DeleteRange,
+            WalOperation.DeleteRange,
             "alpha",
             null,
             1,
@@ -30,14 +30,14 @@ public sealed class PantsWalLogicalByteMetricsTests
     [Fact]
     public async Task ShouldCountOuterBatchKeyAndPayloadBytesExactlyWhenVerifyingAndRecovering()
     {
-        var record = MidgeWalCodec.EncodeTransactionBatch(
+        var record = WalCodec.EncodeTransactionBatch(
             7,
             1,
             1,
             [
-                new MidgeWalMutation(
+                new WalMutation(
                     0,
-                    MidgeWalOperation.Put,
+                    WalOperation.Put,
                     "batch-key"u8.ToArray(),
                     "batch-value"u8.ToArray(),
                     0,
@@ -51,13 +51,13 @@ public sealed class PantsWalLogicalByteMetricsTests
     [Fact]
     public async Task ShouldCountEncodedMarkerKeysExactlyWhenVerifyingAndRecovering()
     {
-        var begin = MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionBegin,
+        var begin = WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionBegin,
             7,
             1,
             1);
-        var commit = MidgeWalCodec.EncodeTransactionMarker(
-            MidgeWalOperation.TransactionCommit,
+        var commit = WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionCommit,
             7,
             2,
             1);
@@ -92,12 +92,12 @@ public sealed class PantsWalLogicalByteMetricsTests
     }
 
     static byte[] CreateRecord(
-        MidgeWalOperation operation,
+        WalOperation operation,
         string key,
         string? value,
         ulong sequence,
         string? rangeEnd = null) =>
-        MidgeWalCodec.EncodeRecord(new MidgeWalRecord(
+        WalCodec.EncodeRecord(new WalRecord(
             0,
             operation,
             TestBytes.FromString(key),
@@ -113,8 +113,8 @@ public sealed class PantsWalLogicalByteMetricsTests
         using var stream = new MemoryStream();
         foreach (var payload in payloads)
         {
-            MidgeDiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            MidgeDiskFormat.WriteUInt32(stream, MidgeDiskFormat.Crc32C(payload));
+            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
+            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
 

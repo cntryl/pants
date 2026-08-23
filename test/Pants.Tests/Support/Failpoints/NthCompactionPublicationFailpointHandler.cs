@@ -1,7 +1,7 @@
 namespace Cntryl.Pants.Tests.Support.Failpoints;
 
 sealed class NthCompactionPublicationFailpointHandler(int failAtHit) :
-    IPantsFailpointHandler
+    IFailpointHandler
 {
     int _failureCount;
     int _hitCount;
@@ -10,9 +10,9 @@ sealed class NthCompactionPublicationFailpointHandler(int failAtHit) :
 
     public int HitCount => Volatile.Read(ref _hitCount);
 
-    public void Hit(PantsFailpoint failpoint)
+    public void Hit(Failpoint failpoint)
     {
-        if (failpoint != PantsFailpoint.BeforeCompactionManifestPublish ||
+        if (failpoint != Failpoint.BeforeCompactionManifestPublish ||
             Interlocked.Increment(ref _hitCount) != failAtHit)
         {
             return;

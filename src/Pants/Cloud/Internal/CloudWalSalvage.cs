@@ -6,13 +6,13 @@ static class CloudWalSalvage
     {
         try
         {
-            MidgeWalFrameReader.Visit(
+            WalFrameReader.Visit(
                 bytes,
                 static (record, _) =>
                 {
-                    if (record.Operation == MidgeWalOperation.TransactionBatch)
+                    if (record.Operation == WalOperation.TransactionBatch)
                     {
-                        MidgeWalCodec.ValidateTransactionBatch(record);
+                        WalCodec.ValidateTransactionBatch(record);
                     }
                 });
         }

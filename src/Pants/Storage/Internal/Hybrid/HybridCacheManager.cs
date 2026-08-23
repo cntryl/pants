@@ -2,13 +2,13 @@ namespace Cntryl.Pants.Storage.Internal.Hybrid;
 
 sealed class HybridCacheManager
 {
-    readonly IPantsFailpointHandler _failpoints;
+    readonly IFailpointHandler _failpoints;
     readonly HybridStorageBudgetPolicy _policy;
     int _pendingEvictions;
 
     public HybridCacheManager(
         long maximumLocalBytes,
-        IPantsFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null)
     {
         _policy = new HybridStorageBudgetPolicy(maximumLocalBytes);
         _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
@@ -16,7 +16,7 @@ sealed class HybridCacheManager
 
     public int PendingEvictions => Volatile.Read(ref _pendingEvictions);
 
-    public void EnsureWriteAdmitted(LocalDiskStore store, PantsRuntimeState state)
+    public void EnsureWriteAdmitted(LocalDiskStore store, RuntimeState state)
     {
         if (_policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Emergency)
         {
@@ -39,7 +39,7 @@ sealed class HybridCacheManager
         Volatile.Write(ref _pendingEvictions, candidates.Count);
         try
         {
-            _failpoints.Hit(PantsFailpoint.BeforeHybridSstEviction);
+            _failpoints.Hit(Failpoint.BeforeHybridSstEviction);
             foreach (var candidate in candidates)
             {
                 if (_policy.GetUsagePercent(store.LocalCommittedBytes) <

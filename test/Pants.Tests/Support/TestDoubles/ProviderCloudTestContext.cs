@@ -44,7 +44,7 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
                 $"database-{Guid.NewGuid():N}");
             var database = await PantsDatabase.OpenForTestingAsync(
                 PantsOpenOptions.Cloud(cache.Path, location),
-                new PantsRuntimeDependencies(cloudHttpClient: client));
+                new RuntimeDependencies(cloudHttpClient: client));
             return new ProviderCloudTestContext(cache, handler, client, database);
         }
         catch

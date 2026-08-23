@@ -47,7 +47,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         using var deadline = new CancellationTokenSource();
         var request = database.GetRuntimeMetricsAsync(deadline.Token).AsTask();
 
@@ -74,7 +74,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var request = database.GetRuntimeMetricsAsync(deadline.Token).AsTask();
 
@@ -101,7 +101,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
-            new PantsRuntimeDependencies(failpoint));
+            new RuntimeDependencies(failpoint));
 
         try
         {
