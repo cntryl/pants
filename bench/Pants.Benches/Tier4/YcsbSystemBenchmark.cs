@@ -7,7 +7,7 @@ namespace Cntryl.Pants.Benches.Tier4;
 public abstract class YcsbSystemBenchmark : Tier4Benchmark
 {
     public const int InitialKeyCount = 50_000;
-    public const int OperationCount = 10_000;
+    public const int OperationCount = 1_000;
     const int BatchSize = 1_000;
     string _path = null!;
     IPantsDatabase _database = null!;
