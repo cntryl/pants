@@ -24,6 +24,7 @@ jobs:
         include:
           - name: ubuntu-latest / Release
             os: ubuntu-latest
+            configuration: Release
             run-crash-recovery: true
             remaining-filter: >-
               FullyQualifiedName!~PantsCloudCrashRecoveryTests&
@@ -32,6 +33,7 @@ jobs:
             max-parallel-threads: 8
           - name: macos-latest / Release
             os: macos-latest
+            configuration: Release
             run-crash-recovery: true
             remaining-filter: >-
               FullyQualifiedName!~PantsCloudCrashRecoveryTests&
@@ -40,6 +42,7 @@ jobs:
             max-parallel-threads: 8
           - name: windows-latest / Release
             os: windows-latest
+            configuration: Release
             run-crash-recovery: false
             remaining-filter: >-
               FullyQualifiedName!~PantsCloudCrashRecoveryTests&
@@ -61,6 +64,7 @@ jobs:
             max-parallel-threads: 2
           - name: windows-latest / Release (cloud and storage)
             os: windows-latest
+            configuration: Release
             run-crash-recovery: false
             remaining-filter: >-
               (FullyQualifiedName~Cloud|
@@ -80,6 +84,77 @@ jobs:
             max-parallel-threads: 2
           - name: windows-latest / Release (runtime races)
             os: windows-latest
+            configuration: Release
+            run-crash-recovery: true
+            remaining-filter: >-
+              FullyQualifiedName~PantsBackgroundFlushPipelineTests|
+              FullyQualifiedName~PantsStorageVerificationHardeningTests|
+              FullyQualifiedName~PantsColumnFamilyReclamationTests|
+              FullyQualifiedName~RuntimeWorkerTests
+            max-parallel-threads: 1
+          - name: ubuntu-latest / Debug
+            os: ubuntu-latest
+            configuration: Debug
+            run-crash-recovery: true
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
+            max-parallel-threads: 8
+          - name: macos-latest / Debug
+            os: macos-latest
+            configuration: Debug
+            run-crash-recovery: true
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
+            max-parallel-threads: 8
+          - name: windows-latest / Debug
+            os: windows-latest
+            configuration: Debug
+            run-crash-recovery: false
+            remaining-filter: >-
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
+              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests&
+              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
+              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
+              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
+              FullyQualifiedName!~RuntimeWorkerTests&
+              FullyQualifiedName!~Cloud&
+              FullyQualifiedName!~PantsHybrid&
+              FullyQualifiedName!~PantsMemoryManagementContractTests&
+              FullyQualifiedName!~PantsDurabilityParityTests&
+              FullyQualifiedName!~PantsReadAmplificationContractTests&
+              FullyQualifiedName!~PantsLeveledCompactionTests&
+              FullyQualifiedName!~PantsCompressionCompatibilityTests&
+              FullyQualifiedName!~PantsTransactionSpillReadMemoryTests&
+              FullyQualifiedName!~PantsTransactionSpillBehaviorTests
+            max-parallel-threads: 2
+          - name: windows-latest / Debug (cloud and storage)
+            os: windows-latest
+            configuration: Debug
+            run-crash-recovery: false
+            remaining-filter: >-
+              (FullyQualifiedName~Cloud|
+              FullyQualifiedName~PantsHybrid|
+              FullyQualifiedName~PantsMemoryManagementContractTests|
+              FullyQualifiedName~PantsDurabilityParityTests|
+              FullyQualifiedName~PantsReadAmplificationContractTests|
+              FullyQualifiedName~PantsLeveledCompactionTests|
+              FullyQualifiedName~PantsCompressionCompatibilityTests|
+              FullyQualifiedName~PantsTransactionSpillReadMemoryTests|
+              FullyQualifiedName~PantsTransactionSpillBehaviorTests)&
+              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
+              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
+              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
+              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
+              FullyQualifiedName!~RuntimeWorkerTests
+            max-parallel-threads: 2
+          - name: windows-latest / Debug (runtime races)
+            os: windows-latest
+            configuration: Debug
             run-crash-recovery: true
             remaining-filter: >-
               FullyQualifiedName~PantsBackgroundFlushPipelineTests|
@@ -91,6 +166,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v6
@@ -104,13 +181,16 @@ jobs:
         run: dotnet format Pants.slnx --verify-no-changes --no-restore
 
       - name: Build
-        run: dotnet build Pants.slnx --configuration Release --no-restore
+        run: >-
+          dotnet build Pants.slnx
+          --configuration ${{ matrix.configuration }}
+          --no-restore
 
       - name: Test crash recovery
         if: ${{ matrix.run-crash-recovery }}
         run: >-
           dotnet test Pants.slnx
-          --configuration Release
+          --configuration ${{ matrix.configuration }}
           --no-build
           --filter "FullyQualifiedName~PantsCloudCrashRecoveryTests|FullyQualifiedName~PantsTransactionSpillCrashRecoveryTests|FullyQualifiedName~PantsCommitCoalescingCrashRecoveryTests"
           --logger "console;verbosity=detailed"
@@ -122,7 +202,7 @@ jobs:
       - name: Test remaining suite
         run: >-
           dotnet test Pants.slnx
-          --configuration Release
+          --configuration ${{ matrix.configuration }}
           --no-build
           --filter "${{ matrix.remaining-filter }}"
           --logger "trx;LogFileName=remaining.trx"
