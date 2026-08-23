@@ -93,7 +93,7 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "pants": {
+      "Cntryl.Pants": {
         "type": "Project",
         "dependencies": {
           "K4os.Compression.LZ4": "[1.3.8, )",
@@ -101,10 +101,10 @@
           "ZstdSharp.Port": "[0.8.8, )"
         }
       },
-      "pants.compatibilityharness": {
+      "Cntryl.Pants.CompatibilityHarness": {
         "type": "Project",
         "dependencies": {
-          "Pants": "[1.0.0, )"
+          "Cntryl.Pants": "[1.0.0, )"
         }
       },
       "K4os.Compression.LZ4": {
