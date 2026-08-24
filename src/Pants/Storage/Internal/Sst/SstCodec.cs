@@ -664,6 +664,11 @@ static class SstCodec
             cursor += length;
             var handle = ReadHandle(bytes, cursor);
             cursor += 16;
+            if (output.Count > 0 && output[^1].Item1.AsSpan().SequenceCompareTo(key) > 0)
+            {
+                throw new StorageException("SST index first keys are not sorted in ascending order.");
+            }
+
             output.Add((key, handle));
         }
 

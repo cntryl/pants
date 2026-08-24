@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsSstBlockCoverageTests
@@ -35,6 +37,18 @@ public sealed class PantsSstBlockCoverageTests
         Assert.Equal("SST block references do not exactly reach the footer.", exception.Message);
     }
 
+    [Fact]
+    public void ShouldRejectIndexFirstKeysThatDescend()
+    {
+        var index = EncodeIndexEntry("second"u8, new SstBlockHandle(10, 10))
+            .Concat(EncodeIndexEntry("first"u8, new SstBlockHandle(0, 10)))
+            .ToArray();
+
+        var exception = Assert.Throws<StorageException>(() => SstCodec.DecodeIndex(index));
+
+        Assert.Equal("SST index first keys are not sorted in ascending order.", exception.Message);
+    }
+
     static void Validate(
         long footerOffset,
         SstBlockHandle metadata,
@@ -47,4 +61,16 @@ public sealed class PantsSstBlockCoverageTests
             bloom: null,
             range: null,
             []);
+
+    static byte[] EncodeIndexEntry(ReadOnlySpan<byte> key, SstBlockHandle handle)
+    {
+        var entry = new byte[sizeof(uint) + key.Length + 2 * sizeof(ulong)];
+        BinaryPrimitives.WriteUInt32LittleEndian(entry, checked((uint)key.Length));
+        key.CopyTo(entry.AsSpan(sizeof(uint)));
+        BinaryPrimitives.WriteUInt64LittleEndian(entry.AsSpan(sizeof(uint) + key.Length), handle.Offset);
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            entry.AsSpan(sizeof(uint) + key.Length + sizeof(ulong)),
+            handle.Size);
+        return entry;
+    }
 }
