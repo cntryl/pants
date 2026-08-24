@@ -375,6 +375,7 @@ static class SstCodec
     {
         ArgumentNullException.ThrowIfNull(file);
         if (handle.Offset > (ulong)fileLength ||
+            handle.Size < 9 ||
             handle.Size > int.MaxValue ||
             handle.Size > (ulong)fileLength - handle.Offset)
         {
