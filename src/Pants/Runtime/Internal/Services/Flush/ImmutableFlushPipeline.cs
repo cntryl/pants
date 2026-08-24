@@ -53,8 +53,10 @@ sealed class ImmutableFlushPipeline
             .OrderBy(static flush => flush.Frozen.FrontierSequence)
             .ThenBy(static flush => flush.Frozen.Id)
             .ThenBy(static flush => flush.Frozen.ColumnFamilyId)
-            .FirstOrDefault();
-        if (next is null || next.IsRunning || (next.HasFailed && !retryFailure))
+            .GroupBy(static flush => flush.Frozen.ColumnFamily)
+            .Select(static family => family.First())
+            .FirstOrDefault(flush => !flush.IsRunning && (!flush.HasFailed || retryFailure));
+        if (next is null)
         {
             return;
         }
@@ -173,7 +175,7 @@ sealed class ImmutableFlushPipeline
         }
     }
 
-    static TimeSpan GetRetryBackoff(int attempts)
+    public static TimeSpan GetRetryBackoff(int attempts)
     {
         var exponent = Math.Min(Math.Max(attempts - 1, 0), 7);
         var milliseconds = Math.Min(

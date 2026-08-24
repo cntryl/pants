@@ -141,6 +141,65 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
+    public async Task ShouldIsolatePerFamilyGenerationCapDuringBlockedFlush()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoint = new FlushPipelineFailpointHandler(
+            Failpoint.BeforeFlushManifestPublish);
+        var options = CreateOptions(directory.Path).WithFlushAfterWalRecordsForTesting(1);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoint));
+        var saturated = await database.CreateColumnFamilyAsync("saturated-generations");
+        var healthy = await database.CreateColumnFamilyAsync("healthy-generations");
+        try
+        {
+            await CommitAsync(database, saturated, new byte[] { 0 }, new byte[] { 0 });
+            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            for (var index = 1; index < MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily; index++)
+            {
+                await CommitAsync(
+                    database,
+                    saturated,
+                    new byte[] { checked((byte)index) },
+                    new byte[] { checked((byte)index) });
+            }
+
+            var stalled = await Assert.ThrowsAsync<PantsWriteStallException>(() =>
+                CommitAsync(database, saturated, new byte[] { 10 }, new byte[] { 10 }).AsTask());
+            var blocked = await database.GetRuntimeMetricsAsync();
+
+            Assert.Equal(PantsErrorCode.WriteStall, stalled.Code);
+            Assert.Equal(10, blocked.ImmutableMemtables);
+            Assert.True(blocked.TotalMemtableBytes < 2L * blocked.MemtableFlushThresholdBytes);
+
+            await CommitAsync(database, healthy, "healthy"u8.ToArray(), "value"u8.ToArray());
+            var isolated = await database.GetRuntimeMetricsAsync();
+            Assert.Equal(11, isolated.ImmutableMemtables);
+
+            failpoint.Release();
+            await database.FlushAsync(saturated).AsTask().WaitAsync(BackgroundWorkTimeout);
+            await database.FlushAsync(healthy).AsTask().WaitAsync(BackgroundWorkTimeout);
+            var drained = await database.GetRuntimeMetricsAsync();
+            Assert.Equal(0, drained.ImmutableMemtables);
+            Assert.False(drained.WriteStalled);
+            await using var read = await database.BeginTransactionAsync(
+                saturated,
+                PantsTransactionMode.ReadOnly);
+            for (var index = 0; index < MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily; index++)
+            {
+                Assert.Equal(
+                    new byte[] { checked((byte)index) },
+                    (await read.GetAsync(new byte[] { checked((byte)index) }))!.Value.ToArray());
+            }
+        }
+        finally
+        {
+            failpoint.Release();
+        }
+    }
+
+    [Fact]
     public async Task ShouldAdmitCommitThatRacesWriteStallHint()
     {
         using var directory = new TemporaryDirectory();
@@ -314,10 +373,13 @@ public sealed class PantsBackgroundFlushPipelineTests
             var error = await Assert.ThrowsAsync<PantsCorruptionException>(() =>
                 database.FlushAsync(family).AsTask());
             var layout = await database.GetStorageLayoutAsync();
+            var failed = await database.GetRuntimeMetricsAsync();
             using var intent = JsonDocument.Parse(
                 await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
 
             Assert.Equal(PantsErrorCode.Corruption, error.Code);
+            Assert.Equal(PantsEngineHealth.Degraded, failed.Health);
+            Assert.Equal(0, failed.FlushRetriesTotal);
             Assert.DoesNotContain(
                 layout.Levels.SelectMany(static level => level.Files),
                 file => file.ColumnFamilyId == family.Id);
