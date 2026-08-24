@@ -83,13 +83,24 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        var shutdowns = Enumerable.Range(0, 16)
+        var shutdowns = Enumerable.Range(0, 8)
             .Select(_ => database.ShutdownAsync(AssertionTimeout).AsTask())
+            .ToArray();
+        var deadlineShutdowns = Enumerable.Range(0, 8)
+            .Select(_ => database.ShutdownAsync(TimeSpan.FromMilliseconds(50)).AsTask())
             .ToArray();
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 
         Assert.Equal(1, failpoint.HitCount);
         Assert.All(shutdowns, static shutdown => Assert.False(shutdown.IsCompleted));
+        foreach (var deadlineShutdown in deadlineShutdowns)
+        {
+            var timeout = await Assert.ThrowsAsync<PantsTimeoutException>(() => deadlineShutdown);
+            Assert.Equal(PantsErrorCode.Timeout, timeout.Code);
+        }
+
+        Assert.All(shutdowns, static shutdown => Assert.False(shutdown.IsCompleted));
+        Assert.Equal(1, failpoint.HitCount);
 
         failpoint.Release();
         await Task.WhenAll(shutdowns).WaitAsync(AssertionTimeout);
