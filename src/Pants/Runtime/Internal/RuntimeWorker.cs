@@ -4,9 +4,12 @@ namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 {
+    static readonly TimeSpan DefaultDisposalTimeout = TimeSpan.FromSeconds(30);
+
     readonly Channel<RuntimeWorkerCommand> _commands;
     readonly CancellationTokenSource _lifetimeCancellation = new();
     readonly Task _loopTask;
+    readonly TimeSpan _disposalTimeout;
     long _completed;
     int _disposed;
     long _enqueued;
@@ -15,8 +18,14 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
     int _outstanding;
     int _queueDepth;
 
-    public RuntimeWorker(int capacity)
+    public RuntimeWorker(int capacity, TimeSpan? disposalTimeout = null)
     {
+        _disposalTimeout = disposalTimeout ?? DefaultDisposalTimeout;
+        if (_disposalTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(disposalTimeout));
+        }
+
         _commands = Channel.CreateBounded<RuntimeWorkerCommand>(new BoundedChannelOptions(capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -35,8 +44,24 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
         }
 
         _commands.Writer.TryComplete();
-        await _loopTask.ConfigureAwait(false);
-        _lifetimeCancellation.Dispose();
+        await _lifetimeCancellation.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await _loopTask.WaitAsync(_disposalTimeout).ConfigureAwait(false);
+            _lifetimeCancellation.Dispose();
+        }
+        catch (TimeoutException exception)
+        {
+            _ = _loopTask.ContinueWith(
+                static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                _lifetimeCancellation,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw new PantsTimeoutException(
+                "Runtime worker disposal did not complete before its deadline.",
+                exception);
+        }
     }
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
