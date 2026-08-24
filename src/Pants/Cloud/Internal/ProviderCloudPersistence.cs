@@ -257,14 +257,13 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        byte[]? baseline = null;
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var current = await _controlStore.GetAsync(
                 PantsCloudObjectLayout.DdlRegistryObjectKey,
                 cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
-            baseline ??= current?.Data.ToArray() ?? CloudDdlJson.SerializeRegistry(bootstrap);
+            var baseline = current?.Data.ToArray() ?? CloudDdlJson.SerializeRegistry(bootstrap);
             var fencedBytes = CloudDdlFence.Encode(baseline, _writerEpoch);
             if (current?.Data.Span.SequenceEqual(fencedBytes) == true)
             {

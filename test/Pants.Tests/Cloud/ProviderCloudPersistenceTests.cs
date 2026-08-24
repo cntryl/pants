@@ -230,7 +230,7 @@ public sealed class ProviderCloudPersistenceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ShouldDiscardStaleDdlCasGivenSuccessorClaimAlreadyStarted(
+    public async Task ShouldPreserveCommittedDdlCasGivenSuccessorClaimAlreadyStarted(
         bool registryExists)
     {
         using var firstCache = new TemporaryDirectory();
@@ -331,8 +331,56 @@ public sealed class ProviderCloudPersistenceTests
 
         var claimed = Assert.IsType<CloudDdlRegistryObject>(
             await secondPersistence.ReadDdlRegistryAsync(CancellationToken.None));
-        Assert.Empty(claimed.Registry.Operations);
-        Assert.Equal(0UL, claimed.Registry.Epoch);
+        var operation = Assert.Single(claimed.Registry.Operations);
+        Assert.Equal("stale-operation", operation.OperationId);
+        Assert.Equal(1UL, claimed.Registry.Epoch);
+    }
+
+    [Fact]
+    public async Task ShouldFenceLatestDdlRegistryAfterCasRetry()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        _ = await lease.AcquireAsync(CancellationToken.None);
+        var controlStore = new TestCloudObjectStore();
+        var initial = RegistryWithCreate("initial-operation", 1, "initial");
+        Assert.True(await controlStore.PutAsync(
+            PantsCloudObjectLayout.DdlRegistryObjectKey,
+            CloudDdlJson.SerializeRegistry(initial),
+            new CloudObjectWriteCondition.IfAbsent(),
+            CancellationToken.None));
+        var concurrent = RegistryWithCreate("concurrent-operation", 2, "concurrent");
+        concurrent.Epoch = 1;
+        controlStore.BeforeNextPutAsync = async cancellationToken =>
+        {
+            Assert.True(await controlStore.PutAsync(
+                PantsCloudObjectLayout.DdlRegistryObjectKey,
+                CloudDdlJson.SerializeRegistry(concurrent),
+                new CloudObjectWriteCondition.Unconditional(),
+                cancellationToken));
+        };
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            controlStore,
+            lease);
+
+        await persistence.FenceDdlRegistryAsync(initial, CancellationToken.None);
+
+        var fenced = Assert.IsType<CloudDdlRegistryObject>(
+            await persistence.ReadDdlRegistryAsync(CancellationToken.None));
+        Assert.Equal(1UL, fenced.Registry.Epoch);
+        var operation = Assert.Single(fenced.Registry.Operations);
+        Assert.Equal("concurrent-operation", operation.OperationId);
+        Assert.Equal(4, controlStore.PutCount);
     }
 
     [Fact]
@@ -361,6 +409,21 @@ public sealed class ProviderCloudPersistenceTests
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
         Assert.Equal(2UL, catalog.RootElement.GetProperty("fencing_epoch").GetUInt64());
+    }
+
+    static CloudDdlRegistry RegistryWithCreate(string operationId, uint id, string name)
+    {
+        using var edit = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            CreateColumnFamily = new { id, name, created_at = 1UL }
+        }));
+        var registry = new CloudDdlRegistry();
+        registry.Operations.Add(new CloudDdlOperation
+        {
+            OperationId = operationId,
+            Edit = edit.RootElement.Clone()
+        });
+        return registry;
     }
 
     [Fact]
