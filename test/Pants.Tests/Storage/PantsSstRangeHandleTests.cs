@@ -5,6 +5,17 @@ namespace Cntryl.Pants.Tests.Storage;
 public sealed class PantsSstRangeHandleTests
 {
     [Fact]
+    public void ShouldClassifyUnsupportedMetadataVersionAsCompatibilityFailure()
+    {
+        var metadata = BuildMetadataBytes(offset: 0, size: 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            metadata,
+            DiskFormat.SstFormatVersion + 1);
+
+        Assert.Throws<PantsCompatibilityException>(() => SstCodec.DecodeMetadata(metadata));
+    }
+
+    [Fact]
     public void ShouldRejectRangeHandleGivenOffsetZeroAndSizePositive()
     {
         var metadata = BuildMetadataBytes(offset: 0, size: 16);
