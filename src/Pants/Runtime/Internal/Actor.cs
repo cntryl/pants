@@ -3232,7 +3232,12 @@ sealed class Actor : IAsyncDisposable
 
                     _telemetry.RecordFlushFailure();
                     current.CompleteAttempt(failure);
-                    shouldRetry = !state.IsShuttingDown;
+                    if (failure is PantsCorruptionException)
+                    {
+                        MarkPersistenceAnomaly(state);
+                    }
+
+                    shouldRetry = failure is not PantsCorruptionException && !state.IsShuttingDown;
                     state.SignalWritePressureChanged();
                     PublishSnapshot(state);
                     return false;
