@@ -187,7 +187,7 @@ static class SstCodec
             candidate,
             key);
         var candidateHandle = index[candidate].Handle;
-        var blockSizeBytes = checked((int)candidateHandle.Size);
+        var blockSizeBytes = DecodeInt32(candidateHandle.Size, "block size");
         return mightContain
             ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
             : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
@@ -290,15 +290,19 @@ static class SstCodec
                     throw new StorageException("SST extended entry lengths are truncated.");
                 }
 
-                keyLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor)));
+                keyLength = DecodeInt32(
+                    BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor)),
+                    "extended key length");
                 valueLength =
-                    checked((int)BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor + sizeof(uint))));
+                    DecodeInt32(
+                        BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor + sizeof(uint))),
+                        "extended value length");
                 cursor += 2 * sizeof(uint);
             }
             else
             {
                 keyLength = encodedKeyLength;
-                valueLength = checked((int)encodedValueLength);
+                valueLength = DecodeInt32(encodedValueLength, "value length");
             }
 
             if (shared > previousKey.Length ||
@@ -344,9 +348,11 @@ static class SstCodec
             throw new StorageException("SST block handle is outside the file.");
         }
 
-        var offset = checked((int)handle.Offset);
-        var encodedLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(offset, 4)));
-        if ((ulong)(encodedLength + 4) != handle.Size || encodedLength < 5)
+        var offset = DecodeInt32(handle.Offset, "block offset");
+        var encodedLength = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(offset, 4)),
+            "encoded block length");
+        if ((ulong)encodedLength + 4 != handle.Size || encodedLength < 5)
         {
             throw new StorageException("SST block length does not match its handle.");
         }
@@ -468,19 +474,24 @@ static class SstCodec
             throw new StorageException("SST block-bloom header is truncated.");
         }
 
-        var blockCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
-        var headerLength = checked(sizeof(uint) + blockCount * sizeof(uint));
-        if (blockCount != expectedBlockCount || bytes.Length < headerLength)
+        var blockCount = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes),
+            "block-bloom count");
+        if (blockCount != expectedBlockCount || blockCount > (bytes.Length - sizeof(uint)) / sizeof(uint))
         {
             throw new StorageException("SST block-bloom count or offset table is invalid.");
         }
+
+        var headerLength = sizeof(uint) + blockCount * sizeof(uint);
 
         ReadOnlySpan<byte> bloomData = bytes.AsSpan(headerLength);
         var previousOffset = -1;
         for (var index = 0; index < blockCount; index++)
         {
-            var offset = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.AsSpan(sizeof(uint) + index * sizeof(uint))));
+            var offset = DecodeInt32(
+                BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytes.AsSpan(sizeof(uint) + index * sizeof(uint))),
+                "block-bloom offset");
             if ((index == 0 && offset != 0) || offset <= previousOffset || offset > bloomData.Length)
             {
                 throw new StorageException("SST block-bloom offset table is invalid.");
@@ -491,12 +502,16 @@ static class SstCodec
 
         for (var index = 0; index < blockCount; index++)
         {
-            var start = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
-                bytes.AsSpan(sizeof(uint) + index * sizeof(uint))));
+            var start = DecodeInt32(
+                BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytes.AsSpan(sizeof(uint) + index * sizeof(uint))),
+                "block-bloom offset");
             var end = index + 1 == blockCount
                 ? bloomData.Length
-                : checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
-                    bytes.AsSpan(sizeof(uint) + (index + 1) * sizeof(uint))));
+                : DecodeInt32(
+                    BinaryPrimitives.ReadUInt32LittleEndian(
+                        bytes.AsSpan(sizeof(uint) + (index + 1) * sizeof(uint))),
+                    "block-bloom offset");
             ValidateBloomFilter(bloomData[start..end]);
         }
     }
@@ -636,7 +651,9 @@ static class SstCodec
                 throw new StorageException("SST index key length is truncated.");
             }
 
-            var length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor, 4)));
+            var length = DecodeInt32(
+                BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor, 4)),
+                "index key length");
             cursor += 4;
             if (length > bytes.Length - cursor - 16)
             {
@@ -758,22 +775,51 @@ static class SstCodec
         int blockIndex,
         ReadOnlySpan<byte> key)
     {
-        var blockCount = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(serializedBlooms));
+        if (serializedBlooms.Length < sizeof(uint))
+        {
+            throw new StorageException("SST block-bloom header is truncated.");
+        }
+
+        var blockCount = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(serializedBlooms),
+            "block-bloom count");
         if (blockIndex >= blockCount)
         {
             return true;
         }
 
-        var headerLength = checked(sizeof(uint) + blockCount * sizeof(uint));
-        var start = checked(headerLength + (int)BinaryPrimitives.ReadUInt32LittleEndian(
-            serializedBlooms.Slice(sizeof(uint) + blockIndex * sizeof(uint), sizeof(uint))));
+        if (blockIndex < 0 || blockCount > (serializedBlooms.Length - sizeof(uint)) / sizeof(uint))
+        {
+            throw new StorageException("SST block-bloom count or offset table is invalid.");
+        }
+
+        var headerLength = sizeof(uint) + blockCount * sizeof(uint);
+        var startOffset = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(
+                serializedBlooms.Slice(sizeof(uint) + blockIndex * sizeof(uint), sizeof(uint))),
+            "block-bloom offset");
+        var start = AddBloomOffset(headerLength, startOffset, serializedBlooms.Length);
         var end = blockIndex + 1 == blockCount
             ? serializedBlooms.Length
-            : checked(headerLength + (int)BinaryPrimitives.ReadUInt32LittleEndian(
-                serializedBlooms.Slice(sizeof(uint) + (blockIndex + 1) * sizeof(uint), sizeof(uint))));
+            : AddBloomOffset(
+                headerLength,
+                DecodeInt32(
+                    BinaryPrimitives.ReadUInt32LittleEndian(
+                        serializedBlooms.Slice(
+                            sizeof(uint) + (blockIndex + 1) * sizeof(uint),
+                            sizeof(uint))),
+                    "block-bloom offset"),
+                serializedBlooms.Length);
+        if (end < start)
+        {
+            throw new StorageException("SST block-bloom offset table is invalid.");
+        }
+
         var bloom = serializedBlooms[start..end];
         ValidateBloomFilter(bloom);
-        var numberOfBits = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bloom));
+        var numberOfBits = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(bloom),
+            "bloom bit count");
         var hashFunctions = bloom[8];
         var bits = bloom[9..];
         var firstHash = Hash(key, BloomSeedOne);
@@ -826,7 +872,7 @@ static class SstCodec
         return output.ToArray();
     }
 
-    static List<RangeTombstone> DecodeRangeTombstones(byte[] bytes)
+    internal static List<RangeTombstone> DecodeRangeTombstones(byte[] bytes)
     {
         if (bytes.Length < 4)
         {
@@ -835,7 +881,7 @@ static class SstCodec
 
         var count = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
         var cursor = 4;
-        var output = new List<RangeTombstone>(checked((int)count));
+        var output = new List<RangeTombstone>(DecodeInt32(count, "range-tombstone count"));
         for (var index = 0; index < count; index++)
         {
             var start = ReadLengthPrefixed(bytes, ref cursor);
@@ -962,7 +1008,9 @@ static class SstCodec
             throw new StorageException("SST length-prefixed field is truncated.");
         }
 
-        var length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor, 4)));
+        var length = DecodeInt32(
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor, 4)),
+            "length-prefixed field size");
         cursor += 4;
         if (length > bytes.Length - cursor)
         {
@@ -972,6 +1020,36 @@ static class SstCodec
         var value = bytes.AsSpan(cursor, length).ToArray();
         cursor += length;
         return value;
+    }
+
+    static int AddBloomOffset(int headerLength, int offset, int totalLength)
+    {
+        if (offset > totalLength - headerLength)
+        {
+            throw new StorageException("SST block-bloom offset table is invalid.");
+        }
+
+        return headerLength + offset;
+    }
+
+    static int DecodeInt32(uint value, string field)
+    {
+        if (value > int.MaxValue)
+        {
+            throw new StorageException($"SST {field} exceeds the supported size.");
+        }
+
+        return (int)value;
+    }
+
+    static int DecodeInt32(ulong value, string field)
+    {
+        if (value > int.MaxValue)
+        {
+            throw new StorageException($"SST {field} exceeds the supported size.");
+        }
+
+        return (int)value;
     }
 
     static void WriteUInt16(Stream stream, ushort value)
