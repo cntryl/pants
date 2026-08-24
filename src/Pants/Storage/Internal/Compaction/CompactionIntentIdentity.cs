@@ -17,6 +17,23 @@ sealed record CompactionIntentIdentity(
     public IEnumerable<string> GetAddedFileNames() =>
         AddedFiles.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
+    public void ValidateReplacement(CompactionIntentIdentity replacement, string phase)
+    {
+        var inputsMatch = HasSameInputs(replacement);
+        var outputsMatch = HasSameOutputs(replacement);
+        if (outputsMatch && !inputsMatch)
+        {
+            throw new PantsCorruptionException(
+                "A compaction output identity is owned by different inputs.");
+        }
+
+        if (phase == "ManifestPublished" && (inputsMatch || outputsMatch))
+        {
+            throw new PantsBusyException(
+                "A manifest-published compaction intent cannot be replaced.");
+        }
+    }
+
     public static CompactionIntentIdentity Create(
         uint columnFamilyId,
         IEnumerable<string> removedFiles,

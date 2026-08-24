@@ -54,7 +54,7 @@ static class LeveledCompactionPlanner
         return null;
     }
 
-    static CompactionPlan CreatePlan(
+    static CompactionPlan? CreatePlan(
         FileMeta[] familyFiles,
         IReadOnlyList<FileMeta> sourceFiles,
         IReadOnlyList<FileMeta> targetFiles,
@@ -86,9 +86,7 @@ static class LeveledCompactionPlanner
 
         if (selected.Count > maximumInputs)
         {
-            throw PantsException.ResourceLimit(
-                $"Compaction L{sourceLevel}->L{targetLevel} for column family {columnFamilyId} " +
-                $"requires {selected.Count} inputs, exceeding the configured limit {maximumInputs}.");
+            return null;
         }
 
         var selectedSmallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;

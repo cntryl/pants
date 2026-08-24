@@ -3419,20 +3419,9 @@ sealed class LocalDiskStore : IDisposable
                         continue;
                     }
 
-                    var inputsMatch = existingIdentity.HasSameInputs(identity);
-                    var outputsMatch = existingIdentity.HasSameOutputs(identity);
-                    if (GetCompactionIntentPhase(existing) == "ManifestPublished" &&
-                        (inputsMatch || outputsMatch))
-                    {
-                        throw new PantsBusyException(
-                            "A manifest-published compaction intent cannot be replaced.");
-                    }
-
-                    if (outputsMatch && !inputsMatch)
-                    {
-                        throw new PantsCorruptionException(
-                            "A compaction output identity is owned by different inputs.");
-                    }
+                    existingIdentity.ValidateReplacement(
+                        identity,
+                        GetCompactionIntentPhase(existing) ?? string.Empty);
                 }
 
                 _ = retained.RemoveAll(existing =>
