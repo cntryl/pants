@@ -6,6 +6,9 @@ namespace Cntryl.Pants.Storage.Internal.IO;
 
 static class AtomicStagedFile
 {
+    const int PublishLockCount = 64;
+    static readonly object[] PublishLocks = CreatePublishLocks();
+
     public static void Write(
         string path,
         ReadOnlySpan<byte> bytes,
@@ -48,9 +51,12 @@ static class AtomicStagedFile
             }
 
             beforePublish?.Invoke();
-            File.Move(temporary, fullPath, overwrite);
-            afterPublish?.Invoke();
-            FlushParentDirectory(directory);
+            lock (GetPublishLock(fullPath))
+            {
+                File.Move(temporary, fullPath, overwrite);
+                afterPublish?.Invoke();
+                FlushParentDirectory(directory);
+            }
         }
         finally
         {
@@ -69,6 +75,24 @@ static class AtomicStagedFile
                 ReportCleanupFailure(cleanupFailure, exception);
             }
         }
+    }
+
+    static object GetPublishLock(string path)
+    {
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var hash = comparer.GetHashCode(path) & int.MaxValue;
+        return PublishLocks[hash % PublishLocks.Length];
+    }
+
+    static object[] CreatePublishLocks()
+    {
+        var locks = new object[PublishLockCount];
+        for (var index = 0; index < locks.Length; index++)
+        {
+            locks[index] = new object();
+        }
+
+        return locks;
     }
 
     static void ReportCleanupFailure(Action<Exception>? cleanupFailure, Exception exception)
