@@ -676,6 +676,97 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
+    public async Task ShouldPreserveUnownedSstGivenCorruptIntentLogDuringSalvage()
+    {
+        using var directory = new TemporaryDirectory();
+        string orphanPath;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await using var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+            await database.FlushAsync(database.DefaultColumnFamily);
+            var ownedPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+            orphanPath = Path.Combine(directory.Path, "sst", "000000_00_00000000000000000999.sst");
+            File.Copy(ownedPath, orphanPath);
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "intent_log.json"), "{corrupt");
+
+        await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
+
+        Assert.True(File.Exists(orphanPath));
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+    }
+
+    [Fact]
+    public async Task ShouldReconstructValidSstsGivenTotalManifestLossDuringSalvage()
+    {
+        using var directory = new TemporaryDirectory();
+        string sstPath;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await using var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("durable-key"u8.ToArray(), "durable-value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+            await database.FlushAsync(database.DefaultColumnFamily);
+            sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.json"), "{corrupt");
+
+        await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
+        await using var reader = await salvaged.BeginTransactionAsync(
+            salvaged.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.True(File.Exists(sstPath));
+        Assert.Equal(
+            "durable-value",
+            TestBytes.ToText((await reader.GetAsync("durable-key"u8.ToArray()))!.Value));
+        var metrics = await salvaged.GetRuntimeMetricsAsync();
+        Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
+        Assert.Equal(1, metrics.SstCount);
+    }
+
+    [Fact]
+    public async Task ShouldReopenStrictAndHealthyAfterWalSalvageRepair()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await using var transaction = await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("recoverable"u8.ToArray(), "value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var wal = await File.ReadAllBytesAsync(walPath);
+        wal[^1] ^= 0xFF;
+        await File.WriteAllBytesAsync(walPath, wal);
+
+        await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
+        {
+            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+        }
+
+        var retainedBefore = Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*");
+        await using var strict = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict);
+
+        Assert.Equal(PantsEngineHealth.Healthy, (await strict.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(
+            retainedBefore,
+            Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*"));
+    }
+
+    [Fact]
     public async Task ShouldReportConservativelyRetainedOrphanSstAsDegraded()
     {
         using var directory = new TemporaryDirectory();

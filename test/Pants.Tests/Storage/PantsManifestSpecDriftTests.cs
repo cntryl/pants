@@ -195,6 +195,34 @@ public sealed class PantsManifestSpecDriftTests
         Assert.False(File.Exists(repairPath));
     }
 
+    [Theory]
+    [InlineData(PantsRecoveryPolicy.Strict)]
+    [InlineData(PantsRecoveryPolicy.Salvage)]
+    public async Task ShouldNotMisclassifyManifestJournalRepairIoFailureAsCorruption(
+        PantsRecoveryPolicy recoveryPolicy)
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var durableEdit = EncodeJournalRecord(
+            CreateColumnFamilyRecordType,
+            """{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}""");
+        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
+        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
+        var journal = durableEdit.Concat(durableMarker).Concat(tornMarker[..^2]).ToArray();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        await File.WriteAllBytesAsync(journalPath, journal);
+        var failpoint = new ArmableFailpointHandler();
+        failpoint.Arm(Failpoint.BeforeManifestJournalRepairReplace);
+
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithRecoveryPolicy(recoveryPolicy),
+            new RuntimeDependencies(failpoint));
+
+        Assert.NotNull(await reopened.GetColumnFamilyAsync("durable-family"));
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Empty(Directory.GetFiles(directory.Path, "manifest.journal.salvage-retained*"));
+    }
+
     // Issue #50 -------------------------------------------------------------
 
     [Fact]

@@ -2041,6 +2041,69 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
+    public async Task ShouldRetainCompactionEvidenceGivenCorruptPublishedOutputDuringSalvage()
+    {
+        using var directory = new TemporaryDirectory();
+        using var recoveryDirectory = new TemporaryDirectory();
+        using var failpoint = new FlushPipelineFailpointHandler(
+            Failpoint.AfterCompactionManifestPublish,
+            true);
+        var options = CreateOptions(directory.Path)
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+        string[] inputNames;
+        string outputName;
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoint)))
+        {
+            for (var index = 0; index < 2; index++)
+            {
+                await CommitAsync(
+                    database,
+                    database.DefaultColumnFamily,
+                    TestBytes.FromString($"key-{index}"),
+                    TestBytes.FromString($"value-{index}"));
+                await database.FlushAsync(database.DefaultColumnFamily);
+            }
+
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.CompactAllAsync().AsTask());
+            using var intent = JsonDocument.Parse(
+                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            var publication = Assert.Single(intent.RootElement.EnumerateArray())
+                .GetProperty("CompactionPublish");
+            Assert.Equal("OutputDurable", publication.GetProperty("phase").GetString());
+            inputNames = publication.GetProperty("removed").EnumerateArray()
+                .Select(static item => item.GetString()!)
+                .ToArray();
+            outputName = Assert.Single(publication.GetProperty("added").EnumerateArray())
+                .GetProperty("name")
+                .GetString()!;
+            CopyCrashImage(directory.Path, recoveryDirectory.Path);
+            ExpireWriterLease(recoveryDirectory.Path);
+        }
+
+        var outputPath = Path.Combine(recoveryDirectory.Path, "sst", outputName);
+        var output = await File.ReadAllBytesAsync(outputPath);
+        output[0] ^= 0xFF;
+        await File.WriteAllBytesAsync(outputPath, output);
+        var recoveryOptions = CreateOptions(recoveryDirectory.Path);
+
+        var strict = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            PantsDatabase.OpenAsync(recoveryOptions.WithRecoveryPolicy(PantsRecoveryPolicy.Strict)).AsTask());
+        Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
+
+        await using var salvaged = await PantsDatabase.OpenAsync(
+            recoveryOptions.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+        Assert.True(File.Exists(outputPath));
+        Assert.All(inputNames, name => Assert.True(File.Exists(
+            Path.Combine(recoveryDirectory.Path, "sst", name))));
+        using var retainedIntent = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "intent_log.json")));
+        Assert.NotEmpty(retainedIntent.RootElement.EnumerateArray());
+    }
+
+    [Fact]
     public async Task ShouldSupersedeFailedCompactionIntentWhenRetryUsesNewOutputIdentity()
     {
         using var directory = new TemporaryDirectory();

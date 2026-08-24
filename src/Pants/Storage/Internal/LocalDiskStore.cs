@@ -694,25 +694,27 @@ sealed class LocalDiskStore : IDisposable
             lease.EnsureValid();
             TransactionSpillStore.CleanupOrphans(root);
             lease.EnsureValid();
-            ManifestState manifest;
+            ManifestLoadResult manifestLoad;
             using (startupPhases.Measure(StartupPhase.ManifestSnapshot))
             {
-                manifest = LoadManifest(root, recoveryPolicy, state);
+                manifestLoad = LoadManifest(root, recoveryPolicy, state);
             }
+            var manifest = manifestLoad.Manifest;
             lease.EnsureValid();
-            var clearRecoveredIntents = ValidateRecoveryMetadata(
+            var recoveryMetadata = ValidateRecoveryMetadata(
                 root,
                 manifest,
                 recoveryPolicy,
                 state,
-                startupPhases);
+                startupPhases,
+                failpointHandler);
             ValidateManifestSstNames(manifest);
             lease.EnsureValid();
             CleanStartupResidue(
                 root,
                 manifest,
                 state,
-                !clearRecoveredIntents && IntentLogHasEntries(intentPath),
+                manifestLoad.PreserveUnownedSsts || recoveryMetadata.PreserveUnownedSsts,
                 failpointHandler,
                 lease);
             lease.EnsureValid();
@@ -741,7 +743,7 @@ sealed class LocalDiskStore : IDisposable
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
-            if (clearRecoveredIntents)
+            if (recoveryMetadata.ClearRecoveredIntents)
             {
                 lease.EnsureValid();
                 store.ClearIntentLog();
@@ -765,20 +767,6 @@ sealed class LocalDiskStore : IDisposable
             lease?.Dispose();
             lockStream?.Dispose();
             throw new StorageException($"Could not open Pants database at '{root}'.", ex);
-        }
-    }
-
-    static bool IntentLogHasEntries(string path)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
-            return document.RootElement.ValueKind == JsonValueKind.Array &&
-                   document.RootElement.GetArrayLength() != 0;
-        }
-        catch (Exception exception) when (exception is IOException or JsonException)
-        {
-            return true;
         }
     }
 
@@ -3860,7 +3848,7 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(path, "midge-format-version=3\n"u8);
     }
 
-    static ManifestState LoadManifest(
+    static ManifestLoadResult LoadManifest(
         string root,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state)
@@ -3870,7 +3858,7 @@ sealed class LocalDiskStore : IDisposable
         var sources = new[] { snapshot, legacy }.Where(File.Exists).ToArray();
         if (sources.Length == 0)
         {
-            return ManifestState.CreateInitial();
+            return new ManifestLoadResult(ManifestState.CreateInitial(), false);
         }
 
         Exception? failure = null;
@@ -3886,7 +3874,7 @@ sealed class LocalDiskStore : IDisposable
                     state.MarkSalvageMode();
                 }
 
-                return manifest;
+                return new ManifestLoadResult(manifest, false);
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {
@@ -3904,7 +3892,65 @@ sealed class LocalDiskStore : IDisposable
             }
         }
 
-        return ManifestState.CreateInitial();
+        return new ManifestLoadResult(ReconstructManifestFromSsts(root), true);
+    }
+
+    static ManifestState ReconstructManifestFromSsts(string root)
+    {
+        var manifest = ManifestState.CreateInitial();
+        var sstDirectory = Path.Combine(root, "sst");
+        foreach (var path in Directory.EnumerateFiles(sstDirectory, "*.sst", SearchOption.TopDirectoryOnly))
+        {
+            var name = ValidateSstName(Path.GetFileName(path));
+            var stem = name[..^4];
+            var parts = stem.Split('_');
+            if (parts.Length != 3 ||
+                !uint.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var familyId) ||
+                !uint.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var level) ||
+                !ulong.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var sstSequence))
+            {
+                continue;
+            }
+
+            try
+            {
+                var bytes = PositionalFile.ReadAllBytes(path);
+                var contents = SstCodec.Decode(bytes);
+                var keys = contents.Entries.Select(static entry => entry.Key)
+                    .Concat(contents.RangeTombstones.SelectMany(static range => new[] { range.Start, range.End }))
+                    .OrderBy(static key => key, ByteArrayComparer.Instance)
+                    .ToList();
+                var sequences = contents.Entries.Select(static entry => entry.Sequence)
+                    .Concat(contents.RangeTombstones.Select(static range => range.Sequence))
+                    .ToList();
+                manifest.Files.Add(new FileMeta
+                {
+                    Name = name,
+                    Level = level,
+                    SizeBytes = checked((ulong)bytes.Length),
+                    ContentCrc32C = DiskFormat.Crc32C(bytes),
+                    ColumnFamilyId = familyId,
+                    SstSequence = sstSequence,
+                    SmallestKey = keys.Count == 0 ? null : keys[0].Select(static value => (int)value).ToArray(),
+                    LargestKey = keys.Count == 0 ? null : keys[^1].Select(static value => (int)value).ToArray(),
+                    SmallestSequence = sequences.Count == 0 ? null : sequences.Min(),
+                    LargestSequence = sequences.Count == 0 ? null : sequences.Max(),
+                    Sublevel = 0
+                });
+                manifest.LastPersistedSequence = Math.Max(
+                    manifest.LastPersistedSequence,
+                    sequences.Count == 0 ? 0 : sequences.Max());
+                manifest.NextSstSeqs[familyId] = Math.Max(
+                    manifest.NextSstSeqs.GetValueOrDefault(familyId, 1UL),
+                    checked(sstSequence + 1));
+            }
+            catch (Exception exception) when (exception is IOException or PantsException or OverflowException)
+            {
+                // Salvage preserves undecodable SSTs without claiming them as readable manifest state.
+            }
+        }
+
+        return manifest;
     }
 
     static void ValidateManifestSstNames(ManifestState manifest)
@@ -3944,30 +3990,23 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    static bool ValidateRecoveryMetadata(
+    static RecoveryMetadataResult ValidateRecoveryMetadata(
         string root,
         ManifestState manifest,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
-        StartupPhaseRecorder startupPhases)
+        StartupPhaseRecorder startupPhases,
+        IFailpointHandler failpoints)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
         using (startupPhases.Measure(StartupPhase.ManifestJournal))
         {
+            byte[] journalBytes;
+            int durableByteLength;
             try
             {
-                var journalBytes = File.ReadAllBytes(journalPath);
-                ReplayManifestJournal(journalBytes, manifest, out var durableByteLength);
-                if (durableByteLength < journalBytes.Length)
-                {
-                    // A torn tail: repair the journal on disk to the durable prefix before any
-                    // future append is allowed to proceed, using the same staged fsync+rename
-                    // write already used for the manifest snapshot.
-                    AtomicStagedFile.Write(
-                        journalPath,
-                        journalBytes.AsSpan(0, durableByteLength),
-                        temporaryFileName: "manifest.journal.repair.tmp");
-                }
+                journalBytes = File.ReadAllBytes(journalPath);
+                ReplayManifestJournal(journalBytes, manifest, out durableByteLength);
             }
             catch (Exception exception) when (exception is PantsException or IOException)
             {
@@ -3978,6 +4017,25 @@ sealed class LocalDiskStore : IDisposable
                     recoveryPolicy,
                     state,
                     exception);
+                journalBytes = [];
+                durableByteLength = 0;
+            }
+
+            if (durableByteLength < journalBytes.Length)
+            {
+                try
+                {
+                    AtomicStagedFile.Write(
+                        journalPath,
+                        journalBytes.AsSpan(0, durableByteLength),
+                        beforePublish: () => failpoints.Hit(Failpoint.BeforeManifestJournalRepairReplace),
+                        temporaryFileName: "manifest.journal.repair.tmp");
+                }
+                catch (IOException)
+                {
+                    // The durable prefix was already replayed. Checkpoint publication later in
+                    // Open retries the repair without misclassifying valid journal content.
+                }
             }
         }
 
@@ -3992,7 +4050,14 @@ sealed class LocalDiskStore : IDisposable
                     throw new JsonException("The intent log root must be an array.");
                 }
 
-                return ReplayIntentLog(root, manifest, document.RootElement, recoveryPolicy, state);
+                var clearRecoveredIntents = ReplayIntentLog(
+                    root,
+                    manifest,
+                    document.RootElement,
+                    recoveryPolicy,
+                    state);
+                return new RecoveryMetadataResult(clearRecoveredIntents, !clearRecoveredIntents &&
+                                                                         document.RootElement.GetArrayLength() != 0);
             }
             catch (Exception exception) when (exception is JsonException or PantsException or IOException)
             {
@@ -4003,7 +4068,7 @@ sealed class LocalDiskStore : IDisposable
                     recoveryPolicy,
                     state,
                     exception);
-                return false;
+                return new RecoveryMetadataResult(false, true);
             }
         }
     }
@@ -4833,4 +4898,8 @@ sealed class LocalDiskStore : IDisposable
     }
 
     sealed record JournalRecord(byte Type, byte[] Payload);
+
+    sealed record ManifestLoadResult(ManifestState Manifest, bool PreserveUnownedSsts);
+
+    sealed record RecoveryMetadataResult(bool ClearRecoveredIntents, bool PreserveUnownedSsts);
 }
