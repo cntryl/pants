@@ -79,7 +79,7 @@ static class WalCodec
         byte[]? rangeEnd = null;
         ulong? transactionId = null;
         ulong? writerEpoch = null;
-        byte compression = 0;
+        byte? compression = null;
         var cursor = 3;
         while (cursor < payload.Length)
         {
@@ -146,12 +146,18 @@ static class WalCodec
             throw new StorageException("WAL operation is missing or invalid.");
         }
 
+        if (operation == (byte)WalOperation.TransactionBatch && compression.HasValue)
+        {
+            throw new StorageException(
+                "A WAL TxnBatch record must not carry the COMPRESSION tag.");
+        }
+
         byte[]? decodedValue;
         try
         {
             decodedValue = value is null
                 ? null
-                : DiskFormat.Decompress(value, compression);
+                : DiskFormat.Decompress(value, compression ?? 0);
         }
         catch (PantsException)
         {
