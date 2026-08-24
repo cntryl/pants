@@ -431,6 +431,20 @@ sealed class Actor : IAsyncDisposable
 
     internal long CommandsEnqueued => Volatile.Read(ref _commandsEnqueued);
 
+    internal bool IsDiskStoreDisposed => _diskStore?.IsDisposed ?? true;
+
+    internal bool AreOwnedRuntimeResourcesDisposed =>
+        _cloudFlushRetries.IsDisposed &&
+        _cloudWalDrainScheduler.IsDisposed &&
+        _cloudMaintenanceScheduler.IsDisposed &&
+        _cloudWorker.IsDisposed &&
+        _walRuntime.IsDisposed &&
+        _flushRuntime.IsDisposed &&
+        _compactionRuntime.IsDisposed &&
+        _manifestWorker.IsDisposed &&
+        _garbageCollectionWorker.IsDisposed &&
+        IsDiskStoreDisposed;
+
     bool UsesBackgroundImmutableFlushes =>
         _diskStore is not null && _options.Storage is PantsStorageConfiguration.Local;
 
@@ -439,6 +453,33 @@ sealed class Actor : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
+        }
+
+        Exception? cleanupFailure = null;
+        Exception? loopFailure = null;
+
+        async ValueTask CaptureCleanupAsync(Func<ValueTask> cleanup)
+        {
+            try
+            {
+                await cleanup().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
+        }
+
+        void CaptureCleanup(Action cleanup)
+        {
+            try
+            {
+                cleanup();
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+            }
         }
 
         var cloudWalSealDeadlineTasks = CancelCloudWalSealDeadlinesForDisposal();
@@ -454,25 +495,36 @@ sealed class Actor : IAsyncDisposable
             }
         }
 
-        await _cloudFlushRetries.DisposeAsync().ConfigureAwait(false);
+        await CaptureCleanupAsync(_cloudFlushRetries.DisposeAsync).ConfigureAwait(false);
         _commands.Writer.TryComplete();
-        await _loopTask.ConfigureAwait(false);
-        await _cloudWalDrainScheduler.DisposeAsync().ConfigureAwait(false);
-        await _cloudMaintenanceScheduler.DisposeAsync().ConfigureAwait(false);
-        await _cloudWorker.DisposeAsync().ConfigureAwait(false);
-        await _walRuntime.DisposeAsync().ConfigureAwait(false);
-        await _flushRuntime.DisposeAsync().ConfigureAwait(false);
-        await _compactionRuntime.DisposeAsync().ConfigureAwait(false);
-        await _manifestWorker.DisposeAsync().ConfigureAwait(false);
-        await _garbageCollectionWorker.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await _loopTask.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            loopFailure = exception;
+        }
+
+        await CaptureCleanupAsync(_cloudWalDrainScheduler.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_cloudMaintenanceScheduler.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_cloudWorker.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_walRuntime.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_flushRuntime.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_compactionRuntime.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_manifestWorker.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_garbageCollectionWorker.DisposeAsync).ConfigureAwait(false);
         if (_cloudLeaseCancellation is not null)
         {
-            await _cloudLeaseCancellation.CancelAsync().ConfigureAwait(false);
+            await CaptureCleanupAsync(
+                    () => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
+                .ConfigureAwait(false);
         }
 
         if (_cloudLeaseHeartbeat is not null)
         {
-            await _cloudLeaseHeartbeat.ConfigureAwait(false);
+            await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseHeartbeat))
+                .ConfigureAwait(false);
         }
 
         if (_cloudLease is not null)
@@ -487,10 +539,16 @@ sealed class Actor : IAsyncDisposable
             }
         }
 
-        _cloudLeaseCancellation?.Dispose();
-        _cloudLease?.Dispose();
-        _diskStore?.Dispose();
-        _loopCancellation.Dispose();
+        CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
+        CaptureCleanup(() => _cloudLease?.Dispose());
+        CaptureCleanup(() => _diskStore?.Dispose());
+        CaptureCleanup(_loopCancellation.Dispose);
+
+        var failure = loopFailure ?? cleanupFailure;
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
     }
 
     static void CleanupFailedDiskStartup(LocalDiskStore? diskStore)
@@ -1771,6 +1829,28 @@ sealed class Actor : IAsyncDisposable
             _ = ObserveShutdownPreparationAsync(preparation);
             throw;
         }
+        catch (Exception exception)
+        {
+            try
+            {
+                _ = await SendAsync(
+                        state =>
+                        {
+                            Volatile.Write(ref _shutdownRequested, false);
+                            state.IsShuttingDown = false;
+                            state.SignalWritePressureChanged();
+                            return ValueTask.FromResult(true);
+                        },
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Preserve the preparation failure; disposal remains available as a fallback.
+            }
+
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
 
         if (UsesBackgroundImmutableFlushes)
         {
@@ -1976,6 +2056,7 @@ sealed class Actor : IAsyncDisposable
                 if (command is not CommitRuntimeCommand firstCommit)
                 {
                     await command.ExecuteAsync(_state).ConfigureAwait(false);
+                    _failpoints.Hit(Failpoint.AfterRuntimeCommandExecution);
                     continue;
                 }
 

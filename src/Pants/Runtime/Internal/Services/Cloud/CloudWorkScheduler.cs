@@ -18,6 +18,17 @@ sealed class CloudWorkScheduler(
 
     public int Outstanding => Volatile.Read(ref _outstanding);
 
+    internal bool IsDisposed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _disposed;
+            }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         Task? pumpTask;

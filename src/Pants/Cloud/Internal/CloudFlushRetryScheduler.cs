@@ -10,6 +10,17 @@ sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDispos
     readonly Dictionary<ColumnFamilyIdentity, Task> _retries = [];
     bool _disposed;
 
+    internal bool IsDisposed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _disposed;
+            }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         Task[] retries;

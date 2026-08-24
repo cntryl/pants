@@ -16,6 +16,7 @@ enum Failpoint
     BeforeCoalescedWalRollback,
     BeforeShutdownWalDurabilityBoundary,
     BeforeRuntimeMetricsResponse,
+    AfterRuntimeCommandExecution,
     BeforeVerificationBarrierResponse,
     BeforeWalRotation,
     AfterCloudWalSealFlush,
