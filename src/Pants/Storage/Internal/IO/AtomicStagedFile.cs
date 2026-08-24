@@ -11,7 +11,10 @@ static class AtomicStagedFile
         ReadOnlySpan<byte> bytes,
         bool overwrite = true,
         Action? beforePublish = null,
-        string? temporaryFileName = null)
+        string? temporaryFileName = null,
+        Action? afterPublish = null,
+        Action<string>? deleteTemporary = null,
+        Action<Exception>? cleanupFailure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
@@ -46,22 +49,37 @@ static class AtomicStagedFile
 
             beforePublish?.Invoke();
             File.Move(temporary, fullPath, overwrite);
+            afterPublish?.Invoke();
             FlushParentDirectory(directory);
         }
         finally
         {
             try
             {
-                File.Delete(temporary);
+                (deleteTemporary ?? File.Delete)(temporary);
             }
-            catch (IOException)
+            catch (IOException exception)
             {
                 // An unpublished temporary is safer than deleting an uncertain target.
+                ReportCleanupFailure(cleanupFailure, exception);
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException exception)
             {
                 // Recovery can conservatively classify a retained staging file.
+                ReportCleanupFailure(cleanupFailure, exception);
             }
+        }
+    }
+
+    static void ReportCleanupFailure(Action<Exception>? cleanupFailure, Exception exception)
+    {
+        try
+        {
+            cleanupFailure?.Invoke(exception);
+        }
+        catch
+        {
+            // Diagnostics must not replace the primary staged-write failure.
         }
     }
 
