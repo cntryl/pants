@@ -417,7 +417,8 @@ static class SstCodec
         var version = BinaryPrimitives.ReadUInt32LittleEndian(metadata);
         if (version != DiskFormat.SstFormatVersion)
         {
-            throw new StorageException($"Unsupported SST metadata format version '{version}'.");
+            throw new PantsCompatibilityException(
+                $"Unsupported SST metadata format version '{version}'.");
         }
 
         var rawIndexKind = metadata[4];
