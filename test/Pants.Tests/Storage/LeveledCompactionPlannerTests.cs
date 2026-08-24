@@ -33,7 +33,7 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
-    public void ShouldFailClosedWhenOverlapClosureExceedsInputLimit()
+    public void ShouldSkipFamilyWhenOverlapClosureExceedsInputLimit()
     {
         FileMeta[] files =
         [
@@ -44,15 +44,97 @@ public sealed class LeveledCompactionPlannerTests
             File("l1-3.sst", 1, 5, "n", "z")
         ];
 
-        var exception = Assert.ThrowsAny<PantsException>(() =>
-            LeveledCompactionPlanner.Pick(
-                files,
-                0,
-                Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
-                null,
-                false));
+        var poisoned = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
+            null,
+            false);
+        var healthy = LeveledCompactionPlanner.Pick(
+            [File("healthy-1.sst", 0, 1, "a", "b", columnFamilyId: 1),
+             File("healthy-2.sst", 0, 2, "c", "d", columnFamilyId: 1)],
+            1,
+            Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
+            null,
+            false);
 
-        Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+        Assert.Null(poisoned);
+        Assert.NotNull(healthy);
+        Assert.Equal(2, healthy.Inputs.Count);
+    }
+
+    [Fact]
+    public void ShouldAbsorbTransitivelyOverlappingTargetFiles()
+    {
+        FileMeta[] files =
+        [
+            File("l0-1.sst", 0, 1, "b", "c"),
+            File("l1-a.sst", 1, 2, "c", "d"),
+            File("l1-b.sst", 1, 3, "d", "e"),
+            File("l1-unrelated.sst", 1, 4, "x", "z")
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files, 0, Configuration(l0FileCountTrigger: 1), null, false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(["l0-1.sst", "l1-a.sst", "l1-b.sst"],
+            plan.Inputs.Select(static file => file.Name));
+    }
+
+    [Fact]
+    public void ShouldForceL0CompactionBelowNormalTriggers()
+    {
+        FileMeta[] files =
+        [
+            File("l0-1.sst", 0, 1, "a", "b"),
+            File("l0-2.sst", 0, 2, "c", "d")
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(files, 0, Configuration(), null, true);
+
+        Assert.NotNull(plan);
+        Assert.Equal(2, plan.Inputs.Count);
+    }
+
+    [Fact]
+    public void ShouldNotForceSingleL0File()
+    {
+        var plan = LeveledCompactionPlanner.Pick(
+            [File("l0-1.sst", 0, 1, "a", "b")], 0, Configuration(), null, true);
+
+        Assert.Null(plan);
+    }
+
+    [Fact]
+    public void ShouldForceInnerLevelCompactionBelowNormalTrigger()
+    {
+        FileMeta[] files =
+        [
+            File("l1-1.sst", 1, 1, "a", "b"),
+            File("l1-2.sst", 1, 2, "c", "d")
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(files, 0, Configuration(), null, true);
+
+        Assert.NotNull(plan);
+        Assert.Equal(1u, plan.SourceLevel);
+    }
+
+    [Fact]
+    public void ShouldRespectInputLimitWhenForced()
+    {
+        FileMeta[] files =
+        [
+            File("l0-1.sst", 0, 1, "a", "z"),
+            File("l0-2.sst", 0, 2, "a", "z"),
+            File("l1-1.sst", 1, 3, "a", "m")
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files, 0, Configuration(maximumInputFiles: 2), null, true);
+
+        Assert.Null(plan);
     }
 
     [Fact]
@@ -172,11 +254,12 @@ public sealed class LeveledCompactionPlannerTests
         ulong sequence,
         string smallest,
         string largest,
-        ulong sizeBytes = 1024) => new()
+        ulong sizeBytes = 1024,
+        uint columnFamilyId = 0) => new()
         {
             Name = name,
             Level = level,
-            ColumnFamilyId = 0,
+            ColumnFamilyId = columnFamilyId,
             SstSequence = sequence,
             SizeBytes = sizeBytes,
             SmallestKey = TestBytes.FromString(smallest).Select(static value => (int)value).ToArray(),

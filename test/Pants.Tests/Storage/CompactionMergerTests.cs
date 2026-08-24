@@ -54,6 +54,37 @@ public sealed class CompactionMergerTests
         Assert.Single(result.RangeTombstones);
     }
 
+    [Fact]
+    public void ShouldRetainDeleteVisibleAtSnapshotHorizon()
+    {
+        var result = CompactionMerger.Merge(
+            [Contents(
+                Entry("key", "old", 1),
+                Entry("key", null, 5, true),
+                Entry("key", "new", 10))],
+            Plan(true, true, 7));
+
+        Assert.Equal([10UL, 5UL], result.Entries.Select(static entry => entry.Sequence));
+        Assert.True(result.Entries[1].IsDelete);
+    }
+
+    [Fact]
+    public void ShouldMergeVersionsAndRangeTombstonesAcrossFiles()
+    {
+        var result = CompactionMerger.Merge(
+            [
+                Contents(Entry("key", "old", 2)),
+                new SstContents([], [new RangeTombstone(
+                    TestBytes.FromString("a"), TestBytes.FromString("z"), 5)], 1),
+                Contents(Entry("key", "new", 10))
+            ],
+            Plan(true, true, null));
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(10UL, entry.Sequence);
+        Assert.Equal("new", TestBytes.ToText(entry.Value!));
+    }
+
     static SstContents Contents(params SstEntry[] entries) => new(entries, [], 1);
 
     static SstEntry Entry(
