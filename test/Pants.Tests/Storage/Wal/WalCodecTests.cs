@@ -33,6 +33,7 @@ public sealed class WalCodecTests
     [InlineData((byte)CompressionAlgorithm.Zstd9)]
     public void ShouldRejectTransactionBatchGivenCompressionTagIsPresent(byte compression)
     {
+        // Regression coverage for #81; issue #183 tracks the adversarial proof.
         var encoded = WalCodec.EncodeTransactionBatch(
             7,
             11,
