@@ -6,9 +6,12 @@ namespace Cntryl.Pants.Tests.Storage;
 
 public sealed class PantsManifestSpecDriftTests
 {
+    const byte AddSstRecordType = 1;
     const byte CreateColumnFamilyRecordType = 3;
     const byte SetCloudCheckpointRecordType = 7;
     const byte DurabilityMarkerRecordType = 9;
+    const byte DropColumnFamilyAtRecordType = 10;
+    const byte ReclaimColumnFamilyRecordType = 11;
 
     // Issue #47 -----------------------------------------------------------
 
@@ -202,6 +205,47 @@ public sealed class PantsManifestSpecDriftTests
         var sstFiles = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
         var sstName = Assert.Single(sstFiles);
         Assert.Contains("00000000000000000001.sst", sstName, StringComparison.Ordinal);
+    }
+
+    // Issue #147 ------------------------------------------------------------
+
+    [Fact]
+    public async Task ShouldPreserveReclaimedColumnFamilyTombstoneAndNeverReuseItsIdGivenJournalReplay()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        const string reclaimedSst = "000001_00000000000000000001.sst";
+        var journal = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"reclaimed","created_at":2}}"""),
+            (AddSstRecordType,
+                $"{{\"AddSst\":{{\"name\":\"{reclaimedSst}\",\"level\":0,\"size_bytes\":1,\"cf_id\":1,\"sst_seq\":1,\"sublevel\":0}}}}"),
+            (DropColumnFamilyAtRecordType,
+                $"{{\"DropColumnFamilyAt\":{{\"id\":1,\"drop_sequence\":3,\"dropped_sst_names\":[\"{reclaimedSst}\"]}}}}"),
+            (ReclaimColumnFamilyRecordType,
+                $"{{\"ReclaimColumnFamily\":{{\"id\":1,\"names\":[\"{reclaimedSst}\"]}}}}"));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        uint subsequentId;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            subsequentId = (await database.CreateColumnFamilyAsync("subsequent")).Id;
+        }
+
+        using var document = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        var root = document.RootElement;
+        Assert.DoesNotContain(
+            root.GetProperty("files").EnumerateArray(),
+            file => file.GetProperty("name").GetString() == reclaimedSst);
+        var tombstone = Assert.Single(
+            root.GetProperty("column_families").EnumerateArray(),
+            family => family.GetProperty("id").GetUInt32() == 1);
+        Assert.True(tombstone.GetProperty("reclaimed").GetBoolean());
+        Assert.Empty(tombstone.GetProperty("dropped_sst_names").EnumerateArray());
+        Assert.True(subsequentId > 1);
     }
 
     // Helpers -----------------------------------------------------------------
