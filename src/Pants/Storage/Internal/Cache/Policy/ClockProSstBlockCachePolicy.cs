@@ -7,7 +7,8 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
     readonly Dictionary<SstBlockCacheKey, int> _slotsByKey = [];
     int _hand;
     int _hotCount;
-    int _hotTarget = DefaultCapacity / 4;
+
+    int HotTarget => _slotsByKey.Count / 2;
 
     public void RecordAccess(SstBlockCacheKey key)
     {
@@ -15,7 +16,7 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         {
             var existing = _slots[existingIndex];
             existing.Referenced = true;
-            if (!existing.Hot && _hotCount < _hotTarget)
+            if (!existing.Hot && _hotCount < HotTarget)
             {
                 existing.Hot = true;
                 _hotCount++;
@@ -46,7 +47,7 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
             return false;
         }
 
-        var maximumScans = checked(_slots.Count + 1);
+        var maximumScans = checked(_slots.Count * 2 + 1);
         for (var scan = 0; scan < maximumScans; scan++)
         {
             var slot = _slots[_hand];
@@ -62,7 +63,7 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
                 continue;
             }
 
-            if (slot.Hot && _hotCount <= _hotTarget)
+            if (slot.Hot && _hotCount <= HotTarget)
             {
                 continue;
             }
@@ -86,7 +87,6 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         _slots.Clear();
         _hand = 0;
         _hotCount = 0;
-        _hotTarget = DefaultCapacity / 4;
     }
 
     void RemoveSlot(SstBlockCacheKey key)

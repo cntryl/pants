@@ -19,7 +19,16 @@ sealed class SstBlockCacheShard
 
     public int Count => _entries.Count;
 
-    public long UsedBytes => Volatile.Read(ref _usedBytes);
+    public long UsedBytes
+    {
+        get
+        {
+            lock (_mutationGate)
+            {
+                return _usedBytes;
+            }
+        }
+    }
 
     public bool TryGet(SstBlockCacheKey key, out SstBlockCacheEntry? entry)
     {
