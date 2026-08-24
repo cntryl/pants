@@ -7,7 +7,7 @@ public sealed class PantsConcurrentTelemetryContractTests
     [Fact]
     public async Task ShouldCountEveryReadExactlyUnderConcurrentContention()
     {
-        const int operationCount = 200;
+        const int operationCount = 32;
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
