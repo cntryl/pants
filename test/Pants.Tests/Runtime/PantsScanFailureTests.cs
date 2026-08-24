@@ -3,6 +3,57 @@ namespace Cntryl.Pants.Tests.Runtime;
 public sealed class PantsScanFailureTests
 {
     [Fact]
+    public async Task ShouldRemainExhaustedAndReleaseSnapshotOnceWhenMovedAfterDisposal()
+    {
+        var releases = 0;
+        var scan = new ScanInstance(
+            _ => ValueTask.FromResult(
+                new[] { new PantsEntry("key"u8.ToArray(), "value"u8.ToArray()) }
+                    .AsEnumerable().GetEnumerator()),
+            new PantsScanQuery(),
+            () =>
+            {
+                releases++;
+                return ValueTask.CompletedTask;
+            });
+        var enumerator = scan.GetAsyncEnumerator();
+        Assert.True(await enumerator.MoveNextAsync());
+
+        await scan.DisposeAsync();
+        var moved = await enumerator.MoveNextAsync();
+        await scan.DisposeAsync();
+
+        Assert.False(moved);
+        Assert.Equal(PantsIteratorState.Exhausted, scan.State);
+        Assert.Equal(1, releases);
+    }
+
+    [Fact]
+    public async Task ShouldKeepBusyFailureStickyWhenEnumeratedTwice()
+    {
+        var releases = 0;
+        await using var scan = new ScanInstance(
+            _ => ValueTask.FromResult(
+                Array.Empty<PantsEntry>().AsEnumerable().GetEnumerator()),
+            new PantsScanQuery(),
+            () =>
+            {
+                releases++;
+                return ValueTask.CompletedTask;
+            });
+        var original = scan.GetAsyncEnumerator();
+
+        var failure = Assert.Throws<PantsBusyException>(() => scan.GetAsyncEnumerator());
+        var originalFailure = await Assert.ThrowsAsync<PantsBusyException>(() =>
+            original.MoveNextAsync().AsTask());
+
+        Assert.Same(failure, originalFailure);
+        Assert.Equal(PantsErrorCode.Busy, failure.Code);
+        Assert.Equal(PantsIteratorState.Failed, scan.State);
+        Assert.Equal(0, releases);
+    }
+
+    [Fact]
     public async Task ShouldAdvanceLazilyAndKeepSourceFailureSticky()
     {
         var expected = new InvalidDataException("terminal read failure");
