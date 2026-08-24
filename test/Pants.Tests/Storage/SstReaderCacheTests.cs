@@ -71,18 +71,29 @@ public sealed class SstReaderCacheTests
             Assert.True(releaseOpening.Wait(AssertionTimeout));
             return reader;
         });
-        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var start = new ManualResetEventSlim();
         var acquisitions = Enumerable.Range(0, callerCount)
-            .Select(callerIndex => Task.Run(async () =>
-            {
-                await start.Task;
-                return cache.GetOrAdd("reader.sst", path, out _);
-            }))
+            .Select(callerIndex => Task.Factory.StartNew(
+                () =>
+                {
+                    Assert.True(start.Wait(AssertionTimeout));
+                    return cache.GetOrAdd("reader.sst", path, out _);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default))
             .ToArray();
 
-        start.SetResult();
-        Assert.True(allOpening.Wait(AssertionTimeout));
-        releaseOpening.Set();
+        start.Set();
+        try
+        {
+            Assert.True(allOpening.Wait(AssertionTimeout));
+        }
+        finally
+        {
+            releaseOpening.Set();
+        }
+
         var leases = await Task.WhenAll(acquisitions).WaitAsync(AssertionTimeout);
         try
         {
