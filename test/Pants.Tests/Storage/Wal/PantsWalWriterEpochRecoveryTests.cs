@@ -71,6 +71,56 @@ public sealed class PantsWalWriterEpochRecoveryTests
     }
 
     [Fact]
+    public async Task ShouldFailStrictRecoveryGivenStaleTransactionBatchIsCorrupt()
+    {
+        using var directory = new TemporaryDirectory();
+        await InitializeDatabaseAsync(directory.Path);
+        var staleBatch = WalCodec.EncodeTransactionBatch(
+            7,
+            10,
+            1,
+            [CreateMutation("stale", "hidden", 0)]);
+        var batchMagicOffset = staleBatch.AsSpan().IndexOf("TB"u8);
+        Assert.True(batchMagicOffset >= 0);
+        staleBatch[batchMagicOffset] = (byte)'X';
+        await WriteWalAsync(
+            directory.Path,
+            staleBatch,
+            CreatePut("fresh", "visible", 10, 2));
+
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
+    public async Task ShouldFailStrictRecoveryGivenStaleTransactionBeginIsDuplicated()
+    {
+        using var directory = new TemporaryDirectory();
+        await InitializeDatabaseAsync(directory.Path);
+        const ulong transactionId = 7;
+        await WriteWalAsync(
+            directory.Path,
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
+                transactionId,
+                10,
+                1),
+            WalCodec.EncodeTransactionMarker(
+                WalOperation.TransactionBegin,
+                transactionId,
+                11,
+                1),
+            CreatePut("fresh", "visible", 10, 2));
+
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
     public async Task ShouldIsolateReusedTransactionIdGivenWriterEpochChanges()
     {
         using var directory = new TemporaryDirectory();
