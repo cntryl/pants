@@ -318,7 +318,9 @@ static class SstCodec
             previousKey.AsSpan(0, shared).CopyTo(key);
             block.AsSpan(cursor, keyLength).CopyTo(key.AsSpan(shared));
             cursor += keyLength;
-            var value = entryType == 2 ? null : block.AsSpan(cursor, valueLength).ToArray();
+            var value = entryType == 2 && valueLength == 0
+                ? null
+                : block.AsSpan(cursor, valueLength).ToArray();
             cursor += valueLength;
             entries.Add(new SstEntry(key, value, sequence, expirationPresent == 1 ? expirationRaw : null,
                 entryType == 2));
