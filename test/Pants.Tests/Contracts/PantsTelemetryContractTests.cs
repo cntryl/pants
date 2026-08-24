@@ -310,7 +310,8 @@ public sealed class PantsTelemetryContractTests
         Assert.True(after.CandidateSstFilesChecked > before.CandidateSstFilesChecked);
         Assert.True(after.CandidateBlocksChecked > before.CandidateBlocksChecked);
         Assert.True(after.DataBlocksRead > before.DataBlocksRead);
-        Assert.True(after.RangeTombstoneScans > before.RangeTombstoneScans);
+        Assert.Equal(before.SstReaderCacheMisses, after.SstReaderCacheMisses);
+        Assert.Equal(before.RangeTombstoneScans, after.RangeTombstoneScans);
     }
 
     [Fact]

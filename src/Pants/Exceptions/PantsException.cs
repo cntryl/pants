@@ -52,6 +52,11 @@ public abstract class PantsException : Exception
 
     internal static PantsException FromIOException(IOException exception)
     {
+        if (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new PantsNotFoundException(exception.Message, exception);
+        }
+
         var nativeCode = exception.HResult & 0xffff;
         var message = exception.Message;
         var normalized = message.ToUpperInvariant();

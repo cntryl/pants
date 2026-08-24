@@ -183,6 +183,8 @@ sealed class LocalDiskStore : IDisposable
 
     public int SstCount => GetManifestFilesSnapshot().Length;
 
+    public int SnapshotPinnedObsoleteFileCount => _snapshotPinnedObsoleteFiles.Count;
+
     public long SstBytes => checked((long)GetManifestFilesSnapshot().Aggregate(
         0UL,
         static (total, file) => total + file.SizeBytes));
@@ -630,7 +632,8 @@ sealed class LocalDiskStore : IDisposable
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null,
         IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null,
-        StartupPhaseRecorder? startupPhases = null)
+        StartupPhaseRecorder? startupPhases = null,
+        IPantsClock? leaseClock = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -668,7 +671,8 @@ sealed class LocalDiskStore : IDisposable
                     minimumWriterEpoch,
                     leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
                     leaseLossCallback,
-                    leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10));
+                    leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10),
+                    leaseClock);
             }
             lease.EnsureValid();
             using (startupPhases.Measure(StartupPhase.Format))

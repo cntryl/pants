@@ -60,8 +60,8 @@ sealed class SstScanReadValidator : IScanReadValidator
             _blocks.Count,
             _dataBlocksRead,
             0,
-            _candidateSsts,
-            _candidateSsts);
+            0,
+            0);
     }
 
     void Validate(SstScanBlock block)

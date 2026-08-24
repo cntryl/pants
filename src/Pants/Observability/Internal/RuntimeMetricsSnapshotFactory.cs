@@ -76,7 +76,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             ActiveCompactions = compactionWorker.InFlight,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshots,
-            PinnedSsts = activeSnapshots == 0 ? 0 : diskStore?.SstCount ?? 0,
+            PinnedSsts = diskStore?.SnapshotPinnedObsoleteFileCount ?? 0,
             OldestSnapshotAgeSeconds = GetOldestSnapshotAgeSeconds(state),
             SstCount = diskStore?.SstCount ?? 0,
             SstBytes = diskStore?.SstBytes ?? 0,

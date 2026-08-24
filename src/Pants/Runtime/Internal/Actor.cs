@@ -94,6 +94,7 @@ sealed class Actor : IAsyncDisposable
         _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
         _failpoints = dependencies.Failpoints;
         _runtimeTimeProvider = dependencies.RuntimeTimeProvider;
+        var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
         _state = new RuntimeState(ttlClock, telemetry);
         switch (options.Storage)
         {
@@ -115,7 +116,8 @@ sealed class Actor : IAsyncDisposable
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
                     leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval,
-                    startupPhases: startupPhases);
+                    startupPhases: startupPhases,
+                    leaseClock: leaseClock);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -148,7 +150,8 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
                         simulatedHydration.RecoverySsts,
-                        startupPhases);
+                        startupPhases,
+                        leaseClock);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         _diskStore.WriterEpoch,
@@ -191,7 +194,7 @@ sealed class Actor : IAsyncDisposable
                     dependencies.CloudHttpClient);
                 var cloudLease = new CloudLeaseCoordinator(
                     new CloudObjectLeaseStore(controlStore, PantsCloudObjectLayout.LeaseObjectKey),
-                    SystemPantsClock.Instance,
+                    leaseClock,
                     $"pants-{Environment.ProcessId}-{Guid.NewGuid():N}",
                     TimeSpan.FromSeconds(30),
                     options.LeaseClockSkewTolerance,
@@ -236,7 +239,8 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
                         hydration.RecoverySsts,
-                        startupPhases);
+                        startupPhases,
+                        leaseClock);
                     var providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         walStore,
@@ -1563,6 +1567,12 @@ sealed class Actor : IAsyncDisposable
         catch (OperationCanceledException)
         {
             _ = ObserveStorageVerificationAsync(verification);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            ExceptionDispatchInfo.Capture(
+                RuntimeExceptionMapper.ToPublicException(exception, cancellationToken)).Throw();
             throw;
         }
     }
