@@ -66,6 +66,8 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
 
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
     public int InFlight => Volatile.Read(ref _inFlight);
 
     public int Outstanding => Volatile.Read(ref _outstanding);

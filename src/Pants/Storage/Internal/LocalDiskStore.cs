@@ -154,6 +154,8 @@ sealed class LocalDiskStore : IDisposable
 
     public string RootPath { get; }
 
+    internal bool IsDisposed => _disposed;
+
     public bool IsLeaseHealthy
     {
         get

@@ -42,6 +42,8 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
 
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
     public int InFlight => Volatile.Read(ref _inFlight);
 
     public int Outstanding => Volatile.Read(ref _outstanding);

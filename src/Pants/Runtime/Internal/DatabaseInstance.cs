@@ -276,6 +276,10 @@ sealed class DatabaseInstance : IPantsDatabase
                 if (ReferenceEquals(_shutdownTask, completion.Task))
                 {
                     _shutdownTask = null;
+                    if (exception is not PantsBusyException)
+                    {
+                        Volatile.Write(ref _lifecycleState, 0);
+                    }
                 }
             }
 
