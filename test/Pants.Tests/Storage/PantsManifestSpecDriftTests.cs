@@ -7,6 +7,7 @@ namespace Cntryl.Pants.Tests.Storage;
 public sealed class PantsManifestSpecDriftTests
 {
     const byte AddSstRecordType = 1;
+    const byte RemoveSstRecordType = 2;
     const byte CreateColumnFamilyRecordType = 3;
     const byte SetCloudCheckpointRecordType = 7;
     const byte DurabilityMarkerRecordType = 9;
@@ -165,6 +166,33 @@ public sealed class PantsManifestSpecDriftTests
 
         Assert.DoesNotContain("torn-tail-family", rawJournalText, StringComparison.Ordinal);
         Assert.Contains("durable-family", rawJournalText, StringComparison.Ordinal);
+
+        await using var reopened = await OpenAsync(directory.Path);
+        var afterRepair = await reopened.CreateColumnFamilyAsync("after-repair");
+        var visibleAfterRepair = Assert.IsAssignableFrom<IPantsColumnFamily>(
+            await reopened.GetColumnFamilyAsync("after-repair"));
+        Assert.Equal(afterRepair.Id, visibleAfterRepair.Id);
+        rawJournalText = Encoding.UTF8.GetString(await File.ReadAllBytesAsync(journalPath));
+        Assert.DoesNotContain("torn-tail-family", rawJournalText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShouldUseNormativeManifestJournalRepairStagingName()
+    {
+        using var directory = new TemporaryDirectory();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        var repairPath = Path.Combine(directory.Path, "manifest.journal.repair.tmp");
+        var sawRepairStagingFile = false;
+
+        AtomicStagedFile.Write(
+            journalPath,
+            "durable-prefix"u8,
+            beforePublish: () => sawRepairStagingFile = File.Exists(repairPath),
+            temporaryFileName: "manifest.journal.repair.tmp");
+
+        Assert.True(sawRepairStagingFile);
+        Assert.Equal("durable-prefix", File.ReadAllText(journalPath));
+        Assert.False(File.Exists(repairPath));
     }
 
     // Issue #50 -------------------------------------------------------------
@@ -248,6 +276,130 @@ public sealed class PantsManifestSpecDriftTests
         Assert.True(subsequentId > 1);
     }
 
+    // Issues #142-#146 ------------------------------------------------------
+
+    [Fact]
+    public async Task ShouldSkipJournalEditAlreadyFoldedIntoManifestSnapshot()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, "manifest.snapshot.json"),
+            """
+            {
+              "last_persisted_sequence": 0,
+              "files": [],
+              "column_families": [
+                { "id": 0, "name": "default", "created_at": 1 },
+                { "id": 1, "name": "current", "created_at": 2 }
+              ],
+              "next_wal_seq": 1,
+              "next_sst_seqs": {},
+              "edit_checkpoint_id": 1
+            }
+            """);
+        var staleDrop = BuildEnvelopedJournal(
+            (1, DropColumnFamilyAtRecordType,
+                """{"DropColumnFamilyAt":{"id":1,"drop_sequence":3,"dropped_sst_names":[]}}"""));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), staleDrop);
+
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
+                await database.GetColumnFamilyAsync("current"));
+            Assert.Equal(1u, family.Id);
+        }
+
+        using var document = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        var families = document.RootElement.GetProperty("column_families").EnumerateArray().ToArray();
+        Assert.Equal(2, families.Length);
+        var current = Assert.Single(families, family => family.GetProperty("id").GetUInt32() == 1);
+        Assert.Equal("current", current.GetProperty("name").GetString());
+        Assert.False(current.TryGetProperty("deleted_at", out _));
+    }
+
+    [Fact]
+    public async Task ShouldRejectFullLengthManifestJournalRecordGivenChecksumMismatch()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var record = EncodeJournalRecord(
+            CreateColumnFamilyRecordType,
+            """{"CreateColumnFamily":{"id":1,"name":"corrupt","created_at":1}}""");
+        record[^1] ^= 0xff;
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "manifest.journal"),
+            [.. record, .. EncodeJournalRecord(DurabilityMarkerRecordType, "{}")]);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
+    public async Task ShouldRejectManifestJournalRecordGivenFramingTypeDisagreesWithEdit()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = BuildJournal(
+            (RemoveSstRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"mismatch","created_at":1}}"""));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
+    public async Task ShouldRejectManifestJournalRecordGivenUnknownRecordType()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = BuildJournal(
+            (12, """{"CreateColumnFamily":{"id":1,"name":"unknown","created_at":1}}"""));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
+    public async Task ShouldResurrectTombstonedColumnFamilyGivenCreateEditReusesItsId()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"before","created_at":2}}"""),
+            (DropColumnFamilyAtRecordType,
+                """{"DropColumnFamilyAt":{"id":1,"drop_sequence":3,"dropped_sst_names":[]}}"""),
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"after","created_at":4}}"""));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            var resurrected = Assert.IsAssignableFrom<IPantsColumnFamily>(
+                await database.GetColumnFamilyAsync("after"));
+            Assert.Equal(1u, resurrected.Id);
+            Assert.Null(await database.GetColumnFamilyAsync("before"));
+        }
+
+        using var document = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        var resurrectedMeta = Assert.Single(
+            document.RootElement.GetProperty("column_families").EnumerateArray(),
+            family => family.GetProperty("id").GetUInt32() == 1);
+        Assert.Equal("after", resurrectedMeta.GetProperty("name").GetString());
+        Assert.Equal(4u, resurrectedMeta.GetProperty("created_at").GetUInt64());
+        Assert.False(resurrectedMeta.TryGetProperty("deleted_at", out _));
+    }
+
     // Helpers -----------------------------------------------------------------
 
     static byte[] BuildJournal(params (byte Type, string Json)[] edits)
@@ -256,6 +408,18 @@ public sealed class PantsManifestSpecDriftTests
         foreach (var (type, json) in edits)
         {
             stream.Write(EncodeJournalRecord(type, json));
+            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, "{}"));
+        }
+
+        return stream.ToArray();
+    }
+
+    static byte[] BuildEnvelopedJournal(params (ulong Id, byte Type, string Json)[] edits)
+    {
+        using var stream = new MemoryStream();
+        foreach (var (id, type, json) in edits)
+        {
+            stream.Write(EncodeJournalRecord(type, $"{{\"edit_id\":{id},\"edit\":{json}}}"));
             stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, "{}"));
         }
 
