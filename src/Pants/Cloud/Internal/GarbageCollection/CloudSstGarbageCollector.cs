@@ -31,6 +31,7 @@ sealed class CloudSstGarbageCollector
             var objectKeys = await _sstStore.ListAllAsync(
                 PantsCloudObjectLayout.SstPrefix,
                 cancellationToken).ConfigureAwait(false);
+            var encounteredAnomaly = false;
             foreach (var objectKey in objectKeys
                          .Distinct(StringComparer.Ordinal)
                          .Order(StringComparer.Ordinal))
@@ -38,7 +39,8 @@ sealed class CloudSstGarbageCollector
                 _ensureAuthority();
                 if (!CloudSstObjectKey.TryGetName(objectKey, out var name))
                 {
-                    return false;
+                    encounteredAnomaly = true;
+                    continue;
                 }
 
                 if (proof.ProtectedNames.Contains(name) ||
@@ -68,7 +70,8 @@ sealed class CloudSstGarbageCollector
 
                 if (string.IsNullOrWhiteSpace(objectIdentity.Version))
                 {
-                    return false;
+                    encounteredAnomaly = true;
+                    continue;
                 }
 
                 if (!await VerifyProofAsync(proof, cancellationToken).ConfigureAwait(false) ||
@@ -90,7 +93,7 @@ sealed class CloudSstGarbageCollector
                 }
             }
 
-            return true;
+            return !encounteredAnomaly;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

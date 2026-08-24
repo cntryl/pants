@@ -20,6 +20,8 @@ static class SimulatedCloudSstGarbageCollector
             var proof = CaptureProof(localRoot, cloudRoot);
             var cloudSstDirectory = Path.Combine(cloudRoot, "sst");
             Directory.CreateDirectory(cloudSstDirectory);
+            ReconcileQuarantines(cloudSstDirectory);
+            var encounteredAnomaly = false;
             foreach (var path in Directory.EnumerateFiles(
                          cloudSstDirectory,
                          "*",
@@ -28,7 +30,8 @@ static class SimulatedCloudSstGarbageCollector
                 var objectKey = PantsCloudObjectLayout.SstPrefix + Path.GetFileName(path);
                 if (!CloudSstObjectKey.TryGetName(objectKey, out var name))
                 {
-                    return false;
+                    encounteredAnomaly = true;
+                    continue;
                 }
 
                 if (proof.ProtectedNames.Contains(name) ||
@@ -51,7 +54,7 @@ static class SimulatedCloudSstGarbageCollector
                 }
             }
 
-            return true;
+            return !encounteredAnomaly;
         }
         catch (PantsRecoveryFailedException)
         {
@@ -60,6 +63,31 @@ static class SimulatedCloudSstGarbageCollector
         catch (Exception)
         {
             return false;
+        }
+    }
+
+    static void ReconcileQuarantines(string cloudSstDirectory)
+    {
+        foreach (var quarantinePath in Directory.EnumerateFiles(
+                     cloudSstDirectory,
+                     "*.gc-*",
+                     SearchOption.TopDirectoryOnly))
+        {
+            var marker = quarantinePath.LastIndexOf(".gc-", StringComparison.Ordinal);
+            if (marker < 0)
+            {
+                continue;
+            }
+
+            var originalPath = quarantinePath[..marker];
+            if (File.Exists(originalPath))
+            {
+                File.Delete(quarantinePath);
+            }
+            else
+            {
+                File.Move(quarantinePath, originalPath, false);
+            }
         }
     }
 

@@ -225,6 +225,27 @@ public sealed class GcsObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldRejectGcsListKeyOutsideConfiguredPrefix()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                { "items": [
+                  { "name": "database/sst/inside.sst" },
+                  { "name": "foreign/sst/outside.sst" }
+                ] }
+                """)
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, "database");
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() =>
+            store.ListAllAsync("sst/", CancellationToken.None).AsTask());
+
+        Assert.Contains("foreign/sst/outside.sst", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ShouldRejectRepeatedGcsJsonListPageToken()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

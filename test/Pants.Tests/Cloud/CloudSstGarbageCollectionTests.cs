@@ -145,6 +145,85 @@ public sealed class CloudSstGarbageCollectionTests
         handler.FailSstDeletes = false;
     }
 
+    [Fact]
+    public async Task ShouldCollectValidGarbageDespiteMalformedAndVersionlessObjects()
+    {
+        const string first = "sst/000000_01_00000000000000000001.sst";
+        const string versionless = "sst/000000_01_00000000000000000002.sst";
+        var store = new AnomalousCloudObjectStore(versionless, "sst/not-an-sst.txt");
+        store.Seed(first);
+        store.Seed(versionless);
+        var collector = CreateCollector(store, static () => { });
+
+        var complete = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.False(complete);
+        Assert.False(store.Contains(first));
+        Assert.True(store.Contains(versionless));
+    }
+
+    [Fact]
+    public async Task ShouldStopDeletingImmediatelyWhenAuthorityIsLostMidPass()
+    {
+        const string first = "sst/000000_01_00000000000000000001.sst";
+        const string second = "sst/000000_01_00000000000000000002.sst";
+        var store = new AnomalousCloudObjectStore(null);
+        store.Seed(first);
+        store.Seed(second);
+        var authorityChecks = 0;
+        var collector = CreateCollector(store, () =>
+        {
+            if (Interlocked.Increment(ref authorityChecks) == 4)
+            {
+                throw new PantsFencedException("authority lost");
+            }
+        });
+
+        var complete = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.False(complete);
+        Assert.False(store.Contains(first));
+        Assert.True(store.Contains(second));
+    }
+
+    [Fact]
+    public void ShouldRecoverQuarantineLeftByCrashedSimulatedCollection()
+    {
+        using var directory = new TemporaryDirectory();
+        var localRoot = Path.Combine(directory.Path, "local");
+        var cloudRoot = Path.Combine(directory.Path, "cloud");
+        var sstDirectory = Path.Combine(cloudRoot, "sst");
+        Directory.CreateDirectory(localRoot);
+        Directory.CreateDirectory(sstDirectory);
+        var quarantined = Path.Combine(
+            sstDirectory,
+            "000000_01_00000000000000000001.sst.gc-crashed");
+        File.WriteAllBytes(quarantined, "first"u8.ToArray());
+        File.WriteAllBytes(
+            Path.Combine(sstDirectory, "000000_01_00000000000000000002.sst"),
+            "second"u8.ToArray());
+
+        var complete = SimulatedCloudSstGarbageCollector.Collect(
+            localRoot,
+            cloudRoot,
+            NullPantsFailpointHandler.Instance);
+
+        Assert.True(complete);
+        Assert.Empty(Directory.EnumerateFiles(sstDirectory));
+    }
+
+    static CloudSstGarbageCollector CreateCollector(
+        ICloudObjectStore store,
+        Action ensureAuthority) => new(
+        store,
+        _ => ValueTask.FromResult(new CloudSstRetentionProof(
+            new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<uint, ulong> { [0] = 100 },
+            [])),
+        () => new HashSet<string>(StringComparer.Ordinal),
+        ensureAuthority,
+        NullPantsFailpointHandler.Instance);
+
     static async Task VerifyProviderCollectionAsync()
     {
         using var cache = new TemporaryDirectory();
@@ -265,4 +344,47 @@ public sealed class CloudSstGarbageCollectionTests
             Path.Combine(root, "cloud_store", "sst"),
             "*.sst",
             SearchOption.TopDirectoryOnly);
+
+    sealed class AnomalousCloudObjectStore(
+        string? versionlessKey,
+        params string[] extraListedKeys) : ICloudObjectStore
+    {
+        readonly SnapshotConsistencyCloudObjectStore _inner = new();
+
+        public void Seed(string key) => _inner.Seed(key, "data"u8);
+
+        public bool Contains(string key) => _inner.GetData(key) is not null;
+
+        public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
+            _inner.GetAsync(objectKey, cancellationToken);
+
+        public async ValueTask<CloudObjectMetadata?> HeadAsync(
+            string objectKey,
+            CancellationToken cancellationToken)
+        {
+            var metadata = await _inner.HeadAsync(objectKey, cancellationToken);
+            return metadata is not null && StringComparer.Ordinal.Equals(objectKey, versionlessKey)
+                ? metadata with { ETag = " ", Generation = null }
+                : metadata;
+        }
+
+        public ValueTask<bool> PutAsync(string objectKey, ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition, CancellationToken cancellationToken) =>
+            _inner.PutAsync(objectKey, data, condition, cancellationToken);
+
+        public async ValueTask<CloudObjectListPage> ListPageAsync(
+            string prefix,
+            string? continuationToken,
+            CancellationToken cancellationToken)
+        {
+            var page = await _inner.ListPageAsync(prefix, continuationToken, cancellationToken);
+            return continuationToken is null
+                ? new CloudObjectListPage([.. page.ObjectKeys, .. extraListedKeys], null)
+                : page;
+        }
+
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(string objectKey,
+            CloudObjectDeleteCondition condition, CancellationToken cancellationToken) =>
+            _inner.DeleteAsync(objectKey, condition, cancellationToken);
+    }
 }
