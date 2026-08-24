@@ -1,0 +1,48 @@
+name: Cloud compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-compatibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sqrzl:
+    name: Sqrzl cloud providers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Start Sqrzl emulator
+        run: docker compose up -d sqrzl
+
+      - name: Build
+        run: dotnet build Pants.slnx --configuration Release
+
+      - name: Test cloud compatibility
+        run: >-
+          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=Sqrzl"
+
+      - name: Stop Sqrzl emulator
+        if: ${{ always() }}
+        run: docker compose down --volumes

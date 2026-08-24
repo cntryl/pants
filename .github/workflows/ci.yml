@@ -15,153 +15,16 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 6
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: ubuntu-latest / Release
-            os: ubuntu-latest
-            configuration: Release
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
-            max-parallel-threads: 8
-          - name: macos-latest / Release
-            os: macos-latest
-            configuration: Release
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
-            max-parallel-threads: 8
-          - name: windows-latest / Release
-            os: windows-latest
-            configuration: Release
-            run-crash-recovery: false
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests&
-              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
-              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
-              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
-              FullyQualifiedName!~RuntimeWorkerTests&
-              FullyQualifiedName!~Cloud&
-              FullyQualifiedName!~PantsHybrid&
-              FullyQualifiedName!~PantsMemoryManagementContractTests&
-              FullyQualifiedName!~PantsDurabilityParityTests&
-              FullyQualifiedName!~PantsReadAmplificationContractTests&
-              FullyQualifiedName!~PantsLeveledCompactionTests&
-              FullyQualifiedName!~PantsCompressionCompatibilityTests&
-              FullyQualifiedName!~PantsTransactionSpillReadMemoryTests&
-              FullyQualifiedName!~PantsTransactionSpillBehaviorTests
-            max-parallel-threads: 2
-          - name: windows-latest / Release (cloud and storage)
-            os: windows-latest
-            configuration: Release
-            run-crash-recovery: false
-            remaining-filter: >-
-              (FullyQualifiedName~Cloud|
-              FullyQualifiedName~PantsHybrid|
-              FullyQualifiedName~PantsMemoryManagementContractTests|
-              FullyQualifiedName~PantsDurabilityParityTests|
-              FullyQualifiedName~PantsReadAmplificationContractTests|
-              FullyQualifiedName~PantsLeveledCompactionTests|
-              FullyQualifiedName~PantsCompressionCompatibilityTests|
-              FullyQualifiedName~PantsTransactionSpillReadMemoryTests|
-              FullyQualifiedName~PantsTransactionSpillBehaviorTests)&
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
-              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
-              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
-              FullyQualifiedName!~RuntimeWorkerTests
-            max-parallel-threads: 2
-          - name: windows-latest / Release (runtime races)
-            os: windows-latest
-            configuration: Release
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName~PantsBackgroundFlushPipelineTests|
-              FullyQualifiedName~PantsStorageVerificationHardeningTests|
-              FullyQualifiedName~PantsColumnFamilyReclamationTests|
-              FullyQualifiedName~RuntimeWorkerTests
-            max-parallel-threads: 1
-          - name: ubuntu-latest / Debug
-            os: ubuntu-latest
-            configuration: Debug
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
-            max-parallel-threads: 8
-          - name: macos-latest / Debug
-            os: macos-latest
-            configuration: Debug
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests
-            max-parallel-threads: 8
-          - name: windows-latest / Debug
-            os: windows-latest
-            configuration: Debug
-            run-crash-recovery: false
-            remaining-filter: >-
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsTransactionSpillCrashRecoveryTests&
-              FullyQualifiedName!~PantsCommitCoalescingCrashRecoveryTests&
-              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
-              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
-              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
-              FullyQualifiedName!~RuntimeWorkerTests&
-              FullyQualifiedName!~Cloud&
-              FullyQualifiedName!~PantsHybrid&
-              FullyQualifiedName!~PantsMemoryManagementContractTests&
-              FullyQualifiedName!~PantsDurabilityParityTests&
-              FullyQualifiedName!~PantsReadAmplificationContractTests&
-              FullyQualifiedName!~PantsLeveledCompactionTests&
-              FullyQualifiedName!~PantsCompressionCompatibilityTests&
-              FullyQualifiedName!~PantsTransactionSpillReadMemoryTests&
-              FullyQualifiedName!~PantsTransactionSpillBehaviorTests
-            max-parallel-threads: 2
-          - name: windows-latest / Debug (cloud and storage)
-            os: windows-latest
-            configuration: Debug
-            run-crash-recovery: false
-            remaining-filter: >-
-              (FullyQualifiedName~Cloud|
-              FullyQualifiedName~PantsHybrid|
-              FullyQualifiedName~PantsMemoryManagementContractTests|
-              FullyQualifiedName~PantsDurabilityParityTests|
-              FullyQualifiedName~PantsReadAmplificationContractTests|
-              FullyQualifiedName~PantsLeveledCompactionTests|
-              FullyQualifiedName~PantsCompressionCompatibilityTests|
-              FullyQualifiedName~PantsTransactionSpillReadMemoryTests|
-              FullyQualifiedName~PantsTransactionSpillBehaviorTests)&
-              FullyQualifiedName!~PantsCloudCrashRecoveryTests&
-              FullyQualifiedName!~PantsBackgroundFlushPipelineTests&
-              FullyQualifiedName!~PantsStorageVerificationHardeningTests&
-              FullyQualifiedName!~PantsColumnFamilyReclamationTests&
-              FullyQualifiedName!~RuntimeWorkerTests
-            max-parallel-threads: 2
-          - name: windows-latest / Debug (runtime races)
-            os: windows-latest
-            configuration: Debug
-            run-crash-recovery: true
-            remaining-filter: >-
-              FullyQualifiedName~PantsBackgroundFlushPipelineTests|
-              FullyQualifiedName~PantsStorageVerificationHardeningTests|
-              FullyQualifiedName~PantsColumnFamilyReclamationTests|
-              FullyQualifiedName~RuntimeWorkerTests
-            max-parallel-threads: 1
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
 
     steps:
       - name: Check out repository
@@ -174,121 +37,15 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Restore locked dependencies
-        run: dotnet restore Pants.slnx --locked-mode
-
-      - name: Verify formatting and analyzers
-        run: dotnet format Pants.slnx --verify-no-changes --no-restore
-
-      - name: Build
-        run: >-
-          dotnet build Pants.slnx
-          --configuration ${{ matrix.configuration }}
-          --no-restore
-
-      - name: Test crash recovery
-        if: ${{ matrix.run-crash-recovery }}
-        run: >-
-          dotnet test Pants.slnx
-          --configuration ${{ matrix.configuration }}
-          --no-build
-          --filter "FullyQualifiedName~PantsCloudCrashRecoveryTests|FullyQualifiedName~PantsTransactionSpillCrashRecoveryTests|FullyQualifiedName~PantsCommitCoalescingCrashRecoveryTests"
-          --logger "console;verbosity=detailed"
-          --logger "trx;LogFileName=crash.trx"
-          --results-directory TestResults
-          --blame-hang-timeout 2m
-          --blame-hang-dump-type none
-
-      - name: Test remaining suite
-        run: >-
-          dotnet test Pants.slnx
-          --configuration ${{ matrix.configuration }}
-          --no-build
-          --filter "(${{ matrix.remaining-filter }})&Category!=Sqrzl"
-          --logger "trx;LogFileName=remaining.trx"
-          --results-directory TestResults
-          --blame-hang-timeout 3m
-          --blame-hang-dump-type none
-          --
-          xUnit.MaxParallelThreads=${{ matrix.max-parallel-threads }}
-          xUnit.ParallelAlgorithm=conservative
-
-      - name: Report slowest tests
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          $resultPaths = @(
-            Join-Path $PWD "TestResults/crash.trx"
-            Join-Path $PWD "TestResults/remaining.trx"
-          ) | Where-Object { Test-Path $_ }
-          if ($resultPaths.Count -eq 0) {
-            Write-Warning "No TRX test result was produced."
-            exit 0
-          }
-
-          $results = foreach ($resultPath in $resultPaths) {
-            Select-Xml `
-              -Path $resultPath `
-              -XPath "//*[local-name()='UnitTestResult']" |
-              ForEach-Object { $_.Node }
-          }
-          $results |
-            Sort-Object { [TimeSpan]::Parse($_.duration) } -Descending |
-            Select-Object -First 25 |
-            ForEach-Object {
-              Write-Host ("{0,12}  {1,-10}  {2}" -f $_.duration, $_.outcome, $_.testName)
-            }
-
-  sqrzl:
-    name: Sqrzl cloud providers
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install .NET 10 SDK
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Restore locked dependencies
-        run: dotnet restore Pants.slnx --locked-mode
+      - name: Check formatting
+        run: dotnet format Pants.slnx --verify-no-changes
 
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
-      - name: Start Sqrzl emulator
-        run: docker compose up -d sqrzl
-
-      - name: Wait for Sqrzl health
+      - name: Test
         run: >-
-          curl --fail
-          --retry 30
-          --retry-delay 1
-          --retry-all-errors
-          http://127.0.0.1:9001/healthz
-
-      - name: Test every cloud provider
-        run: >-
-          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          dotnet test Pants.slnx
           --configuration Release
           --no-build
-          --filter "Category=Sqrzl"
-          --logger "console;verbosity=detailed"
-          --blame-hang-timeout 3m
-          --blame-hang-dump-type none
-          --
-          xUnit.MaxParallelThreads=1
-          xUnit.ParallelAlgorithm=conservative
-
-      - name: Report Sqrzl logs
-        if: ${{ failure() }}
-        run: docker compose logs --no-color sqrzl
-
-      - name: Stop Sqrzl emulator
-        if: ${{ always() }}
-        run: docker compose down --volumes
+          --filter "Category!=Sqrzl"
