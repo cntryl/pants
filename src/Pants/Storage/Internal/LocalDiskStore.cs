@@ -2873,15 +2873,16 @@ sealed class LocalDiskStore : IDisposable
             ref replayOrdinal,
             (record, _, recordOrdinal) =>
             {
-                if (writerEpochFrontiers.IsStale(record, recordOrdinal))
-                {
-                    return true;
-                }
-
-                state.RecordWalRecovery(WalRecordMetrics.GetLogicalByteCount(record));
-                _nextSequence = Math.Max(_nextSequence, record.Sequence);
                 try
                 {
+                    if (writerEpochFrontiers.IsStale(record, recordOrdinal))
+                    {
+                        recovery.Accept(record, static (_, _) => { });
+                        return true;
+                    }
+
+                    state.RecordWalRecovery(WalRecordMetrics.GetLogicalByteCount(record));
+                    _nextSequence = Math.Max(_nextSequence, record.Sequence);
                     var recoveredMutations = new List<(WalMutation Mutation, ulong CommitSequence)>();
                     recovery.Accept(
                         record,
