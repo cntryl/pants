@@ -42,6 +42,7 @@ jobs:
           --configuration Release
           --no-build
           --filter "Category=Sqrzl"
+          --logger "console;verbosity=detailed"
 
       - name: Stop Sqrzl emulator
         if: ${{ always() }}
