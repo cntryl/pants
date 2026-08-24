@@ -72,11 +72,16 @@ public sealed class PantsStartupResidueCleanupTests
         await File.WriteAllTextAsync(residue, "stale");
         var failpoint = new NthStartupResidueDeleteFailpointHandler(1);
 
-        await using var reopened = await OpenAsync(options, failpoint);
+        await using (var reopened = await OpenAsync(options, failpoint))
+        {
+            Assert.True(File.Exists(residue));
+            Assert.Equal(1, failpoint.FailureCount);
+            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+        }
 
-        Assert.True(File.Exists(residue));
-        Assert.Equal(1, failpoint.FailureCount);
-        Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+        await using var healed = await PantsDatabase.OpenAsync(options);
+        Assert.False(File.Exists(residue));
+        Assert.Equal(PantsEngineHealth.Healthy, (await healed.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -89,11 +94,16 @@ public sealed class PantsStartupResidueCleanupTests
         await File.WriteAllTextAsync(residue, "stale");
         var failpoint = new NthStartupResidueDeleteFailpointHandler(2);
 
-        await using var reopened = await OpenAsync(options, failpoint);
+        await using (var reopened = await OpenAsync(options, failpoint))
+        {
+            Assert.True(File.Exists(residue));
+            Assert.Equal(1, failpoint.FailureCount);
+            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+        }
 
-        Assert.True(File.Exists(residue));
-        Assert.Equal(1, failpoint.FailureCount);
-        Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+        await using var healed = await PantsDatabase.OpenAsync(options);
+        Assert.False(File.Exists(residue));
+        Assert.Equal(PantsEngineHealth.Healthy, (await healed.GetRuntimeMetricsAsync()).Health);
     }
 
     static PantsOpenOptions CreateOptions(string path) =>

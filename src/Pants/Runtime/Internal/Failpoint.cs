@@ -44,6 +44,7 @@ enum Failpoint
     AfterManifestJournalSync,
     BeforeManifestCheckpointReplace,
     AfterManifestCheckpointReplace,
+    BeforeManifestJournalRepairReplace,
     BeforeIntentLogReplace,
     AfterIntentLogReplace,
     BeforeStartupResidueDelete,
