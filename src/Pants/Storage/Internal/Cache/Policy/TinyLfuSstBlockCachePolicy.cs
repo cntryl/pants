@@ -2,49 +2,46 @@ namespace Cntryl.Pants.Storage.Internal.Cache.Policy;
 
 sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
 {
-    const int WindowSize = 100;
-    readonly Dictionary<SstBlockCacheKey, uint> _frequencies = [];
-    readonly LinkedList<SstBlockCacheKey> _recentSamples = [];
+    internal const int WindowSize = 100;
+    readonly Dictionary<SstBlockCacheKey, FrequencyEntry> _frequencies = [];
+    ulong _nextOrder;
 
     public void RecordAccess(SstBlockCacheKey key)
     {
-        _recentSamples.AddLast(key);
-        _frequencies[key] = _frequencies.GetValueOrDefault(key) switch
+        if (_frequencies.TryGetValue(key, out var existing))
         {
-            uint.MaxValue => uint.MaxValue,
-            uint frequency => frequency + 1
-        };
-        if (_recentSamples.Count <= WindowSize)
-        {
+            _frequencies[key] = existing with
+            {
+                Frequency = existing.Frequency == uint.MaxValue
+                    ? uint.MaxValue
+                    : existing.Frequency + 1
+            };
             return;
         }
 
-        var expired = _recentSamples.First!.Value;
-        _recentSamples.RemoveFirst();
-        if (!_recentSamples.Contains(expired))
-        {
-            _frequencies.Remove(expired);
-        }
+        _frequencies.Add(key, new FrequencyEntry(1, _nextOrder));
+        _nextOrder = _nextOrder == ulong.MaxValue ? 0 : _nextOrder + 1;
     }
 
     public bool TrySelectVictim(out SstBlockCacheKey key)
     {
-        var sample = _recentSamples.First;
-        if (sample is null)
+        using var candidates = _frequencies.GetEnumerator();
+        if (!candidates.MoveNext())
         {
             key = default;
             return false;
         }
 
-        key = sample.Value;
-        var minimumFrequency = _frequencies.GetValueOrDefault(key);
-        for (sample = sample.Next; sample is not null; sample = sample.Next)
+        key = candidates.Current.Key;
+        var minimum = candidates.Current.Value;
+        while (candidates.MoveNext())
         {
-            var frequency = _frequencies.GetValueOrDefault(sample.Value);
-            if (frequency < minimumFrequency)
+            var candidate = candidates.Current.Value;
+            if (candidate.Frequency < minimum.Frequency ||
+                (candidate.Frequency == minimum.Frequency && candidate.Order < minimum.Order))
             {
-                key = sample.Value;
-                minimumFrequency = frequency;
+                key = candidates.Current.Key;
+                minimum = candidate;
             }
         }
 
@@ -58,23 +55,10 @@ sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
     public void Clear()
     {
         _frequencies.Clear();
-        _recentSamples.Clear();
+        _nextOrder = 0;
     }
 
-    void Remove(SstBlockCacheKey key)
-    {
-        var node = _recentSamples.First;
-        while (node is not null)
-        {
-            var next = node.Next;
-            if (node.Value == key)
-            {
-                _recentSamples.Remove(node);
-            }
+    void Remove(SstBlockCacheKey key) => _frequencies.Remove(key);
 
-            node = next;
-        }
-
-        _frequencies.Remove(key);
-    }
+    readonly record struct FrequencyEntry(uint Frequency, ulong Order);
 }
