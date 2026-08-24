@@ -7,6 +7,20 @@ public sealed class PantsWalVerificationTailParityTests
     const string SealedWalName = "00000000000000000001.wal";
 
     [Fact]
+    public void ShouldRestorePositionGivenZeroTailProbeFindsNonZeroByte()
+    {
+        var bytes = new byte[32];
+        bytes[24] = 1;
+        using var stream = new MemoryStream(bytes);
+        stream.Position = 8;
+
+        var isZeroFilledTail = WalFrameReader.IsZeroFilledTail(stream);
+
+        Assert.False(isZeroFilledTail);
+        Assert.Equal(8, stream.Position);
+    }
+
+    [Fact]
     public async Task ShouldAcceptIncompleteFinalActiveWalTailWhenVerifyingOffline()
     {
         using var directory = new TemporaryDirectory();

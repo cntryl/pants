@@ -2937,7 +2937,7 @@ sealed class LocalDiskStore : IDisposable
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
 
-            if (header.IndexOfAnyExcept((byte)0) < 0 && IsZeroFilledTail(stream))
+            if (header.IndexOfAnyExcept((byte)0) < 0 && WalFrameReader.IsZeroFilledTail(stream))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
@@ -3055,22 +3055,6 @@ sealed class LocalDiskStore : IDisposable
         throw innerException is null
             ? PantsException.Create(PantsErrorCode.RecoveryFailed, message)
             : PantsException.Create(PantsErrorCode.RecoveryFailed, message, innerException);
-    }
-
-    static bool IsZeroFilledTail(FileStream stream)
-    {
-        Span<byte> buffer = stackalloc byte[4096];
-        while (stream.Position < stream.Length)
-        {
-            var requested = checked((int)Math.Min(buffer.Length, stream.Length - stream.Position));
-            var read = stream.Read(buffer[..requested]);
-            if (read == 0 || buffer[..read].IndexOfAnyExcept((byte)0) >= 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     void ResetActiveWalAfterSalvage()

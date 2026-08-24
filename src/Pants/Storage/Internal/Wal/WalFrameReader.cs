@@ -38,7 +38,6 @@ static class WalFrameReader
                 throw new StorageException("The WAL has a torn frame header.");
             }
 
-            var payloadStart = stream.Position;
             if (header.IndexOfAnyExcept((byte)0) < 0)
             {
                 var isZeroFilledTail = IsZeroFilledTail(stream);
@@ -51,8 +50,6 @@ static class WalFrameReader
 
                     throw new StorageException("The WAL has a zero-filled final tail.");
                 }
-
-                stream.Position = payloadStart;
             }
 
             var encodedLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
@@ -91,8 +88,9 @@ static class WalFrameReader
         }
     }
 
-    static bool IsZeroFilledTail(Stream stream)
+    internal static bool IsZeroFilledTail(Stream stream)
     {
+        var start = stream.Position;
         Span<byte> buffer = stackalloc byte[4096];
         while (stream.Position < stream.Length)
         {
@@ -100,6 +98,7 @@ static class WalFrameReader
             var read = stream.Read(buffer[..requested]);
             if (read == 0 || buffer[..read].IndexOfAnyExcept((byte)0) >= 0)
             {
+                stream.Position = start;
                 return false;
             }
         }
