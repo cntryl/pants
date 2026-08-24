@@ -142,9 +142,15 @@ public sealed class PantsStorageIoTests
             }
         });
 
-        await Task.WhenAll(payloads.Select(payload => Task.Run(() => AtomicStagedFile.Write(path, payload))));
-        stop.Cancel();
-        await reader;
+        try
+        {
+            await Task.WhenAll(payloads.Select(payload => Task.Run(() => AtomicStagedFile.Write(path, payload))));
+        }
+        finally
+        {
+            stop.Cancel();
+            await reader;
+        }
 
         var final = File.ReadAllBytes(path);
         Assert.Contains(payloads, payload => payload.AsSpan().SequenceEqual(final));

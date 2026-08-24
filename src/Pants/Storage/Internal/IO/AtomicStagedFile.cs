@@ -84,6 +84,16 @@ static class AtomicStagedFile
         return PublishLocks[hash % PublishLocks.Length];
     }
 
+    public static T WithPathLock<T>(string path, Func<T> operation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(operation);
+        lock (GetPublishLock(Path.GetFullPath(path)))
+        {
+            return operation();
+        }
+    }
+
     static object[] CreatePublishLocks()
     {
         var locks = new object[PublishLockCount];

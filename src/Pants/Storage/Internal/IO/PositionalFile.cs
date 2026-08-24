@@ -6,7 +6,10 @@ static class PositionalFile
 {
     public delegate int ReadOperation(SafeFileHandle handle, Span<byte> buffer, long offset);
 
-    public static byte[] ReadAllBytes(string path, ReadOperation? readOperation = null)
+    public static byte[] ReadAllBytes(string path, ReadOperation? readOperation = null) =>
+        AtomicStagedFile.WithPathLock(path, () => ReadAllBytesCore(path, readOperation));
+
+    static byte[] ReadAllBytesCore(string path, ReadOperation? readOperation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var handle = File.OpenHandle(
