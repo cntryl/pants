@@ -23,7 +23,8 @@ sealed class S3ObjectStore : ICloudObjectStore
         PantsCloudProviderConfiguration provider,
         string prefix,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        HttpClient? credentialHttpClient = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         if (timeout < TimeSpan.FromMilliseconds(1))
@@ -42,7 +43,7 @@ sealed class S3ObjectStore : ICloudObjectStore
                     aws.Credentials,
                     aws.Region,
                     true,
-                    httpClient,
+                    credentialHttpClient ?? httpClient,
                     timeout)),
             PantsCloudProviderConfiguration.S3Compatible compatible => (
                 compatible.Bucket,
@@ -53,7 +54,7 @@ sealed class S3ObjectStore : ICloudObjectStore
                     compatible.Credentials,
                     compatible.Region,
                     false,
-                    httpClient,
+                    credentialHttpClient ?? httpClient,
                     timeout)),
             _ => throw PantsException.InvalidArgument("An S3 provider configuration is required.")
         };

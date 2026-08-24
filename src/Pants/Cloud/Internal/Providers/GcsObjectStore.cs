@@ -21,7 +21,8 @@ sealed class GcsObjectStore : ICloudObjectStore
         PantsCloudProviderConfiguration.Gcs configuration,
         string prefix,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        HttpClient? credentialHttpClient = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -33,7 +34,10 @@ sealed class GcsObjectStore : ICloudObjectStore
         _endpoint = configuration.Endpoint ?? new Uri("https://storage.googleapis.com/", UriKind.Absolute);
         _prefix = NormalizePrefix(prefix);
         _timeout = timeout;
-        _credential = GcsCredentialResolver.Resolve(configuration.Credential, httpClient, timeout);
+        _credential = GcsCredentialResolver.Resolve(
+            configuration.Credential,
+            credentialHttpClient ?? httpClient,
+            timeout);
         if (_credential.HmacAccessId is not null && configuration.ApiStyle != PantsGcsApiStyle.Xml)
         {
             throw PantsException.InvalidArgument("GCS HMAC credentials require the XML API style.");
@@ -325,11 +329,7 @@ sealed class GcsObjectStore : ICloudObjectStore
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken)
     {
-        if (_configuration.ApiStyle == PantsGcsApiStyle.Xml && request.Content is null)
-        {
-            // GCS XML requires explicit request framing even for bodyless reads and deletes.
-            request.Content = new ByteArrayContent([]);
-        }
+        EnsureXmlBodylessFraming(request);
 
         if (_credential.TokenProvider is { } tokenProvider)
         {
@@ -340,6 +340,21 @@ sealed class GcsObjectStore : ICloudObjectStore
         }
 
         SignHmac(request, payload.Span);
+    }
+
+    void EnsureXmlBodylessFraming(HttpRequestMessage request)
+    {
+        if (_configuration.ApiStyle != PantsGcsApiStyle.Xml ||
+            request.Content is not null)
+        {
+            return;
+        }
+
+        // This supplies Content-Length: 0 without payload bytes, including for HEAD.
+        // It is a GCS XML wire-framing requirement, not part of signing and not a
+        // general convention shared by the S3 and Azure providers. Sqrzl's
+        // provider-shaped GCS endpoint rejects these requests with 411 otherwise.
+        request.Content = new ByteArrayContent([]);
     }
 
     Uri BuildJsonUri(

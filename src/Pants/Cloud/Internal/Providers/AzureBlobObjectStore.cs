@@ -21,7 +21,8 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         PantsCloudProviderConfiguration.AzureBlob configuration,
         string prefix,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        HttpClient? credentialHttpClient = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -34,7 +35,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         _timeout = timeout;
         var resolution = AzureCredentialResolver.Resolve(
             configuration,
-            httpClient,
+            credentialHttpClient ?? httpClient,
             timeout);
         _account = resolution.Account;
         _credential = resolution.Credential;

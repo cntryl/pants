@@ -277,6 +277,22 @@ public sealed class GcsObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldFrameGcsXmlGetAndHeadWithoutPayloadBytes()
+    {
+        var handler = new RecordingHandler(request => request.Method == HttpMethod.Head
+            ? XmlMetadataResponse(5, "\"etag-head\"", "2")
+            : Response(HttpStatusCode.OK, "value", "1"));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Xml, string.Empty);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+        Assert.NotNull(await store.HeadAsync("object", CancellationToken.None));
+
+        Assert.Equal(0, handler.Requests[0].ContentLength);
+        Assert.Equal(0, handler.Requests[1].ContentLength);
+    }
+
+    [Fact]
     public async Task ShouldReadGcsJsonMetadataAndUseGenerationForConditionalDelete()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get
@@ -339,6 +355,8 @@ public sealed class GcsObjectStoreTests
         Assert.Equal("19", metadata.Generation);
         Assert.Equal(CloudObjectDeleteOutcome.ConditionNotMet, outcome);
         Assert.Equal("19", handler.Requests[1].GenerationMatch);
+        Assert.Equal(0, handler.Requests[0].ContentLength);
+        Assert.Equal(0, handler.Requests[1].ContentLength);
     }
 
     static GcsObjectStore CreateStore(
