@@ -2118,18 +2118,39 @@ sealed class Actor : IAsyncDisposable
             RecordPostDurabilityFailure(state, exception);
         }
 
-        commitCoalescer.Apply(state, prepared);
-        foreach (var commit in prepared)
+        try
         {
-            if (_cloudPersistence is not null)
+            _failpoints.Hit(Failpoint.BeforeCoalescedCommitApply);
+            commitCoalescer.Apply(state, prepared);
+            foreach (var commit in prepared)
             {
-                TrackCloudMemtableWrites(commit.Command.Payload, writtenWalSegmentId);
+                if (_cloudPersistence is not null)
+                {
+                    TrackCloudMemtableWrites(commit.Command.Payload, writtenWalSegmentId);
+                }
+
+                _telemetry.RecordTransactionCommit();
             }
 
-            _telemetry.RecordTransactionCommit();
+            PublishSnapshot(state);
+        }
+        catch (Exception exception)
+        {
+            RecordPostDurabilityFailure(state, exception);
+            foreach (var commit in prepared)
+            {
+                commit.Command.Fail(state, exception, false);
+            }
+
+            await ExecuteRemainingDrainedCommitsAsync(
+                    state,
+                    commits,
+                    stopIndex,
+                    deferredError)
+                .ConfigureAwait(false);
+            return;
         }
 
-        PublishSnapshot(state);
         foreach (var commit in prepared)
         {
             commit.Command.Complete(IsCommitWriteStalled(state, commit.Families));

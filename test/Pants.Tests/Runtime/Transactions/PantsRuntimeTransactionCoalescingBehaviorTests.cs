@@ -123,6 +123,39 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         Assert.Equal("99", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(finalValue)));
     }
 
+    [Fact]
+    public async Task ShouldFailCoalescedBatchWithoutFaultingActorGivenApplyFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler(
+            Failpoint.BeforeCoalescedCommitApply);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        var transactions = await CreateTransactionsAsync(database, "apply-failure", 8);
+        var barrier = database.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(5));
+        var commits = transactions
+            .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
+            .ToArray();
+        failpoints.ReleaseRuntimeBarrier();
+        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(5));
+
+        foreach (var commit in commits)
+        {
+            var failure = await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                commit.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(PantsErrorCode.NoSpace, failure.Code);
+        }
+
+        var metrics = await database.GetRuntimeMetricsAsync()
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
+        Assert.Equal(1, metrics.WalAppendCount);
+        await DisposeTransactionsAsync(transactions);
+    }
+
     static async Task CommitAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,

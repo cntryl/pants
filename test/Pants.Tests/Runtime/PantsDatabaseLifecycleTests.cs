@@ -42,8 +42,20 @@ public sealed class PantsDatabaseLifecycleTests
 
         Assert.Equal(PantsErrorCode.Busy, error.Code);
         await Assert.ThrowsAsync<PantsBusyException>(() => transaction.GetAsync("missing"u8.ToArray()).AsTask());
+        var independentBegin = Task.Run(async () => await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly));
+        var independentCreate = Task.Run(async () => await database.CreateColumnFamilyAsync(
+            "closing-family"));
+
+        await Assert.ThrowsAsync<PantsBusyException>(() => independentBegin);
+        await Assert.ThrowsAsync<PantsBusyException>(() => independentCreate);
 
         await transaction.RollbackAsync();
         await database.ShutdownAsync(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly)
+            .AsTask());
     }
 }
