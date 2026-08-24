@@ -3963,7 +3963,10 @@ sealed class LocalDiskStore : IDisposable
                     // A torn tail: repair the journal on disk to the durable prefix before any
                     // future append is allowed to proceed, using the same staged fsync+rename
                     // write already used for the manifest snapshot.
-                    AtomicStagedFile.Write(journalPath, journalBytes.AsSpan(0, durableByteLength));
+                    AtomicStagedFile.Write(
+                        journalPath,
+                        journalBytes.AsSpan(0, durableByteLength),
+                        temporaryFileName: "manifest.journal.repair.tmp");
                 }
             }
             catch (Exception exception) when (exception is PantsException or IOException)

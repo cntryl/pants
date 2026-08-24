@@ -10,22 +10,33 @@ static class AtomicStagedFile
         string path,
         ReadOnlySpan<byte> bytes,
         bool overwrite = true,
-        Action? beforePublish = null)
+        Action? beforePublish = null,
+        string? temporaryFileName = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
                         throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
         Directory.CreateDirectory(directory);
+        if (temporaryFileName is not null &&
+            (!string.Equals(Path.GetFileName(temporaryFileName), temporaryFileName, StringComparison.Ordinal) ||
+             string.IsNullOrWhiteSpace(temporaryFileName)))
+        {
+            throw new ArgumentException(
+                "A staged file name must be a non-empty file name without a directory.",
+                nameof(temporaryFileName));
+        }
+
         var temporary = Path.Combine(
             directory,
+            temporaryFileName ??
             $".{Path.GetFileName(fullPath)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
 
         try
         {
             using (var handle = File.OpenHandle(
                        temporary,
-                       FileMode.CreateNew,
+                       temporaryFileName is null ? FileMode.CreateNew : FileMode.Create,
                        FileAccess.Write,
                        FileShare.None))
             {
