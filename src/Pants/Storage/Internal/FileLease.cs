@@ -11,6 +11,7 @@ sealed class FileLease : IDisposable
     readonly string _leaderPath;
     readonly Action? _leaseLossCallback;
     readonly string _lockPath;
+    readonly IPantsClock _clock;
     bool _disposed;
     int _leaseLossNotified;
     volatile bool _valid = true;
@@ -20,12 +21,14 @@ sealed class FileLease : IDisposable
         string holderId,
         ulong epoch,
         Action? leaseLossCallback,
-        TimeSpan heartbeatInterval)
+        TimeSpan heartbeatInterval,
+        IPantsClock clock)
     {
         _leaderPath = Path.Combine(root, ".midge_leader");
         _lockPath = Path.Combine(root, ".midge_leader.lock");
         _holderId = holderId;
         _leaseLossCallback = leaseLossCallback;
+        _clock = clock;
         Epoch = epoch;
         _heartbeat = new Timer(_ => Renew(), null, heartbeatInterval, heartbeatInterval);
     }
@@ -62,6 +65,7 @@ sealed class FileLease : IDisposable
                 using var leaseLock = AcquireMutationLock(
                     _lockPath,
                     _holderId,
+                    _clock,
                     MutationLockDisposalInterferenceHookForTesting);
                 var current = ReadRecord(_leaderPath);
                 if (current?.Epoch == Epoch && current.HolderId == _holderId)
@@ -83,12 +87,14 @@ sealed class FileLease : IDisposable
         ulong minimumEpoch,
         TimeSpan clockSkewTolerance,
         Action? leaseLossCallback,
-        TimeSpan heartbeatInterval)
+        TimeSpan heartbeatInterval,
+        IPantsClock? clock = null)
     {
+        var effectiveClock = clock ?? SystemPantsClock.Instance;
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
         var holderId = $"{Environment.ProcessId}.{Guid.NewGuid():N}@{Environment.MachineName}";
-        using var leaseLock = AcquireMutationLock(lockPath, holderId);
+        using var leaseLock = AcquireMutationLock(lockPath, holderId, effectiveClock);
         var current = ReadRecord(leaderPath);
         if (current is not null)
         {
@@ -98,7 +104,7 @@ sealed class FileLease : IDisposable
                     "Midge leader timestamp is invalid; ownership is ambiguous.");
             }
 
-            var age = DateTimeOffset.UtcNow - acquiredAt;
+            var age = effectiveClock.UtcNow - acquiredAt;
             if (age < TimeSpan.Zero)
             {
                 throw new PantsLeaseIndeterminateException(
@@ -120,14 +126,22 @@ sealed class FileLease : IDisposable
         }
 
         var epoch = previousEpoch + 1;
-        WriteRecord(leaderPath, new LeaseRecord(epoch, holderId, DateTimeOffset.UtcNow.ToString("O")));
+        WriteRecord(
+            leaderPath,
+            new LeaseRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O")));
         var published = ReadRecord(leaderPath);
         if (published?.Epoch != epoch || published.HolderId != holderId)
         {
             throw new PantsLeaseHeldException("Lost the Midge leader publication race.");
         }
 
-        return new FileLease(root, holderId, epoch, leaseLossCallback, heartbeatInterval);
+        return new FileLease(
+            root,
+            holderId,
+            epoch,
+            leaseLossCallback,
+            heartbeatInterval,
+            effectiveClock);
     }
 
     public void EnsureValid()
@@ -182,7 +196,7 @@ sealed class FileLease : IDisposable
 
             try
             {
-                using var leaseLock = AcquireMutationLock(_lockPath, _holderId);
+                using var leaseLock = AcquireMutationLock(_lockPath, _holderId, _clock);
                 var current = ReadRecord(_leaderPath);
                 if (current?.Epoch != Epoch || current.HolderId != _holderId)
                 {
@@ -193,7 +207,7 @@ sealed class FileLease : IDisposable
                 {
                     WriteRecord(
                         _leaderPath,
-                        current with { AcquiredAt = DateTimeOffset.UtcNow.ToString("O") });
+                        current with { AcquiredAt = _clock.UtcNow.ToString("O") });
                     RenewWriteInterferenceHookForTesting?.Invoke();
                     var published = ReadRecord(_leaderPath);
                     if (published?.Epoch != Epoch || published.HolderId != _holderId)
@@ -234,6 +248,7 @@ sealed class FileLease : IDisposable
     static LeaseMutationLock AcquireMutationLock(
         string path,
         string holderId,
+        IPantsClock clock,
         Action? disposalInterferenceHook = null)
     {
         try
@@ -242,7 +257,7 @@ sealed class FileLease : IDisposable
             var ownerToken = Guid.NewGuid().ToString("N");
             using var writer = new StreamWriter(stream, leaveOpen: true);
             writer.Write(
-                $"holder_id={holderId}\nowner_token={ownerToken}\ncreated_at={DateTimeOffset.UtcNow:O}\n");
+                $"holder_id={holderId}\nowner_token={ownerToken}\ncreated_at={clock.UtcNow:O}\n");
             writer.Flush();
             stream.Flush(true);
             return new LeaseMutationLock(stream, path, ownerToken, disposalInterferenceHook);

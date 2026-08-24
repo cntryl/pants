@@ -4,6 +4,41 @@ public sealed class FileLeaseTests
 {
     static readonly TimeSpan LongHeartbeatInterval = TimeSpan.FromHours(1);
 
+    [Fact]
+    public async Task ShouldUseInjectedClockForTakeoverAgeWithoutWallClockDelay()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            5,
+            "previous-writer",
+            clock.UtcNow - TimeSpan.FromSeconds(59));
+
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock));
+
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            5,
+            "previous-writer",
+            clock.UtcNow - TimeSpan.FromSeconds(60));
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock);
+
+        Assert.Equal(6UL, lease.Epoch);
+    }
+
     // ----- Issue #39: PantsOpenOptions.MinimumEpoch floor plumbed through to a local open -----
 
     [Fact]

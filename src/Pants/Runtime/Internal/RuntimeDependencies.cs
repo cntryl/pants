@@ -9,7 +9,8 @@ sealed class RuntimeDependencies
         HttpClient? cloudHttpClient = null,
         VerificationBarrierResponseDelegate? verificationBarrierResponse = null,
         TimeProvider? runtimeTimeProvider = null,
-        Action<StartupPhaseMeasurement>? startupPhaseMeasurement = null)
+        Action<StartupPhaseMeasurement>? startupPhaseMeasurement = null,
+        IPantsClock? leaseClock = null)
     {
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Cntryl.Pants.Storage.Internal.StorageVerifier.VerifyPathAsync;
@@ -17,6 +18,7 @@ sealed class RuntimeDependencies
         CloudHttpClient = cloudHttpClient;
         VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;
         RuntimeTimeProvider = runtimeTimeProvider ?? TimeProvider.System;
+        LeaseClock = leaseClock ?? SystemPantsClock.Instance;
         StartupPhases = new StartupPhaseRecorder(startupPhaseMeasurement);
         if (LeaseHeartbeatInterval <= TimeSpan.Zero)
         {
@@ -37,6 +39,8 @@ sealed class RuntimeDependencies
     public VerificationBarrierResponseDelegate VerificationBarrierResponse { get; }
 
     public TimeProvider RuntimeTimeProvider { get; }
+
+    public IPantsClock LeaseClock { get; }
 
     public StartupPhaseRecorder StartupPhases { get; }
 
