@@ -41,16 +41,16 @@ static class CommitValidator
         payload.Operations.ForEach(operation =>
         {
             ValidateActiveFamily(state, operation.Family);
-            if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
-            {
-                ValidateWriteConflict(state, payload, operation);
-            }
-
             if (operation.Kind == CommitOperationKind.Put &&
                 operation.InsertOnly &&
                 ResolvePriorExists(state, payload, operation, now))
             {
                 throw PantsException.InvalidArgument("Insert requires an absent key.");
+            }
+
+            if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
+            {
+                ValidateWriteConflict(state, payload, operation);
             }
         });
     }
@@ -100,6 +100,12 @@ static class CommitValidator
                 }
 
                 break;
+            case CommitOperationKind.DeleteRange:
+                throw new PantsInternalException(
+                    "A range-delete operation requires an exclusive end key.");
+            default:
+                throw new PantsInternalException(
+                    $"Unsupported commit operation kind '{operation.Kind}'.");
         }
     }
 

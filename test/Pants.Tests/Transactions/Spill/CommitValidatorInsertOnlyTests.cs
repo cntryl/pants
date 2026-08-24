@@ -154,6 +154,27 @@ public sealed class CommitValidatorInsertOnlyTests
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
     }
 
+    [Fact]
+    public void ShouldFailClosedGivenRangeDeleteHasNoExclusiveEnd()
+    {
+        var state = CreateState();
+        var malformed = new TransactionIntentOperation(
+            0,
+            CommitOperationKind.DeleteRange,
+            Family,
+            "start"u8.ToArray(),
+            null,
+            null,
+            null,
+            null,
+            false);
+        var source = CreateSource(malformed);
+
+        Assert.Throws<PantsInternalException>(() => CommitValidator.Validate(
+            state,
+            CreatePayload(state, source, PantsConflictPolicy.AbortOnWriteConflict)));
+    }
+
     static RuntimeState CreateState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
 
