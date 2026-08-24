@@ -85,7 +85,9 @@ sealed class TrieIndex
 
                 var firstByte = bytes[cursor++];
                 var childIndex = ReadUInt32(bytes, ref cursor, "child index");
-                node.AddChild(new TrieEdge(firstByte, childIndex));
+                // Preserve the serialized order so ValidateGraph can reject
+                // duplicate or unsorted edges instead of normalizing corrupt input.
+                node.Children.Add(new TrieEdge(firstByte, childIndex));
             }
 
             nodes[index] = node;
