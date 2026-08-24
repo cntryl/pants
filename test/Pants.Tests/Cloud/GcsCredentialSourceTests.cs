@@ -121,6 +121,38 @@ public sealed class GcsCredentialSourceTests
     }
 
     [Fact]
+    public async Task ShouldRouteMetadataCredentialsThroughIndependentClient()
+    {
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GCE_METADATA_HOST"] = "metadata.example.test"
+        });
+        using var storageHandler = new CredentialHttpHandler(static (_, _) => GcsObjectResponse());
+        using var credentialHandler = new CredentialHttpHandler(static (_, _) =>
+            GcsTokenResponse("metadata-token", 3600));
+        using var storageClient = new HttpClient(storageHandler);
+        using var credentialClient = new HttpClient(credentialHandler);
+        var store = new GcsObjectStore(
+            new PantsCloudProviderConfiguration.Gcs(
+                "bucket",
+                "project",
+                new Uri("https://gcs.example.test"),
+                PantsGcsApiStyle.Json,
+                new PantsGcsCredentialSource.MetadataServer()),
+            string.Empty,
+            storageClient,
+            TimeSpan.FromSeconds(5),
+            credentialClient);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+
+        Assert.Single(credentialHandler.Requests);
+        Assert.Equal("metadata.example.test", credentialHandler.Requests[0].Uri.Host);
+        Assert.Single(storageHandler.Requests);
+        Assert.Equal("gcs.example.test", storageHandler.Requests[0].Uri.Host);
+    }
+
+    [Fact]
     public async Task ShouldExchangeFileSourcedExternalAccountCredentialFromAdc()
     {
         using var directory = new TemporaryDirectory();
