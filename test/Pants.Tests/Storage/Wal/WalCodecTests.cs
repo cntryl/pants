@@ -26,6 +26,29 @@ public sealed class WalCodecTests
             "A TxnBatch record must never carry the COMPRESSION tag.");
     }
 
+    [Theory]
+    [InlineData((byte)CompressionAlgorithm.None)]
+    [InlineData((byte)CompressionAlgorithm.Lz4)]
+    [InlineData((byte)CompressionAlgorithm.Zstd3)]
+    [InlineData((byte)CompressionAlgorithm.Zstd9)]
+    public void ShouldRejectTransactionBatchGivenCompressionTagIsPresent(byte compression)
+    {
+        var encoded = WalCodec.EncodeTransactionBatch(
+            7,
+            11,
+            9,
+            [new WalMutation(1, WalOperation.Put, "key"u8.ToArray(), "value"u8.ToArray(), 0, null, null)]);
+        using var payload = new MemoryStream();
+        payload.Write(encoded);
+        WriteTlv(payload, 9, [compression]);
+
+        var exception = Assert.Throws<StorageException>(() =>
+            WalCodec.DecodeRecord(payload.ToArray()));
+
+        Assert.Contains("COMPRESSION", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("TxnBatch", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ShouldRejectDeleteMutationGivenValueIsPresent()
     {
