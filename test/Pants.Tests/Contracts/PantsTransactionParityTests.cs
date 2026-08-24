@@ -243,9 +243,11 @@ public sealed class PantsTransactionParityTests
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
         exhausted.Put("resident"u8.ToArray(), Enumerable.Repeat((byte)'r', 400).ToArray());
-        var limit = Assert.Throws<PantsResourceLimitException>(() =>
-            exhausted.AssertValue("asserted"u8.ToArray(), assertedValue));
-        Assert.Equal(PantsErrorCode.ResourceLimit, limit.Code);
+        exhausted.AssertValue("asserted"u8.ToArray(), assertedValue);
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+        await exhausted.CommitAsync(PantsWriteOptions.Sync);
+        Assert.False(Directory.Exists(Path.Combine(directory.Path, "txn")));
+        Assert.NotNull(await ReadAsync(database, "resident"));
     }
 
     [Fact]

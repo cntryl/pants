@@ -72,6 +72,8 @@ public sealed class PantsTransactionSpillTests
         await using var transaction = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadWrite);
+        var instance = Assert.IsType<DatabaseInstance>(database);
+        var baselineBytes = instance.TransactionMemoryPool.Used;
         var value = new byte[900];
         transaction.Put("first"u8.ToArray(), value);
         transaction.Put("second"u8.ToArray(), value);
@@ -82,11 +84,29 @@ public sealed class PantsTransactionSpillTests
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Equal(PantsErrorCode.Io, error.Code);
+        Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
         await using var reader = await database.BeginTransactionAsync(
             database.DefaultColumnFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("first"u8.ToArray()));
         Assert.Null(await reader.GetAsync("second"u8.ToArray()));
+    }
+
+    [Fact]
+    public async Task ShouldSpillResidentIntentsToAdmitAssertion()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put("key"u8.ToArray(), new byte[900]);
+
+        transaction.AssertValue("asserted"u8.ToArray(), new byte[100]);
+
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+        await transaction.RollbackAsync();
     }
 
     [Fact]

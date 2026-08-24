@@ -516,10 +516,7 @@ sealed class TransactionInstance : IPantsTransaction
 
         if (_intentLog.Count != 0)
         {
-            _spillStore.WriteRun(_intentLog);
-            _intentLog.Clear();
-            _database.TransactionMemoryPool.Release(_residentIntentBytes);
-            _residentIntentBytes = 0;
+            SpillResidentIntents();
         }
 
         if (_database.TransactionMemoryPool.TryReserve(bytes))
@@ -537,6 +534,17 @@ sealed class TransactionInstance : IPantsTransaction
 
     void ReserveAssertion(long bytes)
     {
+        if (_database.TransactionMemoryPool.TryReserve(bytes))
+        {
+            _assertionBytes = checked(_assertionBytes + bytes);
+            return;
+        }
+
+        if (_spillStore is not null && _intentLog.Count != 0)
+        {
+            SpillResidentIntents();
+        }
+
         if (!_database.TransactionMemoryPool.TryReserve(bytes))
         {
             throw PantsException.Create(
@@ -545,6 +553,16 @@ sealed class TransactionInstance : IPantsTransaction
         }
 
         _assertionBytes = checked(_assertionBytes + bytes);
+    }
+
+    void SpillResidentIntents()
+    {
+        var spillStore = _spillStore ??
+                         throw new PantsInternalException("A transaction spill store is unavailable.");
+        spillStore.WriteRun(_intentLog);
+        _intentLog.Clear();
+        _database.TransactionMemoryPool.Release(_residentIntentBytes);
+        _residentIntentBytes = 0;
     }
 
     void Finish()
