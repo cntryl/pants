@@ -477,10 +477,11 @@ sealed class LocalDiskStore : IDisposable
         foreach (var candidate in candidates)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            var reader = _readerCache.GetOrAdd(
+            using var readerLease = _readerCache.GetOrAdd(
                 candidate.Name,
                 path,
                 out var readerCacheHit);
+            var reader = readerLease.Reader;
             if (readerCacheHit)
             {
                 readerCacheHits++;
