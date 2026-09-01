@@ -10,9 +10,11 @@ sealed class CloudLeaseCoordinator : IDisposable
     readonly Action? _leaseLossCallback;
     readonly string _ownerToken = Guid.NewGuid().ToString("N");
     readonly ICloudLeaseStore _store;
+    int _activeOperations;
     int _disposed;
     ulong _epoch;
     long _expiresAtUtcTicks;
+    int _gateDisposed;
     long _latestObservedUtcTicks;
     int _lost;
 
@@ -70,14 +72,16 @@ sealed class CloudLeaseCoordinator : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             Volatile.Write(ref _lost, 1);
-            _gate.Dispose();
+            if (Volatile.Read(ref _activeOperations) == 0)
+            {
+                DisposeGate();
+            }
         }
     }
 
     public async ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (Volatile.Read(ref _lost) != 0)
@@ -139,14 +143,13 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
         finally
         {
-            _gate.Release();
+            ExitGate();
         }
     }
 
     public async ValueTask RenewAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureValid();
@@ -175,7 +178,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                     throw new PantsFencedException("The cloud primary lease renewal was fenced.");
                 }
             }
-            catch (PantsLeaseIndeterminateException error)
+            catch (PantsException error) when (
+                error is PantsLeaseIndeterminateException or PantsTimeoutException or PantsIOException)
             {
                 confirmed = await ConfirmIndeterminateRenewalAsync(
                     proposed,
@@ -204,7 +208,7 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
         finally
         {
-            _gate.Release();
+            ExitGate();
         }
     }
 
@@ -219,8 +223,7 @@ sealed class CloudLeaseCoordinator : IDisposable
 
     public async ValueTask ReleaseAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (Volatile.Read(ref _lost) != 0 || Epoch == 0)
@@ -245,14 +248,18 @@ sealed class CloudLeaseCoordinator : IDisposable
                     ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
                 },
                 cancellationToken).ConfigureAwait(false);
-            if (!released)
+            if (released)
+            {
+                Volatile.Write(ref _lost, 1);
+            }
+            else
             {
                 LoseLease();
             }
         }
         finally
         {
-            _gate.Release();
+            ExitGate();
         }
     }
 
@@ -271,7 +278,7 @@ sealed class CloudLeaseCoordinator : IDisposable
 
     async ValueTask<CloudLeaseSnapshot> ConfirmIndeterminateRenewalAsync(
         CloudLeaseRecord proposed,
-        PantsLeaseIndeterminateException writeError,
+        PantsException writeError,
         CancellationToken cancellationToken)
     {
         CloudLeaseSnapshot? current;
@@ -373,6 +380,56 @@ sealed class CloudLeaseCoordinator : IDisposable
         if (Interlocked.Exchange(ref _lost, 1) == 0)
         {
             _leaseLossCallback?.Invoke();
+        }
+    }
+
+    void BeginOperation()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        Interlocked.Increment(ref _activeOperations);
+        if (Volatile.Read(ref _disposed) == 0)
+        {
+            return;
+        }
+
+        EndOperation();
+        throw new ObjectDisposedException(GetType().FullName);
+    }
+
+    async ValueTask EnterGateAsync(CancellationToken cancellationToken)
+    {
+        BeginOperation();
+        try
+        {
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            EndOperation();
+            throw;
+        }
+    }
+
+    void ExitGate()
+    {
+        _gate.Release();
+        EndOperation();
+    }
+
+    void EndOperation()
+    {
+        if (Interlocked.Decrement(ref _activeOperations) == 0 &&
+            Volatile.Read(ref _disposed) != 0)
+        {
+            DisposeGate();
+        }
+    }
+
+    void DisposeGate()
+    {
+        if (Interlocked.Exchange(ref _gateDisposed, 1) == 0)
+        {
+            _gate.Dispose();
         }
     }
 }

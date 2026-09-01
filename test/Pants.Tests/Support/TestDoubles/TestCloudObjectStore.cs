@@ -14,6 +14,13 @@ sealed class TestCloudObjectStore : ICloudObjectStore
 
     public Func<CancellationToken, ValueTask>? BeforeNextPutAsync { get; set; }
 
+    public void Seed(string objectKey, ReadOnlyMemory<byte> data)
+    {
+        _objectKey = objectKey;
+        Data = data.ToArray();
+        _version = Guid.NewGuid().ToString("N");
+    }
+
     public ValueTask<CloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken)

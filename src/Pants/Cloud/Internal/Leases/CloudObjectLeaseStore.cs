@@ -7,6 +7,8 @@ sealed class CloudObjectLeaseStore(
     ICloudObjectStore objectStore,
     string objectKey) : ICloudLeaseStore
 {
+    static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
     readonly string _objectKey = string.IsNullOrWhiteSpace(objectKey)
         ? throw new ArgumentException("A lease object key is required.", nameof(objectKey))
         : objectKey;
@@ -56,7 +58,18 @@ sealed class CloudObjectLeaseStore(
 
     static CloudLeaseRecord Parse(ReadOnlySpan<byte> bytes)
     {
-        var text = Encoding.UTF8.GetString(bytes);
+        string text;
+        try
+        {
+            text = StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new PantsCorruptionException(
+                "The cloud primary lease document is not valid UTF-8.",
+                exception);
+        }
+
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
