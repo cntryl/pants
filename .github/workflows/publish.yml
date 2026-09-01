@@ -19,7 +19,12 @@ jobs:
       - name: Require main
         env:
           REF: ${{ github.ref }}
-        run: test "$REF" = refs/heads/main
+        shell: bash
+        run: |
+          if [[ "$REF" != refs/heads/main ]]; then
+            echo "::error title=Invalid release ref::Publish must run from refs/heads/main; got $REF"
+            exit 1
+          fi
 
   version:
     needs: authorize
@@ -121,7 +126,11 @@ jobs:
         run: |
           tag="v${PACKAGE_VERSION}"
           if git show-ref --tags --verify --quiet "refs/tags/$tag"; then
-            test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
+            tag_commit="$(git rev-list -n 1 "$tag")"
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error title=Tag conflict::$tag points to $tag_commit; expected $GITHUB_SHA"
+              exit 1
+            fi
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
             git tag "$tag" "$GITHUB_SHA"
