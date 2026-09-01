@@ -10,7 +10,8 @@ sealed class RuntimeDependencies
         VerificationBarrierResponseDelegate? verificationBarrierResponse = null,
         TimeProvider? runtimeTimeProvider = null,
         Action<StartupPhaseMeasurement>? startupPhaseMeasurement = null,
-        IPantsClock? leaseClock = null)
+        IPantsClock? leaseClock = null,
+        long? hybridLocalStorageBudgetBytes = null)
     {
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Cntryl.Pants.Storage.Internal.StorageVerifier.VerifyPathAsync;
@@ -19,12 +20,20 @@ sealed class RuntimeDependencies
         VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;
         RuntimeTimeProvider = runtimeTimeProvider ?? TimeProvider.System;
         LeaseClock = leaseClock ?? SystemPantsClock.Instance;
+        HybridLocalStorageBudgetBytes = hybridLocalStorageBudgetBytes;
         StartupPhases = new StartupPhaseRecorder(startupPhaseMeasurement);
         if (LeaseHeartbeatInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(leaseHeartbeatInterval),
                 "The lease heartbeat interval must be greater than zero.");
+        }
+
+        if (HybridLocalStorageBudgetBytes is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(hybridLocalStorageBudgetBytes),
+                "The hybrid local storage budget must be greater than zero.");
         }
     }
 
@@ -41,6 +50,8 @@ sealed class RuntimeDependencies
     public TimeProvider RuntimeTimeProvider { get; }
 
     public IPantsClock LeaseClock { get; }
+
+    public long? HybridLocalStorageBudgetBytes { get; }
 
     public StartupPhaseRecorder StartupPhases { get; }
 

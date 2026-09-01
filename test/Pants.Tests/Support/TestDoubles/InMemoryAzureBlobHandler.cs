@@ -16,6 +16,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     bool _acknowledgeSstWritesWithoutPersisting;
     bool _acknowledgeWalCatalogWritesWithoutPersisting;
     bool _acknowledgeWalWritesWithoutPersisting;
+    int _acknowledgeNextSstWriteWithoutPersisting;
     bool _failMetadataWrites;
     bool _failSstDeletes;
     bool _failSstList;
@@ -59,6 +60,9 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         get => Volatile.Read(ref _acknowledgeMetadataWritesWithoutPersisting);
         set => Volatile.Write(ref _acknowledgeMetadataWritesWithoutPersisting, value);
     }
+
+    public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
+        Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
 
     public bool FailSstList
     {
@@ -168,6 +172,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
              (AcknowledgeSstWritesWithoutPersisting &&
               key.Contains("/sst/", StringComparison.Ordinal) &&
               key.EndsWith(".sst", StringComparison.Ordinal)) ||
+             ShouldAcknowledgeNextMissingSstWrite(key) ||
              (AcknowledgeMetadataWritesWithoutPersisting &&
               key.Contains("/metadata/", StringComparison.Ordinal) &&
               !key.EndsWith("/metadata/ddl.registry.json", StringComparison.Ordinal))))
@@ -247,6 +252,22 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             var next = (bytes, exists ? current.Version + 1 : 1);
             _objects[key] = next;
             return CreateResponse(HttpStatusCode.Created, next);
+        }
+    }
+
+    bool ShouldAcknowledgeNextMissingSstWrite(string key)
+    {
+        if (Volatile.Read(ref _acknowledgeNextSstWriteWithoutPersisting) == 0 ||
+            !key.Contains("/sst/", StringComparison.Ordinal) ||
+            !key.EndsWith(".sst", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return !_objects.ContainsKey(key) &&
+                   Interlocked.Exchange(ref _acknowledgeNextSstWriteWithoutPersisting, 0) == 1;
         }
     }
 

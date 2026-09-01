@@ -337,8 +337,18 @@ sealed class LocalDiskStore : IDisposable
             .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
             .Select(file => new HybridLocalSst(
                 file.Name,
-                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
+                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length,
+                file.SmallestSequence))
             .ToArray();
+
+    public ReadOnlyMemory<byte>? ReadLocalSstForEviction(string name)
+    {
+        _ = GetManifestSst(name);
+        var path = Path.Combine(_sstDirectory, name);
+        return File.Exists(path)
+            ? PositionalFile.ReadAllBytes(path)
+            : null;
+    }
 
     public IReadOnlyList<string> GetPointReadSstNames(
         ColumnFamilyIdentity columnFamily,

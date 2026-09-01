@@ -301,6 +301,7 @@ sealed class Actor : IAsyncDisposable
                     HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                     _failpoints),
                 PantsStorageConfiguration.Cloud => new HybridCacheManager(
+                    dependencies.HybridLocalStorageBudgetBytes ??
                     HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                     _failpoints),
                 _ => null
@@ -545,6 +546,7 @@ sealed class Actor : IAsyncDisposable
 
         CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
         CaptureCleanup(() => _cloudLease?.Dispose());
+        CaptureCleanup(() => _hybridCache?.Dispose());
         CaptureCleanup(() => _diskStore?.Dispose());
         CaptureCleanup(_loopCancellation.Dispose);
 
@@ -852,6 +854,7 @@ sealed class Actor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 var snapshotId = checked(++state.TransactionCounter);
+                _hybridCache?.RegisterSnapshot(snapshotId, snapshot.Sequence);
                 state.ActiveScanSnapshots[snapshotId] = new ScanSnapshotPin(
                     snapshotId,
                     snapshot.Sequence,
@@ -871,6 +874,7 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
+                    _hybridCache?.UnregisterSnapshot(snapshotId);
                     _telemetry.RecordSnapshotUnregister();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
                         .ConfigureAwait(false);
@@ -902,6 +906,7 @@ sealed class Actor : IAsyncDisposable
                     snapshot,
                     state.Clock.UtcNow,
                     _diskStore?.RootPath);
+                _hybridCache?.RegisterSnapshot(transactionId, snapshot.Sequence);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
@@ -949,6 +954,7 @@ sealed class Actor : IAsyncDisposable
                 startedAt,
                 null,
                 false);
+            _hybridCache?.RegisterSnapshot(transactionId, version.Sequence);
             if (!_state.DirectReadOnlyTransactions.TryAdd(
                     transactionId,
                     new TransactionInfo(
@@ -958,6 +964,7 @@ sealed class Actor : IAsyncDisposable
                         startedAt,
                         version)))
             {
+                _hybridCache?.UnregisterSnapshot(transactionId);
                 throw new PantsInternalException("A direct read-only transaction identifier collided.");
             }
 
@@ -979,6 +986,7 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
+        _hybridCache?.UnregisterSnapshot(transactionId);
         _telemetry.RecordSnapshotUnregister();
         if (committed)
         {
@@ -1043,6 +1051,7 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveTransactions.Remove(transactionId))
                 {
+                    _hybridCache?.UnregisterSnapshot(transactionId);
                     _telemetry.RecordSnapshotUnregister();
                     _telemetry.RecordTransactionRollback();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
@@ -2452,6 +2461,7 @@ sealed class Actor : IAsyncDisposable
                 $"Transaction {payload.TransactionId} is not active.");
         }
 
+        _hybridCache?.UnregisterSnapshot(payload.TransactionId);
         _telemetry.RecordSnapshotUnregister();
         if (_diskStore is not null)
         {
@@ -2467,7 +2477,9 @@ sealed class Actor : IAsyncDisposable
                     storageChanged = _diskStore.CollectObsoleteFiles(state))
                 .ConfigureAwait(false);
             var requiresCloudMaintenance = _cloudPersistence is not null &&
-                                           (storageChanged || _cloudPersistence.HasPersistenceAnomaly);
+                                           (storageChanged ||
+                                            _cloudPersistence.HasPersistenceAnomaly ||
+                                            _hybridCache?.RequiresEviction(_diskStore) == true);
             if (durability == PantsDurability.CloudAsync)
             {
                 if (requiresCloudMaintenance)
@@ -2519,6 +2531,7 @@ sealed class Actor : IAsyncDisposable
     {
         if (state.ActiveTransactions.Remove(payload.TransactionId))
         {
+            _hybridCache?.UnregisterSnapshot(payload.TransactionId);
             _telemetry.RecordSnapshotUnregister();
         }
     }
@@ -3788,13 +3801,6 @@ sealed class Actor : IAsyncDisposable
         await _cloudWorker.ExecuteAsync(MirrorCloudStorageWithFailureTrackingAsync)
             .ConfigureAwait(false);
         ApplyPendingPersistenceAnomaly(_state);
-
-        if (_hybridCache is not null && _diskStore is not null)
-        {
-            _hybridCache.EvictIfNeeded(
-                _diskStore,
-                _state.ActiveSnapshotCount != 0);
-        }
     }
 
     async ValueTask MirrorCloudStorageCoreAsync(CancellationToken cancellationToken)
@@ -3829,6 +3835,16 @@ sealed class Actor : IAsyncDisposable
         try
         {
             await MirrorCloudStorageCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (_hybridCache is not null &&
+                _diskStore is not null &&
+                _cloudPersistence is { HasPersistenceAnomaly: false } persistence)
+            {
+                await _hybridCache.EvictIfNeededAsync(
+                        _diskStore,
+                        persistence.FetchSstAsync,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {

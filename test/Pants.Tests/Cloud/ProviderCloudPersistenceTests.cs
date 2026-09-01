@@ -800,6 +800,58 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldRetainProviderSstUntilCloudReadbackConfirmsDurability()
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var dependencies = new RuntimeDependencies(
+            cloudHttpClient: client,
+            hybridLocalStorageBudgetBytes: 512 * 1024);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
+                .WithBackgroundCompaction(false),
+            dependencies);
+        var firstValue = new byte[128 * 1024];
+        new Random(71).NextBytes(firstValue);
+        await using (var transaction = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("provider-hybrid-first"u8.ToArray(), firstValue);
+            await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+        var secondValue = new byte[512 * 1024];
+        new Random(73).NextBytes(secondValue);
+        await using (var transaction = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("provider-hybrid-second"u8.ToArray(), secondValue);
+            await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+
+        handler.AcknowledgeNextMissingSstWriteWithoutPersisting();
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        Assert.Equal(2, Directory.EnumerateFiles(
+            Path.Combine(cache.Path, "sst"),
+            "*.sst",
+            SearchOption.TopDirectoryOnly).Count());
+        Assert.Single(handler.GetObjectPaths("/sst/"));
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        Assert.Empty(Directory.EnumerateFiles(
+            Path.Combine(cache.Path, "sst"),
+            "*.sst",
+            SearchOption.TopDirectoryOnly));
+        Assert.Equal(2, handler.GetObjectPaths("/sst/").Length);
+    }
+
+    [Fact]
     public async Task ShouldRejectMetadataRegressionGivenRemoteManifestAheadOfLocalCache()
     {
         using var cache = new TemporaryDirectory();
