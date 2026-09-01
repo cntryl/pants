@@ -198,6 +198,30 @@ using Microsoft.Extensions.DependencyInjection;
 services.AddPants(PantsOpenOptions.Local("data/catalog"));
 ```
 
+Host-based applications can bind and validate settings through the standard options pattern:
+
+```csharp
+services.AddPants().BindConfiguration("Pants");
+```
+
+```json
+{
+  "Pants": {
+    "Storage": {
+      "Kind": "Local",
+      "Path": "data/catalog"
+    },
+    "PerformanceGoal": "Latency",
+    "WorkloadProfile": "ReadMostly"
+  }
+}
+```
+
+Bound settings are validated when the host starts and projected once into immutable
+`PantsOpenOptions` when the database first opens. Use `AddKeyedPants("name")` for named options and
+multiple independent databases. See [dependency injection configuration](docs/dependency-injection.md)
+for the complete storage, cloud-provider, and credential shapes.
+
 Resolve `IPantsDatabaseProvider` and open the shared database when it is first needed:
 
 ```csharp
@@ -209,8 +233,7 @@ public sealed class CatalogStore(IPantsDatabaseProvider databaseProvider)
 }
 ```
 
-The service provider owns the database and closes it during asynchronous disposal. Use
-`AddKeyedPants` when an application needs multiple independent databases.
+The service provider owns the database and closes it during asynchronous disposal.
 
 ## Cloud-backed storage
 

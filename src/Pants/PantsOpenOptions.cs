@@ -155,6 +155,48 @@ public sealed class PantsOpenOptions
             ValidateNonEmpty(bucket, nameof(bucket)),
             prefix ?? throw new ArgumentNullException(nameof(prefix)))));
 
+    internal static PantsOpenOptions FromSettings(
+        PantsStorageConfiguration storage,
+        PantsPerformanceGoal performanceGoal,
+        PantsMemoryBudget memoryBudget,
+        PantsWorkloadProfile workloadProfile,
+        PantsRecoveryPolicy recoveryPolicy,
+        PantsBlockCachePolicy blockCachePolicy,
+        PantsCloudWritePolicy? cloudWritePolicy,
+        TimeSpan storageTimeout,
+        TimeSpan shutdownTimeout,
+        bool backgroundCompaction,
+        long? memtableSizeLimitBytes,
+        long? memtableFlushThresholdBytes,
+        long? transactionMemoryPoolBytes,
+        int? walBufferSizeBytes,
+        TimeSpan leaseClockSkewTolerance,
+        PantsCompactionConfiguration? compaction,
+        ulong minimumEpoch)
+    {
+        ArgumentNullException.ThrowIfNull(storage);
+        var defaults = Configuration.Default(storage);
+        return new PantsOpenOptions(defaults with
+        {
+            PerformanceGoal = performanceGoal,
+            MemoryBudget = memoryBudget,
+            WorkloadProfile = workloadProfile,
+            RecoveryPolicy = recoveryPolicy,
+            BlockCachePolicy = blockCachePolicy,
+            CloudWritePolicy = cloudWritePolicy ?? defaults.CloudWritePolicy,
+            StorageTimeout = storageTimeout,
+            ShutdownTimeout = shutdownTimeout,
+            BackgroundCompaction = backgroundCompaction,
+            MemtableSizeLimitBytes = memtableSizeLimitBytes,
+            MemtableFlushThresholdBytes = memtableFlushThresholdBytes,
+            TransactionMemoryPoolBytes = transactionMemoryPoolBytes,
+            WalBufferSizeBytes = walBufferSizeBytes,
+            LeaseClockSkewTolerance = leaseClockSkewTolerance,
+            Compaction = compaction,
+            MinimumEpoch = minimumEpoch
+        });
+    }
+
     public PantsOpenOptions WithPerformanceGoal(PantsPerformanceGoal goal) =>
         With(_configuration with { PerformanceGoal = goal });
 
