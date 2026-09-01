@@ -232,6 +232,28 @@ public sealed class S3ObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldRejectS3ListKeyOutsideConfiguredPrefix()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                <ListBucketResult>
+                  <Contents><Key>database/sst/inside.sst</Key></Contents>
+                  <Contents><Key>foreign/sst/outside.sst</Key></Contents>
+                  <IsTruncated>false</IsTruncated>
+                </ListBucketResult>
+                """)
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, "database");
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() =>
+            store.ListAllAsync("sst/", CancellationToken.None).AsTask());
+
+        Assert.Contains("foreign/sst/outside.sst", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ShouldRejectRepeatedS3ListContinuationToken()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
