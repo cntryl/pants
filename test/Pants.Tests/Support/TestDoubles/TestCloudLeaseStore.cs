@@ -10,13 +10,19 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
 
     public Action? AfterNextReplace { get; set; }
 
+    public Func<CancellationToken, ValueTask>? BeforeNextCreateAsync { get; set; }
+
     public bool ApplyIndeterminateReplace { get; set; }
+
+    public bool ApplyReplaceBeforeException { get; set; }
 
     public Func<CancellationToken, ValueTask>? BeforeNextReplaceAsync { get; set; }
 
     public bool IndeterminateRead { get; set; }
 
     public bool IndeterminateReplace { get; set; }
+
+    public PantsException? NextReplaceException { get; set; }
 
     public CloudLeaseRecord? Lease { get; private set; }
 
@@ -42,19 +48,26 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
         return ValueTask.FromResult(snapshot);
     }
 
-    public ValueTask<bool> TryCreateAsync(
+    public async ValueTask<bool> TryCreateAsync(
         CloudLeaseRecord lease,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var beforeCreate = BeforeNextCreateAsync;
+        BeforeNextCreateAsync = null;
+        if (beforeCreate is not null)
+        {
+            await beforeCreate(cancellationToken).ConfigureAwait(false);
+        }
+
         if (Lease is not null)
         {
-            return ValueTask.FromResult(false);
+            return false;
         }
 
         Lease = lease;
         _version++;
-        return ValueTask.FromResult(true);
+        return true;
     }
 
     public async ValueTask<bool> TryReplaceAsync(
@@ -64,13 +77,6 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReplaceAttempts++;
-        if (!StringComparer.Ordinal.Equals(
-                expectedVersion,
-                _version.ToString(CultureInfo.InvariantCulture)))
-        {
-            return false;
-        }
-
         var beforeReplace = BeforeNextReplaceAsync;
         BeforeNextReplaceAsync = null;
         if (beforeReplace is not null)
@@ -78,9 +84,20 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
             await beforeReplace(cancellationToken).ConfigureAwait(false);
         }
 
+        if (!StringComparer.Ordinal.Equals(
+                expectedVersion,
+                _version.ToString(CultureInfo.InvariantCulture)))
+        {
+            return false;
+        }
+
         var indeterminate = IndeterminateReplace;
         IndeterminateReplace = false;
-        if (!indeterminate || ApplyIndeterminateReplace)
+        var replacementException = NextReplaceException;
+        NextReplaceException = null;
+        if ((!indeterminate && replacementException is null) ||
+            ApplyIndeterminateReplace ||
+            ApplyReplaceBeforeException)
         {
             Lease = lease;
             _version++;
@@ -89,6 +106,11 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
         var afterReplace = AfterNextReplace;
         AfterNextReplace = null;
         afterReplace?.Invoke();
+        if (replacementException is not null)
+        {
+            throw replacementException;
+        }
+
         if (indeterminate)
         {
             throw new PantsLeaseIndeterminateException(
@@ -96,5 +118,11 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
         }
 
         return true;
+    }
+
+    public void Seed(CloudLeaseRecord lease)
+    {
+        Lease = lease;
+        _version++;
     }
 }
