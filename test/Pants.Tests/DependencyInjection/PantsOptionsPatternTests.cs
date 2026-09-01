@@ -78,6 +78,22 @@ public sealed class PantsOptionsPatternTests
     }
 
     [Fact]
+    public void AddPantsRejectsFlushThresholdWithoutSizeLimitAtStartup()
+    {
+        var services = new ServiceCollection();
+        services.AddPants().Configure(options =>
+            options.MemtableFlushThresholdBytes = 8 * 1024 * 1024);
+        using var serviceProvider = services.BuildServiceProvider();
+
+        var exception = Assert.Throws<OptionsValidationException>(() =>
+            serviceProvider.GetRequiredService<IStartupValidator>().Validate());
+
+        Assert.Contains(
+            "A memtable flush threshold requires a memtable size limit.",
+            exception.Message);
+    }
+
+    [Fact]
     public async Task AddKeyedPantsUsesNamedOptionsForIndependentDatabases()
     {
         using var directory = new TemporaryDirectory();
