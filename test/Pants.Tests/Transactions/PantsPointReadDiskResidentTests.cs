@@ -45,6 +45,43 @@ public sealed class PantsPointReadDiskResidentTests
     }
 
     [Fact]
+    public async Task ShouldReadTheNewestVersionWhenOneKeysVersionsSpanSstBlocks()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await OpenAsync(directory.Path);
+        for (var version = 1; version <= 3; version++)
+        {
+            await PutAsync(database, "large-key", new string((char)('0' + version), 40 * 1_024));
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        Assert.Equal(new string('3', 40 * 1_024), await ReadAsync(database, "large-key"));
+    }
+
+    [Fact]
+    public async Task ShouldNotResurrectAnOlderValueWhenScanningDuplicateSstVersions()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await OpenAsync(directory.Path);
+        await PutAsync(database, "deleted", "old-value");
+        await DeleteAsync(database, "deleted");
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var scan = await transaction.ScanAsync(new PantsScanQuery());
+        var entries = new List<PantsEntry>();
+        await foreach (var entry in scan)
+        {
+            entries.Add(entry);
+        }
+
+        Assert.Empty(entries);
+    }
+
+    [Fact]
     public async Task ShouldPreferAnActiveMemtableWriteOverAnOlderFlushedSstValue()
     {
         using var directory = new TemporaryDirectory();

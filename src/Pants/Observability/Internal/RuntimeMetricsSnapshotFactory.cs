@@ -7,7 +7,8 @@ sealed class RuntimeMetricsSnapshotFactory(
     CompactionRuntimeService compactionWorker,
     CloudWalSealController? cloudWalSealController,
     CloudMemtableSegmentTracker? cloudMemtableSegments,
-    HybridCacheManager? hybridCache)
+    HybridCacheManager? hybridCache,
+    ResourceBudget scanMemoryBudget)
 {
     int _storageHealth = (int)PantsEngineHealth.Healthy;
 
@@ -58,6 +59,19 @@ sealed class RuntimeMetricsSnapshotFactory(
             ActiveMemtables = state.FamilyData.Count,
             ImmutableMemtables = state.ImmutableMemtableFlushes.Count,
             TotalMemtableBytes = MemtableWritePressure.GetTotalBytes(state),
+            ActiveMemtableBytes = state.ActiveMemtableBytes.Values.Sum(),
+            ImmutableMemtableBytes = state.ImmutableMemtableFlushes.Values
+                .Sum(static flush => flush.Frozen.SizeBytes),
+            BlockCacheUsedBytes = diskStore?.BlockCacheUsedBytes ?? 0,
+            BlockCacheCapacityBytes = diskStore?.BlockCacheCapacityBytes ?? 0,
+            CompactionBufferUsedBytes = compactionWorker.BufferBudget.Current,
+            CompactionBufferPeakBytes = compactionWorker.BufferBudget.Peak,
+            CompactionBufferCapacityBytes = compactionWorker.BufferBudget.Limit,
+            ScanBufferUsedBytes = scanMemoryBudget.Current,
+            ScanBufferPeakBytes = scanMemoryBudget.Peak,
+            ScanBufferCapacityBytes = scanMemoryBudget.Limit,
+            WalBytesWrittenTotal = diskStore?.WalBytesWrittenTotal ?? 0,
+            SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? 0,
             MemtableSizeLimitBytes = options.MemtableSizeLimitBytes,
             MemtableFlushThresholdBytes = options.MemtableFlushThresholdBytes,
             MaximumMemtableWalSegmentGap = checked((long)(
@@ -164,6 +178,16 @@ sealed class RuntimeMetricsSnapshotFactory(
                 Math.Max(0, activeCompactionRequests - activeCompactions)),
             CompactingSsts = compactionWorker.CompactingSsts,
             ActiveCompactions = activeCompactions,
+            BlockCacheUsedBytes = diskStore?.BlockCacheUsedBytes ?? snapshot.BlockCacheUsedBytes,
+            BlockCacheCapacityBytes = diskStore?.BlockCacheCapacityBytes ?? snapshot.BlockCacheCapacityBytes,
+            CompactionBufferUsedBytes = compactionWorker.BufferBudget.Current,
+            CompactionBufferPeakBytes = compactionWorker.BufferBudget.Peak,
+            CompactionBufferCapacityBytes = compactionWorker.BufferBudget.Limit,
+            ScanBufferUsedBytes = scanMemoryBudget.Current,
+            ScanBufferPeakBytes = scanMemoryBudget.Peak,
+            ScanBufferCapacityBytes = scanMemoryBudget.Limit,
+            WalBytesWrittenTotal = diskStore?.WalBytesWrittenTotal ?? snapshot.WalBytesWrittenTotal,
+            SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? snapshot.SstBytesWrittenTotal,
             WalCloudDurableSequence = walCloudDurableSequence,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             SalvageModeOpens = telemetry.SalvageModeOpens,

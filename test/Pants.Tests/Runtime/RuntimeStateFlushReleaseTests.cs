@@ -67,6 +67,33 @@ public sealed class RuntimeStateFlushReleaseTests
         Assert.True(state.FamilyData.ContainsKey(Family));
     }
 
+    [Fact]
+    public void ShouldReleaseRangeDeletedCellsAndTombstonesCoveredByTheFlush()
+    {
+        var state = NewState();
+        state.FamilyData[Family] = state.FamilyData[Family]
+            .SetItem(Key(1), new CellState(null, 3, null))
+            .SetItem(Key(2), new CellState([2], 4, null));
+        state.RangeTombstones[Family] =
+        [
+            new CommittedRangeTombstone(Key(0), Key(2), 3)
+        ];
+        var rangeDelete = new WalMutation(
+            Family.Id,
+            WalOperation.DeleteRange,
+            Key(0),
+            null,
+            3,
+            null,
+            Key(2));
+
+        state.ReleaseFlushedGeneration(Flush([rangeDelete]));
+
+        Assert.False(state.FamilyData[Family].ContainsKey(Key(1)));
+        Assert.True(state.FamilyData[Family].ContainsKey(Key(2)));
+        Assert.Empty(state.RangeTombstones[Family]);
+    }
+
     static RuntimeState NewState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
 

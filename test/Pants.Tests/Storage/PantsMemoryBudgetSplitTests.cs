@@ -31,6 +31,41 @@ public sealed class PantsMemoryBudgetSplitTests
         Assert.True(
             options.TransactionMemoryPoolBytes +
             options.CompactionMemoryPoolBytes +
+            options.ScanMemoryPoolBytes +
+            2 * options.MemtableSizeLimitBytes +
+            options.BlockCacheBytes <= budget);
+    }
+
+    [Fact]
+    public void ShouldReserveEnoughCompactionMemoryForDecodedBlocksUnderASubMebibyteBudget()
+    {
+        const long budget = 64L * 1024;
+        var options = PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+
+        Assert.True(options.CompactionMemoryPoolBytes > budget / 2);
+        Assert.True(
+            options.TransactionMemoryPoolBytes +
+            options.CompactionMemoryPoolBytes +
+            options.ScanMemoryPoolBytes +
+            2 * options.MemtableSizeLimitBytes +
+            options.BlockCacheBytes <= budget);
+    }
+
+    [Fact]
+    public void ShouldUseUnallocatedExplicitBudgetForCompactionInputAndOutputBuffers()
+    {
+        const long budget = 2L * 1024 * 1024;
+        var options = PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
+            .WithMemtableLimits(512 * 1024)
+            .WithTransactionMemoryPool(512 * 1024);
+
+        Assert.True(options.CompactionMemoryPoolBytes > 300 * 1024);
+        Assert.True(
+            options.TransactionMemoryPoolBytes +
+            options.CompactionMemoryPoolBytes +
+            options.ScanMemoryPoolBytes +
             2 * options.MemtableSizeLimitBytes +
             options.BlockCacheBytes <= budget);
     }
@@ -42,5 +77,7 @@ public sealed class PantsMemoryBudgetSplitTests
 
         Assert.True(options.CompactionMemoryPoolBytes > 0);
         Assert.True(options.CompactionMemoryPoolBytes <= 256L * 1024 * 1024);
+        Assert.True(options.ScanMemoryPoolBytes > 0);
+        Assert.True(options.ScanMemoryPoolBytes <= 128L * 1024 * 1024);
     }
 }

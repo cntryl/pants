@@ -6,16 +6,20 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 /// Lazily walks the data blocks of an open <see cref="SstReader"/> one block at a time,
 /// forward or reverse, decoding at most one block's entries at any moment. Used by scans
 /// (<see cref="PantsScanDirection"/>) and compaction so neither has to fully decode an SST
-/// up front the way <see cref="SstCodec.Decode"/> does.
+/// up front the way <see cref="SstCodec.Decode"/> does. When supplied, a shared
+/// <see cref="ResourceBudget"/> accounts for the current decoded block and releases it as the
+/// cursor advances or is disposed.
 /// </summary>
 sealed class SstBlockIterator : IDisposable
 {
     readonly SstReader _reader;
     readonly PantsScanDirection _direction;
+    readonly ResourceBudget? _resourceBudget;
     readonly byte[]? _startInclusive;
     readonly byte[]? _endExclusive;
     int _blockIndex;
     IReadOnlyList<SstEntry>? _blockEntries;
+    IDisposable? _blockReservation;
     int _positionInBlock;
     bool _started;
     bool _finished;
@@ -24,12 +28,14 @@ sealed class SstBlockIterator : IDisposable
         SstReader reader,
         PantsScanDirection direction,
         byte[]? startInclusive,
-        byte[]? endExclusive)
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget)
     {
         _reader = reader;
         _direction = direction;
         _startInclusive = startInclusive;
         _endExclusive = endExclusive;
+        _resourceBudget = resourceBudget;
     }
 
     /// <summary>Current entry. Valid only after <see cref="MoveNext"/> returns <c>true</c>.</summary>
@@ -42,7 +48,8 @@ sealed class SstBlockIterator : IDisposable
         SstReader reader,
         PantsScanDirection direction,
         byte[]? startInclusive = null,
-        byte[]? endExclusive = null)
+        byte[]? endExclusive = null,
+        ResourceBudget? resourceBudget = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         if (!Enum.IsDefined(direction))
@@ -50,7 +57,12 @@ sealed class SstBlockIterator : IDisposable
             throw new ArgumentOutOfRangeException(nameof(direction));
         }
 
-        return new SstBlockIterator(reader, direction, startInclusive, endExclusive);
+        return new SstBlockIterator(
+            reader,
+            direction,
+            startInclusive,
+            endExclusive,
+            resourceBudget);
     }
 
     public bool MoveNext()
@@ -147,9 +159,21 @@ sealed class SstBlockIterator : IDisposable
 
     void LoadBlock(int blockIndex)
     {
+        _blockEntries = null;
+        _blockReservation?.Dispose();
+        _blockReservation = null;
         var block = _reader.ReadDataBlock(blockIndex);
+        using var transientBlockReservation = _resourceBudget?.Reserve(block.Length);
+        var entries = SstCodec.DecodeDataBlock(block);
+        // The decompressed byte buffer above is temporary; this longer-lived reservation charges
+        // the decoded key/value arrays retained by _blockEntries. A compaction output reservation
+        // keeps charging entries that outlive this iterator block.
+        var accountedBytes = checked(entries.Sum(static entry =>
+            entry.Key.Length + (entry.Value?.Length ?? 0) + 32));
+        var reservation = _resourceBudget?.Reserve(accountedBytes);
+        _blockReservation = reservation;
         CurrentBlockBytes = block.Length;
-        _blockEntries = SstCodec.DecodeDataBlock(block);
+        _blockEntries = entries;
         _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : _blockEntries.Count - 1;
     }
 
@@ -158,6 +182,12 @@ sealed class SstBlockIterator : IDisposable
         if (_direction == PantsScanDirection.Forward)
         {
             blockIndex = _startInclusive is null ? 0 : Math.Max(0, FindFloorBlock(_startInclusive));
+            while (blockIndex > 0 &&
+                   _reader.GetFirstKey(blockIndex).AsSpan().SequenceEqual(_startInclusive))
+            {
+                blockIndex--;
+            }
+
             return true;
         }
 
@@ -196,9 +226,8 @@ sealed class SstBlockIterator : IDisposable
 
     public void Dispose()
     {
-        // The iterator does not own the SstReader (leased separately, e.g. via
-        // SstReaderCache) or any unmanaged resource of its own; Dispose exists for
-        // symmetry with other scan/compaction cursors and to allow a `using` at call
-        // sites without callers needing to know that today.
+        _blockEntries = null;
+        _blockReservation?.Dispose();
+        _blockReservation = null;
     }
 }

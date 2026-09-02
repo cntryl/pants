@@ -3,10 +3,13 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Compaction;
 sealed class CompactionRuntimeService(
     int capacity,
     LocalDiskStore? diskStore,
-    RuntimeTelemetry telemetry)
+    RuntimeTelemetry telemetry,
+    long memoryBudgetBytes)
     : ChannelRuntimeService<CompactionRuntimeRequest, CompactionResult>(capacity)
 {
     int _compactingSsts;
+
+    public ResourceBudget BufferBudget { get; } = new(memoryBudgetBytes);
 
     public int CompactingSsts => Volatile.Read(ref _compactingSsts);
 
@@ -41,6 +44,7 @@ sealed class CompactionRuntimeService(
                     request.OutputPublisher,
                     request.FlushMutableOperations,
                     telemetry.RecordCompaction,
+                    BufferBudget,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

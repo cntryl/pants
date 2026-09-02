@@ -52,6 +52,159 @@ public sealed class PantsTransactionConcurrencyTests
     }
 
     [Fact]
+    public async Task ShouldValidateAnAssertionAgainstAReleasedSstValue()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await PutAsync(database, "key", "v1");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using var transaction = await BeginWriteAsync(database);
+        transaction.AssertValue("key"u8.ToArray(), "v1"u8.ToArray());
+        transaction.Put("unrelated"u8.ToArray(), "value"u8.ToArray());
+
+        await transaction.CommitAsync(PantsWriteOptions.Buffered);
+
+        await using var read = await BeginReadAsync(database);
+        Assert.Equal("value", TestBytes.ToText((await read.GetAsync("unrelated"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
+    public async Task ShouldApplyStartSnapshotRangeTombstoneBeforeValidatingAReleasedSstValue()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await PutAsync(database, "key", "old");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using (var deleting = await BeginWriteAsync(database))
+        {
+            deleting.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
+            await deleting.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var transaction = await BeginWriteAsync(database);
+        transaction.AssertValue("key"u8.ToArray(), null);
+        transaction.Put("unrelated"u8.ToArray(), "value"u8.ToArray());
+
+        await transaction.CommitAsync(PantsWriteOptions.Buffered);
+
+        await using var read = await BeginReadAsync(database);
+        Assert.Null(await read.GetAsync("key"u8.ToArray()));
+        Assert.Equal("value", TestBytes.ToText((await read.GetAsync("unrelated"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
+    public async Task ShouldRejectARangeDeleteGivenAConcurrentPutWasFlushedAndReleased()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var stale = await BeginWriteAsync(database);
+        stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+        stale.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
+        await PutAsync(database, "key", "newer");
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
+            stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+
+        Assert.True(conflict.IsRangeConflict);
+    }
+
+    [Fact]
+    public async Task ShouldSkipReleasedSstsThatPredateARangeDeleteTransaction()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await PutAsync(database, "key", "old");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using var transaction = await BeginWriteAsync(database);
+        transaction.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+        transaction.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
+
+        var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        var original = await File.ReadAllBytesAsync(sstPath);
+        var corrupted = original.ToArray();
+        corrupted[sizeof(uint)] ^= 0xff;
+        await File.WriteAllBytesAsync(sstPath, corrupted);
+        try
+        {
+            await transaction.CommitAsync(PantsWriteOptions.Buffered);
+        }
+        finally
+        {
+            await File.WriteAllBytesAsync(sstPath, original);
+        }
+    }
+
+    [Fact]
+    public async Task ShouldRejectAPointWriteGivenAConcurrentPutWasFlushedAndReleased()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var stale = await BeginWriteAsync(database);
+        stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+        stale.Put("key"u8.ToArray(), "stale"u8.ToArray());
+        await PutAsync(database, "key", "newer");
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
+            stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+
+        Assert.False(conflict.IsRangeConflict);
+    }
+
+    [Fact]
+    public async Task ShouldRejectAnAssertionGivenAConcurrentRangeDeleteWasFlushedAndReleased()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var stale = await BeginWriteAsync(database);
+        stale.AssertValue("key"u8.ToArray(), null);
+        stale.Put("unrelated"u8.ToArray(), "stale"u8.ToArray());
+        await using (var newer = await BeginWriteAsync(database))
+        {
+            newer.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
+            await newer.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
+            stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+
+        Assert.False(conflict.IsRangeConflict);
+    }
+
+    [Fact]
+    public async Task ShouldAllowInsertWhenAnInMemoryTombstoneSupersedesAnOlderSstValue()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await PutAsync(database, "key", "old");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await using (var deleting = await BeginWriteAsync(database))
+        {
+            deleting.Delete("key"u8.ToArray());
+            await deleting.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using (var inserting = await BeginWriteAsync(database))
+        {
+            inserting.Insert("key"u8.ToArray(), "replacement"u8.ToArray());
+            await inserting.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var read = await BeginReadAsync(database);
+        Assert.Equal("replacement", TestBytes.ToText((await read.GetAsync("key"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldKeepPointAndScanReadsPinnedAcrossConcurrentCommit()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());

@@ -5,8 +5,9 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 /// does the same k-way merge across inputs, the same version-retention/tombstone-covers-entry/
 /// GC-eligibility filtering, and the same size-based output partitioning with per-partition
 /// range-tombstone clamping — but drives it entry-by-entry over one <see cref="SstBlockIterator"/>
-/// per input instead of materializing every input's decoded entries into one array first and
-/// then slicing it. Range tombstones remain a small, resident-per-file list (loaded eagerly by
+/// per input and yields each completed partition before building the next instead of
+/// materializing every input, merged result, and output partition concurrently. Range
+/// tombstones remain a small, resident-per-file list (loaded eagerly by
 /// <see cref="SstReader.Open"/>, same as elsewhere in this codebase) — only the entry stream is
 /// genuinely lazy. The retention/masking rules themselves are intentionally copied verbatim from
 /// <c>CompactionMerger</c>/<c>CompactionOutputPartitioner</c> rather than shared, so a change to
@@ -17,11 +18,14 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 static class StreamingCompactionMerger
 {
     const int EntryOverheadBytes = 32;
+    const int RangeTombstoneOverheadBytes = 24;
+    const long ReservationGranularityBytes = 64 * 1024;
 
-    public static IReadOnlyList<CompactionMergeResult> MergeAndPartition(
+    public static IEnumerable<CompactionMergeResult> MergeAndPartition(
         IReadOnlyList<SstReader> readers,
         CompactionPlan plan,
-        long targetSizeBytes)
+        long targetSizeBytes,
+        ResourceBudget? resourceBudget = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         var horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : (ulong?)null;
@@ -39,52 +43,161 @@ static class StreamingCompactionMerger
 
         if (readers.Count == 0)
         {
-            return retainedRanges.Length == 0
-                ? []
-                : CompactionOutputPartitioner.Partition(
-                    new CompactionMergeResult([], retainedRanges),
-                    targetSizeBytes);
-        }
-
-        var partitions = new List<CompactionMergeResult>();
-        var currentEntries = new List<SstEntry>();
-        long currentBytes = 0;
-        byte[]? regionStart = null;
-
-        foreach (var entry in MergeEntries(readers, horizon, plan.PointTombstoneGcEligible, droppedRanges))
-        {
-            var entryBytes = checked(entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes);
-            if (currentEntries.Count > 0 &&
-                currentBytes + entryBytes > targetSizeBytes &&
-                !ByteArrayComparer.Instance.Equals(currentEntries[^1].Key, entry.Key))
+            if (retainedRanges.Length > 0)
             {
-                partitions.Add(CreatePartition(currentEntries, retainedRanges, regionStart, entry.Key));
-                regionStart = entry.Key;
-                currentEntries = [];
-                currentBytes = 0;
+                foreach (var partition in CompactionOutputPartitioner.Partition(
+                             new CompactionMergeResult([], retainedRanges),
+                             targetSizeBytes))
+                {
+                    using var reservation = resourceBudget?.Reserve(
+                        EstimatePartitionBytes(partition));
+                    yield return partition;
+                }
             }
 
-            currentEntries.Add(entry);
-            currentBytes = checked(currentBytes + entryBytes);
+            yield break;
         }
 
-        if (currentEntries.Count > 0)
+        var effectiveTargetSizeBytes = resourceBudget is null
+            ? targetSizeBytes
+            : Math.Min(
+                targetSizeBytes,
+                Math.Max(1, resourceBudget.Limit / 2));
+        var currentEntries = new List<SstEntry>();
+        var reservations = new List<IDisposable>();
+        long reservedBytes = 0;
+        long currentBytes = 0;
+        byte[]? regionStart = null;
+        try
         {
-            partitions.Add(CreatePartition(currentEntries, retainedRanges, regionStart, null));
+            foreach (var entry in MergeEntries(
+                         readers,
+                         horizon,
+                         plan.PointTombstoneGcEligible,
+                         droppedRanges,
+                         resourceBudget))
+            {
+                var entryBytes = checked(
+                    entry.Key.Length +
+                    (entry.Value?.Length ?? 0) +
+                    EntryOverheadBytes);
+                if (entryBytes > effectiveTargetSizeBytes)
+                {
+                    throw PantsException.ResourceLimit(
+                        $"A {entryBytes}-byte compaction entry exceeds the " +
+                        $"{effectiveTargetSizeBytes}-byte compaction buffer budget.");
+                }
+
+                if (currentEntries.Count > 0 &&
+                    currentBytes + entryBytes > effectiveTargetSizeBytes &&
+                    !ByteArrayComparer.Instance.Equals(currentEntries[^1].Key, entry.Key))
+                {
+                    var partition = CreatePartition(
+                        currentEntries,
+                        retainedRanges,
+                        regionStart,
+                        entry.Key);
+                    ReserveThrough(
+                        resourceBudget,
+                        reservations,
+                        ref reservedBytes,
+                        EstimatePartitionBytes(partition));
+                    yield return partition;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                    regionStart = entry.Key;
+                    currentEntries = [];
+                    currentBytes = 0;
+                }
+
+                ReserveThrough(
+                    resourceBudget,
+                    reservations,
+                    ref reservedBytes,
+                    checked(currentBytes + entryBytes));
+                currentEntries.Add(entry);
+                currentBytes = checked(currentBytes + entryBytes);
+            }
+
+            if (currentEntries.Count > 0)
+            {
+                var partition = CreatePartition(currentEntries, retainedRanges, regionStart, null);
+                ReserveThrough(
+                    resourceBudget,
+                    reservations,
+                    ref reservedBytes,
+                    EstimatePartitionBytes(partition));
+                yield return partition;
+            }
+            else if (retainedRanges.Length > 0)
+            {
+                foreach (var partition in CompactionOutputPartitioner.Partition(
+                             new CompactionMergeResult([], retainedRanges),
+                             effectiveTargetSizeBytes))
+                {
+                    ReserveThrough(
+                        resourceBudget,
+                        reservations,
+                        ref reservedBytes,
+                        EstimatePartitionBytes(partition));
+                    yield return partition;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                }
+            }
         }
-        else if (partitions.Count == 0 && retainedRanges.Length > 0)
+        finally
         {
-            return CompactionOutputPartitioner.Partition(
-                new CompactionMergeResult([], retainedRanges),
-                targetSizeBytes);
+            DisposeReservations(reservations);
+        }
+    }
+
+    static long EstimatePartitionBytes(CompactionMergeResult partition) => checked(
+        partition.Entries.Sum(static entry =>
+            (long)entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes) +
+        partition.RangeTombstones.Sum(static range =>
+            (long)range.Start.Length + range.End.Length + RangeTombstoneOverheadBytes));
+
+    static void ReserveThrough(
+        ResourceBudget? budget,
+        List<IDisposable> reservations,
+        ref long reservedBytes,
+        long requiredBytes)
+    {
+        if (budget is null)
+        {
+            return;
         }
 
-        return partitions;
+        if (requiredBytes > budget.Limit)
+        {
+            throw PantsException.ResourceLimit(
+                $"A {requiredBytes}-byte compaction partition exceeds the " +
+                $"{budget.Limit}-byte compaction buffer budget.");
+        }
+
+        while (reservedBytes < requiredBytes)
+        {
+            var bytes = Math.Min(ReservationGranularityBytes, requiredBytes - reservedBytes);
+            reservations.Add(budget.Reserve(bytes));
+            reservedBytes = checked(reservedBytes + bytes);
+        }
+    }
+
+    static void DisposeReservations(List<IDisposable> reservations)
+    {
+        foreach (var reservation in reservations)
+        {
+            reservation.Dispose();
+        }
+
+        reservations.Clear();
     }
 
     /// <summary>
-    /// K-way merges every reader's sorted entry stream, grouping same-key entries across inputs
-    /// (never within one input — an SST has no duplicate keys) and applying the same
+    /// K-way merges every reader's sorted entry stream, grouping same-key entries both across
+    /// inputs and within one input. Flush SSTs may contain multiple versions of a key, so every
+    /// matching head must be drained into one retention group before applying the same
     /// range-tombstone-covers / version-retention rules <c>CompactionMerger</c> applies, in the
     /// same order (ascending key, descending sequence within a key).
     /// </summary>
@@ -92,10 +205,14 @@ static class StreamingCompactionMerger
         IReadOnlyList<SstReader> readers,
         ulong? horizon,
         bool pointTombstoneGcEligible,
-        IReadOnlyList<RangeTombstone> droppedRanges)
+        IReadOnlyList<RangeTombstone> droppedRanges,
+        ResourceBudget? resourceBudget)
     {
         var iterators = readers
-            .Select(static reader => SstBlockIterator.Create(reader, PantsScanDirection.Forward))
+            .Select(reader => SstBlockIterator.Create(
+                reader,
+                PantsScanDirection.Forward,
+                resourceBudget: resourceBudget))
             .ToArray();
         try
         {
@@ -126,7 +243,8 @@ static class StreamingCompactionMerger
                 var group = new List<SstEntry>();
                 for (var i = 0; i < heads.Length; i++)
                 {
-                    if (heads[i] is { } head && ByteArrayComparer.Instance.Equals(head.Key, minKey))
+                    while (heads[i] is { } head &&
+                           ByteArrayComparer.Instance.Equals(head.Key, minKey))
                     {
                         group.Add(head);
                         heads[i] = iterators[i].MoveNext() ? iterators[i].Current : null;

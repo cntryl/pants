@@ -498,6 +498,18 @@ sealed class TransactionInstance : IPantsTransaction
             _columnFamily.Identity,
             key);
         var entry = candidates.Count == 0 ? null : _database.TryReadPointValue(candidates, key);
+        var coveringRangeSequence = _startSnapshot.RangeTombstones[_columnFamily.Identity]
+            .Where(tombstone =>
+                ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
+                ByteArrayComparer.Instance.Compare(key, tombstone.EndExclusive) < 0)
+            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Max();
+        if (coveringRangeSequence is { } rangeSequence &&
+            (entry is null || rangeSequence > checked((long)entry.Sequence)))
+        {
+            return (null, false);
+        }
+
         if (entry is null || entry.IsDelete || UnixTimestamp.IsExpired(entry.Expiration, _snapshotTime))
         {
             return (null, false);

@@ -43,8 +43,7 @@ public sealed class StreamingCompactionMergerTests
     [Fact]
     public void ShouldRetainOnlyOneOlderVersionAtOrBelowTheSnapshotHorizon()
     {
-        // Same key across three separate input files (mirroring real overlapping generations —
-        // a single SST never contains duplicate keys).
+        // Same key across three separate input files, mirroring overlapping generations.
         var files = new[] { Build(("key", 1, "v1")), Build(("key", 5, "v5")), Build(("key", 9, "v9")) };
         AssertEquivalent(files, Plan(snapshotHorizon: 5), 1024 * 1024);
     }
@@ -83,6 +82,52 @@ public sealed class StreamingCompactionMergerTests
         AssertEquivalent(files, Plan(), targetSizeBytes: 4096);
     }
 
+    [Fact]
+    public void ShouldDrainEveryVersionGivenDuplicateKeysWithinOneInput()
+    {
+        var file = Build(
+            ("key", 9, null),
+            ("key", 5, "old"),
+            ("key", 1, "older"));
+
+        AssertEquivalent(
+            [file],
+            Plan(snapshotHorizon: 10, pointTombstoneGcEligible: true),
+            targetSizeBytes: 1024 * 1024);
+    }
+
+    [Fact]
+    public void ShouldChargeInputBlocksAndKeepOnlyOneOutputPartitionReservedAtATime()
+    {
+        var entries = Enumerable.Range(0, 100)
+            .Select(index => ($"key-{index:D4}", (ulong)(index + 1), (string?)new string('v', 200)))
+            .ToArray();
+        var file = Build(entries, []);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "input.sst", file);
+        var budget = new ResourceBudget(64 * 1024);
+        var partitionCount = 0;
+        long largestOutputBytes = 0;
+
+        foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
+                     [reader],
+                     Plan(),
+                     targetSizeBytes: 2048,
+                     budget))
+        {
+            partitionCount++;
+            Assert.NotEmpty(partition.Entries);
+            var outputBytes = partition.Entries.Sum(static entry =>
+                (long)entry.Key.Length + (entry.Value?.Length ?? 0) + 32);
+            largestOutputBytes = Math.Max(largestOutputBytes, outputBytes);
+            Assert.InRange(budget.Current, outputBytes, budget.Limit);
+        }
+
+        Assert.True(partitionCount > 1);
+        Assert.Equal(0, budget.Current);
+        Assert.InRange(budget.Peak, largestOutputBytes + 1, budget.Limit);
+    }
+
     static void AssertEquivalent(
         IReadOnlyList<SstContents> contents,
         CompactionPlan plan,
@@ -97,9 +142,10 @@ public sealed class StreamingCompactionMergerTests
             .ToArray();
         try
         {
-            var actual = StreamingCompactionMerger.MergeAndPartition(readers, plan, targetSizeBytes);
+            var actual = StreamingCompactionMerger.MergeAndPartition(readers, plan, targetSizeBytes)
+                .ToArray();
 
-            Assert.Equal(expected.Count, actual.Count);
+            Assert.Equal(expected.Count, actual.Length);
             for (var index = 0; index < expected.Count; index++)
             {
                 AssertPartitionEqual(expected[index], actual[index]);

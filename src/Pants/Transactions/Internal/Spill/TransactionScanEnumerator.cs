@@ -172,8 +172,8 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
 
     /// <summary>
     /// Picks the newest (highest-sequence) non-tombstone, non-expired entry among every SST
-    /// source whose head is at <paramref name="key"/>, then advances exactly those sources —
-    /// a key can legitimately appear at the head of more than one SST at once.
+    /// source whose head is at <paramref name="key"/>, then drains every same-key version from
+    /// those sources — both multiple SSTs and one flush SST can contribute duplicate versions.
     /// </summary>
     byte[]? ResolveFromSstSources(byte[] key)
     {
@@ -186,14 +186,19 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                 continue;
             }
 
-            if (best is null || head.Sequence > best.Sequence)
+            do
             {
-                best = head;
-            }
+                if (best is null || head.Sequence > best.Sequence)
+                {
+                    best = head;
+                }
 
-            _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
-                ? _sstSources[index].Iterator.Current
-                : null;
+                _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
+                    ? _sstSources[index].Iterator.Current
+                    : null;
+                head = _sstHeads[index];
+            }
+            while (head is not null && head.Key.AsSpan().SequenceEqual(key));
         }
 
         if (best is null ||

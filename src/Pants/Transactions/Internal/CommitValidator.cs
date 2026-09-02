@@ -14,15 +14,23 @@ static class CommitValidator
             foreach (var assertion in assertions)
             {
                 var key = assertion.Key;
-                var start = ResolveVisibleCell(startFamily, key, payload.SnapshotTime);
+                var start = ResolveStartCell(
+                    payload.StartSnapshot,
+                    identity,
+                    startFamily,
+                    key,
+                    diskStore);
                 if (!Matches(assertion.Expected, start, payload.SnapshotTime))
                 {
                     throw PointConflict(
                         "A value assertion did not match the transaction's start snapshot.");
                 }
 
-                if (currentFamily.TryGetValue(key, out var current) &&
-                    current.WriteSequence > payload.StartSnapshot.Sequence)
+                if ((currentFamily.TryGetValue(key, out var current) &&
+                     current.WriteSequence > payload.StartSnapshot.Sequence) ||
+                    (current is null &&
+                     ResolveDiskWriteSequence(diskStore, identity, key) is { } diskSequence &&
+                     diskSequence > payload.StartSnapshot.Sequence))
                 {
                     throw PointConflict("An asserted key changed after the transaction began.");
                 }
@@ -99,6 +107,16 @@ static class CommitValidator
                     throw RangeConflict("A covered range changed after the transaction began.");
                 }
 
+                if (HasDiskMutationInRange(
+                        diskStore,
+                        operation.Family,
+                        operation.Key,
+                        operation.EndExclusive,
+                        payload.StartSnapshot.Sequence))
+                {
+                    throw RangeConflict("A covered range changed after the transaction began.");
+                }
+
                 if (state.RangeTombstones[operation.Family].Any(tombstone =>
                         tombstone.WriteSequence > payload.StartSnapshot.Sequence &&
                         RangesOverlap(
@@ -133,10 +151,35 @@ static class CommitValidator
         {
             { IsDeleted: true } => false,
             { IsDeleted: false } => true,
-            _ => ResolveVisibleCell(GetFamily(state, operation.Family), operation.Key, now)?.Value
-                is not null ||
-                ResolveDiskEntry(diskStore, operation.Family, operation.Key) is { IsDelete: false }
+            _ => ResolveCurrentExists(state, operation.Family, operation.Key, now, diskStore)
         };
+    }
+
+    static bool ResolveCurrentExists(
+        RuntimeState state,
+        ColumnFamilyIdentity family,
+        byte[] key,
+        DateTimeOffset now,
+        LocalDiskStore? diskStore)
+    {
+        if (GetFamily(state, family).TryGetValue(key, out var current))
+        {
+            return current.Value is not null && !current.IsExpired(now);
+        }
+
+        var diskEntry = ResolveDiskEntry(diskStore, family, key);
+        var currentRangeSequence = state.RangeTombstones[family]
+            .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
+            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Max();
+        if (currentRangeSequence is { } rangeSequence &&
+            (diskEntry is null || rangeSequence > checked((long)diskEntry.Sequence)))
+        {
+            return false;
+        }
+
+        return diskEntry is { IsDelete: false } &&
+               !UnixTimestamp.IsExpired(diskEntry.Expiration, now);
     }
 
     /// <summary>
@@ -147,7 +190,9 @@ static class CommitValidator
     /// which the key last changed (put or delete), or <c>null</c> if it has no durable record.
     /// </summary>
     static long? ResolveDiskWriteSequence(LocalDiskStore? diskStore, ColumnFamilyIdentity family, byte[] key) =>
-        ResolveDiskEntry(diskStore, family, key) is { } entry ? checked((long)entry.Sequence) : null;
+        diskStore?.GetLatestMutationSequence(GetDiskCandidates(diskStore, family, key), key) is { } sequence
+            ? checked((long)sequence)
+            : null;
 
     static SstEntry? ResolveDiskEntry(LocalDiskStore? diskStore, ColumnFamilyIdentity family, byte[] key)
     {
@@ -156,12 +201,95 @@ static class CommitValidator
             return null;
         }
 
-        var candidates = diskStore.GetVisibleFilesSnapshot()
-            .GetValueOrDefault(family.Id, [])
-            .Where(file => LocalDiskStore.IsWithinFileRange(file, key))
+        var candidates = GetDiskCandidates(diskStore, family, key);
+        return candidates.Length == 0 ? null : diskStore.TryReadPointValue(candidates, key);
+    }
+
+    static SstEntry? ResolveDiskCellEntry(
+        LocalDiskStore? diskStore,
+        IReadOnlyList<FileMeta> visibleFiles,
+        byte[] key)
+    {
+        if (diskStore is null)
+        {
+            return null;
+        }
+
+        var candidates = visibleFiles
+            .Where(file =>
+                diskStore.IsSstAvailable(file) &&
+                LocalDiskStore.IsWithinFileRange(file, key))
             .OrderByDescending(static file => file.SstSequence)
             .ToArray();
         return candidates.Length == 0 ? null : diskStore.TryReadPointValue(candidates, key);
+    }
+
+    static CellState? ResolveDiskCell(
+        LocalDiskStore? diskStore,
+        IReadOnlyList<FileMeta> visibleFiles,
+        byte[] key) => ResolveDiskCellEntry(diskStore, visibleFiles, key) is { } entry
+        ? CellState.FromUnixMilliseconds(
+            entry.IsDelete ? null : entry.Value,
+            checked((long)entry.Sequence),
+            entry.Expiration)
+        : null;
+
+    static CellState? ResolveStartCell(
+        DatabaseVersion startSnapshot,
+        ColumnFamilyIdentity family,
+        ImmutableSortedDictionary<byte[], CellState> startFamily,
+        byte[] key,
+        LocalDiskStore? diskStore)
+    {
+        if (startFamily.TryGetValue(key, out var startCell))
+        {
+            return startCell;
+        }
+
+        var diskCell = ResolveDiskCell(
+            diskStore,
+            startSnapshot.GetVisibleFiles(family.Id),
+            key);
+        var coveringRangeSequence = startSnapshot.RangeTombstones[family]
+            .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
+            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Max();
+        return coveringRangeSequence is { } rangeSequence &&
+               (diskCell is null || rangeSequence > diskCell.WriteSequence)
+            ? new CellState(null, rangeSequence, null)
+            : diskCell;
+    }
+
+    static FileMeta[] GetDiskCandidates(
+        LocalDiskStore diskStore,
+        ColumnFamilyIdentity family,
+        byte[] key) => diskStore.GetVisibleFilesSnapshot()
+        .GetValueOrDefault(family.Id, [])
+        .Where(file =>
+            diskStore.IsSstAvailable(file) &&
+            LocalDiskStore.IsWithinFileRange(file, key))
+        .OrderByDescending(static file => file.SstSequence)
+        .ToArray();
+
+    static bool HasDiskMutationInRange(
+        LocalDiskStore? diskStore,
+        ColumnFamilyIdentity family,
+        byte[] start,
+        byte[] end,
+        long afterSequence)
+    {
+        if (diskStore is null)
+        {
+            return false;
+        }
+
+        var candidates = diskStore.GetVisibleFilesSnapshot()
+            .GetValueOrDefault(family.Id, []);
+        return diskStore.HasMutationInRange(
+            candidates,
+            start,
+            end,
+            checked((ulong)afterSequence));
     }
 
     static void ValidateActiveFamily(
@@ -186,14 +314,6 @@ static class CommitValidator
             : throw PantsException.Create(
                 PantsErrorCode.InvalidArgument,
                 $"Column family '{identity.Name}' is unavailable.");
-
-    static CellState? ResolveVisibleCell(
-        ImmutableSortedDictionary<byte[], CellState> family,
-        byte[] key,
-        DateTimeOffset now) =>
-        family.TryGetValue(key, out var cell) && !cell.IsExpired(now) && cell.Value is not null
-            ? cell
-            : null;
 
     static bool Matches(
         TransactionReadValue expected,

@@ -13,14 +13,46 @@ public sealed class PantsOpenOptions
         TransactionMemoryPoolBytes = configuration.TransactionMemoryPoolBytes ??
                                      Math.Max(1, MemoryBudgetBytes / 10);
         // Mirrors Midge's derive_memory_pools: a bounded pool for compaction's streaming merge
-        // buffers, capped the same way the transaction pool is (roughly a tenth of the budget),
-        // additionally capped at 256 MiB since a single compaction round never needs more.
-        CompactionMemoryPoolBytes = Math.Max(
+        // buffers, normally capped like the transaction pool (roughly a tenth of the budget)
+        // and at 256 MiB. Sub-MiB automatically partitioned budgets instead prioritize enough
+        // room for the decoded input blocks required to make compaction progress; the derived
+        // memtables shrink with the same total budget, so this does not oversubscribe the limit.
+        var remainingAfterRequiredPools = Math.Max(
+            0,
+            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2);
+        var desiredCompactionPoolBytes = MemoryBudgetBytes < 1024 * 1024 &&
+                                         configuration.MemtableSizeLimitBytes is null
+            ? Math.Max(1, MemoryBudgetBytes * 2 / 3)
+            : Math.Max(1, Math.Min(MemoryBudgetBytes / 10, 256L * 1024 * 1024));
+        var desiredScanPoolBytes = Math.Max(
             1,
-            Math.Min(MemoryBudgetBytes / 10, 256L * 1024 * 1024));
+            Math.Min(MemoryBudgetBytes / 20, 128L * 1024 * 1024));
+        if (configuration.MemtableSizeLimitBytes is > 0 and <= long.MaxValue / 2)
+        {
+            var unallocatedBytes = MemoryBudgetBytes -
+                                   TransactionMemoryPoolBytes -
+                                   2 * configuration.MemtableSizeLimitBytes.Value -
+                                   desiredCompactionPoolBytes -
+                                   desiredScanPoolBytes;
+            desiredCompactionPoolBytes = checked(
+                desiredCompactionPoolBytes +
+                Math.Min(
+                    Math.Max(0, unallocatedBytes),
+                    256L * 1024 * 1024 - desiredCompactionPoolBytes));
+        }
+
+        CompactionMemoryPoolBytes = Math.Min(
+            desiredCompactionPoolBytes,
+            remainingAfterRequiredPools);
+        ScanMemoryPoolBytes = Math.Min(
+            desiredScanPoolBytes,
+            remainingAfterRequiredPools - CompactionMemoryPoolBytes);
 
         var maximumMemtable =
-            (MemoryBudgetBytes - TransactionMemoryPoolBytes - CompactionMemoryPoolBytes) / 2;
+            (MemoryBudgetBytes -
+             TransactionMemoryPoolBytes -
+             CompactionMemoryPoolBytes -
+             ScanMemoryPoolBytes) / 2;
         var baseMemtable = configuration.PerformanceGoal switch
         {
             PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
@@ -43,6 +75,7 @@ public sealed class PantsOpenOptions
             MemoryBudgetBytes -
             TransactionMemoryPoolBytes -
             CompactionMemoryPoolBytes -
+            ScanMemoryPoolBytes -
             2 * MemtableSizeLimitBytes);
         if (configuration.PerformanceGoal == PantsPerformanceGoal.Economy)
         {
@@ -101,6 +134,12 @@ public sealed class PantsOpenOptions
     /// knob) — always derived.
     /// </summary>
     public long CompactionMemoryPoolBytes { get; }
+
+    /// <summary>
+    /// Bytes reserved for the decoded blocks held by active SST scan cursors. The pool is shared
+    /// by all scans in the database and is derived from <see cref="MemoryBudgetBytes"/>.
+    /// </summary>
+    public long ScanMemoryPoolBytes { get; }
 
     public PantsWorkloadProfile WorkloadProfile => _configuration.WorkloadProfile;
 
@@ -313,12 +352,6 @@ public sealed class PantsOpenOptions
         ValidateEnum(RecoveryPolicy, nameof(RecoveryPolicy));
         ValidateEnum(BlockCachePolicy, nameof(BlockCachePolicy));
 
-        if (MemoryBudgetBytes < 3)
-        {
-            throw PantsException.ResourceLimit(
-                "The memory budget must hold two memtable generations and a transaction pool.");
-        }
-
         if (TransactionMemoryPoolBytes <= 0)
         {
             throw PantsException.InvalidArgument("Transaction memory pool size must be greater than zero.");
@@ -344,10 +377,26 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
         }
 
-        if (2 * MemtableSizeLimitBytes + TransactionMemoryPoolBytes > MemoryBudgetBytes)
+        long reservedBytes;
+        try
+        {
+            reservedBytes = checked(
+                2 * MemtableSizeLimitBytes +
+                TransactionMemoryPoolBytes +
+                CompactionMemoryPoolBytes +
+                ScanMemoryPoolBytes);
+        }
+        catch (OverflowException)
         {
             throw PantsException.ResourceLimit(
-                "Two memtables and the transaction pool exceed the total memory budget.");
+                "Configured memory pools overflow the total memory budget calculation.");
+        }
+
+        if (reservedBytes > MemoryBudgetBytes)
+        {
+            throw PantsException.ResourceLimit(
+                "Two memtables plus the transaction, compaction, and scan pools exceed the " +
+                "total memory budget.");
         }
 
         if (StorageTimeout < TimeSpan.FromMilliseconds(1))
@@ -504,7 +553,7 @@ public sealed class PantsOpenOptions
         }
 
         var available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        return available > 0 ? Math.Max(3, available / 2) : FallbackMemoryBudgetBytes;
+        return available > 0 ? Math.Max(5, available / 2) : FallbackMemoryBudgetBytes;
     }
 
     static string ValidatePath(string value, string parameterName)

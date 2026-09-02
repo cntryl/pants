@@ -46,7 +46,9 @@ sealed class LocalDiskStore : IDisposable
     ManifestReadSnapshot _manifestReadSnapshot;
     long _nextFrozenFlushId;
     ulong _nextSequence;
+    long _sstBytesWrittenTotal;
     ulong _unflushedCommitSequence;
+    long _walBytesWrittenTotal;
     long _walLastAppendedSequence;
     long _walLastSyncedSequence;
     long _walLocalDurableSequence;
@@ -85,6 +87,7 @@ sealed class LocalDiskStore : IDisposable
         _compaction = compaction;
         _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
+        BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
         _manifest = manifest;
         var visibleSequenceFloor = GetManifestVisibleSequenceFloor(manifest);
@@ -189,6 +192,14 @@ sealed class LocalDiskStore : IDisposable
     public long SstBytes => checked((long)GetManifestFilesSnapshot().Aggregate(
         0UL,
         static (total, file) => total + file.SizeBytes));
+
+    public long BlockCacheUsedBytes => _blockCache.UsedBytes;
+
+    public long BlockCacheCapacityBytes { get; }
+
+    public long WalBytesWrittenTotal => Interlocked.Read(ref _walBytesWrittenTotal);
+
+    public long SstBytesWrittenTotal => Interlocked.Read(ref _sstBytesWrittenTotal);
 
     public long LocalWalBytes
     {
@@ -471,35 +482,134 @@ sealed class LocalDiskStore : IDisposable
                 continue;
             }
 
-            var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-            byte[] blockContent;
-            if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+            // FindFloorBlock deliberately selects the last block whose first key is <= the
+            // target. When one key's descending-sequence versions cross a block boundary that
+            // is the oldest duplicate-key block, not the newest one. Walk back through every
+            // block beginning with the key and include its predecessor, which may hold the first
+            // (newest) versions at its tail.
+            var firstCandidateBlock = decision.CandidateBlockIndex;
+            while (firstCandidateBlock > 0 &&
+                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
             {
-                blockContent = cachedBlock.Content.ToArray();
-            }
-            else
-            {
-                blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
-                _ = _blockCache.Add(cacheKey, blockContent);
+                firstCandidateBlock--;
             }
 
-            foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+            for (var blockIndex = firstCandidateBlock;
+                 blockIndex <= decision.CandidateBlockIndex;
+                 blockIndex++)
             {
-                if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                var blockContent = ReadPointBlock(candidate.Name, reader, blockIndex);
+                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
                 {
-                    continue;
-                }
+                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                    {
+                        continue;
+                    }
 
-                // A range tombstone from this or any newer (already-touched) candidate masks
-                // the match — that is the definitive (deleted) answer, so stop rather than
-                // falling through to older candidates.
-                return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
-                    ? null
-                    : entry;
+                    // A range tombstone from this or any newer (already-touched) candidate masks
+                    // the match — that is the definitive (deleted) answer, so stop rather than
+                    // falling through to older candidates.
+                    return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
+                        ? null
+                        : entry;
+                }
             }
         }
 
         return null;
+    }
+
+    public bool IsSstAvailable(FileMeta file) =>
+        File.Exists(Path.Combine(_sstDirectory, file.Name));
+
+    public ulong? GetLatestMutationSequence(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlySpan<byte> key)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        ulong? latest = null;
+        var available = candidatesNewestFirst.Where(IsSstAvailable).ToArray();
+        foreach (var candidate in available)
+        {
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            foreach (var tombstone in readerLease.Reader.RangeTombstones)
+            {
+                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
+                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
+                    (latest is null || tombstone.Sequence > latest.Value))
+                {
+                    latest = tombstone.Sequence;
+                }
+            }
+        }
+
+        var entry = TryReadPointValue(available, keyCopy);
+        return entry is not null && (latest is null || entry.Sequence > latest.Value)
+            ? entry.Sequence
+            : latest;
+    }
+
+    public bool HasMutationInRange(
+        IReadOnlyList<FileMeta> candidates,
+        ReadOnlySpan<byte> startInclusive,
+        ReadOnlySpan<byte> endExclusive,
+        ulong afterSequence)
+    {
+        ThrowIfDisposed();
+        var start = startInclusive.ToArray();
+        var end = endExclusive.ToArray();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
+            {
+                continue;
+            }
+
+            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
+            {
+                continue;
+            }
+
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            var reader = readerLease.Reader;
+            if (reader.RangeTombstones.Any(tombstone =>
+                    tombstone.Sequence > afterSequence &&
+                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
+            {
+                return true;
+            }
+
+            using var iterator = SstBlockIterator.Create(
+                reader,
+                PantsScanDirection.Forward,
+                start,
+                end);
+            while (iterator.MoveNext())
+            {
+                if (iterator.Current.Sequence > afterSequence)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
+    {
+        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+        {
+            return cachedBlock.Content.ToArray();
+        }
+
+        var blockContent = reader.ReadDataBlock(blockIndex);
+        _ = _blockCache.Add(cacheKey, blockContent);
+        return blockContent;
     }
 
     /// <summary>
@@ -511,7 +621,8 @@ sealed class LocalDiskStore : IDisposable
         IReadOnlyList<FileMeta> candidates,
         PantsScanDirection direction,
         byte[]? startInclusive,
-        byte[]? endExclusive)
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget = null)
     {
         ThrowIfDisposed();
         var sources = new List<SstScanSource>(candidates.Count);
@@ -523,7 +634,12 @@ sealed class LocalDiskStore : IDisposable
                 var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
                 sources.Add(new SstScanSource(
                     lease,
-                    SstBlockIterator.Create(lease.Reader, direction, startInclusive, endExclusive)));
+                    SstBlockIterator.Create(
+                        lease.Reader,
+                        direction,
+                        startInclusive,
+                        endExclusive,
+                        resourceBudget)));
             }
 
             return sources;
@@ -1382,11 +1498,15 @@ sealed class LocalDiskStore : IDisposable
                 if (durability != PantsDurability.BestEffort)
                 {
                     var appendStarted = Stopwatch.GetTimestamp();
+                    var payloads = prepared.Select(static commit => commit.Payload).ToArray();
                     WalCodec.AppendFrames(
                         _walStream.SafeFileHandle,
                         walLength,
-                        prepared.Select(static commit => commit.Payload).ToArray(),
+                        payloads,
                         () => _failpoints.Hit(Failpoint.MidWalAppend));
+                    Interlocked.Add(
+                        ref _walBytesWrittenTotal,
+                        payloads.Sum(static payload => checked((long)payload.Length + 2 * sizeof(uint))));
                     var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
                     metrics?.RecordAppend(appendElapsed);
                     _walRecords = checked(_walRecords + prepared.Count);
@@ -1822,7 +1942,9 @@ sealed class LocalDiskStore : IDisposable
             offset,
             payload,
             afterPartialPayload);
-        offset = checked(offset + 2 * sizeof(uint) + payload.Length);
+        var frameBytes = checked((long)payload.Length + 2 * sizeof(uint));
+        offset = checked(offset + frameBytes);
+        Interlocked.Add(ref _walBytesWrittenTotal, frameBytes);
         _walRecords = checked(_walRecords + 1);
     }
 
@@ -2535,6 +2657,7 @@ sealed class LocalDiskStore : IDisposable
                 true,
                 continueCompacting,
                 null,
+                null,
                 CancellationToken.None)
             .AsTask()
             .GetAwaiter()
@@ -2553,6 +2676,7 @@ sealed class LocalDiskStore : IDisposable
             true,
             false,
             null,
+            null,
             cancellationToken);
 
     public ValueTask<CompactionResult> CompactAsync(
@@ -2561,6 +2685,7 @@ sealed class LocalDiskStore : IDisposable
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
+        ResourceBudget? compactionBudget = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
             state,
@@ -2569,6 +2694,7 @@ sealed class LocalDiskStore : IDisposable
             flushMutableOperations,
             false,
             publicationCompleted,
+            compactionBudget,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -2578,6 +2704,7 @@ sealed class LocalDiskStore : IDisposable
         bool flushMutableOperations,
         bool continueCompacting,
         Action<long>? publicationCompleted,
+        ResourceBudget? compactionBudget,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2602,93 +2729,105 @@ sealed class LocalDiskStore : IDisposable
         var outputNames = new List<string>();
         var outputBytes = 0L;
         var hasCompactionPlan = false;
-        foreach (var (_, familyId) in _familyIds.ToList())
+        try
         {
-            var plan = LeveledCompactionPlanner.Pick(
-                manifest.Files,
-                familyId,
-                _compaction,
-                state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
-                force);
-            if (plan is null)
+            foreach (var (_, familyId) in _familyIds.ToList())
             {
-                continue;
-            }
-
-            hasCompactionPlan = true;
-
-            // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
-            // index/bloom + the small resident range-tombstone list) and walks its entries one
-            // block at a time through the k-way merge — the same version-retention/tombstone-
-            // masking/GC-eligibility rules as CompactionMerger.Merge +
-            // CompactionOutputPartitioner.Partition (see its doc comment), just driven
-            // incrementally instead of over one materialized array per input plus one
-            // materialized merged/partitioned result.
-            var inputReaders = plan.Inputs
-                .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
-                .ToArray();
-            IReadOnlyList<CompactionMergeResult> partitions;
-            try
-            {
-                partitions = StreamingCompactionMerger.MergeAndPartition(
-                    inputReaders,
-                    plan,
-                    _targetSstSizeBytes);
-            }
-            finally
-            {
-                foreach (var inputReader in inputReaders)
-                {
-                    inputReader.Dispose();
-                }
-            }
-            var outputs = new List<FileMeta>(partitions.Count);
-            var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
-                familyId,
-                out var nextOutputSequence)
-                ? nextOutputSequence
-                : 1UL;
-            for (var outputIndex = 0; outputIndex < partitions.Count; outputIndex++)
-            {
-                var partition = partitions[outputIndex];
-                var output = CreateSst(
+                var plan = LeveledCompactionPlanner.Pick(
+                    manifest.Files,
                     familyId,
-                    plan.TargetLevel,
-                    partition.Entries,
-                    partition.RangeTombstones,
-                    Failpoint.AfterCompactionOutputDurable,
-                    checked(firstOutputSequence + (ulong)outputIndex));
-                outputs.Add(output);
-                outputNames.Add(output.Name);
-                edits.Add(CreateManifestEdit("AddSst", output));
-            }
+                    _compaction,
+                    state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
+                    force);
+                if (plan is null)
+                {
+                    continue;
+                }
 
-            if (outputs.Count > 0)
-            {
-                edits.Add(CreateManifestEdit(
-                    "BumpNextSstSeq",
+                hasCompactionPlan = true;
+
+                // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
+                // index/bloom + the small resident range-tombstone list) and walks its entries one
+                // block at a time through the k-way merge — the same version-retention/tombstone-
+                // masking/GC-eligibility rules as CompactionMerger.Merge +
+                // CompactionOutputPartitioner.Partition (see its doc comment), just driven
+                // incrementally instead of over one materialized array per input plus one
+                // materialized merged/partitioned result.
+                var inputReaders = plan.Inputs
+                    .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
+                    .ToArray();
+                var outputs = new List<FileMeta>();
+                var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
+                    familyId,
+                    out var nextOutputSequence)
+                    ? nextOutputSequence
+                    : 1UL;
+                try
+                {
+                    var outputIndex = 0UL;
+                    foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
+                                 inputReaders,
+                                 plan,
+                                 _targetSstSizeBytes,
+                                 compactionBudget))
+                    {
+                        var outputSequence = checked(firstOutputSequence + outputIndex);
+                        outputNames.Add(CreateSstFileName(
+                            familyId,
+                            plan.TargetLevel,
+                            outputSequence));
+                        var output = CreateSst(
+                            familyId,
+                            plan.TargetLevel,
+                            partition.Entries,
+                            partition.RangeTombstones,
+                            Failpoint.AfterCompactionOutputDurable,
+                            outputSequence);
+                        outputs.Add(output);
+                        edits.Add(CreateManifestEdit("AddSst", output));
+                        outputIndex = checked(outputIndex + 1);
+                    }
+                }
+                finally
+                {
+                    foreach (var inputReader in inputReaders)
+                    {
+                        inputReader.Dispose();
+                    }
+                }
+
+                if (outputs.Count > 0)
+                {
+                    edits.Add(CreateManifestEdit(
+                        "BumpNextSstSeq",
+                        new
+                        {
+                            cf_id = familyId,
+                            next_seq = checked(outputs[^1].SstSequence + 1)
+                        }));
+                }
+
+                edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
+                    "RemoveSst",
+                    new { name = input.Name })));
+                intents.Add(CreateIntentEntry(
+                    "CompactionPublish",
                     new
                     {
+                        phase = "OutputDurable",
                         cf_id = familyId,
-                        next_seq = checked(outputs[^1].SstSequence + 1)
+                        removed = plan.Inputs.Select(static input => input.Name).ToArray(),
+                        added = outputs.Select(CreateIntentFileMetadata).ToArray()
                     }));
+
+                obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
+                outputBytes = checked(outputBytes + outputs.Sum(static output => checked((long)output.SizeBytes)));
             }
-
-            edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
-                "RemoveSst",
-                new { name = input.Name })));
-            intents.Add(CreateIntentEntry(
-                "CompactionPublish",
-                new
-                {
-                    phase = "OutputDurable",
-                    cf_id = familyId,
-                    removed = plan.Inputs.Select(static input => input.Name).ToArray(),
-                    added = outputs.Select(CreateIntentFileMetadata).ToArray()
-                }));
-
-            obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
-            outputBytes = checked(outputBytes + outputs.Sum(static output => checked((long)output.SizeBytes)));
+        }
+        catch
+        {
+            DeleteUnpublishedCompactionOutputs(outputNames);
+            throw;
         }
 
         foreach (var family in manifest.ColumnFamilies.Where(family =>
@@ -2715,9 +2854,17 @@ sealed class LocalDiskStore : IDisposable
         _lease.EnsureValid();
         if (outputNames.Count > 0)
         {
-            _failpoints.Hit(Failpoint.BeforeCompactionDirectorySync);
-            AtomicStagedFile.FlushDirectory(_sstDirectory);
-            _lease.EnsureValid();
+            try
+            {
+                _failpoints.Hit(Failpoint.BeforeCompactionDirectorySync);
+                AtomicStagedFile.FlushDirectory(_sstDirectory);
+                _lease.EnsureValid();
+            }
+            catch
+            {
+                DeleteUnpublishedCompactionOutputs(outputNames);
+                throw;
+            }
         }
 
         var supersededOutputs = UpsertCompactionIntents(intents);
@@ -2765,16 +2912,13 @@ sealed class LocalDiskStore : IDisposable
         foreach (var name in obsoleteNames)
         {
             _lease.EnsureValid();
-            if (state.ActiveSnapshotCount == 0)
-            {
-                File.Delete(Path.Combine(_sstDirectory, name));
-                RemoveSstFromCaches(name);
-            }
-            else
-            {
-                _snapshotPinnedObsoleteFiles.Add(name);
-            }
+            // The actor's current DatabaseVersion can still name these inputs until it publishes
+            // the manifest's new version. Queue every retired file; PublishSnapshot performs the
+            // first safe collection while direct-read admission is excluded.
+            _snapshotPinnedObsoleteFiles.Add(name);
         }
+
+        _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
 
         var publicationCount = hasCompactionPlan ? 1 : 0;
         if (!persistenceAnomaly && (force || continueCompacting) && hasCompactionPlan)
@@ -2786,6 +2930,7 @@ sealed class LocalDiskStore : IDisposable
                 flushMutableOperations,
                 true,
                 publicationCompleted,
+                compactionBudget,
                 cancellationToken).ConfigureAwait(false);
             outputBytes = checked(outputBytes + continued.BytesRewritten);
             publicationCount = checked(publicationCount + continued.PublicationCount);
@@ -2799,6 +2944,31 @@ sealed class LocalDiskStore : IDisposable
     {
         _readerCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
+    }
+
+    static string CreateSstFileName(uint familyId, uint level, ulong sequence) =>
+        $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
+
+    void DeleteUnpublishedCompactionOutputs(IEnumerable<string> names)
+    {
+        var distinctNames = names.Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctNames.Length == 0)
+        {
+            return;
+        }
+
+        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
+        foreach (var name in distinctNames)
+        {
+            File.Delete(Path.Combine(
+                stagingDirectory,
+                $"{_lease.Epoch}.compaction.{name}.tmp"));
+            File.Delete(Path.Combine(_sstDirectory, name));
+            RemoveSstFromCaches(name);
+        }
+
+        AtomicStagedFile.FlushDirectory(stagingDirectory);
+        AtomicStagedFile.FlushDirectory(_sstDirectory);
     }
 
     FileMeta GetManifestSst(string name)
@@ -3365,7 +3535,7 @@ sealed class LocalDiskStore : IDisposable
                        (manifest.NextSstSequences.TryGetValue(familyId, out var nextSequence)
                            ? nextSequence
                            : 1UL);
-        var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
+        var name = CreateSstFileName(familyId, level, sequence);
         var stagingPrefix = string.IsNullOrEmpty(stagingIdentity)
             ? _lease.Epoch.ToString(CultureInfo.InvariantCulture)
             : stagingIdentity;
@@ -3384,6 +3554,8 @@ sealed class LocalDiskStore : IDisposable
             sizeBytes = checkedStream.BytesWritten;
             contentCrc32C = checkedStream.Checksum;
         }
+
+        Interlocked.Add(ref _sstBytesWrittenTotal, sizeBytes);
 
         _failpoints.Hit(outputDurableFailpoint);
         var allKeys = entries.Select(entry => entry.Key)
@@ -3987,6 +4159,26 @@ sealed class LocalDiskStore : IDisposable
         var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
         return key.SequenceCompareTo(smallest) >= 0 && key.SequenceCompareTo(largest) <= 0;
     }
+
+    static bool OverlapsFileRange(FileMeta file, ReadOnlySpan<byte> start, ReadOnlySpan<byte> end)
+    {
+        if (file.SmallestKey is null || file.LargestKey is null)
+        {
+            return false;
+        }
+
+        var smallest = file.SmallestKey.Select(static value => checked((byte)value)).ToArray();
+        var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
+        return largest.AsSpan().SequenceCompareTo(start) >= 0 &&
+               smallest.AsSpan().SequenceCompareTo(end) < 0;
+    }
+
+    static bool RangesOverlap(
+        ReadOnlySpan<byte> leftStart,
+        ReadOnlySpan<byte> leftEnd,
+        ReadOnlySpan<byte> rightStart,
+        ReadOnlySpan<byte> rightEnd) =>
+        leftStart.SequenceCompareTo(rightEnd) < 0 && rightStart.SequenceCompareTo(leftEnd) < 0;
 
     static void EnsureFormat(string root)
     {

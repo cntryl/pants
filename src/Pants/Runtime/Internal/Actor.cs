@@ -42,6 +42,7 @@ sealed class Actor : IAsyncDisposable
     readonly PantsOpenOptions _options;
     readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
     readonly TimeProvider _runtimeTimeProvider;
+    readonly ResourceBudget _scanMemoryBudget;
 
     readonly RuntimeState _state;
     readonly StorageVerificationDelegate _storageVerifier;
@@ -94,6 +95,7 @@ sealed class Actor : IAsyncDisposable
         _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
         _failpoints = dependencies.Failpoints;
         _runtimeTimeProvider = dependencies.RuntimeTimeProvider;
+        _scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
         var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
         _state = new RuntimeState(ttlClock, telemetry);
         switch (options.Storage)
@@ -370,7 +372,8 @@ sealed class Actor : IAsyncDisposable
             _compactionRuntime = new CompactionRuntimeService(
                 options.CoordinatorQueueCapacity,
                 _diskStore,
-                telemetry);
+                telemetry,
+                options.CompactionMemoryPoolBytes);
             _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
@@ -389,7 +392,8 @@ sealed class Actor : IAsyncDisposable
                 _compactionRuntime,
                 _cloudWalSealController,
                 _cloudMemtableSegments,
-                _hybridCache);
+                _hybridCache,
+                _scanMemoryBudget);
             _publishedRuntimeMetrics = _runtimeMetricsSnapshotFactory.Create(
                 _state,
                 Volatile.Read(ref _walCloudDurableSequence));
@@ -1191,6 +1195,8 @@ sealed class Actor : IAsyncDisposable
                             Volatile.Write(ref _persistenceAnomaly, 1);
                             MarkPersistenceAnomaly(state);
                         }
+
+                        PublishSnapshot(state);
                     }
 
                     await MirrorCloudStorageAsync().ConfigureAwait(false);
@@ -1381,7 +1387,12 @@ sealed class Actor : IAsyncDisposable
         byte[]? startInclusive,
         byte[]? endExclusive) =>
         _hybridCache is null && _diskStore is not null
-            ? _diskStore.CreateScanSources(candidates, direction, startInclusive, endExclusive)
+            ? _diskStore.CreateScanSources(
+                candidates,
+                direction,
+                startInclusive,
+                endExclusive,
+                _scanMemoryBudget)
             : [];
 
     public async ValueTask RecordPointReadAsync(
@@ -3619,6 +3630,8 @@ sealed class Actor : IAsyncDisposable
             MarkPersistenceAnomaly(state);
         }
 
+        PublishSnapshot(state);
+
         if (result.PublicationCount > 0 || _hybridCache is not null)
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
@@ -3677,6 +3690,8 @@ sealed class Actor : IAsyncDisposable
             Volatile.Write(ref _persistenceAnomaly, 1);
             MarkPersistenceAnomaly(state);
         }
+
+        PublishSnapshot(state);
 
         if (result.PublicationCount > 0 || _hybridCache is not null)
         {
@@ -4066,7 +4081,25 @@ sealed class Actor : IAsyncDisposable
 
     void PublishSnapshot(RuntimeState state)
     {
-        Volatile.Write(ref _currentVersion, state.CreateVersion(VisibleFilesSnapshot()));
+        lock (_directReadAdmissionGate)
+        {
+            Volatile.Write(ref _currentVersion, state.CreateVersion(VisibleFilesSnapshot()));
+            if (_diskStore?.SnapshotPinnedObsoleteFileCount > 0)
+            {
+                // A direct read can acquire only the newly-published version while this gate is
+                // held. Existing readers are already registered in ActiveSnapshotCount, so the
+                // store can now collect retired inputs only when no old version can reference them.
+                if (state.ActiveSnapshotCount == 0)
+                {
+                    _ = _diskStore.CollectObsoleteFiles(state);
+                }
+                else
+                {
+                    DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
+                }
+            }
+        }
+
         Volatile.Write(
             ref _publishedRuntimeMetrics,
             _runtimeMetricsSnapshotFactory.RefreshPublished(

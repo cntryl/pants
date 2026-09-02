@@ -7,6 +7,7 @@
     <Project Path="src/Pants/Pants.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Pants.Destroyer/Pants.Destroyer.csproj" />
     <Project Path="test/Pants.Tests/Pants.Tests.csproj" />
   </Folder>
 </Solution>

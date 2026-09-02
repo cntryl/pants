@@ -40,6 +40,7 @@ enum Failpoint
     BeforeCompactionDirectorySync,
     BeforeCompactionManifestPublish,
     AfterCompactionManifestPublish,
+    AfterCompactionObsoleteFilesRetired,
     BeforeManifestJournalAppend,
     AfterManifestJournalAppend,
     BeforeManifestJournalSync,

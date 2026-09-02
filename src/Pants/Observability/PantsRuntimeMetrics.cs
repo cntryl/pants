@@ -9,6 +9,18 @@ public sealed record PantsRuntimeMetrics
     public int ActiveMemtables { get; init; }
     public int ImmutableMemtables { get; init; }
     public long TotalMemtableBytes { get; init; }
+    public long ActiveMemtableBytes { get; init; }
+    public long ImmutableMemtableBytes { get; init; }
+    public long BlockCacheUsedBytes { get; init; }
+    public long BlockCacheCapacityBytes { get; init; }
+    public long CompactionBufferUsedBytes { get; init; }
+    public long CompactionBufferPeakBytes { get; init; }
+    public long CompactionBufferCapacityBytes { get; init; }
+    public long ScanBufferUsedBytes { get; init; }
+    public long ScanBufferPeakBytes { get; init; }
+    public long ScanBufferCapacityBytes { get; init; }
+    public long WalBytesWrittenTotal { get; init; }
+    public long SstBytesWrittenTotal { get; init; }
     public long MemtableSizeLimitBytes { get; init; }
     public long MemtableFlushThresholdBytes { get; init; }
     public long MaximumMemtableWalSegmentGap { get; init; }

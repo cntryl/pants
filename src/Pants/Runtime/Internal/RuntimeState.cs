@@ -137,11 +137,32 @@ sealed class RuntimeState
             {
                 updated = updated.Remove(operation.Key);
             }
+
+            if (operation.Operation == WalOperation.DeleteRange && operation.RangeEnd is not null)
+            {
+                foreach (var key in updated
+                             .Where(pair =>
+                                 pair.Value.WriteSequence <= frontier &&
+                                 ByteArrayComparer.Instance.Compare(pair.Key, operation.Key) >= 0 &&
+                                 ByteArrayComparer.Instance.Compare(pair.Key, operation.RangeEnd) < 0)
+                             .Select(static pair => pair.Key)
+                             .ToArray())
+                {
+                    updated = updated.Remove(key);
+                }
+            }
         }
 
         if (!ReferenceEquals(updated, current))
         {
             FamilyData[flush.ColumnFamily] = updated;
+        }
+
+        if (RangeTombstones.TryGetValue(flush.ColumnFamily, out var tombstones))
+        {
+            RangeTombstones[flush.ColumnFamily] = tombstones
+                .Where(tombstone => tombstone.WriteSequence > frontier)
+                .ToImmutableArray();
         }
     }
 

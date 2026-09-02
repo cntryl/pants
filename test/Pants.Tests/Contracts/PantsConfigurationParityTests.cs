@@ -59,6 +59,8 @@ public sealed class PantsConfigurationParityTests
             static options => Assert.True(
                 2 * options.MemtableSizeLimitBytes +
                 options.TransactionMemoryPoolBytes +
+                options.CompactionMemoryPoolBytes +
+                options.ScanMemoryPoolBytes +
                 options.BlockCacheBytes <= options.MemoryBudgetBytes));
     }
 
@@ -76,9 +78,13 @@ public sealed class PantsConfigurationParityTests
 
         Assert.Equal(budget, options.MemoryBudgetBytes);
         Assert.True(options.TransactionMemoryPoolBytes > 0);
+        Assert.True(options.CompactionMemoryPoolBytes >= 0);
+        Assert.True(options.ScanMemoryPoolBytes >= 0);
         Assert.True(
             2 * options.MemtableSizeLimitBytes +
             options.TransactionMemoryPoolBytes +
+            options.CompactionMemoryPoolBytes +
+            options.ScanMemoryPoolBytes +
             options.BlockCacheBytes <= budget);
     }
 
