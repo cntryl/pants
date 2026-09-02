@@ -11,6 +11,9 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
     readonly ImmutableSortedDictionary<byte[], CellState> _snapshot;
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly DateTimeOffset _snapshotTime;
+    readonly IReadOnlyList<SstScanSource> _sstSources;
+    readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
+    readonly SstEntry?[] _sstHeads;
     bool _advanceIntent;
     bool _advanceSnapshot;
     int _disposed;
@@ -23,7 +26,8 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         ColumnFamilyIdentity family,
         DateTimeOffset snapshotTime,
         TransactionIntentReadView intents,
-        ScanBounds bounds)
+        ScanBounds bounds,
+        IReadOnlyList<SstScanSource>? sstSources = null)
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
         {
@@ -46,6 +50,9 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
             bounds.StartInclusive,
             bounds.EndExclusive,
             bounds.Direction);
+        _sstSources = sstSources ?? [];
+        _sstRangeTombstones = _sstSources.SelectMany(static source => source.RangeTombstones).ToArray();
+        _sstHeads = new SstEntry?[_sstSources.Count];
     }
 
     public PantsEntry Current { get; private set; }
@@ -66,9 +73,18 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                 return false;
             }
 
-            byte[]? baseValue = null;
+            // Always advance every SST source whose head is at this key, even when the
+            // in-memory tier also covers it below and wins — otherwise a stale SST entry for an
+            // already-in-memory key would never advance past and the scan would stall.
+            var sstValue = ResolveFromSstSources(key);
+
+            byte[]? baseValue;
             if (_snapshotHead is not null && ByteArrayComparer.Instance.Equals(_snapshotHead, key))
             {
+                // A key resident in the in-memory tier is always at least as new as any SST
+                // copy of it (see RuntimeState.ReleaseFlushedGeneration) — no need to compare
+                // against SST candidates at the same key when this source has it.
+                baseValue = null;
                 if (_snapshot.TryGetValue(key, out var cell) &&
                     cell.Value is not null &&
                     !cell.IsExpired(_snapshotTime))
@@ -77,6 +93,10 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                 }
 
                 _advanceSnapshot = true;
+            }
+            else
+            {
+                baseValue = sstValue;
             }
 
             if (_intentHead is not null && ByteArrayComparer.Instance.Equals(_intentHead, key))
@@ -109,6 +129,10 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         {
             _snapshotKeys.Dispose();
             _intentKeys.Dispose();
+            foreach (var source in _sstSources)
+            {
+                source.Dispose();
+            }
         }
     }
 
@@ -121,6 +145,13 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
 
         _snapshotHead = _snapshotKeys.MoveNext() ? _snapshotKeys.Current : null;
         _intentHead = _intentKeys.MoveNext() ? _intentKeys.Current : null;
+        for (var index = 0; index < _sstSources.Count; index++)
+        {
+            _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
+                ? _sstSources[index].Iterator.Current
+                : null;
+        }
+
         _initialized = true;
     }
 
@@ -139,22 +170,69 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         }
     }
 
+    /// <summary>
+    /// Picks the newest (highest-sequence) non-tombstone, non-expired entry among every SST
+    /// source whose head is at <paramref name="key"/>, then advances exactly those sources —
+    /// a key can legitimately appear at the head of more than one SST at once.
+    /// </summary>
+    byte[]? ResolveFromSstSources(byte[] key)
+    {
+        SstEntry? best = null;
+        for (var index = 0; index < _sstHeads.Length; index++)
+        {
+            var head = _sstHeads[index];
+            if (head is null || !head.Key.AsSpan().SequenceEqual(key))
+            {
+                continue;
+            }
+
+            if (best is null || head.Sequence > best.Sequence)
+            {
+                best = head;
+            }
+
+            _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
+                ? _sstSources[index].Iterator.Current
+                : null;
+        }
+
+        if (best is null ||
+            best.IsDelete ||
+            UnixTimestamp.IsExpired(best.Expiration, _snapshotTime) ||
+            SstRangeTombstoneMask.Covers(_sstRangeTombstones, key, best.Sequence))
+        {
+            return null;
+        }
+
+        return best.Value;
+    }
+
     byte[]? SelectKey()
     {
-        if (_snapshotHead is null)
+        byte[]? candidate = _snapshotHead;
+        candidate = Combine(candidate, _intentHead);
+        foreach (var head in _sstHeads)
         {
-            return _intentHead;
+            candidate = Combine(candidate, head?.Key);
         }
 
-        if (_intentHead is null)
+        return candidate;
+    }
+
+    byte[]? Combine(byte[]? left, byte[]? right)
+    {
+        if (left is null)
         {
-            return _snapshotHead;
+            return right;
         }
 
-        var comparison = ByteArrayComparer.Instance.Compare(_intentHead, _snapshotHead);
-        var intentWins = _direction == PantsScanDirection.Reverse
-            ? comparison > 0
-            : comparison < 0;
-        return intentWins ? _intentHead : _snapshotHead;
+        if (right is null)
+        {
+            return left;
+        }
+
+        var comparison = ByteArrayComparer.Instance.Compare(right, left);
+        var rightWins = _direction == PantsScanDirection.Reverse ? comparison > 0 : comparison < 0;
+        return rightWins ? right : left;
     }
 }

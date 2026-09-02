@@ -227,6 +227,34 @@ static class SstCodec
         return false;
     }
 
+    internal static IReadOnlyList<SstEntry> DecodeDataBlock(byte[] block)
+    {
+        var entries = new List<SstEntry>();
+        DecodeEntries(block, entries);
+        return entries;
+    }
+
+    /// <summary>
+    /// Builds the same <see cref="SstContents"/> shape as <see cref="Decode"/> (used by
+    /// compaction's input-reading step), but walks <paramref name="reader"/> one block at a time
+    /// via <see cref="SstBlockIterator"/> instead of requiring the caller to have already read
+    /// and decoded the whole file — the caller never holds more than one input SST's worth of
+    /// decoded blocks (plus the entries accumulated so far) at once. Range tombstones come
+    /// straight from <see cref="SstReader.RangeTombstones"/>, already loaded (small/bounded) by
+    /// <see cref="SstReader.Open"/>.
+    /// </summary>
+    internal static SstContents DecodeViaBlockIterator(SstReader reader)
+    {
+        var entries = new List<SstEntry>();
+        using var iterator = SstBlockIterator.Create(reader, PantsScanDirection.Forward);
+        while (iterator.MoveNext())
+        {
+            entries.Add(iterator.Current);
+        }
+
+        return new SstContents(entries, reader.RangeTombstones, reader.DataBlockCount);
+    }
+
     static byte[] EncodeEntry(byte[] previousKey, SstEntry entry)
     {
         var shared = 0;

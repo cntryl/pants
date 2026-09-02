@@ -12,8 +12,15 @@ public sealed class PantsOpenOptions
         MemoryBudgetBytes = ResolveMemoryBudget(configuration.MemoryBudget);
         TransactionMemoryPoolBytes = configuration.TransactionMemoryPoolBytes ??
                                      Math.Max(1, MemoryBudgetBytes / 10);
+        // Mirrors Midge's derive_memory_pools: a bounded pool for compaction's streaming merge
+        // buffers, capped the same way the transaction pool is (roughly a tenth of the budget),
+        // additionally capped at 256 MiB since a single compaction round never needs more.
+        CompactionMemoryPoolBytes = Math.Max(
+            1,
+            Math.Min(MemoryBudgetBytes / 10, 256L * 1024 * 1024));
 
-        var maximumMemtable = (MemoryBudgetBytes - TransactionMemoryPoolBytes) / 2;
+        var maximumMemtable =
+            (MemoryBudgetBytes - TransactionMemoryPoolBytes - CompactionMemoryPoolBytes) / 2;
         var baseMemtable = configuration.PerformanceGoal switch
         {
             PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
@@ -33,7 +40,10 @@ public sealed class PantsOpenOptions
                                       MemtableSizeLimitBytes;
         BlockCacheBytes = Math.Max(
             0,
-            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2 * MemtableSizeLimitBytes);
+            MemoryBudgetBytes -
+            TransactionMemoryPoolBytes -
+            CompactionMemoryPoolBytes -
+            2 * MemtableSizeLimitBytes);
         if (configuration.PerformanceGoal == PantsPerformanceGoal.Economy)
         {
             BlockCacheBytes = Math.Min(BlockCacheBytes, 256L * 1024 * 1024);
@@ -83,6 +93,14 @@ public sealed class PantsOpenOptions
     public PantsMemoryBudget MemoryBudget => _configuration.MemoryBudget;
 
     public long MemoryBudgetBytes { get; }
+
+    /// <summary>
+    /// Bytes reserved for compaction's streaming merge/partition buffers (see
+    /// <c>ResourceBudget</c>), derived from <see cref="MemoryBudgetBytes"/> the same way the
+    /// transaction pool is. Not separately overridable today (no corresponding configuration
+    /// knob) — always derived.
+    /// </summary>
+    public long CompactionMemoryPoolBytes { get; }
 
     public PantsWorkloadProfile WorkloadProfile => _configuration.WorkloadProfile;
 

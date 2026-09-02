@@ -145,7 +145,7 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
-    public async Task ShouldClassifyStructurallyCorruptSstAsCorruptionAndRecoveryFailure()
+    public async Task ShouldClassifyStructurallyCorruptSstAsCorruptionOnVerification()
     {
         using var directory = new TemporaryDirectory();
         string sstPath;
@@ -164,14 +164,22 @@ public sealed class PantsDiskStorageTests
         bytes[0] ^= 0xff;
         await File.WriteAllBytesAsync(sstPath, bytes);
 
+        // Byte 0 falls inside the file's first data block, not its footer/metadata/index. Normal
+        // (bounded) recovery only positionally reads those trailing structural sections — see
+        // LocalDiskStoreBoundedRecoveryTests — so this corruption class is now an explicitly
+        // deferred one, per issue #219's acceptance criteria: Open succeeds, but an explicit
+        // verification pass still detects it, and so would the first read of the affected block.
         var verification =
             await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-        var recovery = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
-
         Assert.Equal(PantsErrorCode.Corruption, verification.Code);
-        Assert.Equal(PantsErrorCode.RecoveryFailed, recovery.Code);
         Assert.IsType<PantsCorruptionException>(verification);
-        Assert.IsType<PantsRecoveryFailedException>(recovery);
+
+        await using var reopened = await OpenAsync(directory.Path);
+        await using var reader = await reopened.BeginTransactionAsync(
+            reopened.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        await Assert.ThrowsAnyAsync<PantsException>(
+            () => reader.GetAsync("key"u8.ToArray()).AsTask());
     }
 
     [Fact]

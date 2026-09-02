@@ -349,6 +349,16 @@ sealed class DatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken) =>
         _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
 
+    internal SstEntry? TryReadPointValue(IReadOnlyList<FileMeta> candidatesNewestFirst, ReadOnlySpan<byte> key) =>
+        _actor.TryReadPointValue(candidatesNewestFirst, key);
+
+    internal IReadOnlyList<SstScanSource> CreateScanSources(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive) =>
+        _actor.CreateScanSources(candidates, direction, startInclusive, endExclusive);
+
     internal ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
         ColumnFamilyIdentity columnFamily,
         ReadOnlyMemory<byte> key,

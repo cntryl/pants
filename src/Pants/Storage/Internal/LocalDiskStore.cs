@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -380,6 +381,16 @@ sealed class LocalDiskStore : IDisposable
     public IReadOnlyList<string> GetManifestSstNames() =>
         GetManifestFilesSnapshot().Select(static file => file.Name).ToArray();
 
+    /// <summary>
+    /// Manifest-published SST files grouped by column-family id, for pinning onto a
+    /// database-version snapshot at snapshot-creation time so a concurrent flush/compaction
+    /// publication cannot change what an already-open snapshot sees.
+    /// </summary>
+    public IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> GetVisibleFilesSnapshot() =>
+        GetManifestFilesSnapshot()
+            .GroupBy(static file => file.ColumnFamilyId)
+            .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
+
     public bool IsSstLocal(string name)
     {
         _ = GetManifestSst(name);
@@ -425,6 +436,107 @@ sealed class LocalDiskStore : IDisposable
         _ = GetManifestSst(name);
         RemoveSstFromCaches(name);
         File.Delete(Path.Combine(_sstDirectory, name));
+    }
+
+    /// <summary>
+    /// Resolves a key's newest visible SST entry, checking <paramref name="candidatesNewestFirst"/>
+    /// in order and stopping at the first file that contains the key (whether a value or a
+    /// tombstone masked by a range tombstone) — a real value-supplying counterpart to
+    /// <see cref="RecordPointReadCore"/>'s telemetry-only bloom/block-read simulation. Safe to
+    /// call concurrently with the actor's mailbox: it only reads the (lock-free,
+    /// snapshot-pinned) reader/block caches. Deliberately records no telemetry of its own — the
+    /// existing exhaustive <see cref="RecordPointReadCore"/> pass remains the sole source of
+    /// read-amplification telemetry/compaction-trigger signal and of <see cref="PantsPointReadTrace"/>
+    /// diagnostics, run unconditionally alongside this resolution (see
+    /// <c>TransactionInstance.GetAsync</c>/<c>GetWithDiagnosticsAsync</c>) so those observability
+    /// paths and the read-amplification-triggered compaction trigger are unaffected by whether a
+    /// value happened to already be resolved from disk.
+    /// </summary>
+    public SstEntry? TryReadPointValue(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlySpan<byte> key)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        var tombstonesSeen = new List<RangeTombstone>();
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            var reader = readerLease.Reader;
+            tombstonesSeen.AddRange(reader.RangeTombstones);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            if (decision.Rejected || decision.CandidateBlockIndex < 0)
+            {
+                continue;
+            }
+
+            var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
+            byte[] blockContent;
+            if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+            {
+                blockContent = cachedBlock.Content.ToArray();
+            }
+            else
+            {
+                blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
+                _ = _blockCache.Add(cacheKey, blockContent);
+            }
+
+            foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+            {
+                if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                {
+                    continue;
+                }
+
+                // A range tombstone from this or any newer (already-touched) candidate masks
+                // the match — that is the definitive (deleted) answer, so stop rather than
+                // falling through to older candidates.
+                return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
+                    ? null
+                    : entry;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Leases a reader and opens a bound-clamped <see cref="SstBlockIterator"/> for each
+    /// candidate file, for a scan's k-way merge (see <c>TransactionScanEnumerator</c>). The
+    /// caller owns disposing each returned source once the scan completes.
+    /// </summary>
+    public IReadOnlyList<SstScanSource> CreateScanSources(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive)
+    {
+        ThrowIfDisposed();
+        var sources = new List<SstScanSource>(candidates.Count);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var path = Path.Combine(_sstDirectory, candidate.Name);
+                var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+                sources.Add(new SstScanSource(
+                    lease,
+                    SstBlockIterator.Create(lease.Reader, direction, startInclusive, endExclusive)));
+            }
+
+            return sources;
+        }
+        catch
+        {
+            foreach (var source in sources)
+            {
+                source.Dispose();
+            }
+
+            throw;
+        }
     }
 
     public bool RecordPointRead(
@@ -625,7 +737,7 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
+    internal static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
         key.Select(static value => checked((byte)value)).ToArray();
 
     public static LocalDiskStore Open(
@@ -2505,12 +2617,31 @@ sealed class LocalDiskStore : IDisposable
 
             hasCompactionPlan = true;
 
-            var contents = plan.Inputs
-                .Select(input => SstCodec.Decode(
-                    PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
+            // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
+            // index/bloom + the small resident range-tombstone list) and walks its entries one
+            // block at a time through the k-way merge — the same version-retention/tombstone-
+            // masking/GC-eligibility rules as CompactionMerger.Merge +
+            // CompactionOutputPartitioner.Partition (see its doc comment), just driven
+            // incrementally instead of over one materialized array per input plus one
+            // materialized merged/partitioned result.
+            var inputReaders = plan.Inputs
+                .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
                 .ToArray();
-            var merged = CompactionMerger.Merge(contents, plan);
-            var partitions = CompactionOutputPartitioner.Partition(merged, _targetSstSizeBytes);
+            IReadOnlyList<CompactionMergeResult> partitions;
+            try
+            {
+                partitions = StreamingCompactionMerger.MergeAndPartition(
+                    inputReaders,
+                    plan,
+                    _targetSstSizeBytes);
+            }
+            finally
+            {
+                foreach (var inputReader in inputReaders)
+                {
+                    inputReader.Dispose();
+                }
+            }
             var outputs = new List<FileMeta>(partitions.Count);
             var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
                 familyId,
@@ -2685,6 +2816,15 @@ sealed class LocalDiskStore : IDisposable
         StartupPhaseRecorder startupPhases)
     {
         RestoreColumnFamilies(state);
+        // Only SSTs recovered here without a local file (the cloud cache-miss fallback below)
+        // need their content applied into FamilyData — a locally-present SST is durable and
+        // stays servable straight from disk via later point reads/scans, so it needs no more
+        // than the bounded structural validation below. Cloud-hydration bytes, in contrast, are
+        // NOT written to local disk during recovery (see SimulatedCloudPersistence/
+        // ProviderCloudPersistence), so FamilyData is their only path to being servable until an
+        // on-demand hydration writes them locally later — this branch is unchanged from before
+        // bounded recovery and is tracked for its own bounded treatment separately (issue #219
+        // slice 4c, cloud metadata-only startup).
         var recoveredOperations = new List<WalMutation>();
         using (startupPhases.Measure(StartupPhase.SstHydration))
         {
@@ -2694,6 +2834,29 @@ sealed class LocalDiskStore : IDisposable
                 {
                     var name = ValidateSstName(file.Name);
                     var path = Path.Combine(_sstDirectory, name);
+                    // recoverySsts is non-null exactly for hybrid/cloud-backed opens (Local opens
+                    // never pass it). Point reads for those configurations don't yet fall
+                    // through to SST when a key is absent from FamilyData (Actor.TryReadPointValue
+                    // is gated off whenever a hybrid cache is present — see issue #219 slice 4c),
+                    // so a hybrid/cloud open still needs every published entry applied into
+                    // FamilyData here, exactly as before bounded recovery — even for a file that
+                    // happens to already be present in the local cache.
+                    if (recoverySsts is null && File.Exists(path))
+                    {
+                        // Bounded: SstReader.Open only positionally reads the footer, metadata,
+                        // index, and block-bloom blocks — never a data block. This validates
+                        // structure (footer/metadata/index parse and are internally consistent,
+                        // manifest ownership matches) without whole-file hydration. It
+                        // deliberately does NOT re-verify FileMeta.ContentCrc32C (a whole-file
+                        // checksum) since that requires reading every byte; a corrupted data
+                        // block is surfaced by the first read that touches it instead, or by an
+                        // explicit offline/online verification pass — see
+                        // LocalDiskStoreBoundedRecoveryTests for the acceptance-criteria-mandated
+                        // behavior this trades for boundedness.
+                        using var reader = SstReader.Open(path);
+                        continue;
+                    }
+
                     var bytes = File.Exists(path)
                         ? PositionalFile.ReadAllBytes(path)
                         : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
@@ -2744,6 +2907,7 @@ sealed class LocalDiskStore : IDisposable
         {
             ReplayWal(state);
         }
+
         state.Sequence = checked((long)_nextSequence);
     }
 
@@ -3812,7 +3976,7 @@ sealed class LocalDiskStore : IDisposable
             ? id
             : throw new StorageException($"Column family '{identity}' has no persistent Midge identity.");
 
-    static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
+    internal static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
     {
         if (file.SmallestKey is null || file.LargestKey is null)
         {

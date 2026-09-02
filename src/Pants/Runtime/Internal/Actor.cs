@@ -404,7 +404,7 @@ sealed class Actor : IAsyncDisposable
             });
             using (startupPhases.Measure(StartupPhase.VersionConstruction))
             {
-                _currentVersion = _state.CreateVersion();
+                _currentVersion = _state.CreateVersion(VisibleFilesSnapshot());
             }
             _loopTask = Task.Run(RunLoopAsync);
             if (UsesBackgroundImmutableFlushes)
@@ -1358,6 +1358,31 @@ sealed class Actor : IAsyncDisposable
         SendAsync(
             _ => ValueTask.FromResult(_telemetry.GetReadPathDiagnostics()),
             cancellationToken);
+
+    /// <summary>
+    /// Resolves a key's newest visible SST entry for the local (non-hybrid) disk store, or
+    /// <c>null</c> if none of <paramref name="candidatesNewestFirst"/> contain it. Called
+    /// directly off the caller's thread (not the actor mailbox) — safe because it only reads
+    /// the lock-free reader/block caches, mirroring <see cref="RecordPointReadAsync"/>'s
+    /// existing non-mailbox fast path.
+    /// </summary>
+    public SstEntry? TryReadPointValue(IReadOnlyList<FileMeta> candidatesNewestFirst, ReadOnlySpan<byte> key) =>
+        _hybridCache is null ? _diskStore?.TryReadPointValue(candidatesNewestFirst, key) : null;
+
+    /// <summary>
+    /// See <see cref="LocalDiskStore.CreateScanSources"/>. Empty when there is no local disk
+    /// store or the store is hybrid/cloud-cache-backed (not yet wired to on-demand hydration —
+    /// see issue #219 slice 4c); a scan then falls back to whatever it already had (its
+    /// in-memory tier plus the existing validator-only SST corroboration).
+    /// </summary>
+    public IReadOnlyList<SstScanSource> CreateScanSources(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive) =>
+        _hybridCache is null && _diskStore is not null
+            ? _diskStore.CreateScanSources(candidates, direction, startInclusive, endExclusive)
+            : [];
 
     public async ValueTask RecordPointReadAsync(
         ColumnFamilyIdentity columnFamily,
@@ -2500,7 +2525,7 @@ sealed class Actor : IAsyncDisposable
 
         try
         {
-            CommitValidator.Validate(state, payload);
+            CommitValidator.Validate(state, payload, _diskStore);
         }
         catch (PantsWriteConflictException exception)
         {
@@ -3375,6 +3400,7 @@ sealed class Actor : IAsyncDisposable
                 }
 
                 state.ImmutableMemtableFlushes.Remove(current.Frozen.Id);
+                state.ReleaseFlushedGeneration(current.Frozen);
                 state.SignalWritePressureChanged();
                 var identity = current.Frozen.ColumnFamily;
                 if (!state.IsShuttingDown &&
@@ -4040,7 +4066,7 @@ sealed class Actor : IAsyncDisposable
 
     void PublishSnapshot(RuntimeState state)
     {
-        Volatile.Write(ref _currentVersion, state.CreateVersion());
+        Volatile.Write(ref _currentVersion, state.CreateVersion(VisibleFilesSnapshot()));
         Volatile.Write(
             ref _publishedRuntimeMetrics,
             _runtimeMetricsSnapshotFactory.RefreshPublished(
@@ -4048,6 +4074,9 @@ sealed class Actor : IAsyncDisposable
                 state,
                 Volatile.Read(ref _walCloudDurableSequence)));
     }
+
+    IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> VisibleFilesSnapshot() =>
+        _diskStore?.GetVisibleFilesSnapshot() ?? ImmutableDictionary<uint, ImmutableArray<FileMeta>>.Empty;
 
     void EnsureCloudLeaseValid() => _cloudLease?.EnsureValid();
 

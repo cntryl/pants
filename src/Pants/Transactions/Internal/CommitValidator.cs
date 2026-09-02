@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Transactions.Internal;
 
 static class CommitValidator
 {
-    public static void Validate(RuntimeState state, CommitPayload payload)
+    public static void Validate(RuntimeState state, CommitPayload payload, LocalDiskStore? diskStore = null)
     {
         foreach (var (identity, assertions) in payload.Asserts)
         {
@@ -43,14 +43,14 @@ static class CommitValidator
             ValidateActiveFamily(state, operation.Family);
             if (operation.Kind == CommitOperationKind.Put &&
                 operation.InsertOnly &&
-                ResolvePriorExists(state, payload, operation, now))
+                ResolvePriorExists(state, payload, operation, now, diskStore))
             {
                 throw PantsException.InvalidArgument("Insert requires an absent key.");
             }
 
             if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
             {
-                ValidateWriteConflict(state, payload, operation);
+                ValidateWriteConflict(state, payload, operation, diskStore);
             }
         });
     }
@@ -58,7 +58,8 @@ static class CommitValidator
     static void ValidateWriteConflict(
         RuntimeState state,
         CommitPayload payload,
-        TransactionIntentOperation operation)
+        TransactionIntentOperation operation,
+        LocalDiskStore? diskStore)
     {
         var family = GetFamily(state, operation.Family);
         switch (operation.Kind)
@@ -67,6 +68,17 @@ static class CommitValidator
             case CommitOperationKind.Delete:
                 if (family.TryGetValue(operation.Key, out var current) &&
                     current.WriteSequence > payload.StartSnapshot.Sequence)
+                {
+                    throw PointConflict("A write-set key changed after the transaction began.");
+                }
+
+                // The in-memory tier no longer has this key at all (e.g. its write was flushed
+                // and released — RuntimeState.ReleaseFlushedGeneration — after this transaction
+                // began but before it committed); the durable SST is the only remaining witness.
+                if (current is null &&
+                    ResolveDiskWriteSequence(diskStore, operation.Family, operation.Key) is
+                    { } diskSequence &&
+                    diskSequence > payload.StartSnapshot.Sequence)
                 {
                     throw PointConflict("A write-set key changed after the transaction began.");
                 }
@@ -113,18 +125,43 @@ static class CommitValidator
         RuntimeState state,
         CommitPayload payload,
         TransactionIntentOperation operation,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        LocalDiskStore? diskStore)
     {
         var prior = payload.Operations.LatestBefore(operation.Ordinal, operation.Key);
         return prior switch
         {
             { IsDeleted: true } => false,
             { IsDeleted: false } => true,
-            _ => ResolveVisibleCell(
-                GetFamily(state, operation.Family),
-                operation.Key,
-                now)?.Value is not null
+            _ => ResolveVisibleCell(GetFamily(state, operation.Family), operation.Key, now)?.Value
+                is not null ||
+                ResolveDiskEntry(diskStore, operation.Family, operation.Key) is { IsDelete: false }
         };
+    }
+
+    /// <summary>
+    /// Falls through to the current manifest once the in-memory tier no longer has the key — it
+    /// may have been written before this process started, or released from
+    /// <see cref="RuntimeState.FamilyData"/> after a flush durably published it (see
+    /// <see cref="RuntimeState.ReleaseFlushedGeneration"/>). Returns the durable sequence at
+    /// which the key last changed (put or delete), or <c>null</c> if it has no durable record.
+    /// </summary>
+    static long? ResolveDiskWriteSequence(LocalDiskStore? diskStore, ColumnFamilyIdentity family, byte[] key) =>
+        ResolveDiskEntry(diskStore, family, key) is { } entry ? checked((long)entry.Sequence) : null;
+
+    static SstEntry? ResolveDiskEntry(LocalDiskStore? diskStore, ColumnFamilyIdentity family, byte[] key)
+    {
+        if (diskStore is null)
+        {
+            return null;
+        }
+
+        var candidates = diskStore.GetVisibleFilesSnapshot()
+            .GetValueOrDefault(family.Id, [])
+            .Where(file => LocalDiskStore.IsWithinFileRange(file, key))
+            .OrderByDescending(static file => file.SstSequence)
+            .ToArray();
+        return candidates.Length == 0 ? null : diskStore.TryReadPointValue(candidates, key);
     }
 
     static void ValidateActiveFamily(

@@ -160,6 +160,10 @@ sealed class TransactionInstance : IPantsTransaction
     {
         var (keyCopy, value, resolvedByIntent) = PreparePointRead(key, cancellationToken);
 
+        // Unconditional even when ReadVisibleValue already resolved the value from an SST:
+        // this exhaustive pass is the sole source of read-amplification telemetry and the
+        // signal that triggers background read-amplification-driven compaction, independent of
+        // this early-exit real resolution.
         if (!resolvedByIntent)
         {
             await _database.RecordPointReadAsync(
@@ -230,12 +234,25 @@ sealed class TransactionInstance : IPantsTransaction
                     TransactionScanEnumerator? entries = null;
                     try
                     {
+                        var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
+                            _startSnapshot,
+                            _columnFamily.Identity,
+                            bounds.StartInclusive,
+                            bounds.EndExclusive);
+                        var sstSources = candidates.Count == 0
+                            ? []
+                            : _database.CreateScanSources(
+                                candidates,
+                                bounds.Direction,
+                                bounds.StartInclusive,
+                                bounds.EndExclusive);
                         entries = new TransactionScanEnumerator(
                             _startSnapshot,
                             _columnFamily.Identity,
                             _snapshotTime,
                             intents,
-                            bounds);
+                            bounds,
+                            sstSources);
                         return validator is null
                             ? entries
                             : new ValidatingScanEnumerator(entries, validator);
@@ -463,15 +480,30 @@ sealed class TransactionInstance : IPantsTransaction
             return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
         }
 
-        if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) ||
-            !family.TryGetValue(key, out var cell) ||
-            cell.Value is null ||
-            cell.IsExpired(_snapshotTime))
+        if (_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) &&
+            family.TryGetValue(key, out var cell))
+        {
+            return cell.Value is null || cell.IsExpired(_snapshotTime)
+                ? (null, false)
+                : (cell.Value.ToArray(), false);
+        }
+
+        // Absent from the in-memory tier: it was either never written, or written and later
+        // released from RuntimeState.FamilyData once its flush durably published (see
+        // RuntimeState.ReleaseFlushedGeneration) — either way, the SST is now the sole source.
+        // Candidates come from this transaction's own pinned snapshot, not the live manifest, so
+        // a concurrent compaction/flush cannot change what this snapshot sees.
+        var candidates = SnapshotReadPath.ResolveCandidateFilesForPoint(
+            _startSnapshot,
+            _columnFamily.Identity,
+            key);
+        var entry = candidates.Count == 0 ? null : _database.TryReadPointValue(candidates, key);
+        if (entry is null || entry.IsDelete || UnixTimestamp.IsExpired(entry.Expiration, _snapshotTime))
         {
             return (null, false);
         }
 
-        return (cell.Value.ToArray(), false);
+        return (entry.Value?.ToArray(), false);
     }
 
     (byte[] Key, byte[]? Value, bool ResolvedByIntent) PreparePointRead(
