@@ -87,6 +87,46 @@ sealed class S3ObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
+    public async ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        ValidateRange(offset, length);
+        using var response = await SendReadAsync(
+            async token =>
+            {
+                var request = await CreateObjectRequestAsync(
+                    HttpMethod.Get,
+                    objectKey,
+                    ReadOnlyMemory<byte>.Empty,
+                    null,
+                    token).ConfigureAwait(false);
+                request.Headers.Range = new RangeHeaderValue(
+                    checked((long)offset),
+                    checked((long)offset + length - 1));
+                return request;
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        EnsureSuccess(response);
+        var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (data.Length != length)
+        {
+            throw new PantsIOException("S3 ranged GET returned an unexpected byte count.");
+        }
+
+        var version = response.Headers.ETag?.Tag ??
+                      throw new PantsIOException("S3 ranged GET response did not include an ETag.");
+        return new CloudObject(data, version);
+    }
+
     public async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken)
@@ -518,6 +558,15 @@ sealed class S3ObjectStore : ICloudObjectStore
             ? throw new PantsInvalidArgumentException(
                 "A non-empty cloud object version is required for conditional deletion.")
             : version;
+
+    static void ValidateRange(ulong offset, int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        if (offset > long.MaxValue || offset > (ulong)(long.MaxValue - length + 1))
+        {
+            throw PantsException.InvalidArgument("The cloud object range is too large.");
+        }
+    }
 
     static bool IsRetryable(HttpStatusCode statusCode) =>
         statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests ||

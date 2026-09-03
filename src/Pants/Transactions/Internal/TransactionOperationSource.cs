@@ -61,6 +61,19 @@ sealed class TransactionOperationSource : ITransactionOperationSource
         }
     }
 
+    public ValueTask ForEachAsync(
+        Func<TransactionIntentOperation, ValueTask> visitor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        ForEach(operation =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            visitor(operation).AsTask().GetAwaiter().GetResult();
+        });
+        return ValueTask.CompletedTask;
+    }
+
     public TransactionIntentLookup? LatestBefore(ulong ordinal, ReadOnlySpan<byte> key)
     {
         var latest = _spillStore?.LatestBefore(ordinal, key);

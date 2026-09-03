@@ -1,9 +1,8 @@
-using System.Collections;
 using System.Collections.Immutable;
 
 namespace Cntryl.Pants.Transactions.Internal.Spill;
 
-sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
+sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
 {
     readonly PantsScanDirection _direction;
     readonly IEnumerator<byte[]> _intentKeys;
@@ -11,7 +10,9 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
     readonly ImmutableSortedDictionary<byte[], CellState> _snapshot;
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly DateTimeOffset _snapshotTime;
-    readonly IReadOnlyList<SstScanSource> _sstSources;
+    readonly CancellationToken _cancellationToken;
+    readonly bool[] _sstActivated;
+    readonly AsyncSstScanSource?[] _sstSources;
     readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
     readonly SstEntry?[] _sstHeads;
     bool _advanceIntent;
@@ -27,7 +28,8 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         DateTimeOffset snapshotTime,
         TransactionIntentReadView intents,
         ScanBounds bounds,
-        IReadOnlyList<SstScanSource>? sstSources = null)
+        IReadOnlyList<AsyncSstScanSource>? sstSources = null,
+        CancellationToken cancellationToken = default)
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
         {
@@ -37,6 +39,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         }
 
         _snapshotTime = snapshotTime;
+        _cancellationToken = cancellationToken;
         _intents = intents;
         _direction = bounds.Direction;
         var snapshotKeys = _snapshot.Keys.Where(key => bounds.Matches(key));
@@ -50,22 +53,24 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
             bounds.StartInclusive,
             bounds.EndExclusive,
             bounds.Direction);
-        _sstSources = sstSources ?? [];
-        _sstRangeTombstones = _sstSources.SelectMany(static source => source.RangeTombstones).ToArray();
-        _sstHeads = new SstEntry?[_sstSources.Count];
+        _sstSources = (sstSources ?? []).Cast<AsyncSstScanSource?>().ToArray();
+        _sstActivated = new bool[_sstSources.Length];
+        _sstRangeTombstones = _sstSources
+            .SelectMany(static source => source!.RangeTombstones)
+            .ToArray();
+        _sstHeads = new SstEntry?[_sstSources.Length];
     }
 
     public PantsEntry Current { get; private set; }
 
-    object IEnumerator.Current => Current;
-
-    public bool MoveNext()
+    public async ValueTask<bool> MoveNextAsync()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        Initialize();
+        await InitializeAsync().ConfigureAwait(false);
         while (true)
         {
             AdvanceConsumedSources();
+            await ActivateSourcesThroughFrontierAsync().ConfigureAwait(false);
             var key = SelectKey();
             if (key is null)
             {
@@ -73,17 +78,11 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                 return false;
             }
 
-            // Always advance every SST source whose head is at this key, even when the
-            // in-memory tier also covers it below and wins — otherwise a stale SST entry for an
-            // already-in-memory key would never advance past and the scan would stall.
-            var sstValue = ResolveFromSstSources(key);
+            var sstValue = await ResolveFromSstSourcesAsync(key).ConfigureAwait(false);
 
             byte[]? baseValue;
             if (_snapshotHead is not null && ByteArrayComparer.Instance.Equals(_snapshotHead, key))
             {
-                // A key resident in the in-memory tier is always at least as new as any SST
-                // copy of it (see RuntimeState.ReleaseFlushedGeneration) — no need to compare
-                // against SST candidates at the same key when this source has it.
                 baseValue = null;
                 if (_snapshot.TryGetValue(key, out var cell) &&
                     cell.Value is not null &&
@@ -121,22 +120,22 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         }
     }
 
-    public void Reset() => throw new NotSupportedException();
-
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            _snapshotKeys.Dispose();
-            _intentKeys.Dispose();
-            foreach (var source in _sstSources)
-            {
-                source.Dispose();
-            }
+            return;
+        }
+
+        _snapshotKeys.Dispose();
+        _intentKeys.Dispose();
+        for (var index = 0; index < _sstSources.Length; index++)
+        {
+            await DisposeSourceAsync(index).ConfigureAwait(false);
         }
     }
 
-    void Initialize()
+    async ValueTask InitializeAsync()
     {
         if (_initialized)
         {
@@ -145,14 +144,70 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
 
         _snapshotHead = _snapshotKeys.MoveNext() ? _snapshotKeys.Current : null;
         _intentHead = _intentKeys.MoveNext() ? _intentKeys.Current : null;
-        for (var index = 0; index < _sstSources.Count; index++)
+        _initialized = true;
+    }
+
+    async ValueTask ActivateSourcesThroughFrontierAsync()
+    {
+        while (TryGetNextInactiveSource(out var index, out var activationKey))
         {
-            _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
-                ? _sstSources[index].Iterator.Current
-                : null;
+            var frontier = SelectKey();
+            if (frontier is not null)
+            {
+                var comparison = ByteArrayComparer.Instance.Compare(activationKey, frontier);
+                var canAffectFrontier = _direction == PantsScanDirection.Forward
+                    ? comparison <= 0
+                    : comparison >= 0;
+                if (!canAffectFrontier)
+                {
+                    return;
+                }
+            }
+
+            _sstActivated[index] = true;
+            var source = _sstSources[index]!;
+            if (await source.MoveNextAsync(_cancellationToken).ConfigureAwait(false))
+            {
+                _sstHeads[index] = source.Current;
+            }
+            else
+            {
+                await DisposeSourceAsync(index).ConfigureAwait(false);
+            }
+        }
+    }
+
+    bool TryGetNextInactiveSource(out int sourceIndex, out byte[] activationKey)
+    {
+        sourceIndex = -1;
+        activationKey = null!;
+        for (var index = 0; index < _sstSources.Length; index++)
+        {
+            if (_sstActivated[index] || _sstSources[index] is not { } source)
+            {
+                continue;
+            }
+
+            var candidate = _direction == PantsScanDirection.Forward
+                ? source.SmallestKey
+                : source.LargestKey;
+            if (sourceIndex < 0)
+            {
+                sourceIndex = index;
+                activationKey = candidate;
+                continue;
+            }
+
+            var comparison = ByteArrayComparer.Instance.Compare(candidate, activationKey);
+            if ((_direction == PantsScanDirection.Forward && comparison < 0) ||
+                (_direction == PantsScanDirection.Reverse && comparison > 0))
+            {
+                sourceIndex = index;
+                activationKey = candidate;
+            }
         }
 
-        _initialized = true;
+        return sourceIndex >= 0;
     }
 
     void AdvanceConsumedSources()
@@ -170,12 +225,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         }
     }
 
-    /// <summary>
-    /// Picks the newest (highest-sequence) non-tombstone, non-expired entry among every SST
-    /// source whose head is at <paramref name="key"/>, then drains every same-key version from
-    /// those sources — both multiple SSTs and one flush SST can contribute duplicate versions.
-    /// </summary>
-    byte[]? ResolveFromSstSources(byte[] key)
+    async ValueTask<byte[]?> ResolveFromSstSourcesAsync(byte[] key)
     {
         SstEntry? best = null;
         for (var index = 0; index < _sstHeads.Length; index++)
@@ -186,6 +236,7 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                 continue;
             }
 
+            var source = _sstSources[index]!;
             do
             {
                 if (best is null || head.Sequence > best.Sequence)
@@ -193,9 +244,16 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
                     best = head;
                 }
 
-                _sstHeads[index] = _sstSources[index].Iterator.MoveNext()
-                    ? _sstSources[index].Iterator.Current
-                    : null;
+                if (await source.MoveNextAsync(_cancellationToken).ConfigureAwait(false))
+                {
+                    _sstHeads[index] = source.Current;
+                }
+                else
+                {
+                    _sstHeads[index] = null;
+                    await DisposeSourceAsync(index).ConfigureAwait(false);
+                }
+
                 head = _sstHeads[index];
             }
             while (head is not null && head.Key.AsSpan().SequenceEqual(key));
@@ -210,6 +268,17 @@ sealed class TransactionScanEnumerator : IEnumerator<PantsEntry>
         }
 
         return best.Value;
+    }
+
+    async ValueTask DisposeSourceAsync(int index)
+    {
+        if (_sstSources[index] is not { } source)
+        {
+            return;
+        }
+
+        _sstSources[index] = null;
+        await source.DisposeAsync().ConfigureAwait(false);
     }
 
     byte[]? SelectKey()

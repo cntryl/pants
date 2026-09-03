@@ -2,6 +2,15 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 
 static class SstManifestMetadataValidator
 {
+    public static void ValidateMetadata(
+        SstMetadata metadata,
+        FileMeta file,
+        string storageKind)
+    {
+        ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, metadata.SmallestKey);
+        ValidateKey(storageKind, file.Name, "largest", file.LargestKey, metadata.LargestKey);
+    }
+
     public static void Validate(
         SstContents contents,
         FileMeta file,

@@ -10,5 +10,18 @@ interface ITransactionOperationSource
 
     void ForEach(Action<TransactionIntentOperation> visitor);
 
+    ValueTask ForEachAsync(
+        Func<TransactionIntentOperation, ValueTask> visitor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(visitor);
+        ForEach(operation =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            visitor(operation).AsTask().GetAwaiter().GetResult();
+        });
+        return ValueTask.CompletedTask;
+    }
+
     TransactionIntentLookup? LatestBefore(ulong ordinal, ReadOnlySpan<byte> key);
 }

@@ -34,6 +34,7 @@ sealed class LocalDiskStore : IDisposable
     readonly PantsPerformanceGoal _performanceGoal;
     readonly SstReaderCache _readerCache = new();
     readonly PantsRecoveryPolicy _recoveryPolicy;
+    readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
     readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
 
     readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
@@ -69,7 +70,8 @@ sealed class LocalDiskStore : IDisposable
         PantsCompactionConfiguration compaction,
         long targetSstSizeBytes,
         PantsBlockCachePolicy blockCachePolicy,
-        long blockCacheBytes)
+        long blockCacheBytes,
+        IAsyncSstSourceFactory? remoteSstSourceFactory)
     {
         RootPath = root;
         _walDirectory = Path.Combine(root, "wal");
@@ -87,6 +89,7 @@ sealed class LocalDiskStore : IDisposable
         _compaction = compaction;
         _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
+        _remoteSstSourceFactory = remoteSstSourceFactory;
         BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
         _manifest = manifest;
@@ -256,6 +259,27 @@ sealed class LocalDiskStore : IDisposable
                 force)?.Inputs.Count ?? 0);
     }
 
+    public IReadOnlyList<string> GetCompactionInputNames(RuntimeState state, bool force)
+    {
+        var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        var snapshotHorizon = state.ActiveSnapshots
+            .Select(static snapshot => snapshot.BeginSequence)
+            .Cast<long?>()
+            .Min();
+        return _familyIds.Values
+            .Select(familyId => LeveledCompactionPlanner.Pick(
+                manifest.Files,
+                familyId,
+                _compaction,
+                snapshotHorizon,
+                force))
+            .Where(static plan => plan is not null)
+            .SelectMany(static plan => plan!.Inputs)
+            .Select(static file => file.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public PantsEngineHealth GetHealth(RuntimeState state)
     {
         if (state.Health != PantsEngineHealth.Healthy)
@@ -353,13 +377,49 @@ sealed class LocalDiskStore : IDisposable
                 file.SmallestSequence))
             .ToArray();
 
-    public ReadOnlyMemory<byte>? ReadLocalSstForEviction(string name)
+    public async ValueTask VerifyRemoteSstMatchesLocalAsync(
+        string name,
+        CancellationToken cancellationToken)
     {
-        _ = GetManifestSst(name);
+        ThrowIfDisposed();
+        var metadata = GetManifestSst(name);
         var path = Path.Combine(_sstDirectory, name);
-        return File.Exists(path)
-            ? PositionalFile.ReadAllBytes(path)
-            : null;
+        if (!File.Exists(path))
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' disappeared before cloud durability could be verified.");
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Hybrid SST verification requires a remote source factory.");
+        await using var local = LocalAsyncSstSource.Open(path);
+        await using var remote = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Hybrid SST '{name}' is not confirmed durable in cloud storage.");
+        if (local.Length != remote.Length)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' differs from its cloud copy.");
+        }
+
+        const int verificationChunkBytes = 64 * 1024;
+        for (long offset = 0; offset < local.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = checked((int)Math.Min(verificationChunkBytes, local.Length - offset));
+            var localBytes = await local.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            var remoteBytes = await remote.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            if (!localBytes.AsSpan().SequenceEqual(remoteBytes))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Hybrid SST '{name}' differs from its cloud copy.");
+            }
+
+            offset = checked(offset + length);
+        }
     }
 
     public IReadOnlyList<string> GetPointReadSstNames(
@@ -437,6 +497,94 @@ sealed class LocalDiskStore : IDisposable
         }
 
         AtomicStagedFile.Write(path, bytesCopy);
+    }
+
+    public async ValueTask HydrateLocalSstAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        var metadata = GetManifestSst(name);
+        var path = Path.Combine(_sstDirectory, name);
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Remote SST hydration requires a remote source factory.");
+        await using var source = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
+        if (checked((ulong)source.Length) != metadata.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Cloud SST '{name}' length differs from its manifest.");
+        }
+
+        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
+        var stagingPath = Path.Combine(
+            stagingDirectory,
+            $"{_lease.Epoch}.hydration.{name}.{Guid.NewGuid():N}.tmp");
+        var checksum = 0U;
+        long offset = 0;
+        try
+        {
+            await using (var output = new FileStream(
+                             stagingPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                while (offset < source.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
+                    var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
+                        .ConfigureAwait(false);
+                    checksum = DiskFormat.Crc32CAppend(checksum, bytes);
+                    await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                    offset = checked(offset + bytes.Length);
+                }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                output.Flush(true);
+            }
+
+            if (metadata.ContentCrc32C.HasValue && checksum != metadata.ContentCrc32C.Value)
+            {
+                throw new PantsCorruptionException(
+                    $"Cloud SST '{name}' content checksum differs from its manifest.");
+            }
+
+            var stagedSource = LocalAsyncSstSource.Open(stagingPath);
+            await using var stagedReader = await AsyncSstReader.OpenAsync(
+                    stagedSource,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            _lease.EnsureValid();
+            AtomicStagedFile.WithPathLock(path, () =>
+            {
+                if (!File.Exists(path))
+                {
+                    File.Move(stagingPath, path);
+                    AtomicStagedFile.FlushDirectory(_sstDirectory);
+                }
+
+                return true;
+            });
+        }
+        finally
+        {
+            File.Delete(stagingPath);
+        }
     }
 
     public void EvictLocalSst(string name)
@@ -519,8 +667,94 @@ sealed class LocalDiskStore : IDisposable
         return null;
     }
 
+    public async ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        var tombstonesSeen = new List<RangeTombstone>();
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            tombstonesSeen.AddRange(reader.RangeTombstones);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            if (decision.Rejected || decision.CandidateBlockIndex < 0)
+            {
+                continue;
+            }
+
+            var firstCandidateBlock = decision.CandidateBlockIndex;
+            while (firstCandidateBlock > 0 &&
+                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
+            {
+                firstCandidateBlock--;
+            }
+
+            for (var blockIndex = firstCandidateBlock;
+                 blockIndex <= decision.CandidateBlockIndex;
+                 blockIndex++)
+            {
+                var blockContent = await ReadPointBlockAsync(
+                        candidate.Name,
+                        reader,
+                        blockIndex,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+                {
+                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                    {
+                        continue;
+                    }
+
+                    return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
+                        ? null
+                        : entry;
+                }
+            }
+        }
+
+        return null;
+    }
+
     public bool IsSstAvailable(FileMeta file) =>
-        File.Exists(Path.Combine(_sstDirectory, file.Name));
+        File.Exists(Path.Combine(_sstDirectory, file.Name)) || _remoteSstSourceFactory is not null;
+
+    public async ValueTask<ulong?> GetLatestMutationSequenceAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        ulong? latest = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var tombstone in reader.RangeTombstones)
+            {
+                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
+                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
+                    (latest is null || tombstone.Sequence > latest.Value))
+                {
+                    latest = tombstone.Sequence;
+                }
+            }
+        }
+
+        var entry = await TryReadPointValueAsync(
+                candidatesNewestFirst,
+                keyCopy,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return entry is not null && (latest is null || entry.Sequence > latest.Value)
+            ? entry.Sequence
+            : latest;
+    }
 
     public ulong? GetLatestMutationSequence(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
@@ -599,6 +833,55 @@ sealed class LocalDiskStore : IDisposable
         return false;
     }
 
+    public async ValueTask<bool> HasMutationInRangeAsync(
+        IReadOnlyList<FileMeta> candidates,
+        ReadOnlyMemory<byte> startInclusive,
+        ReadOnlyMemory<byte> endExclusive,
+        ulong afterSequence,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var start = startInclusive.ToArray();
+        var end = endExclusive.ToArray();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
+            {
+                continue;
+            }
+
+            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
+            {
+                continue;
+            }
+
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            if (reader.RangeTombstones.Any(tombstone =>
+                    tombstone.Sequence > afterSequence &&
+                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
+            {
+                return true;
+            }
+
+            await using var iterator = new AsyncSstBlockIterator(
+                reader,
+                PantsScanDirection.Forward,
+                start,
+                end,
+                null);
+            while (await iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (iterator.Current.Sequence > afterSequence)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
     {
         var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
@@ -608,6 +891,28 @@ sealed class LocalDiskStore : IDisposable
         }
 
         var blockContent = reader.ReadDataBlock(blockIndex);
+        _ = _blockCache.Add(cacheKey, blockContent);
+        return blockContent;
+    }
+
+    async ValueTask<byte[]> ReadPointBlockAsync(
+        string fileName,
+        AsyncSstReader reader,
+        int blockIndex,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+        {
+            return cachedBlock.Content.ToArray();
+        }
+
+        var blockContent = await reader.ReadDataBlockAsync(blockIndex, cancellationToken)
+            .ConfigureAwait(false);
+        // Cache admission follows both the encoded block CRC/decompression check above and the
+        // entry-frame decode. A remote block with a self-consistent CRC but malformed entries
+        // must not poison subsequent reads through the shared block cache.
+        _ = SstCodec.DecodeDataBlock(blockContent);
         _ = _blockCache.Add(cacheKey, blockContent);
         return blockContent;
     }
@@ -655,6 +960,77 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
+    public async ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var sources = new List<AsyncSstScanSource>(candidates.Count);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                    .ConfigureAwait(false);
+                try
+                {
+                    sources.Add(new AsyncSstScanSource(
+                        candidate,
+                        reader,
+                        new AsyncSstBlockIterator(
+                            reader,
+                            direction,
+                            startInclusive,
+                            endExclusive,
+                            resourceBudget),
+                        startInclusive,
+                        endExclusive));
+                }
+                catch
+                {
+                    await reader.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+            }
+
+            return sources;
+        }
+        catch
+        {
+            foreach (var source in sources)
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
+    async ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+        FileMeta file,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_sstDirectory, ValidateSstName(file.Name));
+        IAsyncSstSource? source = File.Exists(path)
+            ? LocalAsyncSstSource.Open(path)
+            : _remoteSstSourceFactory is null
+                ? null
+                : await _remoteSstSourceFactory.OpenAsync(file, cancellationToken)
+                    .ConfigureAwait(false);
+        if (source is null)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Manifest-owned SST '{file.Name}' is missing.");
+        }
+
+        return await AsyncSstReader.OpenAsync(source, file, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public bool RecordPointRead(
         RuntimeTelemetry telemetry,
         ColumnFamilyIdentity columnFamily,
@@ -684,6 +1060,110 @@ sealed class LocalDiskStore : IDisposable
             out var keyRangeRejects);
         trace = new PantsPointReadTrace(keyRangeRejects, [.. sstTraces]);
         return exceedsBudget;
+    }
+
+    public async ValueTask<(bool ExceedsBudget, PantsPointReadTrace Trace)> RecordPointReadAsync(
+        RuntimeTelemetry telemetry,
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        var keyCopy = key.ToArray();
+        var familyFiles = GetManifestFilesSnapshot()
+            .Where(file => file.ColumnFamilyId == columnFamily.Id)
+            .ToArray();
+        var candidates = familyFiles
+            .Where(file => IsWithinFileRange(file, keyCopy))
+            .ToArray();
+        var bloomChecks = 0;
+        var candidateBlocks = 0;
+        var amplificationBlocksRead = 0;
+        var dataBlocksRead = 0;
+        var bloomTruePositives = 0;
+        var bloomFalsePositives = 0;
+        var bloomTrueNegatives = 0;
+        var blockCacheHits = 0;
+        var blockCacheMisses = 0;
+        var traces = new List<PantsSstReadTrace>();
+        foreach (var candidate in candidates)
+        {
+            var local = IsSstLocal(candidate.Name);
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            bloomChecks = checked(bloomChecks + decision.BloomChecks);
+            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
+            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
+            amplificationBlocksRead = checked(amplificationBlocksRead + 1 + decision.BlocksRead);
+            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
+            var bloomFilterOutcome = decision.Rejected
+                ? PantsBloomFilterOutcome.Rejected
+                : PantsBloomFilterOutcome.NotChecked;
+            var sstDataBlocksRead = 0;
+            if (decision.BlocksRead != 0)
+            {
+                var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
+                bool containsKey;
+                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+                {
+                    blockCacheHits++;
+                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
+                    containsKey = cachedBlock.ContainsKey(keyCopy);
+                }
+                else
+                {
+                    blockCacheMisses++;
+                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
+                    var blockContent = await reader.ReadDataBlockAsync(
+                            decision.CandidateBlockIndex,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    dataBlocksRead++;
+                    sstDataBlocksRead = 1;
+                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
+                    _ = _blockCache.Add(cacheKey, blockContent);
+                }
+
+                if (containsKey)
+                {
+                    bloomTruePositives++;
+                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
+                }
+                else
+                {
+                    bloomFalsePositives++;
+                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
+                }
+            }
+
+            traces.Add(new PantsSstReadTrace(
+                candidate.Name,
+                candidate.Level,
+                local ? PantsSstReadTier.Local : PantsSstReadTier.HydratedFromCloud,
+                bloomFilterOutcome,
+                PantsCacheReadOutcome.Miss,
+                blockCacheOutcome,
+                sstDataBlocksRead));
+        }
+
+        var keyRangeRejects = familyFiles.Length - candidates.Length;
+        var exceedsBudget = telemetry.RecordSstRead(new SstReadSample
+        {
+            SstsTouched = candidates.Length,
+            L0SstsTouched = candidates.Count(static file => file.Level == 0),
+            AmplificationBlocksRead = amplificationBlocksRead,
+            DataBlocksRead = dataBlocksRead,
+            ReaderCacheMisses = candidates.Length,
+            BlockCacheHits = blockCacheHits,
+            BlockCacheMisses = blockCacheMisses,
+            CandidateBlocks = candidateBlocks,
+            KeyRangeRejects = keyRangeRejects,
+            BloomChecks = bloomChecks,
+            BloomTruePositives = bloomTruePositives,
+            BloomFalsePositives = bloomFalsePositives,
+            BloomTrueNegatives = bloomTrueNegatives
+        });
+        return (exceedsBudget, new PantsPointReadTrace(keyRangeRejects, [.. traces]));
     }
 
     bool RecordPointReadCore(
@@ -870,7 +1350,7 @@ sealed class LocalDiskStore : IDisposable
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null,
+        IAsyncSstSourceFactory? remoteSstSourceFactory = null,
         StartupPhaseRecorder? startupPhases = null,
         IPantsClock? leaseClock = null)
     {
@@ -982,9 +1462,10 @@ sealed class LocalDiskStore : IDisposable
                 compaction ?? new PantsCompactionConfiguration(),
                 targetSstSizeBytes,
                 blockCachePolicy,
-                blockCacheBytes);
+                blockCacheBytes,
+                remoteSstSourceFactory);
             lease.EnsureValid();
-            store.Recover(state, recoverySsts, startupPhases);
+            store.Recover(state, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
@@ -2658,6 +3139,7 @@ sealed class LocalDiskStore : IDisposable
                 continueCompacting,
                 null,
                 null,
+                null,
                 CancellationToken.None)
             .AsTask()
             .GetAwaiter()
@@ -2677,6 +3159,7 @@ sealed class LocalDiskStore : IDisposable
             false,
             null,
             null,
+            null,
             cancellationToken);
 
     public ValueTask<CompactionResult> CompactAsync(
@@ -2686,6 +3169,7 @@ sealed class LocalDiskStore : IDisposable
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
         ResourceBudget? compactionBudget = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
             state,
@@ -2695,6 +3179,7 @@ sealed class LocalDiskStore : IDisposable
             false,
             publicationCompleted,
             compactionBudget,
+            prepareInputs,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -2705,6 +3190,7 @@ sealed class LocalDiskStore : IDisposable
         bool continueCompacting,
         Action<long>? publicationCompleted,
         ResourceBudget? compactionBudget,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2745,6 +3231,16 @@ sealed class LocalDiskStore : IDisposable
                 }
 
                 hasCompactionPlan = true;
+                if (prepareInputs is not null)
+                {
+                    await prepareInputs(
+                            plan.Inputs
+                                .Select(static input => input.Name)
+                                .Distinct(StringComparer.Ordinal)
+                                .ToArray(),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
 
                 // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
                 // index/bloom + the small resident range-tombstone list) and walks its entries one
@@ -2931,6 +3427,7 @@ sealed class LocalDiskStore : IDisposable
                 true,
                 publicationCompleted,
                 compactionBudget,
+                prepareInputs,
                 cancellationToken).ConfigureAwait(false);
             outputBytes = checked(outputBytes + continued.BytesRewritten);
             publicationCount = checked(publicationCount + continued.PublicationCount);
@@ -2980,22 +3477,9 @@ sealed class LocalDiskStore : IDisposable
                    $"SST '{safeName}' is not owned by the active manifest.");
     }
 
-    void Recover(
-        RuntimeState state,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts,
-        StartupPhaseRecorder startupPhases)
+    void Recover(RuntimeState state, StartupPhaseRecorder startupPhases)
     {
         RestoreColumnFamilies(state);
-        // Only SSTs recovered here without a local file (the cloud cache-miss fallback below)
-        // need their content applied into FamilyData — a locally-present SST is durable and
-        // stays servable straight from disk via later point reads/scans, so it needs no more
-        // than the bounded structural validation below. Cloud-hydration bytes, in contrast, are
-        // NOT written to local disk during recovery (see SimulatedCloudPersistence/
-        // ProviderCloudPersistence), so FamilyData is their only path to being servable until an
-        // on-demand hydration writes them locally later — this branch is unchanged from before
-        // bounded recovery and is tracked for its own bounded treatment separately (issue #219
-        // slice 4c, cloud metadata-only startup).
-        var recoveredOperations = new List<WalMutation>();
         using (startupPhases.Measure(StartupPhase.SstHydration))
         {
             foreach (var file in _manifest.Files.ToArray())
@@ -3004,56 +3488,20 @@ sealed class LocalDiskStore : IDisposable
                 {
                     var name = ValidateSstName(file.Name);
                     var path = Path.Combine(_sstDirectory, name);
-                    // recoverySsts is non-null exactly for hybrid/cloud-backed opens (Local opens
-                    // never pass it). Point reads for those configurations don't yet fall
-                    // through to SST when a key is absent from FamilyData (Actor.TryReadPointValue
-                    // is gated off whenever a hybrid cache is present — see issue #219 slice 4c),
-                    // so a hybrid/cloud open still needs every published entry applied into
-                    // FamilyData here, exactly as before bounded recovery — even for a file that
-                    // happens to already be present in the local cache.
-                    if (recoverySsts is null && File.Exists(path))
+                    if (File.Exists(path))
                     {
-                        // Bounded: SstReader.Open only positionally reads the footer, metadata,
-                        // index, and block-bloom blocks — never a data block. This validates
-                        // structure (footer/metadata/index parse and are internally consistent,
-                        // manifest ownership matches) without whole-file hydration. It
-                        // deliberately does NOT re-verify FileMeta.ContentCrc32C (a whole-file
-                        // checksum) since that requires reading every byte; a corrupted data
-                        // block is surfaced by the first read that touches it instead, or by an
-                        // explicit offline/online verification pass — see
-                        // LocalDiskStoreBoundedRecoveryTests for the acceptance-criteria-mandated
-                        // behavior this trades for boundedness.
                         using var reader = SstReader.Open(path);
                         continue;
                     }
 
-                    var bytes = File.Exists(path)
-                        ? PositionalFile.ReadAllBytes(path)
-                        : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
-                            ? recovered.ToArray()
-                            : throw new StorageException($"Manifest SST '{file.Name}' is missing.");
-                    if (file.ContentCrc32C.HasValue && DiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                    if (_remoteSstSourceFactory is null)
                     {
-                        throw new StorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
+                        throw new StorageException($"Manifest SST '{file.Name}' is missing.");
                     }
 
-                    var contents = SstCodec.Decode(bytes);
-                    recoveredOperations.AddRange(contents.Entries.Select(entry => new WalMutation(
-                        file.ColumnFamilyId,
-                        entry.IsDelete ? WalOperation.Delete : WalOperation.Put,
-                        entry.Key,
-                        entry.Value,
-                        entry.Sequence,
-                        entry.Expiration,
-                        null)));
-                    recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new WalMutation(
-                        file.ColumnFamilyId,
-                        WalOperation.DeleteRange,
-                        range.Start,
-                        null,
-                        range.Sequence,
-                        null,
-                        range.End)));
+                    var remoteReader = OpenAsyncSstReaderAsync(file, CancellationToken.None)
+                        .AsTask().GetAwaiter().GetResult();
+                    remoteReader.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
                 catch (Exception exception) when (
                     _recoveryPolicy == PantsRecoveryPolicy.Salvage &&
@@ -3072,7 +3520,6 @@ sealed class LocalDiskStore : IDisposable
             }
         }
 
-        ApplyMutations(state, recoveredOperations.OrderBy(operation => operation.Sequence));
         using (startupPhases.Measure(StartupPhase.WalReplay))
         {
             ReplayWal(state);

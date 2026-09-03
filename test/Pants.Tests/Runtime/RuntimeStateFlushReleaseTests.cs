@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Cntryl.Pants.Tests.Runtime;
 
 public sealed class RuntimeStateFlushReleaseTests
@@ -93,6 +95,45 @@ public sealed class RuntimeStateFlushReleaseTests
         Assert.True(state.FamilyData[Family].ContainsKey(Key(2)));
         Assert.Empty(state.RangeTombstones[Family]);
     }
+
+    [Fact]
+    public void ShouldMakeAReleasedPublishedPayloadUnreachable()
+    {
+        var (state, payload) = ReleasePublishedPayload();
+
+        Assert.Empty(state.FamilyData[Family]);
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            CollectGarbage();
+        }
+
+        Assert.False(IsAlive(payload));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static (RuntimeState State, WeakReference<byte[]> Payload) ReleasePublishedPayload()
+    {
+        var state = NewState();
+        var payload = new byte[64 * 1024];
+        state.FamilyData[Family] = state.FamilyData[Family].SetItem(
+            Key(1),
+            new CellState(payload, 1, null));
+        var weakPayload = new WeakReference<byte[]>(payload);
+
+        state.ReleaseFlushedGeneration(Flush([Mutation(1, 1)]));
+        return (state, weakPayload);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void CollectGarbage()
+    {
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static bool IsAlive(WeakReference<byte[]> payload) => payload.TryGetTarget(out _);
 
     static RuntimeState NewState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());

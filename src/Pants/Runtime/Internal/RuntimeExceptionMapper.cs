@@ -9,6 +9,11 @@ static class RuntimeExceptionMapper
             OperationCanceledException canceled when
                 callerCancellationToken.IsCancellationRequested &&
                 canceled.CancellationToken == callerCancellationToken => canceled,
+            OperationCanceledException canceled when callerCancellationToken.IsCancellationRequested =>
+                new OperationCanceledException(
+                    canceled.Message,
+                    canceled,
+                    callerCancellationToken),
             OperationCanceledException canceled => new PantsAbortedException(
                 "The Pants runtime operation was aborted by the engine.",
                 canceled),

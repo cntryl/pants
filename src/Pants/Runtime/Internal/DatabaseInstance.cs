@@ -349,15 +349,24 @@ sealed class DatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken) =>
         _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
 
-    internal SstEntry? TryReadPointValue(IReadOnlyList<FileMeta> candidatesNewestFirst, ReadOnlySpan<byte> key) =>
-        _actor.TryReadPointValue(candidatesNewestFirst, key);
+    internal ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken) =>
+        _actor.TryReadPointValueAsync(candidatesNewestFirst, key, cancellationToken);
 
-    internal IReadOnlyList<SstScanSource> CreateScanSources(
+    internal ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
         IReadOnlyList<FileMeta> candidates,
         PantsScanDirection direction,
         byte[]? startInclusive,
-        byte[]? endExclusive) =>
-        _actor.CreateScanSources(candidates, direction, startInclusive, endExclusive);
+        byte[]? endExclusive,
+        CancellationToken cancellationToken) =>
+        _actor.CreateScanSourcesAsync(
+            candidates,
+            direction,
+            startInclusive,
+            endExclusive,
+            cancellationToken);
 
     internal ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
         ColumnFamilyIdentity columnFamily,
@@ -365,11 +374,9 @@ sealed class DatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken) =>
         _actor.RecordPointReadWithDiagnosticsAsync(columnFamily, key, cancellationToken);
 
-    internal ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
-        ColumnFamilyIdentity columnFamily,
-        ScanBounds bounds,
-        CancellationToken cancellationToken) =>
-        _actor.CreateScanReadValidatorAsync(columnFamily, bounds, cancellationToken);
+    internal IScanReadValidator? CreateScanReadValidator(
+        IReadOnlyList<AsyncSstScanSource> sources) =>
+        _actor.CreateScanReadValidator(sources);
 
     internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
 

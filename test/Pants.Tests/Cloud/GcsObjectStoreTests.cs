@@ -6,6 +6,23 @@ namespace Cntryl.Pants.Tests.Cloud;
 public sealed class GcsObjectStoreTests
 {
     [Fact]
+    public async Task ShouldIssueBoundedGcsRangeRequest()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
+            return Response(HttpStatusCode.PartialContent, "cde", "7");
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
+
+        var value = await store.GetRangeAsync("object", 2, 3, CancellationToken.None);
+
+        Assert.Equal("cde", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
+        Assert.Equal("7", value.Version);
+    }
+
+    [Fact]
     public async Task ShouldUseBearerTokenAndGenerationConditionsGivenJsonApi()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get

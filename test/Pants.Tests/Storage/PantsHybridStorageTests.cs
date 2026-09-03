@@ -123,7 +123,7 @@ public sealed class PantsHybridStorageTests
         var value = await reader.GetAsync("evicted"u8.ToArray());
 
         Assert.Equal(256 * 1024, Assert.IsType<ReadOnlyMemory<byte>>(value).Length);
-        Assert.Single(LocalSsts(directory.Path));
+        Assert.Empty(LocalSsts(directory.Path));
     }
 
     [Fact]

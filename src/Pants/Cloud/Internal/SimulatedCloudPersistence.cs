@@ -57,18 +57,6 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
 
-    public ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var path = ResolveObjectPath(
-            _cloudRoot,
-            PantsCloudObjectLayout.SstPrefix + name);
-        return ValueTask.FromResult<ReadOnlyMemory<byte>?>(
-            File.Exists(path) ? File.ReadAllBytes(path) : null);
-    }
-
     public ValueTask<CloudDdlRegistryObject?> ReadDdlRegistryAsync(
         CancellationToken cancellationToken)
     {
@@ -119,7 +107,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             }
         }
         else if (!exists || !StringComparer.Ordinal.Equals(
-                     CreateVersion(File.ReadAllBytes(path)),
+                     CreateFileVersion(path),
                      expectedVersion))
         {
             return ValueTask.FromResult(false);
@@ -174,7 +162,6 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         {
             return new SimulatedCloudHydrationResult(
                 0,
-                new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal),
                 false);
         }
 
@@ -197,7 +184,6 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         var activeManifest = localManifest ?? remoteManifest;
 
-        var recoverySsts = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal);
         var localSstDirectory = Path.Combine(root, "sst");
         Directory.CreateDirectory(localSstDirectory);
         foreach (var file in activeManifest?.Files ?? [])
@@ -219,27 +205,18 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 continue;
             }
 
-            var bytes = File.ReadAllBytes(cloudPath);
-            CloudSstValidator.Validate(bytes, file);
-            if (File.Exists(localPath))
+            var remoteLength = new FileInfo(cloudPath).Length;
+            if (file.SizeBytes != 0 && checked((ulong)remoteLength) != file.SizeBytes)
             {
-                continue;
-            }
-
-            if (localManifest is not null)
-            {
-                recoverySsts[file.Name] = bytes;
-            }
-            else
-            {
-                AtomicStagedFile.Write(localPath, bytes);
+                throw new PantsCorruptionException(
+                    $"Simulated-cloud SST '{file.Name}' length differs from its manifest.");
             }
         }
 
         var catalog = LoadCatalog(cloudRoot);
         if (catalog is null)
         {
-            return new SimulatedCloudHydrationResult(0, recoverySsts, false);
+            return new SimulatedCloudHydrationResult(0, false);
         }
 
         var localWalDirectory = Path.Combine(root, "wal");
@@ -276,7 +253,6 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         return new SimulatedCloudHydrationResult(
             catalog.FencingEpoch,
-            recoverySsts,
             requiresSalvage);
     }
 
@@ -417,7 +393,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             _failpoints.Hit(Failpoint.AfterCloudUpload);
         }
 
-        ValidateCapturedSsts(metadata);
+        ValidateCapturedSstMetadata(metadata);
 
         foreach (var fileName in MetadataFiles)
         {
@@ -434,7 +410,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         PruneCoveredWal(metadata);
     }
 
-    void ValidateCapturedSsts(CloudControlMetadataSnapshot metadata)
+    void ValidateCapturedSstMetadata(CloudControlMetadataSnapshot metadata)
     {
         foreach (var file in metadata.ReferencedSsts)
         {
@@ -446,7 +422,10 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Manifest simulated-cloud SST '{name}' is unavailable for publication.");
             }
 
-            CloudSstValidator.Validate(File.ReadAllBytes(path), file);
+            var source = LocalAsyncSstSource.Open(path);
+            var reader = AsyncSstReader.OpenAsync(source, file, CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+            reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
@@ -636,7 +615,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             var guard = walGuards[segment.SegmentId];
             if (File.Exists(guard.Path) &&
                 StringComparer.Ordinal.Equals(
-                    CreateVersion(File.ReadAllBytes(guard.Path)),
+                    CreateFileVersion(guard.Path),
                     guard.Version))
             {
                 File.Delete(guard.Path);
@@ -661,10 +640,21 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Manifest simulated-cloud SST '{file.Name}' is missing during WAL pruning.");
             }
 
-            var bytes = File.ReadAllBytes(path);
-            CloudSstValidator.Validate(bytes, file);
+            var length = new FileInfo(path).Length;
+            if ((file.SizeBytes != 0 && checked((ulong)length) != file.SizeBytes) ||
+                (file.ContentCrc32C.HasValue &&
+                 ComputeFileCrc32C(path) != file.ContentCrc32C.Value))
+            {
+                throw new PantsCorruptionException(
+                    $"Manifest simulated-cloud SST '{file.Name}' differs during WAL pruning.");
+            }
 
-            guards.Add(new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
+            var source = LocalAsyncSstSource.Open(path);
+            var reader = AsyncSstReader.OpenAsync(source, file, CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+            reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+            guards.Add(new SimulatedCloudObjectGuard(path, CreateFileVersion(path)));
         }
 
         foreach (var (fileName, capturedBytes) in metadata.Files)
@@ -697,7 +687,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         {
             if (!File.Exists(guard.Path) ||
                 !StringComparer.Ordinal.Equals(
-                    CreateVersion(File.ReadAllBytes(guard.Path)),
+                    CreateFileVersion(guard.Path),
                     guard.Version))
             {
                 throw new PantsLeaseIndeterminateException(
@@ -729,6 +719,26 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     static string CreateVersion(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes));
+
+    static string CreateFileVersion(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    static uint ComputeFileCrc32C(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var buffer = new byte[64 * 1024];
+        var checksum = 0U;
+        int read;
+        while ((read = stream.Read(buffer)) != 0)
+        {
+            checksum = DiskFormat.Crc32CAppend(checksum, buffer.AsSpan(0, read));
+        }
+
+        return checksum;
+    }
 
     sealed class WalPublicationCatalog
     {

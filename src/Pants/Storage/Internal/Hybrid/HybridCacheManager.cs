@@ -57,7 +57,6 @@ sealed class HybridCacheManager : IDisposable
 
     public async ValueTask EvictIfNeededAsync(
         LocalDiskStore store,
-        Func<string, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> fetchCloudSst,
         CancellationToken cancellationToken)
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -77,20 +76,14 @@ sealed class HybridCacheManager : IDisposable
             foreach (var candidate in planned)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var localBytes = store.ReadLocalSstForEviction(candidate.Name);
-                if (localBytes is null)
+                if (!store.IsSstLocal(candidate.Name))
                 {
                     Interlocked.Decrement(ref _pendingEvictions);
                     continue;
                 }
 
-                var cloudBytes = await fetchCloudSst(candidate.Name, cancellationToken)
+                await store.VerifyRemoteSstMatchesLocalAsync(candidate.Name, cancellationToken)
                     .ConfigureAwait(false);
-                if (cloudBytes is null || !cloudBytes.Value.Span.SequenceEqual(localBytes.Value.Span))
-                {
-                    throw new PantsRecoveryFailedException(
-                        $"Hybrid SST '{candidate.Name}' is not confirmed durable in cloud storage.");
-                }
 
                 lock (_snapshotGate)
                 {
@@ -169,7 +162,6 @@ sealed class HybridCacheManager : IDisposable
     public static async ValueTask EnsureLocalSstsAsync(
         LocalDiskStore store,
         IEnumerable<string> names,
-        Func<string, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> fetch,
         CancellationToken cancellationToken)
     {
         foreach (var name in names.Distinct(StringComparer.Ordinal))
@@ -180,10 +172,7 @@ sealed class HybridCacheManager : IDisposable
                 continue;
             }
 
-            var bytes = await fetch(name, cancellationToken).ConfigureAwait(false) ??
-                        throw new PantsRecoveryFailedException(
-                            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
-            store.HydrateLocalSst(name, bytes.Span);
+            await store.HydrateLocalSstAsync(name, cancellationToken).ConfigureAwait(false);
         }
     }
 

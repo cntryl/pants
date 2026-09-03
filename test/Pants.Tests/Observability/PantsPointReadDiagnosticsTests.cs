@@ -141,21 +141,23 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
         Assert.Equal(PantsBloomFilterOutcome.TruePositive, hydratedSst.BloomFilterOutcome);
         Assert.Equal(PantsCacheReadOutcome.Miss, hydratedSst.ReaderCacheOutcome);
-        Assert.Equal(PantsCacheReadOutcome.Miss, hydratedSst.BlockCacheOutcome);
-        Assert.Equal(1, hydratedSst.DataBlocksRead);
+        // Value resolution performs the ranged read before the exhaustive diagnostics pass,
+        // so that pass observes the block admitted by the same query.
+        Assert.Equal(PantsCacheReadOutcome.Hit, hydratedSst.BlockCacheOutcome);
+        Assert.Equal(0, hydratedSst.DataBlocksRead);
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(resident.Value).ToArray());
         Assert.Equal(0, resident.Trace.KeyRangeRejects);
         var residentSst = Assert.Single(resident.Trace.Ssts);
         Assert.Equal(hydratedSst.Name, residentSst.Name);
-        Assert.Equal(PantsSstReadTier.Local, residentSst.Tier);
-        Assert.Equal(PantsCacheReadOutcome.Hit, residentSst.ReaderCacheOutcome);
+        Assert.Equal(PantsSstReadTier.HydratedFromCloud, residentSst.Tier);
+        Assert.Equal(PantsCacheReadOutcome.Miss, residentSst.ReaderCacheOutcome);
         Assert.Equal(PantsCacheReadOutcome.Hit, residentSst.BlockCacheOutcome);
         Assert.Equal(0, residentSst.DataBlocksRead);
-        Assert.Single(LocalSsts(directory.Path));
+        Assert.Empty(LocalSsts(directory.Path));
 
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
-        Assert.Equal(1, hydratedSst.DataBlocksRead);
+        Assert.Equal(0, hydratedSst.DataBlocksRead);
     }
 
     [Fact]

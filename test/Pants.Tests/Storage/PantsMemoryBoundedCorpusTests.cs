@@ -6,26 +6,16 @@ using Xunit.Sdk;
 namespace Cntryl.Pants.Tests.Storage;
 
 /// <summary>
-/// Slice 6d (issue #219): a subprocess resource regression proving open/steady-state RSS for a
-/// local, non-hybrid database does not scale with corpus size the way it did before this issue's
-/// work — built on the same child-process convention as the crash-recovery tests (e.g.
+/// A small subprocess smoke test for gross RSS/instrumentation regressions, built on the same
+/// child-process convention as the crash-recovery tests (e.g.
 /// <c>PantsCommitCoalescingCrashRecoveryTests</c>): the same test assembly is re-invoked via
 /// <c>dotnet vstest</c> targeting <see cref="MeasureRssChild"/>, coordinated by environment
 /// variables, except the child here runs to completion and reports results via a file instead of
 /// being crashed mid-flight.
 ///
-/// Two checks, both against a single pair of child runs so total subprocess-spawn overhead stays
-/// bounded to two children:
-/// 1. An absolute allowance check (the acceptance criteria's literal wording): open/steady-state
-///    RSS for a corpus 4x the configured memory budget stays within a documented fixed
-///    allowance over that budget.
-/// 2. A relative-scaling check, empirically calibrated against this codebase (see the constants
-///    below): RSS for a corpus 16x the budget must not have grown anywhere near proportionally
-///    to the ~4x larger corpus compared to the 4x run — this is the stronger, less
-///    machine-dependent proof that memory tracks working set, not corpus size. Measured directly
-///    during this slice's development: a 16 MiB budget with a 64 MiB corpus (4x) peaked at ~95
-///    MiB RSS; the SAME budget with a 256 MiB corpus (16x — four times more data) peaked at only
-///    ~107 MiB — a ~12 MiB difference for a ~192 MiB larger corpus.
+/// Owned-resource bounds and N/2N/4N scaling are proved deterministically by
+/// <see cref="PantsOwnedResourceScalingTests"/>. RSS includes the CLR, JIT, GC segments, native
+/// libraries, and the OS page cache, so it is retained only as a broad secondary signal.
 /// </summary>
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsMemoryBoundedCorpusTests
@@ -36,9 +26,8 @@ public sealed class PantsMemoryBoundedCorpusTests
     const string BudgetBytesEnvironmentVariable = "PANTS_RSS_BUDGET_BYTES";
     const string CorpusMultiplierEnvironmentVariable = "PANTS_RSS_CORPUS_MULTIPLIER";
     const string ResultsPathEnvironmentVariable = "PANTS_RSS_RESULTS_PATH";
-    const long BudgetBytes = 16L * 1024 * 1024;
-    const int SmallMultiplier = 4;
-    const int LargeMultiplier = 16;
+    const long BudgetBytes = 8L * 1024 * 1024;
+    const int CorpusMultiplier = 1;
 
     // Documented, deliberately generous fixed allowance over the configured budget — .NET
     // process RSS carries substantial baseline overhead (CLR/JIT/GC segment reservation, thread
@@ -47,12 +36,6 @@ public sealed class PantsMemoryBoundedCorpusTests
     // real regression (RSS materially tracking corpus size again), not to assert a tight bound —
     // the relative-scaling check below is the more sensitive signal.
     const long FixedAllowanceBytes = 300L * 1024 * 1024;
-
-    // The 16x run's RSS must not exceed the 4x run's RSS by more than this fraction of the extra
-    // corpus bytes ingested (16x - 4x = 12x the budget) — i.e. growth must look like bounded
-    // working-set overhead, not like the ~1:1 "every byte ingested becomes a resident byte"
-    // relationship a full in-memory-resident engine would show.
-    const double MaximumRssGrowthFractionOfExtraCorpus = 0.25;
 
     [Fact]
     public async Task MeasureRssChild()
@@ -79,34 +62,15 @@ public sealed class PantsMemoryBoundedCorpusTests
     }
 
     [Fact]
-    public async Task ShouldKeepRssBoundedAndNotProportionalToCorpusSizeForALocalDatabase()
+    public async Task ShouldKeepSubprocessRssWithinAGrossFixedAllowance()
     {
-        using var smallDirectory = new TemporaryDirectory();
-        using var largeDirectory = new TemporaryDirectory();
-        var smallResults = await RunMeasurementChildAsync(
-            smallDirectory.Path,
+        using var directory = new TemporaryDirectory();
+        var results = await RunMeasurementChildAsync(
+            directory.Path,
             BudgetBytes,
-            SmallMultiplier);
-        var largeResults = await RunMeasurementChildAsync(
-            largeDirectory.Path,
-            BudgetBytes,
-            LargeMultiplier);
+            CorpusMultiplier);
 
-        // 1. Absolute allowance — the acceptance criteria's literal wording.
-        AssertWithinAllowance(smallResults, BudgetBytes, FixedAllowanceBytes);
-        AssertWithinAllowance(largeResults, BudgetBytes, FixedAllowanceBytes);
-
-        // 2. Relative scaling — the stronger signal. The large run ingested
-        // (LargeMultiplier - SmallMultiplier) * BudgetBytes more data than the small run; its
-        // steady-state RSS must not have grown anywhere near proportionally to that.
-        var extraCorpusBytes = checked((LargeMultiplier - SmallMultiplier) * BudgetBytes);
-        var rssGrowth = largeResults.SteadyStateRssBytes - smallResults.SteadyStateRssBytes;
-        Assert.True(
-            rssGrowth < extraCorpusBytes * MaximumRssGrowthFractionOfExtraCorpus,
-            $"Steady-state RSS grew by {rssGrowth / 1024 / 1024} MiB for {extraCorpusBytes / 1024 / 1024} " +
-            $"MiB of extra corpus ({SmallMultiplier}x to {LargeMultiplier}x budget) — expected well " +
-            "under a proportional relationship. small=" + Describe(smallResults) +
-            " large=" + Describe(largeResults));
+        AssertWithinAllowance(results, BudgetBytes, FixedAllowanceBytes);
     }
 
     static void AssertWithinAllowance(RssResults results, long budgetBytes, long allowanceBytes)

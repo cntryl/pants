@@ -15,7 +15,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Cntryl.Pants.Benches"/>
     <InternalsVisibleTo Include="Cntryl.Pants.DependencyInjection"/>
-    <InternalsVisibleTo Include="Cntryl.Pants.Destroyer"/>
     <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
   </ItemGroup>
 

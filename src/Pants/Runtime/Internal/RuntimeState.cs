@@ -166,6 +166,24 @@ sealed class RuntimeState
         }
     }
 
+    /// <summary>
+    /// Releases the current generation for a column family after the serialized cloud flush
+    /// path has published all of that family's mutable operations. Existing snapshots retain
+    /// their immutable roots; snapshots created after publication fall through to the SST.
+    /// </summary>
+    public void ReleasePersistedFamily(ColumnFamilyIdentity identity)
+    {
+        if (FamilyData.ContainsKey(identity))
+        {
+            FamilyData[identity] = EmptyFamily;
+        }
+
+        if (RangeTombstones.ContainsKey(identity))
+        {
+            RangeTombstones[identity] = [];
+        }
+    }
+
     static readonly ImmutableDictionary<uint, ImmutableArray<FileMeta>> EmptyVisibleFiles =
         ImmutableDictionary<uint, ImmutableArray<FileMeta>>.Empty;
 

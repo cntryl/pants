@@ -11,6 +11,26 @@ public sealed class S3ObjectStoreTests
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     [Fact]
+    public async Task ShouldIssueBoundedS3RangeRequest()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
+            };
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, string.Empty);
+
+        var value = await store.GetRangeAsync("object", 2, 3, CancellationToken.None);
+
+        Assert.Equal("cde", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
+    }
+
+    [Fact]
     public async Task ShouldSignAndConditionPathStyleS3RequestsWithoutDisclosingSecrets()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get

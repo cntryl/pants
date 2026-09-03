@@ -9,6 +9,34 @@ namespace Cntryl.Pants.Tests.Cloud;
 public sealed class AzureBlobObjectStoreTests
 {
     [Fact]
+    public async Task ShouldIssueBoundedAzureBlobRangeRequest()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
+            };
+        });
+        using var client = new HttpClient(handler);
+        var store = new AzureBlobObjectStore(
+            new PantsCloudProviderConfiguration.AzureBlob(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=value")),
+            string.Empty,
+            client,
+            TimeSpan.FromSeconds(5));
+
+        var value = await store.GetRangeAsync("object", 2, 3, CancellationToken.None);
+
+        Assert.Equal("cde", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
+    }
+
+    [Fact]
     public async Task ShouldUseSasAndConditionalHeadersGivenDirectHttpObjectWrites()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get

@@ -151,7 +151,7 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
-                        simulatedHydration.RecoverySsts,
+                        new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
                         startupPhases,
                         leaseClock);
                     var simulatedPersistence = new SimulatedCloudPersistence(
@@ -240,7 +240,7 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         dependencies.LeaseHeartbeatInterval,
-                        hydration.RecoverySsts,
+                        new ProviderCloudSstSourceFactory(sstStore),
                         startupPhases,
                         leaseClock);
                     var providerPersistence = new ProviderCloudPersistence(
@@ -1180,7 +1180,7 @@ sealed class Actor : IAsyncDisposable
                     if (_diskStore is not null)
                     {
                         await EnsureHybridSstsLocalAsync(
-                                _diskStore.GetManifestSstNames(),
+                                _diskStore.GetCompactionInputNames(state, true),
                                 cancellationToken)
                             .ConfigureAwait(false);
                         var result = await _compactionRuntime
@@ -1188,6 +1188,7 @@ sealed class Actor : IAsyncDisposable
                                 state,
                                 true,
                                 _cloudCompactionOutputPublisher,
+                                prepareInputs: EnsureHybridSstsLocalAsync,
                                 cancellationToken: CancellationToken.None)
                             .ConfigureAwait(false);
                         if (result.PersistenceAnomaly)
@@ -1366,34 +1367,75 @@ sealed class Actor : IAsyncDisposable
             cancellationToken);
 
     /// <summary>
-    /// Resolves a key's newest visible SST entry for the local (non-hybrid) disk store, or
+    /// Resolves a key's newest visible SST entry from a local or remote SST source, or
     /// <c>null</c> if none of <paramref name="candidatesNewestFirst"/> contain it. Called
     /// directly off the caller's thread (not the actor mailbox) — safe because it only reads
     /// the lock-free reader/block caches, mirroring <see cref="RecordPointReadAsync"/>'s
     /// existing non-mailbox fast path.
     /// </summary>
-    public SstEntry? TryReadPointValue(IReadOnlyList<FileMeta> candidatesNewestFirst, ReadOnlySpan<byte> key) =>
-        _hybridCache is null ? _diskStore?.TryReadPointValue(candidatesNewestFirst, key) : null;
+    public async ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        if (_diskStore is null)
+        {
+            return null;
+        }
+
+        if (_hybridCache is null)
+        {
+            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span);
+        }
+
+        if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        {
+            // The failpoint historically guarded whole-file hydration. It now guards admission
+            // to the equivalent remote ranged-read path.
+            await Task.Yield();
+            _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return await _diskStore.TryReadPointValueAsync(
+                candidatesNewestFirst,
+                key,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>
-    /// See <see cref="LocalDiskStore.CreateScanSources"/>. Empty when there is no local disk
-    /// store or the store is hybrid/cloud-cache-backed (not yet wired to on-demand hydration —
-    /// see issue #219 slice 4c); a scan then falls back to whatever it already had (its
-    /// in-memory tier plus the existing validator-only SST corroboration).
+    /// Opens manifest-selected local or remote SST sources for a scan's asynchronous k-way
+    /// merge. Remote files remain authoritative without being admitted to the local cache.
     /// </summary>
-    public IReadOnlyList<SstScanSource> CreateScanSources(
+    public async ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
         IReadOnlyList<FileMeta> candidates,
         PantsScanDirection direction,
         byte[]? startInclusive,
-        byte[]? endExclusive) =>
-        _hybridCache is null && _diskStore is not null
-            ? _diskStore.CreateScanSources(
+        byte[]? endExclusive,
+        CancellationToken cancellationToken)
+    {
+        if (_diskStore is null)
+        {
+            return [];
+        }
+
+        if (_hybridCache is not null && candidates.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        {
+            await Task.Yield();
+            _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return await _diskStore.CreateScanSourcesAsync(
                 candidates,
                 direction,
                 startInclusive,
                 endExclusive,
-                _scanMemoryBudget)
-            : [];
+                _scanMemoryBudget,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public async ValueTask RecordPointReadAsync(
         ColumnFamilyIdentity columnFamily,
@@ -1457,25 +1499,29 @@ sealed class Actor : IAsyncDisposable
                         trace = new PantsPointReadTrace(0, []);
                     }
                 }
-                else
+                else if (_hybridCache is not null)
                 {
-                    var sstNames = _diskStore.GetPointReadSstNames(columnFamily, key.Span);
-                    var hydratedFromCloud = captureDiagnostics && _hybridCache is not null
-                        ? sstNames
-                            .Where(name => !_diskStore.IsSstLocal(name))
-                            .ToHashSet(StringComparer.Ordinal)
-                        : null;
-                    await EnsureHybridSstsLocalAsync(
-                            sstNames,
+                    var result = await _diskStore.RecordPointReadAsync(
+                            _telemetry,
+                            columnFamily,
+                            key,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    exceedsBudget = result.ExceedsBudget;
+                    if (captureDiagnostics)
+                    {
+                        trace = result.Trace;
+                    }
+                }
+                else
+                {
                     if (captureDiagnostics)
                     {
                         exceedsBudget = _diskStore.RecordPointRead(
                             _telemetry,
                             columnFamily,
                             key.Span,
-                            hydratedFromCloud,
+                            null,
                             out trace);
                     }
                     else
@@ -1496,28 +1542,9 @@ sealed class Actor : IAsyncDisposable
             },
             cancellationToken).ConfigureAwait(false);
 
-    public ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
-        ColumnFamilyIdentity columnFamily,
-        ScanBounds bounds,
-        CancellationToken cancellationToken)
-        => SendAsync(
-            async _ =>
-            {
-                if (_diskStore is not null)
-                {
-                    await EnsureHybridSstsLocalAsync(
-                            _diskStore.GetScanSstNames(columnFamily, bounds),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                var validator = _diskStore?.CreateScanReadValidator(
-                    _telemetry,
-                    columnFamily,
-                    bounds);
-                return validator;
-            },
-            cancellationToken);
+    public IScanReadValidator? CreateScanReadValidator(
+        IReadOnlyList<AsyncSstScanSource> sources) =>
+        sources.Count == 0 ? null : new AsyncSstScanReadValidator(_telemetry, sources);
 
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken) =>
@@ -2536,7 +2563,11 @@ sealed class Actor : IAsyncDisposable
 
         try
         {
-            CommitValidator.Validate(state, payload, _diskStore);
+            await CommitValidator.ValidateAsync(
+                state,
+                payload,
+                _diskStore,
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (PantsWriteConflictException exception)
         {
@@ -3613,7 +3644,7 @@ sealed class Actor : IAsyncDisposable
         _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         await EnsureHybridSstsLocalAsync(
-                _diskStore.GetManifestSstNames(),
+                _diskStore.GetCompactionInputNames(state, false),
                 CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
@@ -3621,7 +3652,8 @@ sealed class Actor : IAsyncDisposable
                 state,
                 false,
                 _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes,
+                EnsureHybridSstsLocalAsync)
             .ConfigureAwait(false);
 
         if (result.PersistenceAnomaly)
@@ -3669,7 +3701,7 @@ sealed class Actor : IAsyncDisposable
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordReadAmplificationCompactionTrigger();
         await EnsureHybridSstsLocalAsync(
-                _diskStore!.GetManifestSstNames(),
+                _diskStore!.GetCompactionInputNames(state, true),
                 CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
@@ -3677,7 +3709,8 @@ sealed class Actor : IAsyncDisposable
                 state,
                 true,
                 _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes,
+                EnsureHybridSstsLocalAsync)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
         {
@@ -3882,7 +3915,6 @@ sealed class Actor : IAsyncDisposable
             {
                 await _hybridCache.EvictIfNeededAsync(
                         _diskStore,
-                        persistence.FetchSstAsync,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -3918,27 +3950,8 @@ sealed class Actor : IAsyncDisposable
         await HybridCacheManager.EnsureLocalSstsAsync(
                 _diskStore,
                 names,
-                FetchHybridSstAsync,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    async ValueTask<ReadOnlyMemory<byte>?> FetchHybridSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        var persistence = _cloudPersistence ??
-                          throw new PantsInternalException("Hybrid cache hydration has no cloud backend.");
-        var result = (ReadOnlyMemory<byte>?)null;
-        await _cloudWorker.ExecuteAsync(
-                async workerCancellationToken =>
-                {
-                    result = await persistence.FetchSstAsync(name, workerCancellationToken)
-                        .ConfigureAwait(false);
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
-        return result;
     }
 
     static void RecordMemtableBytes(RuntimeState state, CommitPayload payload)
@@ -4040,18 +4053,30 @@ sealed class Actor : IAsyncDisposable
         return bytes;
     }
 
-    static void ClearMemtableAccounting(RuntimeState state)
+    void ClearMemtableAccounting(RuntimeState state)
     {
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
         {
+            if (_diskStore is not null)
+            {
+                state.ReleasePersistedFamily(identity);
+            }
+
             state.ActiveMemtableBytes[identity] = 0;
         }
     }
 
-    static void ClearMemtableAccounting(
+    void ClearMemtableAccounting(
         RuntimeState state,
-        ColumnFamilyIdentity identity) =>
+        ColumnFamilyIdentity identity)
+    {
+        if (_diskStore is not null)
+        {
+            state.ReleasePersistedFamily(identity);
+        }
+
         state.ActiveMemtableBytes[identity] = 0;
+    }
 
     static PantsStorageLayout EmptyStorageLayout(RuntimeState state) => new(
         state.Health,
