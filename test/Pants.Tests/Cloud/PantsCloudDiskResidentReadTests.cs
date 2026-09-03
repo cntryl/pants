@@ -29,6 +29,85 @@ public sealed class PantsCloudDiskResidentReadTests
     }
 
     [Fact]
+    public async Task ShouldReleasePublishedCloudValuesAfterAutomaticWalThresholdFlush()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "disk-resident-auto-flush/")
+            .WithBackgroundCompaction(false)
+            .WithFlushAfterWalRecordsForTesting(1);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await using (var writer = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            writer.Put("automatic"u8.ToArray(), "published"u8.ToArray());
+            await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+
+        await using var reader = Assert.IsType<TransactionInstance>(
+            await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly));
+
+        Assert.Empty(GetSnapshot(reader).Families.Single().Value);
+        Assert.Equal(
+            "published",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("automatic"u8.ToArray()))));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseOtherCloudFamilyValuesPublishedByFlushCompaction()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "disk-resident-family-flush/")
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                int.MaxValue))
+            .WithBackgroundCompaction(true);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        var flushedFamily = await database.CreateColumnFamilyAsync("flushed");
+        await using (var defaultWriter = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            defaultWriter.Put("unflushed"u8.ToArray(), "retained"u8.ToArray());
+            await defaultWriter.CommitAsync(PantsWriteOptions.CloudAsync);
+        }
+
+        await using (var familyWriter = await database.BeginTransactionAsync(
+                         flushedFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            familyWriter.Put("published"u8.ToArray(), "value"u8.ToArray());
+            await familyWriter.CommitAsync(PantsWriteOptions.CloudAsync);
+        }
+
+        await database.FlushAsync(flushedFamily);
+
+        await using var reader = Assert.IsType<TransactionInstance>(
+            await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly));
+        var defaultFamily = Assert.Single(
+            GetSnapshot(reader).Families,
+            pair => pair.Key.Id == database.DefaultColumnFamily.Id);
+        Assert.Empty(defaultFamily.Value);
+        Assert.Equal(
+            "retained",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("unflushed"u8.ToArray()))));
+    }
+
+    [Fact]
     public async Task ShouldOpenWithoutRetainingPublishedCloudValuesInTheRuntimeSnapshot()
     {
         using var directory = new TemporaryDirectory();
@@ -62,6 +141,88 @@ public sealed class PantsCloudDiskResidentReadTests
 
         Assert.Equal(Value(EntryCount / 2), value?.ToArray());
         Assert.Empty(LocalSsts(directory.Path));
+    }
+
+    [Fact]
+    public async Task ShouldPreferAnUntouchedRemoteL0ValueOverANewerCompactionFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "disk-resident-compaction-precedence/")
+            .WithBackgroundCompaction(false)
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+        await using var database = await PantsDatabase.OpenAsync(options);
+
+        await CommitAndFlushAsync(database, "key", "old-value");
+        await CommitAndFlushAsync(database, "zulu", "separate-file");
+        await CommitAndFlushAsync(database, "key", "new-value");
+        await database.CompactAllAsync();
+        RemoveLocalSsts(directory.Path);
+
+        await using var reader = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        var value = await reader.GetAsync("key"u8.ToArray());
+
+        Assert.Equal(
+            "new-value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
+        Assert.Empty(LocalSsts(directory.Path));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCloudMemtableTrackingAfterReadAmplificationCompaction()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "disk-resident-read-compaction/")
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                int.MaxValue))
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        for (var generation = 0; generation < 6; generation++)
+        {
+            await CommitAndFlushAsync(database, "hot-key", $"value-{generation}");
+        }
+
+        await using (var writer = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            writer.Put("pending"u8.ToArray(), "published-by-compaction"u8.ToArray());
+            await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+
+        await database.SetBackgroundCompactionAsync(true);
+        await using (var trigger = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal(
+                "value-5",
+                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                    await trigger.GetAsync("hot-key"u8.ToArray()))));
+        }
+
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.Equal(1, metrics.ReadAmplificationCompactionTriggersTotal);
+        Assert.Equal(0, metrics.MaximumMemtableWalSegmentGap);
+        await using var reader = Assert.IsType<TransactionInstance>(
+            await database.BeginTransactionAsync(
+                database.DefaultColumnFamily,
+                PantsTransactionMode.ReadOnly));
+        Assert.Empty(GetSnapshot(reader).Families.Single().Value);
+        Assert.Equal(
+            "published-by-compaction",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("pending"u8.ToArray()))));
     }
 
     [Fact]
@@ -176,6 +337,19 @@ public sealed class PantsCloudDiskResidentReadTests
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.FlushAsync(database.DefaultColumnFamily);
         Assert.NotEmpty(CloudSsts(path));
+    }
+
+    static async Task CommitAndFlushAsync(
+        IPantsDatabase database,
+        string key,
+        string value)
+    {
+        await using var writer = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadWrite);
+        writer.Put(TestBytes.FromString(key), TestBytes.FromString(value));
+        await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+        await database.FlushAsync(database.DefaultColumnFamily);
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(string path) =>

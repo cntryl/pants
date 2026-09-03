@@ -77,8 +77,7 @@ sealed class SstBlockIterator : IDisposable
             _started = true;
             if (_reader.DataBlockCount == 0 || !TryResolveStartBlock(out _blockIndex))
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             LoadBlock(_blockIndex);
@@ -103,8 +102,7 @@ sealed class SstBlockIterator : IDisposable
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
                 {
-                    _finished = true;
-                    return false;
+                    return Finish();
                 }
 
                 Current = candidate;
@@ -114,8 +112,7 @@ sealed class SstBlockIterator : IDisposable
             _blockIndex++;
             if (_blockIndex >= _reader.DataBlockCount)
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             LoadBlock(_blockIndex);
@@ -138,8 +135,7 @@ sealed class SstBlockIterator : IDisposable
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
                 {
-                    _finished = true;
-                    return false;
+                    return Finish();
                 }
 
                 Current = candidate;
@@ -149,8 +145,7 @@ sealed class SstBlockIterator : IDisposable
             _blockIndex--;
             if (_blockIndex < 0)
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             LoadBlock(_blockIndex);
@@ -175,6 +170,16 @@ sealed class SstBlockIterator : IDisposable
         CurrentBlockBytes = block.Length;
         _blockEntries = entries;
         _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : _blockEntries.Count - 1;
+    }
+
+    bool Finish()
+    {
+        _finished = true;
+        _blockEntries = null;
+        _blockReservation?.Dispose();
+        _blockReservation = null;
+        CurrentBlockBytes = 0;
+        return false;
     }
 
     bool TryResolveStartBlock(out int blockIndex)
@@ -226,8 +231,6 @@ sealed class SstBlockIterator : IDisposable
 
     public void Dispose()
     {
-        _blockEntries = null;
-        _blockReservation?.Dispose();
-        _blockReservation = null;
+        _ = Finish();
     }
 }

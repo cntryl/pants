@@ -45,6 +45,26 @@ public sealed class PantsPointReadDiskResidentTests
     }
 
     [Fact]
+    public async Task ShouldPreferAnUntouchedL0ValueOverANewerCompactionFileContainingAnOlderValue()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await PutAsync(database, "key", "old-value");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await PutAsync(database, "zulu", "separate-file");
+        await database.FlushAsync(database.DefaultColumnFamily);
+        await PutAsync(database, "key", "new-value");
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        await database.CompactAllAsync();
+
+        Assert.Equal("new-value", await ReadAsync(database, "key"));
+    }
+
+    [Fact]
     public async Task ShouldReadTheNewestVersionWhenOneKeysVersionsSpanSstBlocks()
     {
         using var directory = new TemporaryDirectory();
@@ -79,6 +99,39 @@ public sealed class PantsPointReadDiskResidentTests
         }
 
         Assert.Empty(entries);
+    }
+
+    [Fact]
+    public async Task ShouldNotScanAnSstValueCoveredByAnUnflushedRangeDelete()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await OpenAsync(directory.Path);
+        await PutAsync(database, "alpha", "one");
+        await PutAsync(database, "bravo", "two");
+        await PutAsync(database, "charlie", "three");
+        await database.FlushAsync(database.DefaultColumnFamily);
+
+        await using (var deleting = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            deleting.DeleteRange(
+                TestBytes.FromString("bravo"),
+                TestBytes.FromString("delta"));
+            await deleting.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var transaction = await database.BeginTransactionAsync(
+            database.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var scan = await transaction.ScanAsync(new PantsScanQuery());
+        var entries = new List<PantsEntry>();
+        await foreach (var entry in scan)
+        {
+            entries.Add(entry);
+        }
+
+        Assert.Equal(["alpha"], entries.Select(entry => TestBytes.ToText(entry.Key)));
     }
 
     [Fact]

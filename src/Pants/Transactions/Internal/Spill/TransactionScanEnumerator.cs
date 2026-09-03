@@ -9,6 +9,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     readonly TransactionIntentReadView _intents;
     readonly ImmutableSortedDictionary<byte[], CellState> _snapshot;
     readonly IEnumerator<byte[]> _snapshotKeys;
+    readonly IReadOnlyList<CommittedRangeTombstone> _snapshotRangeTombstones;
     readonly DateTimeOffset _snapshotTime;
     readonly CancellationToken _cancellationToken;
     readonly bool[] _sstActivated;
@@ -49,6 +50,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         }
 
         _snapshotKeys = snapshotKeys.GetEnumerator();
+        _snapshotRangeTombstones = snapshot.RangeTombstones[family];
         _intentKeys = intents.CreateKeyScan(
             bounds.StartInclusive,
             bounds.EndExclusive,
@@ -262,7 +264,11 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         if (best is null ||
             best.IsDelete ||
             UnixTimestamp.IsExpired(best.Expiration, _snapshotTime) ||
-            SstRangeTombstoneMask.Covers(_sstRangeTombstones, key, best.Sequence))
+            SstRangeTombstoneMask.Covers(_sstRangeTombstones, key, best.Sequence) ||
+            _snapshotRangeTombstones.Any(tombstone =>
+                tombstone.WriteSequence > checked((long)best.Sequence) &&
+                ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
+                ByteArrayComparer.Instance.Compare(key, tombstone.EndExclusive) < 0))
         {
             return null;
         }

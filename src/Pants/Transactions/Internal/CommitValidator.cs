@@ -8,13 +8,14 @@ static class CommitValidator
         RuntimeState state,
         CommitPayload payload,
         LocalDiskStore? diskStore = null) =>
-        ValidateAsync(state, payload, diskStore, CancellationToken.None)
+        ValidateAsync(state, payload, diskStore, null, CancellationToken.None)
             .AsTask().GetAwaiter().GetResult();
 
     public static async ValueTask ValidateAsync(
         RuntimeState state,
         CommitPayload payload,
         LocalDiskStore? diskStore,
+        ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {
         foreach (var (identity, assertions) in payload.Asserts)
@@ -85,6 +86,7 @@ static class CommitValidator
                     payload,
                     operation,
                     diskStore,
+                    scanMemoryBudget,
                     cancellationToken).ConfigureAwait(false);
             }
         }, cancellationToken).ConfigureAwait(false);
@@ -95,6 +97,7 @@ static class CommitValidator
         CommitPayload payload,
         TransactionIntentOperation operation,
         LocalDiskStore? diskStore,
+        ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {
         var family = GetFamily(state, operation.Family);
@@ -145,6 +148,7 @@ static class CommitValidator
                         operation.Key,
                         operation.EndExclusive,
                         payload.StartSnapshot.Sequence,
+                        scanMemoryBudget,
                         cancellationToken).ConfigureAwait(false))
                 {
                     throw RangeConflict("A covered range changed after the transaction began.");
@@ -363,6 +367,7 @@ static class CommitValidator
         byte[] start,
         byte[] end,
         long afterSequence,
+        ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {
         if (diskStore is null)
@@ -377,6 +382,7 @@ static class CommitValidator
                 start,
                 end,
                 checked((ulong)afterSequence),
+                scanMemoryBudget,
                 cancellationToken)
             .ConfigureAwait(false);
     }

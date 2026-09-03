@@ -111,6 +111,27 @@ public sealed class SstBlockIteratorTests
         Assert.Equal(5UL, exposed[0].Sequence);
     }
 
+    [Fact]
+    public void ShouldReleaseTheFinalDecodedBlockAsSoonAsItIsExhausted()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateMultiBlockSst(directory.Path, blockCount: 1);
+        using var reader = SstReader.Open(path);
+        var budget = new ResourceBudget(1024 * 1024);
+        using var iterator = SstBlockIterator.Create(
+            reader,
+            PantsScanDirection.Forward,
+            resourceBudget: budget);
+
+        Assert.True(iterator.MoveNext());
+        Assert.True(budget.Current > 0);
+        while (iterator.MoveNext())
+        {
+        }
+
+        Assert.Equal(0, budget.Current);
+    }
+
     static long MeasurePeakDecodedBlockBytes(string path)
     {
         using var reader = SstReader.Open(path);

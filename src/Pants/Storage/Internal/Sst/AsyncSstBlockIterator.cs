@@ -44,8 +44,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             _started = true;
             if (_reader.DataBlockCount == 0 || !TryResolveStartBlock(out _blockIndex))
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
@@ -58,9 +57,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _blockEntries = null;
-        _blockReservation?.Dispose();
-        _blockReservation = null;
+        _ = Finish();
         await _reader.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -80,8 +77,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
                 if (_endExclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_endExclusive) >= 0)
                 {
-                    _finished = true;
-                    return false;
+                    return Finish();
                 }
 
                 Current = candidate;
@@ -91,8 +87,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             _blockIndex++;
             if (_blockIndex >= _reader.DataBlockCount)
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
@@ -115,8 +110,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
                 if (_startInclusive is not null &&
                     candidate.Key.AsSpan().SequenceCompareTo(_startInclusive) < 0)
                 {
-                    _finished = true;
-                    return false;
+                    return Finish();
                 }
 
                 Current = candidate;
@@ -126,8 +120,7 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
             _blockIndex--;
             if (_blockIndex < 0)
             {
-                _finished = true;
-                return false;
+                return Finish();
             }
 
             await LoadBlockAsync(_blockIndex, cancellationToken).ConfigureAwait(false);
@@ -149,6 +142,15 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         _blockReservation = _resourceBudget?.Reserve(accountedBytes);
         _blockEntries = entries;
         _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : entries.Count - 1;
+    }
+
+    bool Finish()
+    {
+        _finished = true;
+        _blockEntries = null;
+        _blockReservation?.Dispose();
+        _blockReservation = null;
+        return false;
     }
 
     bool TryResolveStartBlock(out int blockIndex)

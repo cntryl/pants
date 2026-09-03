@@ -97,6 +97,23 @@ public sealed class StreamingCompactionMergerTests
     }
 
     [Fact]
+    public void ShouldMatchTheExistingMergerWhenDuplicateVersionsSpanManyBlocks()
+    {
+        var versions = Enumerable.Range(1, 48)
+            .Select(index => (
+                "large-key",
+                checked((ulong)index),
+                (string?)new string((char)('a' + index % 26), 4096)))
+            .Reverse()
+            .ToArray();
+
+        AssertEquivalent(
+            [Build(versions)],
+            Plan(snapshotHorizon: 24),
+            targetSizeBytes: 1024 * 1024);
+    }
+
+    [Fact]
     public void ShouldChargeInputBlocksAndKeepOnlyOneOutputPartitionReservedAtATime()
     {
         var entries = Enumerable.Range(0, 100)

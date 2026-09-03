@@ -44,6 +44,16 @@ public sealed class ResourceBudgetTests
     }
 
     [Fact]
+    public void ShouldRejectOverflowWithoutCorruptingCurrentUsage()
+    {
+        var budget = new ResourceBudget(long.MaxValue);
+        using var held = budget.Reserve(long.MaxValue);
+
+        Assert.Throws<PantsResourceLimitException>(() => budget.Reserve(1));
+        Assert.Equal(long.MaxValue, budget.Current);
+    }
+
+    [Fact]
     public void ShouldAllowAReservationExactlyAtTheRemainingLimit()
     {
         var budget = new ResourceBudget(100);

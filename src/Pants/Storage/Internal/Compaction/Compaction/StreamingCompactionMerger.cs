@@ -77,10 +77,7 @@ static class StreamingCompactionMerger
                          droppedRanges,
                          resourceBudget))
             {
-                var entryBytes = checked(
-                    entry.Key.Length +
-                    (entry.Value?.Length ?? 0) +
-                    EntryOverheadBytes);
+                var entryBytes = EstimateEntryBytes(entry);
                 if (entryBytes > effectiveTargetSizeBytes)
                 {
                     throw PantsException.ResourceLimit(
@@ -240,24 +237,61 @@ static class StreamingCompactionMerger
                     yield break;
                 }
 
-                var group = new List<SstEntry>();
-                for (var i = 0; i < heads.Length; i++)
+                var foundSurvivingEntry = false;
+                var dropGroup = false;
+                var retainedNewest = false;
+                var retainedAtOrBelowHorizon = false;
+                while (TrySelectNewestHead(heads, minKey, out var sourceIndex, out var entry))
                 {
-                    while (heads[i] is { } head &&
-                           ByteArrayComparer.Instance.Equals(head.Key, minKey))
+                    // Advancing can release the iterator's decoded-block reservation. Hold a
+                    // one-entry handoff reservation across that advance and any yield until the
+                    // output partition has taken ownership, rather than materializing an
+                    // unbounded same-key version group between input and output owners.
+                    using var handoffReservation = resourceBudget?.Reserve(
+                        EstimateEntryBytes(entry));
+                    heads[sourceIndex] = iterators[sourceIndex].MoveNext()
+                        ? iterators[sourceIndex].Current
+                        : null;
+                    if (droppedRanges.Any(range => Covers(range, entry)))
                     {
-                        group.Add(head);
-                        heads[i] = iterators[i].MoveNext() ? iterators[i].Current : null;
+                        continue;
                     }
-                }
 
-                var survivingGroup = group.Where(entry => !droppedRanges.Any(range => Covers(range, entry)));
-                foreach (var entry in RetainVersions(
-                    survivingGroup.OrderByDescending(static entry => entry.Sequence),
-                    horizon,
-                    pointTombstoneGcEligible))
-                {
-                    yield return entry;
+                    if (!foundSurvivingEntry)
+                    {
+                        foundSurvivingEntry = true;
+                        dropGroup = entry.IsDelete &&
+                                    CanDrop(
+                                        entry.Sequence,
+                                        horizon,
+                                        pointTombstoneGcEligible);
+                    }
+
+                    if (dropGroup)
+                    {
+                        continue;
+                    }
+
+                    if (horizon is null)
+                    {
+                        if (!retainedNewest)
+                        {
+                            retainedNewest = true;
+                            yield return entry;
+                        }
+
+                        continue;
+                    }
+
+                    if (entry.Sequence > horizon.Value)
+                    {
+                        yield return entry;
+                    }
+                    else if (!retainedAtOrBelowHorizon)
+                    {
+                        retainedAtOrBelowHorizon = true;
+                        yield return entry;
+                    }
                 }
             }
         }
@@ -270,38 +304,33 @@ static class StreamingCompactionMerger
         }
     }
 
-    // Copied verbatim from CompactionMerger — see the type-level doc comment.
-    static List<SstEntry> RetainVersions(
-        IEnumerable<SstEntry> orderedEntries,
-        ulong? horizon,
-        bool tombstoneGcEligible)
+    static bool TrySelectNewestHead(
+        SstEntry?[] heads,
+        byte[] key,
+        out int sourceIndex,
+        out SstEntry entry)
     {
-        var versions = orderedEntries.ToArray();
-        if (versions.Length == 0)
+        sourceIndex = -1;
+        entry = null!;
+        for (var index = 0; index < heads.Length; index++)
         {
-            return [];
+            var candidate = heads[index];
+            if (candidate is null ||
+                !ByteArrayComparer.Instance.Equals(candidate.Key, key) ||
+                (sourceIndex >= 0 && candidate.Sequence <= entry.Sequence))
+            {
+                continue;
+            }
+
+            sourceIndex = index;
+            entry = candidate;
         }
 
-        var newest = versions[0];
-        if (newest.IsDelete && CanDrop(newest.Sequence, horizon, tombstoneGcEligible))
-        {
-            return [];
-        }
-
-        if (horizon is null)
-        {
-            return [newest];
-        }
-
-        var retained = versions.TakeWhile(entry => entry.Sequence > horizon.Value).ToList();
-        var visibleAtHorizon = versions.FirstOrDefault(entry => entry.Sequence <= horizon.Value);
-        if (visibleAtHorizon is not null)
-        {
-            retained.Add(visibleAtHorizon);
-        }
-
-        return retained;
+        return sourceIndex >= 0;
     }
+
+    static long EstimateEntryBytes(SstEntry entry) => checked(
+        (long)entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes);
 
     static bool CanDrop(ulong sequence, ulong? horizon, bool eligible) =>
         eligible && (horizon is null || sequence <= horizon.Value);

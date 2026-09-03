@@ -5704,12 +5704,10 @@
       "source": "tests/hybrid_storage.rs",
       "sourceSymbolOrTest": "should_keep_pinned_sst_local_given_active_snapshot_when_eviction_runs",
       "observableBehavior": "keep pinned sst local given active snapshot when eviction runs",
-      "status": "mapped",
+      "status": "n/a",
       "expectedError": null,
       "issue": 7,
-      "pantsTests": [
-        "Cntryl.Pants.Tests.Storage.PantsHybridStorageTests.ShouldKeepPinnedSstLocalGivenActiveSnapshotWhenEvictionRuns"
-      ]
+      "rationale": "Pants snapshots retain immutable remote SST authority rather than pinning an interchangeable local cache file; snapshot visibility across cache eviction is covered by PantsHybridStorageTests.ShouldEvictSnapshotVisibleSstAndReadItFromRemoteAuthority."
     },
     {
       "id": "behavior:c5ffc2d3284c:tests/hybrid_storage.rs:should_persist_eviction_state_across_restart",

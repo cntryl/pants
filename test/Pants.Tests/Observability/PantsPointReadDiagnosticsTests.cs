@@ -73,11 +73,9 @@ public sealed class PantsPointReadDiagnosticsTests
         var cold = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
         var warm = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
 
-        // GetWithDiagnosticsAsync's trace comes from the exhaustive diagnostic pass (touching
-        // every candidate "alpha" SST), but the real value is resolved separately and first —
-        // stopping at the newest candidate — so that candidate's diagnostic touch is already a
-        // cache hit by the time the exhaustive pass reaches it, while the older, never-resolved
-        // candidate is still a genuine miss.
+        // GetWithDiagnosticsAsync's trace comes from the exhaustive diagnostic pass. The real
+        // value is resolved first by comparing write sequences across every candidate SST, so
+        // every candidate is already warm when the diagnostic pass records this query.
         Assert.Equal("second", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(cold.Value)));
         Assert.Equal(1, cold.Trace.KeyRangeRejects);
         Assert.Equal(2, cold.Trace.Ssts.Count);
@@ -89,9 +87,12 @@ public sealed class PantsPointReadDiagnosticsTests
             Assert.Equal(PantsSstReadTier.Local, sst.Tier);
             Assert.Equal(PantsBloomFilterOutcome.TruePositive, sst.BloomFilterOutcome);
         });
-        Assert.Single(cold.Trace.Ssts, static sst => sst.ReaderCacheOutcome == PantsCacheReadOutcome.Miss);
-        Assert.Single(cold.Trace.Ssts, static sst => sst.ReaderCacheOutcome == PantsCacheReadOutcome.Hit);
-        Assert.Equal(1, cold.Trace.Ssts.Sum(static sst => sst.DataBlocksRead));
+        Assert.All(cold.Trace.Ssts, static sst =>
+        {
+            Assert.Equal(PantsCacheReadOutcome.Hit, sst.ReaderCacheOutcome);
+            Assert.Equal(PantsCacheReadOutcome.Hit, sst.BlockCacheOutcome);
+            Assert.Equal(0, sst.DataBlocksRead);
+        });
 
         // By the time `warm` runs, both candidates' caches are warm (the earlier resolution plus
         // `cold`'s exhaustive pass already touched both).
@@ -110,11 +111,11 @@ public sealed class PantsPointReadDiagnosticsTests
         });
 
         var aggregate = await database.GetReadPathDiagnosticsAsync();
-        Assert.Equal(1, aggregate.SstReaderCacheMisses);
-        Assert.Equal(3, aggregate.SstReaderCacheHits);
-        Assert.Equal(1, aggregate.SstBlockCacheMisses);
-        Assert.Equal(3, aggregate.SstBlockCacheHits);
-        Assert.Equal(1, aggregate.DataBlocksRead);
+        Assert.Equal(0, aggregate.SstReaderCacheMisses);
+        Assert.Equal(4, aggregate.SstReaderCacheHits);
+        Assert.Equal(0, aggregate.SstBlockCacheMisses);
+        Assert.Equal(4, aggregate.SstBlockCacheHits);
+        Assert.Equal(0, aggregate.DataBlocksRead);
     }
 
     [Fact]

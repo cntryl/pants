@@ -858,7 +858,6 @@ sealed class Actor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 var snapshotId = checked(++state.TransactionCounter);
-                _hybridCache?.RegisterSnapshot(snapshotId, snapshot.Sequence);
                 state.ActiveScanSnapshots[snapshotId] = new ScanSnapshotPin(
                     snapshotId,
                     snapshot.Sequence,
@@ -878,7 +877,6 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
-                    _hybridCache?.UnregisterSnapshot(snapshotId);
                     _telemetry.RecordSnapshotUnregister();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
                         .ConfigureAwait(false);
@@ -910,7 +908,6 @@ sealed class Actor : IAsyncDisposable
                     snapshot,
                     state.Clock.UtcNow,
                     _diskStore?.RootPath);
-                _hybridCache?.RegisterSnapshot(transactionId, snapshot.Sequence);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
@@ -958,7 +955,6 @@ sealed class Actor : IAsyncDisposable
                 startedAt,
                 null,
                 false);
-            _hybridCache?.RegisterSnapshot(transactionId, version.Sequence);
             if (!_state.DirectReadOnlyTransactions.TryAdd(
                     transactionId,
                     new TransactionInfo(
@@ -968,7 +964,6 @@ sealed class Actor : IAsyncDisposable
                         startedAt,
                         version)))
             {
-                _hybridCache?.UnregisterSnapshot(transactionId);
                 throw new PantsInternalException("A direct read-only transaction identifier collided.");
             }
 
@@ -990,7 +985,6 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        _hybridCache?.UnregisterSnapshot(transactionId);
         _telemetry.RecordSnapshotUnregister();
         if (committed)
         {
@@ -1055,7 +1049,6 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveTransactions.Remove(transactionId))
                 {
-                    _hybridCache?.UnregisterSnapshot(transactionId);
                     _telemetry.RecordSnapshotUnregister();
                     _telemetry.RecordTransactionRollback();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
@@ -2456,14 +2449,23 @@ sealed class Actor : IAsyncDisposable
             else
             {
                 writtenWalSegmentId = _diskStore.CurrentWalSegmentId;
-                await PersistCommitAsync(state, payload, writeOptions.Durability)
+                var automaticallyFlushed = await PersistCommitAsync(
+                        state,
+                        payload,
+                        writeOptions.Durability)
                     .ConfigureAwait(false);
-            }
-
-            ApplyCommittedOperations(state, payload, state.Sequence);
-            if (writtenWalSegmentId.HasValue)
-            {
+                ApplyCommittedOperations(state, payload, state.Sequence);
                 TrackCloudMemtableWrites(payload, writtenWalSegmentId.Value);
+                if (automaticallyFlushed)
+                {
+                    state.UnflushedFamilies.Clear();
+                    ClearMemtableAccounting(state);
+                    _cloudMemtableSegments?.Reinitialize([], _diskStore.CurrentWalSegmentId);
+                }
+            }
+            if (!writtenWalSegmentId.HasValue)
+            {
+                ApplyCommittedOperations(state, payload, state.Sequence);
             }
 
             if (_cloudPersistence is not null &&
@@ -2524,7 +2526,6 @@ sealed class Actor : IAsyncDisposable
                 $"Transaction {payload.TransactionId} is not active.");
         }
 
-        _hybridCache?.UnregisterSnapshot(payload.TransactionId);
         _telemetry.RecordSnapshotUnregister();
         if (_diskStore is not null)
         {
@@ -2567,6 +2568,7 @@ sealed class Actor : IAsyncDisposable
                 state,
                 payload,
                 _diskStore,
+                _scanMemoryBudget,
                 CancellationToken.None).ConfigureAwait(false);
         }
         catch (PantsWriteConflictException exception)
@@ -2598,12 +2600,11 @@ sealed class Actor : IAsyncDisposable
     {
         if (state.ActiveTransactions.Remove(payload.TransactionId))
         {
-            _hybridCache?.UnregisterSnapshot(payload.TransactionId);
             _telemetry.RecordSnapshotUnregister();
         }
     }
 
-    async ValueTask PersistCommitAsync(
+    async ValueTask<bool> PersistCommitAsync(
         RuntimeState state,
         CommitPayload payload,
         PantsDurability durability)
@@ -2622,14 +2623,15 @@ sealed class Actor : IAsyncDisposable
             RecordPostDurabilityFailure(state, result.PostDurabilityFailure);
         }
 
+        var automaticallyFlushed = false;
         if (!UsesBackgroundImmutableFlushes &&
             _options.FlushAfterWalRecords > 0 &&
             diskStore.WalRecords >= _options.FlushAfterWalRecords)
         {
             await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
             await MirrorCloudStorageAsync().ConfigureAwait(false);
-            state.UnflushedFamilies.Clear();
             await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+            automaticallyFlushed = true;
         }
 
         try
@@ -2667,6 +2669,8 @@ sealed class Actor : IAsyncDisposable
                 ScheduleCloudWalBacklogDrain();
             }
         }
+
+        return automaticallyFlushed;
     }
 
     async ValueTask CompleteCloudStrictCommitAsync(CommitPayload payload)
@@ -3668,6 +3672,16 @@ sealed class Actor : IAsyncDisposable
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
         }
+
+        if (!UsesBackgroundImmutableFlushes)
+        {
+            state.UnflushedFamilies.Clear();
+            ClearMemtableAccounting(state);
+            _cloudMemtableSegments?.Reinitialize(
+                [],
+                _diskStore.CurrentWalSegmentId);
+            PublishSnapshot(state);
+        }
     }
 
     async ValueTask RunReadAmplificationCompactionAsync(RuntimeState state)
@@ -3716,6 +3730,9 @@ sealed class Actor : IAsyncDisposable
         {
             state.UnflushedFamilies.Clear();
             ClearMemtableAccounting(state);
+            _cloudMemtableSegments?.Reinitialize(
+                [],
+                _diskStore.CurrentWalSegmentId);
         }
 
         if (result.PersistenceAnomaly)

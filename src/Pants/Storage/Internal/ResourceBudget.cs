@@ -25,14 +25,14 @@ sealed class ResourceBudget(long limit)
         while (true)
         {
             var before = Interlocked.Read(ref _current);
-            var after = before + bytes;
-            if (after > Limit)
+            if (bytes > Limit - before)
             {
                 throw PantsException.ResourceLimit(
                     $"Reserving {bytes} bytes would exceed the {Limit}-byte resource budget " +
                     $"({before} bytes already reserved).");
             }
 
+            var after = before + bytes;
             if (Interlocked.CompareExchange(ref _current, after, before) == before)
             {
                 UpdatePeak(after);

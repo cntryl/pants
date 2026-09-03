@@ -373,8 +373,7 @@ sealed class LocalDiskStore : IDisposable
             .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
             .Select(file => new HybridLocalSst(
                 file.Name,
-                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length,
-                file.SmallestSequence))
+                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
             .ToArray();
 
     public async ValueTask VerifyRemoteSstMatchesLocalAsync(
@@ -598,9 +597,10 @@ sealed class LocalDiskStore : IDisposable
     }
 
     /// <summary>
-    /// Resolves a key's newest visible SST entry, checking <paramref name="candidatesNewestFirst"/>
-    /// in order and stopping at the first file that contains the key (whether a value or a
-    /// tombstone masked by a range tombstone) — a real value-supplying counterpart to
+    /// Resolves a key's newest visible SST entry by comparing write sequences across
+    /// <paramref name="candidatesNewestFirst"/> — file publication order alone is insufficient
+    /// because a newer compaction output can contain an older value than an untouched L0 file.
+    /// This is the real value-supplying counterpart to
     /// <see cref="RecordPointReadCore"/>'s telemetry-only bloom/block-read simulation. Safe to
     /// call concurrently with the actor's mailbox: it only reads the (lock-free,
     /// snapshot-pinned) reader/block caches. Deliberately records no telemetry of its own — the
@@ -618,6 +618,7 @@ sealed class LocalDiskStore : IDisposable
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
         var tombstonesSeen = new List<RangeTombstone>();
+        SstEntry? best = null;
         foreach (var candidate in candidatesNewestFirst)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
@@ -654,17 +655,17 @@ sealed class LocalDiskStore : IDisposable
                         continue;
                     }
 
-                    // A range tombstone from this or any newer (already-touched) candidate masks
-                    // the match — that is the definitive (deleted) answer, so stop rather than
-                    // falling through to older candidates.
-                    return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
-                        ? null
-                        : entry;
+                    if (best is null || entry.Sequence > best.Sequence)
+                    {
+                        best = entry;
+                    }
                 }
             }
         }
 
-        return null;
+        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
+            ? null
+            : best;
     }
 
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
@@ -675,6 +676,7 @@ sealed class LocalDiskStore : IDisposable
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
         var tombstonesSeen = new List<RangeTombstone>();
+        SstEntry? best = null;
         foreach (var candidate in candidatesNewestFirst)
         {
             await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
@@ -710,14 +712,17 @@ sealed class LocalDiskStore : IDisposable
                         continue;
                     }
 
-                    return SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, entry.Sequence)
-                        ? null
-                        : entry;
+                    if (best is null || entry.Sequence > best.Sequence)
+                    {
+                        best = entry;
+                    }
                 }
             }
         }
 
-        return null;
+        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
+            ? null
+            : best;
     }
 
     public bool IsSstAvailable(FileMeta file) =>
@@ -838,6 +843,7 @@ sealed class LocalDiskStore : IDisposable
         ReadOnlyMemory<byte> startInclusive,
         ReadOnlyMemory<byte> endExclusive,
         ulong afterSequence,
+        ResourceBudget? resourceBudget,
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
@@ -869,7 +875,7 @@ sealed class LocalDiskStore : IDisposable
                 PantsScanDirection.Forward,
                 start,
                 end,
-                null);
+                resourceBudget);
             while (await iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
             {
                 if (iterator.Current.Sequence > afterSequence)
@@ -1015,12 +1021,27 @@ sealed class LocalDiskStore : IDisposable
         CancellationToken cancellationToken)
     {
         var path = Path.Combine(_sstDirectory, ValidateSstName(file.Name));
-        IAsyncSstSource? source = File.Exists(path)
-            ? LocalAsyncSstSource.Open(path)
-            : _remoteSstSourceFactory is null
-                ? null
-                : await _remoteSstSourceFactory.OpenAsync(file, cancellationToken)
-                    .ConfigureAwait(false);
+        IAsyncSstSource? source = null;
+        if (File.Exists(path))
+        {
+            try
+            {
+                source = LocalAsyncSstSource.Open(path);
+            }
+            catch (Exception exception) when (
+                _remoteSstSourceFactory is not null &&
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // A verified cache eviction can win the race between the existence check and
+                // acquiring the delete-share local read lease. Remote immutable authority is
+                // still snapshot-visible, so reopen through it below.
+            }
+        }
+
+        source ??= _remoteSstSourceFactory is null
+            ? null
+            : await _remoteSstSourceFactory.OpenAsync(file, cancellationToken)
+                .ConfigureAwait(false);
         if (source is null)
         {
             throw new PantsRecoveryFailedException(
