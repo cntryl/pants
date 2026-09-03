@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Tests.Cloud;
 [Trait("Category", "Sqrzl")]
 public sealed class SqrzlCloudProviderQualificationTests
 {
-    const string Endpoint = "http://127.0.0.1:9000";
+    static readonly string Endpoint = ResolveEndpoint();
     static readonly HttpClient HealthClient = new()
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -195,6 +195,29 @@ public sealed class SqrzlCloudProviderQualificationTests
                 "Start it with 'docker compose up -d sqrzl'.",
                 exception);
         }
+    }
+
+    static string ResolveEndpoint()
+    {
+        var configuredEndpoint = Environment.GetEnvironmentVariable("PANTS_SQRZL_ENDPOINT");
+        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return configuredEndpoint.TrimEnd('/');
+        }
+
+        var configuredPort = Environment.GetEnvironmentVariable("PANTS_SQRZL_API_PORT");
+        if (string.IsNullOrWhiteSpace(configuredPort))
+        {
+            configuredPort = "9000";
+        }
+
+        if (!ushort.TryParse(configuredPort, out var port) || port == 0)
+        {
+            throw new InvalidOperationException(
+                "PANTS_SQRZL_API_PORT must be an integer from 1 through 65535.");
+        }
+
+        return $"http://127.0.0.1:{port}";
     }
 
     static PantsCloudStorageLocation CreateS3Location() => new(
