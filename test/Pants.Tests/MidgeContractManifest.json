@@ -938,12 +938,10 @@
       "source": "tests/cloud_provider_engine_qualification.rs",
       "sourceSymbolOrTest": "should_recover_engine_from_real_s3_after_local_cache_loss_if_configured",
       "observableBehavior": "recover engine from real s3 after local cache loss if configured",
-      "status": "mapped",
+      "status": "n/a",
       "expectedError": null,
       "issue": 7,
-      "pantsTests": [
-        "Cntryl.Pants.Tests.Cloud.CloudProviderEngineQualificationTests.ShouldRecoverEngineFromRealS3AfterLocalCacheLossIfConfigured"
-      ]
+      "rationale": "Credentialed live-account qualification is an optional operational check, not a product compatibility behavior. Pants proves the S3 protocol and cache-loss recovery deterministically with Sqrzl and provider-shaped transports and never contacts live provider accounts."
     },
     {
       "id": "behavior:75dcc39f7a9b:tests/cloud_provider_engine_qualification.rs:should_recover_engine_from_sqrzl_azure_after_local_cache_loss",
@@ -7899,7 +7897,7 @@
       "status": "n/a",
       "expectedError": null,
       "issue": 10,
-      "rationale": "Midge's Rust Sqrzl test-selection assertions are repository tooling; Pants provider qualification is owned by its native workflow."
+      "rationale": "Midge's Rust Sqrzl test-selection assertions are repository tooling; Pants provider qualification is owned by its native Sqrzl CI job."
     },
     {
       "id": "behavior:75dcc39f7a9b:tests/testing_governance.rs:should_summarize_mutation_pilot_given_caught_and_surviving_mutants",

@@ -35,10 +35,11 @@ without copying provider response bodies or credential material into the report.
 `IsValid` means only that configuration structure is accepted. `IsReady` means namespace listing
 succeeded without an error. `IsFullyVerified` additionally means HEAD and the bounded read passed.
 None of these values proves write authorization, conditional-write semantics, durability,
-performance, or future availability. Use the provider qualification suite and storage verification
-for those separate properties.
+performance, or future availability. Use the Sqrzl provider qualification suite and storage
+verification for those separate properties.
 
 OCI is represented by `PantsCloudProviderConfiguration.OciObjectStorage` and
 `PantsOciCredentialSource`. When no endpoint override is supplied, Pants derives
 `https://{namespace}.compat.objectstorage.{region}.oraclecloud.com` and uses path-style S3 signing.
-This is first-class configuration and transport support, not a claim of live OCI qualification.
+This is first-class configuration and transport support, not a claim of live OCI qualification;
+Pants does not run qualification against live provider accounts.

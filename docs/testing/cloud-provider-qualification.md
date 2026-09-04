@@ -1,12 +1,12 @@
 # Cloud provider qualification
 
-Sqrzl is the deterministic qualification environment for Pants cloud storage. The Compose service
-uses the same pinned emulator image as Midge and provides S3, Azure Blob, GCS XML, and GCS JSON front
-doors without live-cloud credentials.
+Sqrzl is the only cloud qualification environment for Pants. The Compose service uses the same
+pinned emulator image as Midge and provides S3, Azure Blob, GCS XML, and GCS JSON front doors
+without live-cloud credentials. Repository and CI qualification is Sqrzl-only and never accesses
+live provider accounts.
 
 OCI configuration and request routing have deterministic structural and provider-shaped coverage,
-but Sqrzl does not expose an OCI identity and no live OCI qualification is claimed. OCI production
-qualification requires a separate credentialed run against OCI Object Storage.
+but Sqrzl does not expose an OCI identity. No live OCI qualification is claimed or run by Pants.
 
 Start the emulator:
 
@@ -56,5 +56,4 @@ precedence over `PANTS_SQRZL_API_PORT`.
 
 The ordinary CI matrix excludes the `Sqrzl` category because those runners do not start the
 emulator. A dedicated CI job starts Sqrzl, waits for its health endpoint, runs every Sqrzl test, and
-always removes the Compose volume afterward. Live-cloud qualification remains separate because it
-tests credentials and provider operations rather than deterministic protocol compatibility.
+always removes the Compose volume afterward. That job is the complete cloud qualification gate.

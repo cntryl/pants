@@ -29,8 +29,9 @@ current-Midge-generated database fixture.
 
 ## Executable closure evidence
 
-- The machine-readable inventory contains 949 entries: 853 map to executable
-  Pants tests and 96 have reviewed implementation/tooling `n/a` rationales.
+- The machine-readable inventory contains 949 entries: 852 map to executable
+  Pants tests and 97 have reviewed implementation/tooling or live-account
+  qualification `n/a` rationales.
   There are no planned entries.
 - Current Midge regenerates all 31 fixture artifacts. Deterministic bytes are
   compared exactly; time-, identity-, and process-dependent artifacts are

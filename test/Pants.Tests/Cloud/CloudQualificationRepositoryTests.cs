@@ -27,7 +27,7 @@ public sealed class CloudQualificationRepositoryTests
         Assert.DoesNotContain("Environment.GetEnvironmentVariable", providerQualificationTests);
         Assert.DoesNotContain("DeleteAllAsync", providerQualificationTests);
         Assert.Contains("Sqrzl is the only cloud qualification environment", documentation);
-        Assert.Contains("never accesses live provider accounts", documentation);
+        Assert.Matches("never\\s+accesses\\s+live\\s+provider\\s+accounts", documentation);
     }
 
     static string FindRepositoryRoot()

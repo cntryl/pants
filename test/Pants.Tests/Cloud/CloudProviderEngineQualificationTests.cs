@@ -115,39 +115,6 @@ public sealed class CloudProviderEngineQualificationTests
         Assert.False(handler.ContainsObject("data.example.test", "/sst/"));
     }
 
-    [Fact]
-    public async Task ShouldRecoverEngineFromRealS3AfterLocalCacheLossIfConfigured()
-    {
-        var bucket = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_BUCKET");
-        var region = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_REGION");
-        var required = string.Equals(
-            Environment.GetEnvironmentVariable("PANTS_REQUIRE_LIVE_S3"),
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(bucket) || string.IsNullOrWhiteSpace(region))
-        {
-            Assert.False(required, "Live S3 qualification was required but its bucket or region was not configured.");
-            return;
-        }
-
-        var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3(
-                bucket,
-                region,
-                new PantsS3CredentialSource.Environment()),
-            $"pants-qualification/{Guid.NewGuid():N}");
-        try
-        {
-            await WriteFlushRecoverAsync(
-                PantsCloudStorageTopology.Shared(location),
-                null);
-        }
-        finally
-        {
-            await DeleteAllAsync(location);
-        }
-    }
-
     static async Task WriteFlushRecoverAsync(
         PantsCloudStorageTopology topology,
         HttpClient? cloudHttpClient)
@@ -206,17 +173,4 @@ public sealed class CloudProviderEngineQualificationTests
             new Uri($"https://{host}"),
             new PantsAzureCredentialSource.SasToken("sig=test")),
         prefix);
-
-    static async Task DeleteAllAsync(PantsCloudStorageLocation location)
-    {
-        var store = CloudObjectStoreFactory.Create(location, TimeSpan.FromMinutes(1));
-        var objectKeys = await store.ListAllAsync(string.Empty, CancellationToken.None);
-        foreach (var objectKey in objectKeys)
-        {
-            _ = await store.DeleteAsync(
-                objectKey,
-                new CloudObjectDeleteCondition.Unconditional(),
-                CancellationToken.None);
-        }
-    }
 }
