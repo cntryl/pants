@@ -20,6 +20,13 @@ public sealed class MidgeQualificationRepositoryTests
             "Pants.CompatibilityHarness",
             "Pants.CompatibilityHarness.csproj");
         var driver = Path.Combine(repository, "eng", "compat", "MidgeDriver", "pants_compat.rs");
+        var builder = Path.Combine(
+            repository,
+            "eng",
+            "compat",
+            "Pants.CompatibilityHarness",
+            "Internal",
+            "MidgeCheckoutBuilder.cs");
         var workflow = Path.Combine(
             repository,
             ".github",
@@ -38,7 +45,9 @@ public sealed class MidgeQualificationRepositoryTests
         Assert.Contains(PinnedMidgeSha, documentation, StringComparison.Ordinal);
         var workflowText = File.ReadAllText(workflow);
         Assert.Contains($"ref: {PinnedMidgeSha}", workflowText, StringComparison.Ordinal);
-        Assert.Contains("cargo build --release --locked", workflowText, StringComparison.Ordinal);
+        var builderText = File.ReadAllText(builder);
+        Assert.Contains("\"--locked\"", builderText, StringComparison.Ordinal);
+        Assert.Contains(PinnedMidgeLockSha256, builderText, StringComparison.Ordinal);
     }
 
     [Fact]

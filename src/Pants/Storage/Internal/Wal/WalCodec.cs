@@ -28,7 +28,7 @@ static class WalCodec
         {
             var encodedValue = record.Value;
             byte? compression = null;
-            if (record.Operation != WalOperation.TransactionBatch && record.Value.Length >= 256)
+            if (record.Value.Length >= 256)
             {
                 var compressed = Lz4Encoder.CompressWithSizePrefix(record.Value);
                 if (compressed.Length < record.Value.Length)
@@ -144,12 +144,6 @@ static class WalCodec
         if (operation is null || operation > (byte)WalOperation.TransactionBatch)
         {
             throw new StorageException("WAL operation is missing or invalid.");
-        }
-
-        if (operation == (byte)WalOperation.TransactionBatch && compression.HasValue)
-        {
-            throw new StorageException(
-                "A WAL TxnBatch record must not carry the COMPRESSION tag.");
         }
 
         byte[]? decodedValue;

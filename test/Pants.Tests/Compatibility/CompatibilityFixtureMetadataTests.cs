@@ -5,10 +5,10 @@ namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class CompatibilityFixtureMetadataTests
 {
-    const string PinnedMidgeSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
+    const string PinnedMidgeSha = "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71";
 
     const string PinnedMidgeDriverLockSha256 =
-        "e1740e05b3ff66b7744432f7346b8c585d8c437d9d1b69cb7e405fea836b046b";
+        "1fe29024e1789245b1ca8b20274aea17573380d5e33cf8f1811b59a65f85f937";
 
     static readonly string[] RequiredStructures =
     [

@@ -2,7 +2,7 @@
 
 M1 closes the behavior groups assigned to issues #1, #2, and #3 in the
 committed Midge contract manifest. The source baseline remains Midge commit
-`c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33`.
+`75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`.
 
 The executable coverage is organized by invariant rather than by mechanically
 copying Rust test structure. Transaction suites cover atomic intent ordering,
@@ -18,5 +18,6 @@ tests. Entries marked `n/a` are limited to Rust Cargo/workflow checks or Midge
 subprocess-driver plumbing; their observable recovery invariants remain mapped
 to deterministic Pants failpoint tests.
 
-Six cloud-specific failure-injection contracts are assigned to issue #7 and
-remain planned for the cloud milestone. M1 does not claim those behaviors.
+Cloud-specific failure-injection contracts remain assigned to their cloud
+milestones, but are now mapped to executable Pants tests. M1 itself claims only
+the contracts assigned to issues #1-#3.

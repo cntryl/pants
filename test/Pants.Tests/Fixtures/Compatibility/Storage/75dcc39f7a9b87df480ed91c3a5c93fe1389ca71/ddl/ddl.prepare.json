@@ -1,0 +1,1 @@
+{"op_id":"48bfaf93-d4cc-4d5a-b13f-1e3a88da86ee","expected_remote_epoch":0,"edit":{"CreateColumnFamily":{"id":1,"name":"fixture","created_at":1788488474997}},"remote_cas_ambiguous":true}
