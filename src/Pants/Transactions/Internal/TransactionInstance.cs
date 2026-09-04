@@ -11,7 +11,7 @@ sealed class TransactionInstance : IPantsTransaction
     readonly object _gate = new();
     readonly List<TransactionIntentOperation> _intentLog = [];
     readonly DateTimeOffset _snapshotTime;
-    readonly TransactionSpillStore? _spillStore;
+    TransactionSpillStore? _spillStore;
     readonly DatabaseVersion _startSnapshot;
     readonly long _transactionId;
     readonly bool _coordinatorRegistered;
@@ -340,6 +340,12 @@ sealed class TransactionInstance : IPantsTransaction
                     .ConfigureAwait(false);
             }
         }
+        catch (PantsTimeoutException exception) when (exception.RuntimeResponseAbandoned)
+        {
+            // The runtime accepted the commit and still owns its completion. Rolling it back here
+            // would falsely turn an outcome-unknown response into an authoritative failure.
+            throw;
+        }
         catch
         {
             if (_coordinatorRegistered)
@@ -433,11 +439,13 @@ sealed class TransactionInstance : IPantsTransaction
                     "A commit payload was requested outside the commit phase.");
             }
 
+            var spillStore = _spillStore;
             var operations = new TransactionOperationSource(
-                _spillStore,
+                spillStore,
                 _intentLog,
                 _nextOrdinal,
-                _database.Clock.UtcNow);
+                _database.Clock.UtcNow,
+                ownsSpillStore: true);
             operations.Validate();
             var assertions = new Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>>(
                 ColumnFamilyIdentityComparer.Instance)
@@ -452,7 +460,7 @@ sealed class TransactionInstance : IPantsTransaction
                                 false)))
                     .ToArray()
             };
-            return new CommitPayload(
+            var payload = new CommitPayload(
                 _transactionId,
                 Mode,
                 _conflictPolicy,
@@ -460,6 +468,8 @@ sealed class TransactionInstance : IPantsTransaction
                 _startSnapshot,
                 operations,
                 assertions);
+            _spillStore = null;
+            return payload;
         }
     }
 

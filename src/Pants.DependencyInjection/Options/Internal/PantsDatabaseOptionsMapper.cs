@@ -29,6 +29,7 @@ static class PantsDatabaseOptionsMapper
             options.BlockCachePolicy,
             CreateCloudWritePolicy(options.CloudWritePolicy),
             options.StorageTimeout,
+            options.RuntimeResponseTimeout,
             options.ShutdownTimeout,
             options.BackgroundCompaction,
             options.MemtableSizeLimitBytes,

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 
@@ -41,6 +42,7 @@ sealed class Actor : IAsyncDisposable
     readonly RuntimeWorker _manifestWorker;
     readonly PantsOpenOptions _options;
     readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
+    readonly RuntimeResponseRegistry _runtimeResponses;
     readonly TimeProvider _runtimeTimeProvider;
     readonly ResourceBudget _scanMemoryBudget;
 
@@ -66,6 +68,7 @@ sealed class Actor : IAsyncDisposable
     int _disposed;
     bool _garbageCollectionPending;
     long _nextVerificationBarrierToken;
+    long _nextRuntimeRequestId;
     int _persistenceAnomaly;
     PantsRuntimeMetrics _publishedRuntimeMetrics = new();
     int _queuedCommands;
@@ -95,6 +98,7 @@ sealed class Actor : IAsyncDisposable
         _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
         _failpoints = dependencies.Failpoints;
         _runtimeTimeProvider = dependencies.RuntimeTimeProvider;
+        _runtimeResponses = new RuntimeResponseRegistry(telemetry, _runtimeTimeProvider);
         _scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
         var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
         _state = new RuntimeState(ttlClock, telemetry);
@@ -393,7 +397,8 @@ sealed class Actor : IAsyncDisposable
                 _cloudWalSealController,
                 _cloudMemtableSegments,
                 _hybridCache,
-                _scanMemoryBudget);
+                _scanMemoryBudget,
+                _runtimeResponses);
             _publishedRuntimeMetrics = _runtimeMetricsSnapshotFactory.Create(
                 _state,
                 Volatile.Read(ref _walCloudDurableSequence));
@@ -866,7 +871,8 @@ sealed class Actor : IAsyncDisposable
                 _telemetry.RecordSnapshotRegister();
                 return ValueTask.FromResult(snapshotId);
             },
-            cancellationToken);
+            cancellationToken,
+            snapshotId => _ = ReleaseAbandonedScanSnapshotAsync(snapshotId));
 
     public async ValueTask ReleaseScanSnapshotAsync(
         long snapshotId,
@@ -917,7 +923,8 @@ sealed class Actor : IAsyncDisposable
                 _telemetry.RecordTransactionBegin(mode);
                 return ValueTask.FromResult<IPantsTransaction>(transaction);
             },
-            cancellationToken);
+            cancellationToken,
+            transaction => _ = DisposeAbandonedTransactionAsync(transaction));
 
     public IPantsTransaction BeginReadOnlyTransaction(
         DatabaseInstance database,
@@ -1019,27 +1026,39 @@ sealed class Actor : IAsyncDisposable
         CommitPayload payload,
         CancellationToken cancellationToken)
     {
-        if (payload.Mode != PantsTransactionMode.ReadOnly &&
-            !IsSupported(writeOptions.Durability))
+        var delegated = false;
+        try
         {
-            throw PantsException.Create(
-                PantsErrorCode.InvalidArgument,
-                $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
-        }
-
-        if (RequiresWriteAdmission(payload))
-        {
-            var families = GetCommitFamilies(payload);
-            if (families.Any(_writeStallHints.ContainsKey))
+            if (payload.Mode != PantsTransactionMode.ReadOnly &&
+                !IsSupported(writeOptions.Durability))
             {
-                await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
+                throw PantsException.Create(
+                    PantsErrorCode.InvalidArgument,
+                    $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
+            }
+
+            if (RequiresWriteAdmission(payload))
+            {
+                var families = GetCommitFamilies(payload);
+                if (families.Any(_writeStallHints.ContainsKey))
+                {
+                    await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            delegated = true;
+            await SendCommitAsync(
+                writeOptions,
+                payload,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!delegated)
+            {
+                payload.Dispose();
             }
         }
-
-        await SendCommitAsync(
-            writeOptions,
-            payload,
-            cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask RollbackAsync(long transactionId, CancellationToken cancellationToken)
@@ -1343,8 +1362,7 @@ sealed class Actor : IAsyncDisposable
                 Volatile.Write(ref _publishedRuntimeMetrics, metrics);
                 return ValueTask.FromResult(metrics);
             },
-            cancellationToken,
-            true);
+            cancellationToken);
     }
 
     public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
@@ -1970,14 +1988,22 @@ sealed class Actor : IAsyncDisposable
     async ValueTask<T> SendAsync<T>(
         Func<RuntimeState, ValueTask<T>> operation,
         CancellationToken cancellationToken,
-        bool allowPostAdmissionCancellation = false)
+        Action<T>? abandonedResponse = null,
+        [CallerMemberName] string requestKind = "RuntimeCommand")
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
             throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
         }
 
-        var command = new RuntimeCommand<T>(operation, cancellationToken);
+        var requestId = NextRuntimeRequestId();
+        var command = new RuntimeCommand<T>(
+            operation,
+            _runtimeResponses,
+            requestId,
+            requestKind,
+            abandonedResponse,
+            cancellationToken);
         Interlocked.Increment(ref _commandsEnqueued);
         var response = command.Response;
         var admitted = false;
@@ -1987,9 +2013,29 @@ sealed class Actor : IAsyncDisposable
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
             admitted = true;
-            return allowPostAdmissionCancellation
-                ? await response.WaitAsync(cancellationToken).ConfigureAwait(false)
-                : await response.ConfigureAwait(false);
+            try
+            {
+                return await response.WaitAsync(
+                        _options.RuntimeResponseTimeout,
+                        _runtimeTimeProvider,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                if (command.AbandonResponse(_options.RuntimeResponseTimeout))
+                {
+                    throw CreateRuntimeResponseTimeout(requestKind, requestId);
+                }
+
+                return await response.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested &&
+                command.AbandonResponse(_options.RuntimeResponseTimeout))
+            {
+                throw;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2025,31 +2071,64 @@ sealed class Actor : IAsyncDisposable
         CommitPayload payload,
         CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _disposed) != 0)
-        {
-            throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
-        }
-
-        if (RequiresWriteAdmission(payload))
-        {
-            ThrowIfRuntimeWorkerWriteStalled();
-        }
-
-        var command = new CommitRuntimeCommand(
-            writeOptions,
-            payload,
-            state => ExecuteCommitAsync(state, writeOptions, payload));
+        CommitRuntimeCommand? command = null;
+        ColumnFamilyIdentity[] commitFamilies = [];
+        var requestId = 0L;
         var admitted = false;
-        Interlocked.Increment(ref _queuedCommands);
+        var queued = false;
         var started = Stopwatch.GetTimestamp();
         try
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
+            }
+
+            if (RequiresWriteAdmission(payload))
+            {
+                ThrowIfRuntimeWorkerWriteStalled();
+            }
+
+            commitFamilies = GetCommitFamilies(payload);
+            requestId = NextRuntimeRequestId();
+            command = new CommitRuntimeCommand(
+                writeOptions,
+                payload,
+                state => ExecuteCommitAsync(state, writeOptions, payload),
+                _runtimeResponses,
+                requestId,
+                nameof(CommitAsync));
+            Interlocked.Increment(ref _queuedCommands);
+            queued = true;
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
             admitted = true;
-            var writeStalled = await command.Task.ConfigureAwait(false);
+            bool writeStalled;
+            try
+            {
+                writeStalled = await command.Task.WaitAsync(
+                        _options.RuntimeResponseTimeout,
+                        _runtimeTimeProvider,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                if (command.AbandonResponse(_options.RuntimeResponseTimeout))
+                {
+                    throw CreateRuntimeResponseTimeout(nameof(CommitAsync), requestId);
+                }
+
+                writeStalled = await command.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested &&
+                command.AbandonResponse(_options.RuntimeResponseTimeout))
+            {
+                throw;
+            }
             if (writeStalled)
             {
-                foreach (var family in GetCommitFamilies(payload))
+                foreach (var family in commitFamilies)
                 {
                     _writeStallHints.TryAdd(family, 0);
                 }
@@ -2078,8 +2157,68 @@ sealed class Actor : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Decrement(ref _queuedCommands);
+            command?.UnregisterResponse();
+            if (queued)
+            {
+                Interlocked.Decrement(ref _queuedCommands);
+            }
+
+            if (!admitted)
+            {
+                if (command is null)
+                {
+                    payload.Dispose();
+                }
+                else
+                {
+                    command.DisposePayload();
+                }
+            }
+
             _telemetry.RecordCommandLatency(Stopwatch.GetElapsedTime(started));
+        }
+    }
+
+    long NextRuntimeRequestId()
+    {
+        var requestId = Interlocked.Increment(ref _nextRuntimeRequestId);
+        if (requestId <= 0)
+        {
+            throw new PantsInternalException("The runtime request ID space is exhausted.");
+        }
+
+        return requestId;
+    }
+
+    PantsTimeoutException CreateRuntimeResponseTimeout(string requestKind, long requestId) => new(
+        $"Runtime request '{requestKind}' with request ID {requestId} exceeded " +
+        $"RuntimeResponseTimeout {_options.RuntimeResponseTimeout:c} after admission; " +
+        "the operation may still complete, its outcome is unknown, and it is not automatically " +
+        "safe to retry.",
+        null,
+        true);
+
+    static async Task DisposeAbandonedTransactionAsync(IPantsTransaction transaction)
+    {
+        try
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The runtime retains ownership of shutdown cleanup after response abandonment.
+        }
+    }
+
+    async Task ReleaseAbandonedScanSnapshotAsync(long snapshotId)
+    {
+        try
+        {
+            await ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The runtime retains ownership of shutdown cleanup after response abandonment.
         }
     }
 
@@ -2145,16 +2284,26 @@ sealed class Actor : IAsyncDisposable
                     commits.Add((CommitRuntimeCommand)admitted);
                 }
 
-                if (commitCoalescer.CanAttempt(commits))
+                try
                 {
-                    await ExecuteCoalescedCommitsAsync(_state, commits, commitCoalescer)
-                        .ConfigureAwait(false);
+                    if (commitCoalescer.CanAttempt(commits))
+                    {
+                        await ExecuteCoalescedCommitsAsync(_state, commits, commitCoalescer)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        foreach (var commit in commits)
+                        {
+                            await commit.ExecuteAsync(_state).ConfigureAwait(false);
+                        }
+                    }
                 }
-                else
+                finally
                 {
                     foreach (var commit in commits)
                     {
-                        await commit.ExecuteAsync(_state).ConfigureAwait(false);
+                        commit.DisposePayload();
                     }
                 }
             }

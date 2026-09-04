@@ -8,7 +8,8 @@ sealed class RuntimeMetricsSnapshotFactory(
     CloudWalSealController? cloudWalSealController,
     CloudMemtableSegmentTracker? cloudMemtableSegments,
     HybridCacheManager? hybridCache,
-    ResourceBudget scanMemoryBudget)
+    ResourceBudget scanMemoryBudget,
+    RuntimeResponseRegistry runtimeResponses)
 {
     int _storageHealth = (int)PantsEngineHealth.Healthy;
 
@@ -157,7 +158,13 @@ sealed class RuntimeMetricsSnapshotFactory(
             WalRecoveryRecordsReplayed = telemetry.WalRecoveryRecordsReplayed,
             WalRecoveryBytesReplayed = telemetry.WalRecoveryBytesReplayed,
             IntentLogReplayRuns = telemetry.IntentLogReplayRuns,
-            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed
+            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed,
+            // A metrics request is itself a registered response route while this snapshot is
+            // assembled. Report other live waiters so the observation does not count itself.
+            RuntimeResponseWaiters = Math.Max(0, runtimeResponses.PendingCount - 1),
+            RuntimeAbandonedRequestMetadata = runtimeResponses.AbandonedMetadataCount,
+            RuntimeAbandonedRequestsTotal = telemetry.RuntimeAbandonedRequests,
+            RuntimeLateResponsesTotal = telemetry.RuntimeLateResponses
         };
     }
 
@@ -225,7 +232,11 @@ sealed class RuntimeMetricsSnapshotFactory(
             WalRecoveryRecordsReplayed = telemetry.WalRecoveryRecordsReplayed,
             WalRecoveryBytesReplayed = telemetry.WalRecoveryBytesReplayed,
             IntentLogReplayRuns = telemetry.IntentLogReplayRuns,
-            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed
+            IntentLogEntriesReplayed = telemetry.IntentLogEntriesReplayed,
+            RuntimeResponseWaiters = runtimeResponses.PendingCount,
+            RuntimeAbandonedRequestMetadata = runtimeResponses.AbandonedMetadataCount,
+            RuntimeAbandonedRequestsTotal = telemetry.RuntimeAbandonedRequests,
+            RuntimeLateResponsesTotal = telemetry.RuntimeLateResponses
         };
     }
 

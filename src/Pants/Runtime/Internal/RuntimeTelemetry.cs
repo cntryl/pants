@@ -52,6 +52,8 @@ sealed class RuntimeTelemetry
     long _readOnlySnapshotCacheMisses;
     long _readOnlyTransactionsBegun;
     long _readsTotal;
+    long _runtimeAbandonedRequests;
+    long _runtimeLateResponses;
     long _salvageModeOpens;
     long _snapshotsRegistered;
     long _snapshotsUnregistered;
@@ -192,6 +194,10 @@ sealed class RuntimeTelemetry
 
     public long IntentLogEntriesReplayed => Volatile.Read(ref _intentLogEntriesReplayed);
 
+    public long RuntimeAbandonedRequests => Volatile.Read(ref _runtimeAbandonedRequests);
+
+    public long RuntimeLateResponses => Volatile.Read(ref _runtimeLateResponses);
+
     public void RecordTransactionBegin(PantsTransactionMode mode)
     {
         Interlocked.Increment(ref _snapshotsRegistered);
@@ -233,6 +239,12 @@ sealed class RuntimeTelemetry
         Interlocked.Add(ref _commandLatencyNanosecondsTotal, ToNanoseconds(elapsed));
         PantsDiagnostics.CommandLatencyMilliseconds.Record(elapsed.TotalMilliseconds);
     }
+
+    public void RecordRuntimeRequestAbandoned() =>
+        Interlocked.Increment(ref _runtimeAbandonedRequests);
+
+    public void RecordRuntimeLateResponse() =>
+        Interlocked.Increment(ref _runtimeLateResponses);
 
     public bool RecordSstRead(SstReadSample sample)
     {

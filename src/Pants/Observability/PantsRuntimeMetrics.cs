@@ -100,4 +100,8 @@ public sealed record PantsRuntimeMetrics
     public long WalRecoveryBytesReplayed { get; init; }
     public long IntentLogReplayRuns { get; init; }
     public long IntentLogEntriesReplayed { get; init; }
+    public int RuntimeResponseWaiters { get; init; }
+    public int RuntimeAbandonedRequestMetadata { get; init; }
+    public long RuntimeAbandonedRequestsTotal { get; init; }
+    public long RuntimeLateResponsesTotal { get; init; }
 }

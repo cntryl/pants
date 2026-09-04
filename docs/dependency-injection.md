@@ -26,6 +26,7 @@ services.AddPants().BindConfiguration("Pants");
     "RecoveryPolicy": "Strict",
     "BlockCachePolicy": "Lru",
     "StorageTimeout": "00:00:30",
+    "RuntimeResponseTimeout": "00:01:00",
     "ShutdownTimeout": "00:00:30",
     "BackgroundCompaction": true
   }
@@ -53,6 +54,13 @@ services.AddPants().Configure(options =>
 
 The existing `AddPants(PantsOpenOptions)` and service-provider factory overloads remain available
 for applications that construct immutable engine options directly.
+
+`StorageTimeout` bounds an individual storage/provider operation. `RuntimeResponseTimeout` bounds
+the caller's wait after the single-threaded runtime has admitted a command and must be strictly
+greater than `StorageTimeout`. If omitted, Pants derives it as the larger of 60 seconds and
+`StorageTimeout + 30 seconds`. A runtime-response timeout is outcome-unknown: accepted work remains
+owned by Pants and can still complete, so callers must not assume a timed-out mutation failed or
+retry it blindly.
 
 ## Bind multiple databases
 

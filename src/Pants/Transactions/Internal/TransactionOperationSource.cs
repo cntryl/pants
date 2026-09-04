@@ -1,20 +1,24 @@
 namespace Cntryl.Pants.Transactions.Internal;
 
-sealed class TransactionOperationSource : ITransactionOperationSource
+sealed class TransactionOperationSource : ITransactionOperationSource, IDisposable
 {
     readonly DateTimeOffset _commitTime;
     readonly TransactionIntentOperation[] _residentOperations;
     readonly TransactionSpillStore? _spillStore;
+    readonly bool _ownsSpillStore;
+    int _disposed;
 
     public TransactionOperationSource(
         TransactionSpillStore? spillStore,
         IReadOnlyList<TransactionIntentOperation> residentOperations,
         ulong count,
-        DateTimeOffset commitTime)
+        DateTimeOffset commitTime,
+        bool ownsSpillStore = false)
     {
         ArgumentNullException.ThrowIfNull(residentOperations);
 
         _spillStore = spillStore;
+        _ownsSpillStore = ownsSpillStore;
         _residentOperations = residentOperations.ToArray();
         Array.Sort(
             _residentOperations,
@@ -26,6 +30,14 @@ sealed class TransactionOperationSource : ITransactionOperationSource
     public ulong Count { get; }
 
     public bool IsSpilled => _spillStore?.HasRuns == true;
+
+    public void Dispose()
+    {
+        if (_ownsSpillStore && Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _spillStore?.Dispose();
+        }
+    }
 
     public void Validate() => ForEach(static _ => { });
 

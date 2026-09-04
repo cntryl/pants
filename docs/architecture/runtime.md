@@ -5,6 +5,20 @@ immutable `DatabaseSnapshot` publication and admits commands through a bounded
 channel. Reads use frozen snapshots; mutations are serialized by the
 coordinator.
 
+Every command that expects a synchronous runtime response receives a monotonic request ID after
+admission and shares one `RuntimeResponseTimeout` budget for that response. If the caller's own
+cancellation expires first it remains authoritative. If the runtime-response budget expires,
+Pants removes the live waiter, retains only bounded and expiring request-kind/timing metadata, and
+reports `PantsTimeoutException` with an outcome-unknown diagnostic. The accepted command is not
+cancelled: commits, provider publication, fencing, and cleanup remain runtime-owned. A later
+terminal response is consumed once and counted by `RuntimeLateResponsesTotal`; current waiters,
+bounded tombstones, and total abandonments are available in `PantsRuntimeMetrics`.
+
+Open/recovery is not an admitted runtime-response wait: provider/storage calls made while opening
+use `StorageTimeout`. Shutdown preparation is governed by the explicit timeout passed to
+`ShutdownAsync` (or `ShutdownTimeout` during disposal), while work already admitted before caller
+abandonment remains owned until it reaches a terminal runtime state.
+
 Persistence work runs through bounded, single-purpose services. Typed,
 immutable requests cross the `WalRuntimeService`, `FlushRuntimeService`, and
 `CompactionRuntimeService` boundaries; the coordinator remains the sole owner

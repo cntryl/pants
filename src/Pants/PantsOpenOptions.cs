@@ -151,6 +151,13 @@ public sealed class PantsOpenOptions
 
     public TimeSpan StorageTimeout => _configuration.StorageTimeout;
 
+    /// <summary>
+    /// Maximum time a caller waits for an admitted runtime command to publish its response.
+    /// A timeout does not cancel accepted work and therefore leaves its outcome unknown.
+    /// </summary>
+    public TimeSpan RuntimeResponseTimeout =>
+        _configuration.RuntimeResponseTimeout ?? DeriveRuntimeResponseTimeout(StorageTimeout);
+
     public TimeSpan ShutdownTimeout => _configuration.ShutdownTimeout;
 
     public bool BackgroundCompaction => _configuration.BackgroundCompaction;
@@ -221,6 +228,7 @@ public sealed class PantsOpenOptions
         PantsBlockCachePolicy blockCachePolicy,
         PantsCloudWritePolicy? cloudWritePolicy,
         TimeSpan storageTimeout,
+        TimeSpan? runtimeResponseTimeout,
         TimeSpan shutdownTimeout,
         bool backgroundCompaction,
         long? memtableSizeLimitBytes,
@@ -242,6 +250,7 @@ public sealed class PantsOpenOptions
             BlockCachePolicy = blockCachePolicy,
             CloudWritePolicy = cloudWritePolicy ?? defaults.CloudWritePolicy,
             StorageTimeout = storageTimeout,
+            RuntimeResponseTimeout = runtimeResponseTimeout,
             ShutdownTimeout = shutdownTimeout,
             BackgroundCompaction = backgroundCompaction,
             MemtableSizeLimitBytes = memtableSizeLimitBytes,
@@ -277,6 +286,9 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithStorageTimeout(TimeSpan timeout) =>
         With(_configuration with { StorageTimeout = timeout });
+
+    public PantsOpenOptions WithRuntimeResponseTimeout(TimeSpan timeout) =>
+        With(_configuration with { RuntimeResponseTimeout = timeout });
 
     public PantsOpenOptions WithShutdownTimeout(TimeSpan timeout) =>
         With(_configuration with { ShutdownTimeout = timeout });
@@ -402,6 +414,15 @@ public sealed class PantsOpenOptions
         if (StorageTimeout < TimeSpan.FromMilliseconds(1))
         {
             throw PantsException.InvalidArgument("Storage timeout must be at least one millisecond.");
+        }
+
+        if (_configuration.RuntimeResponseTimeout is { } explicitResponseTimeout &&
+            (explicitResponseTimeout < TimeSpan.FromMilliseconds(1) ||
+             explicitResponseTimeout <= StorageTimeout))
+        {
+            throw PantsException.InvalidArgument(
+                $"RuntimeResponseTimeout ({explicitResponseTimeout:c}) must be at least one " +
+                $"millisecond and strictly greater than StorageTimeout ({StorageTimeout:c}).");
         }
 
         if (ShutdownTimeout <= TimeSpan.Zero)
@@ -568,6 +589,15 @@ public sealed class PantsOpenOptions
         return value;
     }
 
+    static TimeSpan DeriveRuntimeResponseTimeout(TimeSpan storageTimeout)
+    {
+        const long marginTicks = TimeSpan.TicksPerSecond * 30;
+        var derivedTicks = storageTimeout.Ticks > TimeSpan.MaxValue.Ticks - marginTicks
+            ? TimeSpan.MaxValue.Ticks
+            : storageTimeout.Ticks + marginTicks;
+        return TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(60).Ticks, derivedTicks));
+    }
+
     sealed record Configuration(
         PantsStorageConfiguration Storage,
         PantsPerformanceGoal PerformanceGoal,
@@ -577,6 +607,7 @@ public sealed class PantsOpenOptions
         PantsBlockCachePolicy BlockCachePolicy,
         PantsCloudWritePolicy CloudWritePolicy,
         TimeSpan StorageTimeout,
+        TimeSpan? RuntimeResponseTimeout,
         TimeSpan ShutdownTimeout,
         bool BackgroundCompaction,
         long? MemtableSizeLimitBytes,
@@ -600,6 +631,7 @@ public sealed class PantsOpenOptions
             PantsBlockCachePolicy.Lru,
             new PantsCloudWritePolicy(),
             TimeSpan.FromSeconds(30),
+            null,
             TimeSpan.FromSeconds(30),
             true,
             null,

@@ -4,14 +4,23 @@ sealed class RuntimeCommand<T> : IRuntimeCommand
 {
     readonly CancellationToken _callerCancellationToken;
     readonly Func<RuntimeState, ValueTask<T>> _operation;
-    readonly RuntimeResponseSlot<T> _response = new();
+    readonly RuntimeResponseSlot<T> _response;
 
     public RuntimeCommand(
         Func<RuntimeState, ValueTask<T>> operation,
+        RuntimeResponseRegistry registry,
+        long requestId,
+        string requestKind,
+        Action<T>? abandonedResponse,
         CancellationToken callerCancellationToken)
     {
         _operation = operation;
         _callerCancellationToken = callerCancellationToken;
+        _response = new RuntimeResponseSlot<T>(
+            registry,
+            requestId,
+            requestKind,
+            abandonedResponse);
     }
 
     public Task<T> Response => _response.Response;
@@ -38,4 +47,6 @@ sealed class RuntimeCommand<T> : IRuntimeCommand
     }
 
     public void UnregisterResponse() => _response.Unregister();
+
+    public bool AbandonResponse(TimeSpan timeout) => _response.Abandon(timeout);
 }
