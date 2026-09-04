@@ -5,5 +5,6 @@ public enum PantsCloudProviderKind
     AwsS3,
     S3Compatible,
     AzureBlob,
-    Gcs
+    Gcs,
+    OciObjectStorage
 }

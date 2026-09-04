@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -33,6 +34,7 @@ sealed class LocalDiskStore : IDisposable
     readonly PantsPerformanceGoal _performanceGoal;
     readonly SstReaderCache _readerCache = new();
     readonly PantsRecoveryPolicy _recoveryPolicy;
+    readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
     readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
 
     readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
@@ -45,7 +47,9 @@ sealed class LocalDiskStore : IDisposable
     ManifestReadSnapshot _manifestReadSnapshot;
     long _nextFrozenFlushId;
     ulong _nextSequence;
+    long _sstBytesWrittenTotal;
     ulong _unflushedCommitSequence;
+    long _walBytesWrittenTotal;
     long _walLastAppendedSequence;
     long _walLastSyncedSequence;
     long _walLocalDurableSequence;
@@ -66,7 +70,8 @@ sealed class LocalDiskStore : IDisposable
         PantsCompactionConfiguration compaction,
         long targetSstSizeBytes,
         PantsBlockCachePolicy blockCachePolicy,
-        long blockCacheBytes)
+        long blockCacheBytes,
+        IAsyncSstSourceFactory? remoteSstSourceFactory)
     {
         RootPath = root;
         _walDirectory = Path.Combine(root, "wal");
@@ -84,6 +89,8 @@ sealed class LocalDiskStore : IDisposable
         _compaction = compaction;
         _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
+        _remoteSstSourceFactory = remoteSstSourceFactory;
+        BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
         _manifest = manifest;
         var visibleSequenceFloor = GetManifestVisibleSequenceFloor(manifest);
@@ -189,6 +196,14 @@ sealed class LocalDiskStore : IDisposable
         0UL,
         static (total, file) => total + file.SizeBytes));
 
+    public long BlockCacheUsedBytes => _blockCache.UsedBytes;
+
+    public long BlockCacheCapacityBytes { get; }
+
+    public long WalBytesWrittenTotal => Interlocked.Read(ref _walBytesWrittenTotal);
+
+    public long SstBytesWrittenTotal => Interlocked.Read(ref _sstBytesWrittenTotal);
+
     public long LocalWalBytes
     {
         get
@@ -242,6 +257,27 @@ sealed class LocalDiskStore : IDisposable
                 _compaction,
                 snapshotHorizon,
                 force)?.Inputs.Count ?? 0);
+    }
+
+    public IReadOnlyList<string> GetCompactionInputNames(RuntimeState state, bool force)
+    {
+        var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        var snapshotHorizon = state.ActiveSnapshots
+            .Select(static snapshot => snapshot.BeginSequence)
+            .Cast<long?>()
+            .Min();
+        return _familyIds.Values
+            .Select(familyId => LeveledCompactionPlanner.Pick(
+                manifest.Files,
+                familyId,
+                _compaction,
+                snapshotHorizon,
+                force))
+            .Where(static plan => plan is not null)
+            .SelectMany(static plan => plan!.Inputs)
+            .Select(static file => file.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     public PantsEngineHealth GetHealth(RuntimeState state)
@@ -337,17 +373,52 @@ sealed class LocalDiskStore : IDisposable
             .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
             .Select(file => new HybridLocalSst(
                 file.Name,
-                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length,
-                file.SmallestSequence))
+                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
             .ToArray();
 
-    public ReadOnlyMemory<byte>? ReadLocalSstForEviction(string name)
+    public async ValueTask VerifyRemoteSstMatchesLocalAsync(
+        string name,
+        CancellationToken cancellationToken)
     {
-        _ = GetManifestSst(name);
+        ThrowIfDisposed();
+        var metadata = GetManifestSst(name);
         var path = Path.Combine(_sstDirectory, name);
-        return File.Exists(path)
-            ? PositionalFile.ReadAllBytes(path)
-            : null;
+        if (!File.Exists(path))
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' disappeared before cloud durability could be verified.");
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Hybrid SST verification requires a remote source factory.");
+        await using var local = LocalAsyncSstSource.Open(path);
+        await using var remote = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Hybrid SST '{name}' is not confirmed durable in cloud storage.");
+        if (local.Length != remote.Length)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' differs from its cloud copy.");
+        }
+
+        const int verificationChunkBytes = 64 * 1024;
+        for (long offset = 0; offset < local.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = checked((int)Math.Min(verificationChunkBytes, local.Length - offset));
+            var localBytes = await local.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            var remoteBytes = await remote.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            if (!localBytes.AsSpan().SequenceEqual(remoteBytes))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Hybrid SST '{name}' differs from its cloud copy.");
+            }
+
+            offset = checked(offset + length);
+        }
     }
 
     public IReadOnlyList<string> GetPointReadSstNames(
@@ -379,6 +450,16 @@ sealed class LocalDiskStore : IDisposable
 
     public IReadOnlyList<string> GetManifestSstNames() =>
         GetManifestFilesSnapshot().Select(static file => file.Name).ToArray();
+
+    /// <summary>
+    /// Manifest-published SST files grouped by column-family id, for pinning onto a
+    /// database-version snapshot at snapshot-creation time so a concurrent flush/compaction
+    /// publication cannot change what an already-open snapshot sees.
+    /// </summary>
+    public IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> GetVisibleFilesSnapshot() =>
+        GetManifestFilesSnapshot()
+            .GroupBy(static file => file.ColumnFamilyId)
+            .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
 
     public bool IsSstLocal(string name)
     {
@@ -417,6 +498,94 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(path, bytesCopy);
     }
 
+    public async ValueTask HydrateLocalSstAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        var metadata = GetManifestSst(name);
+        var path = Path.Combine(_sstDirectory, name);
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Remote SST hydration requires a remote source factory.");
+        await using var source = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
+        if (checked((ulong)source.Length) != metadata.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Cloud SST '{name}' length differs from its manifest.");
+        }
+
+        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
+        var stagingPath = Path.Combine(
+            stagingDirectory,
+            $"{_lease.Epoch}.hydration.{name}.{Guid.NewGuid():N}.tmp");
+        var checksum = 0U;
+        long offset = 0;
+        try
+        {
+            await using (var output = new FileStream(
+                             stagingPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                while (offset < source.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
+                    var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
+                        .ConfigureAwait(false);
+                    checksum = DiskFormat.Crc32CAppend(checksum, bytes);
+                    await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                    offset = checked(offset + bytes.Length);
+                }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                output.Flush(true);
+            }
+
+            if (metadata.ContentCrc32C.HasValue && checksum != metadata.ContentCrc32C.Value)
+            {
+                throw new PantsCorruptionException(
+                    $"Cloud SST '{name}' content checksum differs from its manifest.");
+            }
+
+            var stagedSource = LocalAsyncSstSource.Open(stagingPath);
+            await using var stagedReader = await AsyncSstReader.OpenAsync(
+                    stagedSource,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            _lease.EnsureValid();
+            AtomicStagedFile.WithPathLock(path, () =>
+            {
+                if (!File.Exists(path))
+                {
+                    File.Move(stagingPath, path);
+                    AtomicStagedFile.FlushDirectory(_sstDirectory);
+                }
+
+                return true;
+            });
+        }
+        finally
+        {
+            File.Delete(stagingPath);
+        }
+    }
+
     public void EvictLocalSst(string name)
     {
         ThrowIfDisposed();
@@ -425,6 +594,462 @@ sealed class LocalDiskStore : IDisposable
         _ = GetManifestSst(name);
         RemoveSstFromCaches(name);
         File.Delete(Path.Combine(_sstDirectory, name));
+    }
+
+    /// <summary>
+    /// Resolves a key's newest visible SST entry by comparing write sequences across
+    /// <paramref name="candidatesNewestFirst"/> — file publication order alone is insufficient
+    /// because a newer compaction output can contain an older value than an untouched L0 file.
+    /// This is the real value-supplying counterpart to
+    /// <see cref="RecordPointReadCore"/>'s telemetry-only bloom/block-read simulation. Safe to
+    /// call concurrently with the actor's mailbox: it only reads the (lock-free,
+    /// snapshot-pinned) reader/block caches. Deliberately records no telemetry of its own — the
+    /// existing exhaustive <see cref="RecordPointReadCore"/> pass remains the sole source of
+    /// read-amplification telemetry/compaction-trigger signal and of <see cref="PantsPointReadTrace"/>
+    /// diagnostics, run unconditionally alongside this resolution (see
+    /// <c>TransactionInstance.GetAsync</c>/<c>GetWithDiagnosticsAsync</c>) so those observability
+    /// paths and the read-amplification-triggered compaction trigger are unaffected by whether a
+    /// value happened to already be resolved from disk.
+    /// </summary>
+    public SstEntry? TryReadPointValue(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlySpan<byte> key)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        var tombstonesSeen = new List<RangeTombstone>();
+        SstEntry? best = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            var reader = readerLease.Reader;
+            tombstonesSeen.AddRange(reader.RangeTombstones);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            if (decision.Rejected || decision.CandidateBlockIndex < 0)
+            {
+                continue;
+            }
+
+            // FindFloorBlock deliberately selects the last block whose first key is <= the
+            // target. When one key's descending-sequence versions cross a block boundary that
+            // is the oldest duplicate-key block, not the newest one. Walk back through every
+            // block beginning with the key and include its predecessor, which may hold the first
+            // (newest) versions at its tail.
+            var firstCandidateBlock = decision.CandidateBlockIndex;
+            while (firstCandidateBlock > 0 &&
+                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
+            {
+                firstCandidateBlock--;
+            }
+
+            for (var blockIndex = firstCandidateBlock;
+                 blockIndex <= decision.CandidateBlockIndex;
+                 blockIndex++)
+            {
+                var blockContent = ReadPointBlock(candidate.Name, reader, blockIndex);
+                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+                {
+                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                    {
+                        continue;
+                    }
+
+                    if (best is null || entry.Sequence > best.Sequence)
+                    {
+                        best = entry;
+                    }
+                }
+            }
+        }
+
+        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
+            ? null
+            : best;
+    }
+
+    public async ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        var tombstonesSeen = new List<RangeTombstone>();
+        SstEntry? best = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            tombstonesSeen.AddRange(reader.RangeTombstones);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            if (decision.Rejected || decision.CandidateBlockIndex < 0)
+            {
+                continue;
+            }
+
+            var firstCandidateBlock = decision.CandidateBlockIndex;
+            while (firstCandidateBlock > 0 &&
+                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
+            {
+                firstCandidateBlock--;
+            }
+
+            for (var blockIndex = firstCandidateBlock;
+                 blockIndex <= decision.CandidateBlockIndex;
+                 blockIndex++)
+            {
+                var blockContent = await ReadPointBlockAsync(
+                        candidate.Name,
+                        reader,
+                        blockIndex,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+                {
+                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                    {
+                        continue;
+                    }
+
+                    if (best is null || entry.Sequence > best.Sequence)
+                    {
+                        best = entry;
+                    }
+                }
+            }
+        }
+
+        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
+            ? null
+            : best;
+    }
+
+    public bool IsSstAvailable(FileMeta file) =>
+        File.Exists(Path.Combine(_sstDirectory, file.Name)) || _remoteSstSourceFactory is not null;
+
+    public async ValueTask<ulong?> GetLatestMutationSequenceAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        ulong? latest = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var tombstone in reader.RangeTombstones)
+            {
+                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
+                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
+                    (latest is null || tombstone.Sequence > latest.Value))
+                {
+                    latest = tombstone.Sequence;
+                }
+            }
+        }
+
+        var entry = await TryReadPointValueAsync(
+                candidatesNewestFirst,
+                keyCopy,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return entry is not null && (latest is null || entry.Sequence > latest.Value)
+            ? entry.Sequence
+            : latest;
+    }
+
+    public ulong? GetLatestMutationSequence(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlySpan<byte> key)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        ulong? latest = null;
+        var available = candidatesNewestFirst.Where(IsSstAvailable).ToArray();
+        foreach (var candidate in available)
+        {
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            foreach (var tombstone in readerLease.Reader.RangeTombstones)
+            {
+                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
+                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
+                    (latest is null || tombstone.Sequence > latest.Value))
+                {
+                    latest = tombstone.Sequence;
+                }
+            }
+        }
+
+        var entry = TryReadPointValue(available, keyCopy);
+        return entry is not null && (latest is null || entry.Sequence > latest.Value)
+            ? entry.Sequence
+            : latest;
+    }
+
+    public bool HasMutationInRange(
+        IReadOnlyList<FileMeta> candidates,
+        ReadOnlySpan<byte> startInclusive,
+        ReadOnlySpan<byte> endExclusive,
+        ulong afterSequence)
+    {
+        ThrowIfDisposed();
+        var start = startInclusive.ToArray();
+        var end = endExclusive.ToArray();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
+            {
+                continue;
+            }
+
+            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
+            {
+                continue;
+            }
+
+            var path = Path.Combine(_sstDirectory, candidate.Name);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            var reader = readerLease.Reader;
+            if (reader.RangeTombstones.Any(tombstone =>
+                    tombstone.Sequence > afterSequence &&
+                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
+            {
+                return true;
+            }
+
+            using var iterator = SstBlockIterator.Create(
+                reader,
+                PantsScanDirection.Forward,
+                start,
+                end);
+            while (iterator.MoveNext())
+            {
+                if (iterator.Current.Sequence > afterSequence)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public async ValueTask<bool> HasMutationInRangeAsync(
+        IReadOnlyList<FileMeta> candidates,
+        ReadOnlyMemory<byte> startInclusive,
+        ReadOnlyMemory<byte> endExclusive,
+        ulong afterSequence,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var start = startInclusive.ToArray();
+        var end = endExclusive.ToArray();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
+            {
+                continue;
+            }
+
+            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
+            {
+                continue;
+            }
+
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            if (reader.RangeTombstones.Any(tombstone =>
+                    tombstone.Sequence > afterSequence &&
+                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
+            {
+                return true;
+            }
+
+            await using var iterator = new AsyncSstBlockIterator(
+                reader,
+                PantsScanDirection.Forward,
+                start,
+                end,
+                resourceBudget);
+            while (await iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (iterator.Current.Sequence > afterSequence)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
+    {
+        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+        {
+            return cachedBlock.Content.ToArray();
+        }
+
+        var blockContent = reader.ReadDataBlock(blockIndex);
+        _ = _blockCache.Add(cacheKey, blockContent);
+        return blockContent;
+    }
+
+    async ValueTask<byte[]> ReadPointBlockAsync(
+        string fileName,
+        AsyncSstReader reader,
+        int blockIndex,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+        {
+            return cachedBlock.Content.ToArray();
+        }
+
+        var blockContent = await reader.ReadDataBlockAsync(blockIndex, cancellationToken)
+            .ConfigureAwait(false);
+        // Cache admission follows both the encoded block CRC/decompression check above and the
+        // entry-frame decode. A remote block with a self-consistent CRC but malformed entries
+        // must not poison subsequent reads through the shared block cache.
+        _ = SstCodec.DecodeDataBlock(blockContent);
+        _ = _blockCache.Add(cacheKey, blockContent);
+        return blockContent;
+    }
+
+    /// <summary>
+    /// Leases a reader and opens a bound-clamped <see cref="SstBlockIterator"/> for each
+    /// candidate file, for a scan's k-way merge (see <c>TransactionScanEnumerator</c>). The
+    /// caller owns disposing each returned source once the scan completes.
+    /// </summary>
+    public IReadOnlyList<SstScanSource> CreateScanSources(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget = null)
+    {
+        ThrowIfDisposed();
+        var sources = new List<SstScanSource>(candidates.Count);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var path = Path.Combine(_sstDirectory, candidate.Name);
+                var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+                sources.Add(new SstScanSource(
+                    lease,
+                    SstBlockIterator.Create(
+                        lease.Reader,
+                        direction,
+                        startInclusive,
+                        endExclusive,
+                        resourceBudget)));
+            }
+
+            return sources;
+        }
+        catch
+        {
+            foreach (var source in sources)
+            {
+                source.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    public async ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var sources = new List<AsyncSstScanSource>(candidates.Count);
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                    .ConfigureAwait(false);
+                try
+                {
+                    sources.Add(new AsyncSstScanSource(
+                        candidate,
+                        reader,
+                        new AsyncSstBlockIterator(
+                            reader,
+                            direction,
+                            startInclusive,
+                            endExclusive,
+                            resourceBudget),
+                        startInclusive,
+                        endExclusive));
+                }
+                catch
+                {
+                    await reader.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+            }
+
+            return sources;
+        }
+        catch
+        {
+            foreach (var source in sources)
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
+    async ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+        FileMeta file,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_sstDirectory, ValidateSstName(file.Name));
+        IAsyncSstSource? source = null;
+        if (File.Exists(path))
+        {
+            try
+            {
+                source = LocalAsyncSstSource.Open(path);
+            }
+            catch (Exception exception) when (
+                _remoteSstSourceFactory is not null &&
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // A verified cache eviction can win the race between the existence check and
+                // acquiring the delete-share local read lease. Remote immutable authority is
+                // still snapshot-visible, so reopen through it below.
+            }
+        }
+
+        source ??= _remoteSstSourceFactory is null
+            ? null
+            : await _remoteSstSourceFactory.OpenAsync(file, cancellationToken)
+                .ConfigureAwait(false);
+        if (source is null)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Manifest-owned SST '{file.Name}' is missing.");
+        }
+
+        return await AsyncSstReader.OpenAsync(source, file, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public bool RecordPointRead(
@@ -456,6 +1081,110 @@ sealed class LocalDiskStore : IDisposable
             out var keyRangeRejects);
         trace = new PantsPointReadTrace(keyRangeRejects, [.. sstTraces]);
         return exceedsBudget;
+    }
+
+    public async ValueTask<(bool ExceedsBudget, PantsPointReadTrace Trace)> RecordPointReadAsync(
+        RuntimeTelemetry telemetry,
+        ColumnFamilyIdentity columnFamily,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        var keyCopy = key.ToArray();
+        var familyFiles = GetManifestFilesSnapshot()
+            .Where(file => file.ColumnFamilyId == columnFamily.Id)
+            .ToArray();
+        var candidates = familyFiles
+            .Where(file => IsWithinFileRange(file, keyCopy))
+            .ToArray();
+        var bloomChecks = 0;
+        var candidateBlocks = 0;
+        var amplificationBlocksRead = 0;
+        var dataBlocksRead = 0;
+        var bloomTruePositives = 0;
+        var bloomFalsePositives = 0;
+        var bloomTrueNegatives = 0;
+        var blockCacheHits = 0;
+        var blockCacheMisses = 0;
+        var traces = new List<PantsSstReadTrace>();
+        foreach (var candidate in candidates)
+        {
+            var local = IsSstLocal(candidate.Name);
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            bloomChecks = checked(bloomChecks + decision.BloomChecks);
+            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
+            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
+            amplificationBlocksRead = checked(amplificationBlocksRead + 1 + decision.BlocksRead);
+            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
+            var bloomFilterOutcome = decision.Rejected
+                ? PantsBloomFilterOutcome.Rejected
+                : PantsBloomFilterOutcome.NotChecked;
+            var sstDataBlocksRead = 0;
+            if (decision.BlocksRead != 0)
+            {
+                var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
+                bool containsKey;
+                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
+                {
+                    blockCacheHits++;
+                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
+                    containsKey = cachedBlock.ContainsKey(keyCopy);
+                }
+                else
+                {
+                    blockCacheMisses++;
+                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
+                    var blockContent = await reader.ReadDataBlockAsync(
+                            decision.CandidateBlockIndex,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    dataBlocksRead++;
+                    sstDataBlocksRead = 1;
+                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
+                    _ = _blockCache.Add(cacheKey, blockContent);
+                }
+
+                if (containsKey)
+                {
+                    bloomTruePositives++;
+                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
+                }
+                else
+                {
+                    bloomFalsePositives++;
+                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
+                }
+            }
+
+            traces.Add(new PantsSstReadTrace(
+                candidate.Name,
+                candidate.Level,
+                local ? PantsSstReadTier.Local : PantsSstReadTier.HydratedFromCloud,
+                bloomFilterOutcome,
+                PantsCacheReadOutcome.Miss,
+                blockCacheOutcome,
+                sstDataBlocksRead));
+        }
+
+        var keyRangeRejects = familyFiles.Length - candidates.Length;
+        var exceedsBudget = telemetry.RecordSstRead(new SstReadSample
+        {
+            SstsTouched = candidates.Length,
+            L0SstsTouched = candidates.Count(static file => file.Level == 0),
+            AmplificationBlocksRead = amplificationBlocksRead,
+            DataBlocksRead = dataBlocksRead,
+            ReaderCacheMisses = candidates.Length,
+            BlockCacheHits = blockCacheHits,
+            BlockCacheMisses = blockCacheMisses,
+            CandidateBlocks = candidateBlocks,
+            KeyRangeRejects = keyRangeRejects,
+            BloomChecks = bloomChecks,
+            BloomTruePositives = bloomTruePositives,
+            BloomFalsePositives = bloomFalsePositives,
+            BloomTrueNegatives = bloomTrueNegatives
+        });
+        return (exceedsBudget, new PantsPointReadTrace(keyRangeRejects, [.. traces]));
     }
 
     bool RecordPointReadCore(
@@ -625,7 +1354,7 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
+    internal static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
         key.Select(static value => checked((byte)value)).ToArray();
 
     public static LocalDiskStore Open(
@@ -642,9 +1371,10 @@ sealed class LocalDiskStore : IDisposable
         PantsBlockCachePolicy blockCachePolicy = PantsBlockCachePolicy.Lru,
         long blockCacheBytes = 0,
         TimeSpan? leaseHeartbeatInterval = null,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts = null,
+        IAsyncSstSourceFactory? remoteSstSourceFactory = null,
         StartupPhaseRecorder? startupPhases = null,
-        IPantsClock? leaseClock = null)
+        IPantsClock? leaseClock = null,
+        TimeSpan? leaseTimeToLive = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -683,7 +1413,8 @@ sealed class LocalDiskStore : IDisposable
                     leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
                     leaseLossCallback,
                     leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10),
-                    leaseClock);
+                    leaseClock,
+                    leaseTimeToLive);
             }
             lease.EnsureValid();
             using (startupPhases.Measure(StartupPhase.Format))
@@ -754,9 +1485,10 @@ sealed class LocalDiskStore : IDisposable
                 compaction ?? new PantsCompactionConfiguration(),
                 targetSstSizeBytes,
                 blockCachePolicy,
-                blockCacheBytes);
+                blockCacheBytes,
+                remoteSstSourceFactory);
             lease.EnsureValid();
-            store.Recover(state, recoverySsts, startupPhases);
+            store.Recover(state, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
@@ -1270,11 +2002,15 @@ sealed class LocalDiskStore : IDisposable
                 if (durability != PantsDurability.BestEffort)
                 {
                     var appendStarted = Stopwatch.GetTimestamp();
+                    var payloads = prepared.Select(static commit => commit.Payload).ToArray();
                     WalCodec.AppendFrames(
                         _walStream.SafeFileHandle,
                         walLength,
-                        prepared.Select(static commit => commit.Payload).ToArray(),
+                        payloads,
                         () => _failpoints.Hit(Failpoint.MidWalAppend));
+                    Interlocked.Add(
+                        ref _walBytesWrittenTotal,
+                        payloads.Sum(static payload => checked((long)payload.Length + 2 * sizeof(uint))));
                     var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
                     metrics?.RecordAppend(appendElapsed);
                     _walRecords = checked(_walRecords + prepared.Count);
@@ -1710,7 +2446,9 @@ sealed class LocalDiskStore : IDisposable
             offset,
             payload,
             afterPartialPayload);
-        offset = checked(offset + 2 * sizeof(uint) + payload.Length);
+        var frameBytes = checked((long)payload.Length + 2 * sizeof(uint));
+        offset = checked(offset + frameBytes);
+        Interlocked.Add(ref _walBytesWrittenTotal, frameBytes);
         _walRecords = checked(_walRecords + 1);
     }
 
@@ -2423,6 +3161,8 @@ sealed class LocalDiskStore : IDisposable
                 true,
                 continueCompacting,
                 null,
+                null,
+                null,
                 CancellationToken.None)
             .AsTask()
             .GetAwaiter()
@@ -2441,6 +3181,8 @@ sealed class LocalDiskStore : IDisposable
             true,
             false,
             null,
+            null,
+            null,
             cancellationToken);
 
     public ValueTask<CompactionResult> CompactAsync(
@@ -2449,6 +3191,8 @@ sealed class LocalDiskStore : IDisposable
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
+        ResourceBudget? compactionBudget = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
             state,
@@ -2457,6 +3201,8 @@ sealed class LocalDiskStore : IDisposable
             flushMutableOperations,
             false,
             publicationCompleted,
+            compactionBudget,
+            prepareInputs,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -2466,6 +3212,8 @@ sealed class LocalDiskStore : IDisposable
         bool flushMutableOperations,
         bool continueCompacting,
         Action<long>? publicationCompleted,
+        ResourceBudget? compactionBudget,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -2490,74 +3238,115 @@ sealed class LocalDiskStore : IDisposable
         var outputNames = new List<string>();
         var outputBytes = 0L;
         var hasCompactionPlan = false;
-        foreach (var (_, familyId) in _familyIds.ToList())
+        try
         {
-            var plan = LeveledCompactionPlanner.Pick(
-                manifest.Files,
-                familyId,
-                _compaction,
-                state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
-                force);
-            if (plan is null)
+            foreach (var (_, familyId) in _familyIds.ToList())
             {
-                continue;
-            }
-
-            hasCompactionPlan = true;
-
-            var contents = plan.Inputs
-                .Select(input => SstCodec.Decode(
-                    PositionalFile.ReadAllBytes(Path.Combine(_sstDirectory, input.Name))))
-                .ToArray();
-            var merged = CompactionMerger.Merge(contents, plan);
-            var partitions = CompactionOutputPartitioner.Partition(merged, _targetSstSizeBytes);
-            var outputs = new List<FileMeta>(partitions.Count);
-            var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
-                familyId,
-                out var nextOutputSequence)
-                ? nextOutputSequence
-                : 1UL;
-            for (var outputIndex = 0; outputIndex < partitions.Count; outputIndex++)
-            {
-                var partition = partitions[outputIndex];
-                var output = CreateSst(
+                var plan = LeveledCompactionPlanner.Pick(
+                    manifest.Files,
                     familyId,
-                    plan.TargetLevel,
-                    partition.Entries,
-                    partition.RangeTombstones,
-                    Failpoint.AfterCompactionOutputDurable,
-                    checked(firstOutputSequence + (ulong)outputIndex));
-                outputs.Add(output);
-                outputNames.Add(output.Name);
-                edits.Add(CreateManifestEdit("AddSst", output));
-            }
+                    _compaction,
+                    state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
+                    force);
+                if (plan is null)
+                {
+                    continue;
+                }
 
-            if (outputs.Count > 0)
-            {
-                edits.Add(CreateManifestEdit(
-                    "BumpNextSstSeq",
+                hasCompactionPlan = true;
+                if (prepareInputs is not null)
+                {
+                    await prepareInputs(
+                            plan.Inputs
+                                .Select(static input => input.Name)
+                                .Distinct(StringComparer.Ordinal)
+                                .ToArray(),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
+                // index/bloom + the small resident range-tombstone list) and walks its entries one
+                // block at a time through the k-way merge — the same version-retention/tombstone-
+                // masking/GC-eligibility rules as CompactionMerger.Merge +
+                // CompactionOutputPartitioner.Partition (see its doc comment), just driven
+                // incrementally instead of over one materialized array per input plus one
+                // materialized merged/partitioned result.
+                var inputReaders = plan.Inputs
+                    .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
+                    .ToArray();
+                var outputs = new List<FileMeta>();
+                var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
+                    familyId,
+                    out var nextOutputSequence)
+                    ? nextOutputSequence
+                    : 1UL;
+                try
+                {
+                    var outputIndex = 0UL;
+                    foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
+                                 inputReaders,
+                                 plan,
+                                 _targetSstSizeBytes,
+                                 compactionBudget))
+                    {
+                        var outputSequence = checked(firstOutputSequence + outputIndex);
+                        outputNames.Add(CreateSstFileName(
+                            familyId,
+                            plan.TargetLevel,
+                            outputSequence));
+                        var output = CreateSst(
+                            familyId,
+                            plan.TargetLevel,
+                            partition.Entries,
+                            partition.RangeTombstones,
+                            Failpoint.AfterCompactionOutputDurable,
+                            outputSequence);
+                        outputs.Add(output);
+                        edits.Add(CreateManifestEdit("AddSst", output));
+                        outputIndex = checked(outputIndex + 1);
+                    }
+                }
+                finally
+                {
+                    foreach (var inputReader in inputReaders)
+                    {
+                        inputReader.Dispose();
+                    }
+                }
+
+                if (outputs.Count > 0)
+                {
+                    edits.Add(CreateManifestEdit(
+                        "BumpNextSstSeq",
+                        new
+                        {
+                            cf_id = familyId,
+                            next_seq = checked(outputs[^1].SstSequence + 1)
+                        }));
+                }
+
+                edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
+                    "RemoveSst",
+                    new { name = input.Name })));
+                intents.Add(CreateIntentEntry(
+                    "CompactionPublish",
                     new
                     {
+                        phase = "OutputDurable",
                         cf_id = familyId,
-                        next_seq = checked(outputs[^1].SstSequence + 1)
+                        removed = plan.Inputs.Select(static input => input.Name).ToArray(),
+                        added = outputs.Select(CreateIntentFileMetadata).ToArray()
                     }));
+
+                obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
+                outputBytes = checked(outputBytes + outputs.Sum(static output => checked((long)output.SizeBytes)));
             }
-
-            edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
-                "RemoveSst",
-                new { name = input.Name })));
-            intents.Add(CreateIntentEntry(
-                "CompactionPublish",
-                new
-                {
-                    phase = "OutputDurable",
-                    cf_id = familyId,
-                    removed = plan.Inputs.Select(static input => input.Name).ToArray(),
-                    added = outputs.Select(CreateIntentFileMetadata).ToArray()
-                }));
-
-            obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
-            outputBytes = checked(outputBytes + outputs.Sum(static output => checked((long)output.SizeBytes)));
+        }
+        catch
+        {
+            DeleteUnpublishedCompactionOutputs(outputNames);
+            throw;
         }
 
         foreach (var family in manifest.ColumnFamilies.Where(family =>
@@ -2584,9 +3373,17 @@ sealed class LocalDiskStore : IDisposable
         _lease.EnsureValid();
         if (outputNames.Count > 0)
         {
-            _failpoints.Hit(Failpoint.BeforeCompactionDirectorySync);
-            AtomicStagedFile.FlushDirectory(_sstDirectory);
-            _lease.EnsureValid();
+            try
+            {
+                _failpoints.Hit(Failpoint.BeforeCompactionDirectorySync);
+                AtomicStagedFile.FlushDirectory(_sstDirectory);
+                _lease.EnsureValid();
+            }
+            catch
+            {
+                DeleteUnpublishedCompactionOutputs(outputNames);
+                throw;
+            }
         }
 
         var supersededOutputs = UpsertCompactionIntents(intents);
@@ -2634,16 +3431,13 @@ sealed class LocalDiskStore : IDisposable
         foreach (var name in obsoleteNames)
         {
             _lease.EnsureValid();
-            if (state.ActiveSnapshotCount == 0)
-            {
-                File.Delete(Path.Combine(_sstDirectory, name));
-                RemoveSstFromCaches(name);
-            }
-            else
-            {
-                _snapshotPinnedObsoleteFiles.Add(name);
-            }
+            // The actor's current DatabaseVersion can still name these inputs until it publishes
+            // the manifest's new version. Queue every retired file; PublishSnapshot performs the
+            // first safe collection while direct-read admission is excluded.
+            _snapshotPinnedObsoleteFiles.Add(name);
         }
+
+        _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
 
         var publicationCount = hasCompactionPlan ? 1 : 0;
         if (!persistenceAnomaly && (force || continueCompacting) && hasCompactionPlan)
@@ -2655,6 +3449,8 @@ sealed class LocalDiskStore : IDisposable
                 flushMutableOperations,
                 true,
                 publicationCompleted,
+                compactionBudget,
+                prepareInputs,
                 cancellationToken).ConfigureAwait(false);
             outputBytes = checked(outputBytes + continued.BytesRewritten);
             publicationCount = checked(publicationCount + continued.PublicationCount);
@@ -2670,6 +3466,31 @@ sealed class LocalDiskStore : IDisposable
         _blockCache.RemoveFile(name);
     }
 
+    static string CreateSstFileName(uint familyId, uint level, ulong sequence) =>
+        $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
+
+    void DeleteUnpublishedCompactionOutputs(IEnumerable<string> names)
+    {
+        var distinctNames = names.Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctNames.Length == 0)
+        {
+            return;
+        }
+
+        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
+        foreach (var name in distinctNames)
+        {
+            File.Delete(Path.Combine(
+                stagingDirectory,
+                $"{_lease.Epoch}.compaction.{name}.tmp"));
+            File.Delete(Path.Combine(_sstDirectory, name));
+            RemoveSstFromCaches(name);
+        }
+
+        AtomicStagedFile.FlushDirectory(stagingDirectory);
+        AtomicStagedFile.FlushDirectory(_sstDirectory);
+    }
+
     FileMeta GetManifestSst(string name)
     {
         var safeName = ValidateSstName(name);
@@ -2679,13 +3500,9 @@ sealed class LocalDiskStore : IDisposable
                    $"SST '{safeName}' is not owned by the active manifest.");
     }
 
-    void Recover(
-        RuntimeState state,
-        IReadOnlyDictionary<string, ReadOnlyMemory<byte>>? recoverySsts,
-        StartupPhaseRecorder startupPhases)
+    void Recover(RuntimeState state, StartupPhaseRecorder startupPhases)
     {
         RestoreColumnFamilies(state);
-        var recoveredOperations = new List<WalMutation>();
         using (startupPhases.Measure(StartupPhase.SstHydration))
         {
             foreach (var file in _manifest.Files.ToArray())
@@ -2694,33 +3511,20 @@ sealed class LocalDiskStore : IDisposable
                 {
                     var name = ValidateSstName(file.Name);
                     var path = Path.Combine(_sstDirectory, name);
-                    var bytes = File.Exists(path)
-                        ? PositionalFile.ReadAllBytes(path)
-                        : recoverySsts is not null && recoverySsts.TryGetValue(name, out var recovered)
-                            ? recovered.ToArray()
-                            : throw new StorageException($"Manifest SST '{file.Name}' is missing.");
-                    if (file.ContentCrc32C.HasValue && DiskFormat.Crc32C(bytes) != file.ContentCrc32C.Value)
+                    if (File.Exists(path))
                     {
-                        throw new StorageException($"Manifest SST '{file.Name}' content checksum mismatch.");
+                        using var reader = SstReader.Open(path);
+                        continue;
                     }
 
-                    var contents = SstCodec.Decode(bytes);
-                    recoveredOperations.AddRange(contents.Entries.Select(entry => new WalMutation(
-                        file.ColumnFamilyId,
-                        entry.IsDelete ? WalOperation.Delete : WalOperation.Put,
-                        entry.Key,
-                        entry.Value,
-                        entry.Sequence,
-                        entry.Expiration,
-                        null)));
-                    recoveredOperations.AddRange(contents.RangeTombstones.Select(range => new WalMutation(
-                        file.ColumnFamilyId,
-                        WalOperation.DeleteRange,
-                        range.Start,
-                        null,
-                        range.Sequence,
-                        null,
-                        range.End)));
+                    if (_remoteSstSourceFactory is null)
+                    {
+                        throw new StorageException($"Manifest SST '{file.Name}' is missing.");
+                    }
+
+                    var remoteReader = OpenAsyncSstReaderAsync(file, CancellationToken.None)
+                        .AsTask().GetAwaiter().GetResult();
+                    remoteReader.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
                 catch (Exception exception) when (
                     _recoveryPolicy == PantsRecoveryPolicy.Salvage &&
@@ -2739,11 +3543,11 @@ sealed class LocalDiskStore : IDisposable
             }
         }
 
-        ApplyMutations(state, recoveredOperations.OrderBy(operation => operation.Sequence));
         using (startupPhases.Measure(StartupPhase.WalReplay))
         {
             ReplayWal(state);
         }
+
         state.Sequence = checked((long)_nextSequence);
     }
 
@@ -3201,7 +4005,7 @@ sealed class LocalDiskStore : IDisposable
                        (manifest.NextSstSequences.TryGetValue(familyId, out var nextSequence)
                            ? nextSequence
                            : 1UL);
-        var name = $"{familyId:000000}_{level:00}_{sequence:00000000000000000000}.sst";
+        var name = CreateSstFileName(familyId, level, sequence);
         var stagingPrefix = string.IsNullOrEmpty(stagingIdentity)
             ? _lease.Epoch.ToString(CultureInfo.InvariantCulture)
             : stagingIdentity;
@@ -3220,6 +4024,8 @@ sealed class LocalDiskStore : IDisposable
             sizeBytes = checkedStream.BytesWritten;
             contentCrc32C = checkedStream.Checksum;
         }
+
+        Interlocked.Add(ref _sstBytesWrittenTotal, sizeBytes);
 
         _failpoints.Hit(outputDurableFailpoint);
         var allKeys = entries.Select(entry => entry.Key)
@@ -3812,7 +4618,7 @@ sealed class LocalDiskStore : IDisposable
             ? id
             : throw new StorageException($"Column family '{identity}' has no persistent Midge identity.");
 
-    static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
+    internal static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
     {
         if (file.SmallestKey is null || file.LargestKey is null)
         {
@@ -3823,6 +4629,26 @@ sealed class LocalDiskStore : IDisposable
         var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
         return key.SequenceCompareTo(smallest) >= 0 && key.SequenceCompareTo(largest) <= 0;
     }
+
+    static bool OverlapsFileRange(FileMeta file, ReadOnlySpan<byte> start, ReadOnlySpan<byte> end)
+    {
+        if (file.SmallestKey is null || file.LargestKey is null)
+        {
+            return false;
+        }
+
+        var smallest = file.SmallestKey.Select(static value => checked((byte)value)).ToArray();
+        var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
+        return largest.AsSpan().SequenceCompareTo(start) >= 0 &&
+               smallest.AsSpan().SequenceCompareTo(end) < 0;
+    }
+
+    static bool RangesOverlap(
+        ReadOnlySpan<byte> leftStart,
+        ReadOnlySpan<byte> leftEnd,
+        ReadOnlySpan<byte> rightStart,
+        ReadOnlySpan<byte> rightEnd) =>
+        leftStart.SequenceCompareTo(rightEnd) < 0 && rightStart.SequenceCompareTo(leftEnd) < 0;
 
     static void EnsureFormat(string root)
     {

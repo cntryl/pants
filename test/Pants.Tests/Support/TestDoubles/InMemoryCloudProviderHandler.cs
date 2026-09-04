@@ -89,7 +89,10 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 };
             }
 
-            return CreateObjectResponse(HttpStatusCode.OK, protocol, value);
+            return CreateObjectResponse(
+                request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
+                protocol,
+                ApplyRange(request, value));
         }
     }
 
@@ -222,6 +225,21 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
         }
 
         return response;
+    }
+
+    static (byte[] Data, long Version) ApplyRange(
+        HttpRequestMessage request,
+        (byte[] Data, long Version) value)
+    {
+        var range = request.Headers.Range?.Ranges.SingleOrDefault();
+        if (range is null)
+        {
+            return value;
+        }
+
+        var start = checked((int)(range.From ?? 0));
+        var end = checked((int)(range.To ?? value.Data.Length - 1));
+        return (value.Data[start..(end + 1)], value.Version);
     }
 
     static HttpResponseMessage CreatePredicateFailure(string protocol)

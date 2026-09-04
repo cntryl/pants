@@ -8,7 +8,7 @@ namespace Cntryl.Pants.Tests.Compatibility;
 
 public sealed class MidgeStorageGoldenTests
 {
-    const string PinnedMidgeSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
+    const string PinnedMidgeSha = "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71";
 
     static readonly JsonSerializerOptions CatalogJsonOptions = new()
     {

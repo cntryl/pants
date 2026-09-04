@@ -1,15 +1,13 @@
-using System.Collections;
-
 namespace Cntryl.Pants.Transactions.Internal;
 
-sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
+sealed class ValidatingScanEnumerator : IAsyncEnumerator<PantsEntry>
 {
-    readonly IEnumerator<PantsEntry> _entries;
+    readonly IAsyncEnumerator<PantsEntry> _entries;
     readonly IScanReadValidator _validator;
     int _disposed;
 
     public ValidatingScanEnumerator(
-        IEnumerator<PantsEntry> entries,
+        IAsyncEnumerator<PantsEntry> entries,
         IScanReadValidator validator)
     {
         _entries = entries;
@@ -18,11 +16,9 @@ sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
 
     public PantsEntry Current => _entries.Current;
 
-    object IEnumerator.Current => Current;
-
-    public bool MoveNext()
+    public async ValueTask<bool> MoveNextAsync()
     {
-        if (!_entries.MoveNext())
+        if (!await _entries.MoveNextAsync().ConfigureAwait(false))
         {
             _validator.Complete();
             return false;
@@ -32,13 +28,11 @@ sealed class ValidatingScanEnumerator : IEnumerator<PantsEntry>
         return true;
     }
 
-    public void Reset() => throw new NotSupportedException();
-
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _entries.Dispose();
+            await _entries.DisposeAsync().ConfigureAwait(false);
             _validator.Dispose();
         }
     }

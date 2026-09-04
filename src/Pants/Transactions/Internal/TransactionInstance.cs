@@ -11,7 +11,7 @@ sealed class TransactionInstance : IPantsTransaction
     readonly object _gate = new();
     readonly List<TransactionIntentOperation> _intentLog = [];
     readonly DateTimeOffset _snapshotTime;
-    readonly TransactionSpillStore? _spillStore;
+    TransactionSpillStore? _spillStore;
     readonly DatabaseVersion _startSnapshot;
     readonly long _transactionId;
     readonly bool _coordinatorRegistered;
@@ -158,8 +158,15 @@ sealed class TransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
-        var (keyCopy, value, resolvedByIntent) = PreparePointRead(key, cancellationToken);
+        var (keyCopy, value, resolvedByIntent) = await PreparePointReadAsync(
+                key,
+                cancellationToken)
+            .ConfigureAwait(false);
 
+        // Unconditional even when ReadVisibleValue already resolved the value from an SST:
+        // this exhaustive pass is the sole source of read-amplification telemetry and the
+        // signal that triggers background read-amplification-driven compaction, independent of
+        // this early-exit real resolution.
         if (!resolvedByIntent)
         {
             await _database.RecordPointReadAsync(
@@ -175,7 +182,10 @@ sealed class TransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
-        var (keyCopy, value, resolvedByIntent) = PreparePointRead(key, cancellationToken);
+        var (keyCopy, value, resolvedByIntent) = await PreparePointReadAsync(
+                key,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (resolvedByIntent)
         {
             return new PantsPointReadResult(
@@ -223,26 +233,51 @@ sealed class TransactionInstance : IPantsTransaction
             return new ScanInstance(
                 async scanCancellationToken =>
                 {
-                    var validator = await _database.CreateScanReadValidatorAsync(
-                        _columnFamily.Identity,
-                        bounds,
-                        scanCancellationToken).ConfigureAwait(false);
+                    IScanReadValidator? validator = null;
                     TransactionScanEnumerator? entries = null;
+                    IReadOnlyList<AsyncSstScanSource> sstSources = [];
                     try
                     {
+                        var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
+                            _startSnapshot,
+                            _columnFamily.Identity,
+                            bounds.StartInclusive,
+                            bounds.EndExclusive);
+                        sstSources = candidates.Count == 0
+                            ? []
+                            : await _database.CreateScanSourcesAsync(
+                                candidates,
+                                bounds.Direction,
+                                bounds.StartInclusive,
+                                bounds.EndExclusive,
+                                scanCancellationToken).ConfigureAwait(false);
+                        validator = _database.CreateScanReadValidator(sstSources);
                         entries = new TransactionScanEnumerator(
                             _startSnapshot,
                             _columnFamily.Identity,
                             _snapshotTime,
                             intents,
-                            bounds);
+                            bounds,
+                            sstSources,
+                            scanCancellationToken);
                         return validator is null
                             ? entries
                             : new ValidatingScanEnumerator(entries, validator);
                     }
                     catch
                     {
-                        entries?.Dispose();
+                        if (entries is not null)
+                        {
+                            await entries.DisposeAsync().ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            foreach (var source in sstSources)
+                            {
+                                await source.DisposeAsync().ConfigureAwait(false);
+                            }
+                        }
+
                         validator?.Dispose();
                         throw;
                     }
@@ -304,6 +339,12 @@ sealed class TransactionInstance : IPantsTransaction
                 await _database.RecordReadOnlyTransactionCommitAsync(_transactionId)
                     .ConfigureAwait(false);
             }
+        }
+        catch (PantsTimeoutException exception) when (exception.RuntimeResponseAbandoned)
+        {
+            // The runtime accepted the commit and still owns its completion. Rolling it back here
+            // would falsely turn an outcome-unknown response into an authoritative failure.
+            throw;
         }
         catch
         {
@@ -398,11 +439,13 @@ sealed class TransactionInstance : IPantsTransaction
                     "A commit payload was requested outside the commit phase.");
             }
 
+            var spillStore = _spillStore;
             var operations = new TransactionOperationSource(
-                _spillStore,
+                spillStore,
                 _intentLog,
                 _nextOrdinal,
-                _database.Clock.UtcNow);
+                _database.Clock.UtcNow,
+                ownsSpillStore: true);
             operations.Validate();
             var assertions = new Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>>(
                 ColumnFamilyIdentityComparer.Instance)
@@ -417,7 +460,7 @@ sealed class TransactionInstance : IPantsTransaction
                                 false)))
                     .ToArray()
             };
-            return new CommitPayload(
+            var payload = new CommitPayload(
                 _transactionId,
                 Mode,
                 _conflictPolicy,
@@ -425,6 +468,8 @@ sealed class TransactionInstance : IPantsTransaction
                 _startSnapshot,
                 operations,
                 assertions);
+            _spillStore = null;
+            return payload;
         }
     }
 
@@ -454,39 +499,75 @@ sealed class TransactionInstance : IPantsTransaction
         }
     }
 
-    (byte[]? Value, bool ResolvedByIntent) ReadVisibleValue(byte[] key)
+    async ValueTask<(byte[]? Value, bool ResolvedByIntent)> ReadVisibleValueAsync(
+        byte[] key,
+        CancellationToken cancellationToken)
     {
-        using var intents = CreateIntentReadView();
-        var lookup = intents.LookupLatest(key);
-        if (lookup is not null)
+        IReadOnlyList<FileMeta> candidates;
+        long? coveringRangeSequence;
+        lock (_gate)
         {
-            return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
+            using var intents = CreateIntentReadView();
+            var lookup = intents.LookupLatest(key);
+            if (lookup is not null)
+            {
+                return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
+            }
+
+            if (_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) &&
+                family.TryGetValue(key, out var cell))
+            {
+                return cell.Value is null || cell.IsExpired(_snapshotTime)
+                    ? (null, false)
+                    : (cell.Value.ToArray(), false);
+            }
+
+            candidates = SnapshotReadPath.ResolveCandidateFilesForPoint(
+                _startSnapshot,
+                _columnFamily.Identity,
+                key);
+            coveringRangeSequence = _startSnapshot.RangeTombstones[_columnFamily.Identity]
+                .Where(tombstone =>
+                    ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
+                    ByteArrayComparer.Instance.Compare(key, tombstone.EndExclusive) < 0)
+                .Select(static tombstone => (long?)tombstone.WriteSequence)
+                .Max();
         }
 
-        if (!_startSnapshot.Families.TryGetValue(_columnFamily.Identity, out var family) ||
-            !family.TryGetValue(key, out var cell) ||
-            cell.Value is null ||
-            cell.IsExpired(_snapshotTime))
+        var entry = candidates.Count == 0
+            ? null
+            : await _database.TryReadPointValueAsync(candidates, key, cancellationToken)
+                .ConfigureAwait(false);
+        if (coveringRangeSequence is { } rangeSequence &&
+            (entry is null || rangeSequence > checked((long)entry.Sequence)))
         {
             return (null, false);
         }
 
-        return (cell.Value.ToArray(), false);
+        if (entry is null || entry.IsDelete || UnixTimestamp.IsExpired(entry.Expiration, _snapshotTime))
+        {
+            return (null, false);
+        }
+
+        return (entry.Value?.ToArray(), false);
     }
 
-    (byte[] Key, byte[]? Value, bool ResolvedByIntent) PreparePointRead(
+    async ValueTask<(byte[] Key, byte[]? Value, bool ResolvedByIntent)> PreparePointReadAsync(
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        byte[] keyCopy;
         lock (_gate)
         {
             EnsureActive();
             _database.EnsureOpen();
-            var keyCopy = key.ToArray();
-            var (value, resolvedByIntent) = ReadVisibleValue(keyCopy);
-            return (keyCopy, value, resolvedByIntent);
+            keyCopy = key.ToArray();
         }
+
+        var (value, resolvedByIntent) = await ReadVisibleValueAsync(keyCopy, cancellationToken)
+            .ConfigureAwait(false);
+        return (keyCopy, value, resolvedByIntent);
     }
 
     static ReadOnlyMemory<byte>? CopyValue(byte[]? value) =>

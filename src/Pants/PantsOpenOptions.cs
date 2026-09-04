@@ -4,6 +4,7 @@ namespace Cntryl.Pants;
 public sealed class PantsOpenOptions
 {
     const long FallbackMemoryBudgetBytes = 512L * 1024 * 1024;
+    static readonly TimeSpan MinimumLeaseTimeToLive = TimeSpan.FromMilliseconds(3);
     readonly Configuration _configuration;
 
     PantsOpenOptions(Configuration configuration)
@@ -12,8 +13,47 @@ public sealed class PantsOpenOptions
         MemoryBudgetBytes = ResolveMemoryBudget(configuration.MemoryBudget);
         TransactionMemoryPoolBytes = configuration.TransactionMemoryPoolBytes ??
                                      Math.Max(1, MemoryBudgetBytes / 10);
+        // Mirrors Midge's derive_memory_pools: a bounded pool for compaction's streaming merge
+        // buffers, normally capped like the transaction pool (roughly a tenth of the budget)
+        // and at 256 MiB. Sub-MiB automatically partitioned budgets instead prioritize enough
+        // room for the decoded input blocks required to make compaction progress; the derived
+        // memtables shrink with the same total budget, so this does not oversubscribe the limit.
+        var remainingAfterRequiredPools = Math.Max(
+            0,
+            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2);
+        var desiredCompactionPoolBytes = MemoryBudgetBytes < 1024 * 1024 &&
+                                         configuration.MemtableSizeLimitBytes is null
+            ? Math.Max(1, MemoryBudgetBytes * 2 / 3)
+            : Math.Max(1, Math.Min(MemoryBudgetBytes / 10, 256L * 1024 * 1024));
+        var desiredScanPoolBytes = Math.Max(
+            1,
+            Math.Min(MemoryBudgetBytes / 20, 128L * 1024 * 1024));
+        if (configuration.MemtableSizeLimitBytes is > 0 and <= long.MaxValue / 2)
+        {
+            var unallocatedBytes = MemoryBudgetBytes -
+                                   TransactionMemoryPoolBytes -
+                                   2 * configuration.MemtableSizeLimitBytes.Value -
+                                   desiredCompactionPoolBytes -
+                                   desiredScanPoolBytes;
+            desiredCompactionPoolBytes = checked(
+                desiredCompactionPoolBytes +
+                Math.Min(
+                    Math.Max(0, unallocatedBytes),
+                    256L * 1024 * 1024 - desiredCompactionPoolBytes));
+        }
 
-        var maximumMemtable = (MemoryBudgetBytes - TransactionMemoryPoolBytes) / 2;
+        CompactionMemoryPoolBytes = Math.Min(
+            desiredCompactionPoolBytes,
+            remainingAfterRequiredPools);
+        ScanMemoryPoolBytes = Math.Min(
+            desiredScanPoolBytes,
+            remainingAfterRequiredPools - CompactionMemoryPoolBytes);
+
+        var maximumMemtable =
+            (MemoryBudgetBytes -
+             TransactionMemoryPoolBytes -
+             CompactionMemoryPoolBytes -
+             ScanMemoryPoolBytes) / 2;
         var baseMemtable = configuration.PerformanceGoal switch
         {
             PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
@@ -33,7 +73,11 @@ public sealed class PantsOpenOptions
                                       MemtableSizeLimitBytes;
         BlockCacheBytes = Math.Max(
             0,
-            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2 * MemtableSizeLimitBytes);
+            MemoryBudgetBytes -
+            TransactionMemoryPoolBytes -
+            CompactionMemoryPoolBytes -
+            ScanMemoryPoolBytes -
+            2 * MemtableSizeLimitBytes);
         if (configuration.PerformanceGoal == PantsPerformanceGoal.Economy)
         {
             BlockCacheBytes = Math.Min(BlockCacheBytes, 256L * 1024 * 1024);
@@ -84,6 +128,20 @@ public sealed class PantsOpenOptions
 
     public long MemoryBudgetBytes { get; }
 
+    /// <summary>
+    /// Bytes reserved for compaction's streaming merge/partition buffers (see
+    /// <c>ResourceBudget</c>), derived from <see cref="MemoryBudgetBytes"/> the same way the
+    /// transaction pool is. Not separately overridable today (no corresponding configuration
+    /// knob) — always derived.
+    /// </summary>
+    public long CompactionMemoryPoolBytes { get; }
+
+    /// <summary>
+    /// Bytes reserved for the decoded blocks held by active SST scan cursors. The pool is shared
+    /// by all scans in the database and is derived from <see cref="MemoryBudgetBytes"/>.
+    /// </summary>
+    public long ScanMemoryPoolBytes { get; }
+
     public PantsWorkloadProfile WorkloadProfile => _configuration.WorkloadProfile;
 
     public PantsRecoveryPolicy RecoveryPolicy => _configuration.RecoveryPolicy;
@@ -93,6 +151,13 @@ public sealed class PantsOpenOptions
     public PantsCloudWritePolicy CloudWritePolicy => _configuration.CloudWritePolicy;
 
     public TimeSpan StorageTimeout => _configuration.StorageTimeout;
+
+    /// <summary>
+    /// Maximum time a caller waits for an admitted runtime command to publish its response.
+    /// A timeout does not cancel accepted work and therefore leaves its outcome unknown.
+    /// </summary>
+    public TimeSpan RuntimeResponseTimeout =>
+        _configuration.RuntimeResponseTimeout ?? DeriveRuntimeResponseTimeout(StorageTimeout);
 
     public TimeSpan ShutdownTimeout => _configuration.ShutdownTimeout;
 
@@ -116,6 +181,11 @@ public sealed class PantsOpenOptions
 
     public PantsCompactionConfiguration Compaction { get; }
 
+    /// <summary>
+    /// Primary-writer lease lifetime used consistently by local and cloud storage.
+    /// </summary>
+    public TimeSpan LeaseTimeToLive => _configuration.LeaseTimeToLive;
+
     public TimeSpan LeaseClockSkewTolerance => _configuration.LeaseClockSkewTolerance;
 
     public ulong MinimumEpoch => _configuration.MinimumEpoch;
@@ -127,6 +197,11 @@ public sealed class PantsOpenOptions
     internal int CoordinatorQueueCapacity => _configuration.CoordinatorQueueCapacity;
 
     internal int FlushAfterWalRecords => _configuration.FlushAfterWalRecords;
+
+    internal TimeSpan LeaseHeartbeatInterval => TimeSpan.FromTicks(Math.Clamp(
+        LeaseTimeToLive.Ticks / 3,
+        TimeSpan.TicksPerMillisecond,
+        TimeSpan.FromSeconds(10).Ticks));
 
     public static PantsOpenOptions InMemory() =>
         new(Configuration.Default(new PantsStorageConfiguration.InMemory()));
@@ -164,12 +239,14 @@ public sealed class PantsOpenOptions
         PantsBlockCachePolicy blockCachePolicy,
         PantsCloudWritePolicy? cloudWritePolicy,
         TimeSpan storageTimeout,
+        TimeSpan? runtimeResponseTimeout,
         TimeSpan shutdownTimeout,
         bool backgroundCompaction,
         long? memtableSizeLimitBytes,
         long? memtableFlushThresholdBytes,
         long? transactionMemoryPoolBytes,
         int? walBufferSizeBytes,
+        TimeSpan leaseTimeToLive,
         TimeSpan leaseClockSkewTolerance,
         PantsCompactionConfiguration? compaction,
         ulong minimumEpoch)
@@ -185,12 +262,14 @@ public sealed class PantsOpenOptions
             BlockCachePolicy = blockCachePolicy,
             CloudWritePolicy = cloudWritePolicy ?? defaults.CloudWritePolicy,
             StorageTimeout = storageTimeout,
+            RuntimeResponseTimeout = runtimeResponseTimeout,
             ShutdownTimeout = shutdownTimeout,
             BackgroundCompaction = backgroundCompaction,
             MemtableSizeLimitBytes = memtableSizeLimitBytes,
             MemtableFlushThresholdBytes = memtableFlushThresholdBytes,
             TransactionMemoryPoolBytes = transactionMemoryPoolBytes,
             WalBufferSizeBytes = walBufferSizeBytes,
+            LeaseTimeToLive = leaseTimeToLive,
             LeaseClockSkewTolerance = leaseClockSkewTolerance,
             Compaction = compaction,
             MinimumEpoch = minimumEpoch
@@ -220,6 +299,9 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithStorageTimeout(TimeSpan timeout) =>
         With(_configuration with { StorageTimeout = timeout });
+
+    public PantsOpenOptions WithRuntimeResponseTimeout(TimeSpan timeout) =>
+        With(_configuration with { RuntimeResponseTimeout = timeout });
 
     public PantsOpenOptions WithShutdownTimeout(TimeSpan timeout) =>
         With(_configuration with { ShutdownTimeout = timeout });
@@ -253,6 +335,9 @@ public sealed class PantsOpenOptions
         {
             LeaseLossCallback = callback ?? throw new ArgumentNullException(nameof(callback))
         });
+
+    public PantsOpenOptions WithLeaseTimeToLive(TimeSpan timeToLive) =>
+        With(_configuration with { LeaseTimeToLive = timeToLive });
 
     public PantsOpenOptions WithLeaseClockSkewTolerance(TimeSpan tolerance) =>
         With(_configuration with { LeaseClockSkewTolerance = tolerance });
@@ -295,12 +380,6 @@ public sealed class PantsOpenOptions
         ValidateEnum(RecoveryPolicy, nameof(RecoveryPolicy));
         ValidateEnum(BlockCachePolicy, nameof(BlockCachePolicy));
 
-        if (MemoryBudgetBytes < 3)
-        {
-            throw PantsException.ResourceLimit(
-                "The memory budget must hold two memtable generations and a transaction pool.");
-        }
-
         if (TransactionMemoryPoolBytes <= 0)
         {
             throw PantsException.InvalidArgument("Transaction memory pool size must be greater than zero.");
@@ -326,10 +405,26 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
         }
 
-        if (2 * MemtableSizeLimitBytes + TransactionMemoryPoolBytes > MemoryBudgetBytes)
+        long reservedBytes;
+        try
+        {
+            reservedBytes = checked(
+                2 * MemtableSizeLimitBytes +
+                TransactionMemoryPoolBytes +
+                CompactionMemoryPoolBytes +
+                ScanMemoryPoolBytes);
+        }
+        catch (OverflowException)
         {
             throw PantsException.ResourceLimit(
-                "Two memtables and the transaction pool exceed the total memory budget.");
+                "Configured memory pools overflow the total memory budget calculation.");
+        }
+
+        if (reservedBytes > MemoryBudgetBytes)
+        {
+            throw PantsException.ResourceLimit(
+                "Two memtables plus the transaction, compaction, and scan pools exceed the " +
+                "total memory budget.");
         }
 
         if (StorageTimeout < TimeSpan.FromMilliseconds(1))
@@ -337,16 +432,33 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Storage timeout must be at least one millisecond.");
         }
 
+        if (_configuration.RuntimeResponseTimeout is { } explicitResponseTimeout &&
+            (explicitResponseTimeout < TimeSpan.FromMilliseconds(1) ||
+             explicitResponseTimeout <= StorageTimeout))
+        {
+            throw PantsException.InvalidArgument(
+                $"RuntimeResponseTimeout ({explicitResponseTimeout:c}) must be at least one " +
+                $"millisecond and strictly greater than StorageTimeout ({StorageTimeout:c}).");
+        }
+
         if (ShutdownTimeout <= TimeSpan.Zero)
         {
             throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
         }
 
-        if (LeaseClockSkewTolerance < TimeSpan.Zero ||
-            LeaseClockSkewTolerance > TimeSpan.FromSeconds(30))
+        if (LeaseTimeToLive < MinimumLeaseTimeToLive)
         {
             throw PantsException.InvalidArgument(
-                "Lease clock-skew tolerance must be between zero and 30 seconds.");
+                $"LeaseTimeToLive ({LeaseTimeToLive:c}) must be at least " +
+                $"{MinimumLeaseTimeToLive:c}.");
+        }
+
+        if (LeaseClockSkewTolerance < TimeSpan.Zero ||
+            LeaseClockSkewTolerance >= LeaseTimeToLive)
+        {
+            throw PantsException.InvalidArgument(
+                $"LeaseClockSkewTolerance ({LeaseClockSkewTolerance:c}) must be non-negative " +
+                $"and strictly less than LeaseTimeToLive ({LeaseTimeToLive:c}).");
         }
 
         if (CloudWritePolicy.EventualFlushSegmentGap <= 0 ||
@@ -436,9 +548,23 @@ public sealed class PantsOpenOptions
                 ValidateEnum(gcs.ApiStyle, nameof(gcs.ApiStyle));
                 ArgumentNullException.ThrowIfNull(gcs.Credential);
                 break;
+            case PantsCloudProviderConfiguration.OciObjectStorage oci:
+                ValidateProviderText(oci.Namespace, "OCI namespace");
+                ValidateProviderText(oci.Bucket, "OCI bucket");
+                ValidateProviderText(oci.Region, "OCI region");
+                ValidateOptionalHttpEndpoint(oci.Endpoint, "OCI endpoint");
+                ArgumentNullException.ThrowIfNull(oci.Credentials);
+                break;
             default:
                 throw PantsException.InvalidArgument(
                     $"The {objectClass} cloud provider is unsupported.");
+        }
+
+        var report = location.Validate();
+        if (!report.IsValid)
+        {
+            throw PantsException.InvalidArgument(
+                $"The {objectClass} cloud location is invalid: {report.Findings[0].Message}");
         }
     }
 
@@ -486,7 +612,7 @@ public sealed class PantsOpenOptions
         }
 
         var available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        return available > 0 ? Math.Max(3, available / 2) : FallbackMemoryBudgetBytes;
+        return available > 0 ? Math.Max(5, available / 2) : FallbackMemoryBudgetBytes;
     }
 
     static string ValidatePath(string value, string parameterName)
@@ -501,6 +627,15 @@ public sealed class PantsOpenOptions
         return value;
     }
 
+    static TimeSpan DeriveRuntimeResponseTimeout(TimeSpan storageTimeout)
+    {
+        const long marginTicks = TimeSpan.TicksPerSecond * 30;
+        var derivedTicks = storageTimeout.Ticks > TimeSpan.MaxValue.Ticks - marginTicks
+            ? TimeSpan.MaxValue.Ticks
+            : storageTimeout.Ticks + marginTicks;
+        return TimeSpan.FromTicks(Math.Max(TimeSpan.FromSeconds(60).Ticks, derivedTicks));
+    }
+
     sealed record Configuration(
         PantsStorageConfiguration Storage,
         PantsPerformanceGoal PerformanceGoal,
@@ -510,12 +645,14 @@ public sealed class PantsOpenOptions
         PantsBlockCachePolicy BlockCachePolicy,
         PantsCloudWritePolicy CloudWritePolicy,
         TimeSpan StorageTimeout,
+        TimeSpan? RuntimeResponseTimeout,
         TimeSpan ShutdownTimeout,
         bool BackgroundCompaction,
         long? MemtableSizeLimitBytes,
         long? MemtableFlushThresholdBytes,
         long? TransactionMemoryPoolBytes,
         int? WalBufferSizeBytes,
+        TimeSpan LeaseTimeToLive,
         TimeSpan LeaseClockSkewTolerance,
         Action? LeaseLossCallback,
         IPantsClock TtlClock,
@@ -533,12 +670,14 @@ public sealed class PantsOpenOptions
             PantsBlockCachePolicy.Lru,
             new PantsCloudWritePolicy(),
             TimeSpan.FromSeconds(30),
+            null,
             TimeSpan.FromSeconds(30),
             true,
             null,
             null,
             null,
             null,
+            TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(15),
             null,
             SystemPantsClock.Instance,

@@ -222,6 +222,9 @@ public sealed class CommitCoalescerTests
         return new CommitRuntimeCommand(
             writeOptions,
             payload,
-            static _ => ValueTask.FromResult(false));
+            static _ => ValueTask.FromResult(false),
+            new RuntimeResponseRegistry(new RuntimeTelemetry(), TimeProvider.System),
+            transactionId,
+            "Commit");
     }
 }

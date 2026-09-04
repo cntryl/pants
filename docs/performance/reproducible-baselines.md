@@ -22,9 +22,9 @@ dotnet run --project bench/Pants.Benches/Cntryl.Pants.Benches.csproj \
   --artifacts BenchmarkDotNet.Artifacts/mvcc-normal
 ```
 
-## Pinned Midge run
+## Historical Midge performance run
 
-The comparison boundary accepts only Midge commit `c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33` and `cntryl-stress.v2` artifacts. That Midge revision declares `cntryl-stress` from a moving branch and does not commit `Cargo.lock`; pin the compatible harness revision `6b7bd34b495f843826eb873e45b7a70b341c74e3` in the benchmark checkout before running:
+The performance comparison reader accepts only Midge commit `c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33` and `cntryl-stress.v2` artifacts. This is a historical, like-for-like benchmark boundary and must not be reported as Pants's current Midge compatibility baseline. Current feature, persisted-format, and scalability parity is pinned to `75dcc39f7a9b87df480ed91c3a5c93fe1389ca71` and qualified through the contract inventory, bidirectional harness, and owned-resource scale proofs. The older benchmark revision declares `cntryl-stress` from a moving branch and does not commit `Cargo.lock`; pin the compatible harness revision `6b7bd34b495f843826eb873e45b7a70b341c74e3` in the benchmark checkout before running:
 
 ```bash
 git rev-parse HEAD

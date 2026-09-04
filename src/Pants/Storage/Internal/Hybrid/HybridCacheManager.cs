@@ -5,8 +5,6 @@ sealed class HybridCacheManager : IDisposable
     readonly SemaphoreSlim _evictionGate = new(1, 1);
     readonly IFailpointHandler _failpoints;
     readonly HybridStorageBudgetPolicy _policy;
-    readonly Lock _snapshotGate = new();
-    readonly Dictionary<long, long> _snapshotPins = [];
     int _pendingEvictions;
 
     public HybridCacheManager(
@@ -24,26 +22,6 @@ sealed class HybridCacheManager : IDisposable
     public bool RequiresEviction(LocalDiskStore store) =>
         _policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Normal;
 
-    public void RegisterSnapshot(long snapshotId, long sequence)
-    {
-        lock (_snapshotGate)
-        {
-            if (!_snapshotPins.TryAdd(snapshotId, sequence))
-            {
-                throw new PantsInternalException(
-                    $"Hybrid snapshot identifier {snapshotId} is already registered.");
-            }
-        }
-    }
-
-    public void UnregisterSnapshot(long snapshotId)
-    {
-        lock (_snapshotGate)
-        {
-            _snapshotPins.Remove(snapshotId);
-        }
-    }
-
     public void EnsureWriteAdmitted(LocalDiskStore store, RuntimeState state)
     {
         if (_policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Emergency)
@@ -57,7 +35,6 @@ sealed class HybridCacheManager : IDisposable
 
     public async ValueTask EvictIfNeededAsync(
         LocalDiskStore store,
-        Func<string, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> fetchCloudSst,
         CancellationToken cancellationToken)
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -70,38 +47,25 @@ sealed class HybridCacheManager : IDisposable
 
             var planned = PlanEvictions(
                 store.LocalCommittedBytes,
-                store.GetLocalManifestSsts(),
-                GetSnapshotSequences());
+                store.GetLocalManifestSsts());
             Volatile.Write(ref _pendingEvictions, planned.Count);
             _failpoints.Hit(Failpoint.BeforeHybridSstEviction);
             foreach (var candidate in planned)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var localBytes = store.ReadLocalSstForEviction(candidate.Name);
-                if (localBytes is null)
+                if (!store.IsSstLocal(candidate.Name))
                 {
                     Interlocked.Decrement(ref _pendingEvictions);
                     continue;
                 }
 
-                var cloudBytes = await fetchCloudSst(candidate.Name, cancellationToken)
+                await store.VerifyRemoteSstMatchesLocalAsync(candidate.Name, cancellationToken)
                     .ConfigureAwait(false);
-                if (cloudBytes is null || !cloudBytes.Value.Span.SequenceEqual(localBytes.Value.Span))
-                {
-                    throw new PantsRecoveryFailedException(
-                        $"Hybrid SST '{candidate.Name}' is not confirmed durable in cloud storage.");
-                }
 
-                lock (_snapshotGate)
-                {
-                    if (IsPinned(candidate, _snapshotPins.Values))
-                    {
-                        Interlocked.Decrement(ref _pendingEvictions);
-                        continue;
-                    }
-
-                    store.EvictLocalSst(candidate.Name);
-                }
+                // Snapshot visibility is owned by the immutable remote object named in the
+                // snapshot's manifest view. A local source already opened for a read holds a
+                // delete-share file handle; a later read falls back to the remote source.
+                store.EvictLocalSst(candidate.Name);
 
                 Interlocked.Decrement(ref _pendingEvictions);
             }
@@ -115,8 +79,7 @@ sealed class HybridCacheManager : IDisposable
 
     List<HybridLocalSst> PlanEvictions(
         long totalCommittedBytes,
-        IReadOnlyList<HybridLocalSst> candidates,
-        IReadOnlyCollection<long> activeSnapshotSequences)
+        IReadOnlyList<HybridLocalSst> candidates)
     {
         var planned = new List<HybridLocalSst>();
         var projectedBytes = totalCommittedBytes;
@@ -128,11 +91,6 @@ sealed class HybridCacheManager : IDisposable
                 break;
             }
 
-            if (IsPinned(candidate, activeSnapshotSequences))
-            {
-                continue;
-            }
-
             planned.Add(candidate);
             projectedBytes = Math.Max(0, projectedBytes - candidate.SizeBytes);
         }
@@ -140,36 +98,9 @@ sealed class HybridCacheManager : IDisposable
         return planned;
     }
 
-    static bool IsPinned(
-        HybridLocalSst candidate,
-        IReadOnlyCollection<long> activeSnapshotSequences)
-    {
-        if (activeSnapshotSequences.Count == 0)
-        {
-            return false;
-        }
-
-        if (!candidate.SmallestSequence.HasValue)
-        {
-            return true;
-        }
-
-        return activeSnapshotSequences.Any(sequence =>
-            sequence >= 0 && checked((ulong)sequence) >= candidate.SmallestSequence.Value);
-    }
-
-    long[] GetSnapshotSequences()
-    {
-        lock (_snapshotGate)
-        {
-            return _snapshotPins.Values.ToArray();
-        }
-    }
-
     public static async ValueTask EnsureLocalSstsAsync(
         LocalDiskStore store,
         IEnumerable<string> names,
-        Func<string, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> fetch,
         CancellationToken cancellationToken)
     {
         foreach (var name in names.Distinct(StringComparer.Ordinal))
@@ -180,10 +111,7 @@ sealed class HybridCacheManager : IDisposable
                 continue;
             }
 
-            var bytes = await fetch(name, cancellationToken).ConfigureAwait(false) ??
-                        throw new PantsRecoveryFailedException(
-                            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
-            store.HydrateLocalSst(name, bytes.Span);
+            await store.HydrateLocalSstAsync(name, cancellationToken).ConfigureAwait(false);
         }
     }
 

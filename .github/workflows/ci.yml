@@ -73,6 +73,18 @@ jobs:
       - name: Start Sqrzl emulator
         run: docker compose up -d sqrzl
 
+      - name: Wait for Sqrzl emulator
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:9000/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs sqrzl
+          exit 1
+
       - name: Build
         run: dotnet build Pants.slnx --configuration Release
 

@@ -4,7 +4,19 @@ namespace Cntryl.Pants.Transactions.Internal;
 
 static class CommitValidator
 {
-    public static void Validate(RuntimeState state, CommitPayload payload)
+    public static void Validate(
+        RuntimeState state,
+        CommitPayload payload,
+        LocalDiskStore? diskStore = null) =>
+        ValidateAsync(state, payload, diskStore, null, CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+
+    public static async ValueTask ValidateAsync(
+        RuntimeState state,
+        CommitPayload payload,
+        LocalDiskStore? diskStore,
+        ResourceBudget? scanMemoryBudget,
+        CancellationToken cancellationToken)
     {
         foreach (var (identity, assertions) in payload.Asserts)
         {
@@ -14,15 +26,28 @@ static class CommitValidator
             foreach (var assertion in assertions)
             {
                 var key = assertion.Key;
-                var start = ResolveVisibleCell(startFamily, key, payload.SnapshotTime);
+                var start = await ResolveStartCellAsync(
+                    payload.StartSnapshot,
+                    identity,
+                    startFamily,
+                    key,
+                    diskStore,
+                    cancellationToken).ConfigureAwait(false);
                 if (!Matches(assertion.Expected, start, payload.SnapshotTime))
                 {
                     throw PointConflict(
                         "A value assertion did not match the transaction's start snapshot.");
                 }
 
-                if (currentFamily.TryGetValue(key, out var current) &&
-                    current.WriteSequence > payload.StartSnapshot.Sequence)
+                if ((currentFamily.TryGetValue(key, out var current) &&
+                     current.WriteSequence > payload.StartSnapshot.Sequence) ||
+                    (current is null &&
+                     await ResolveDiskWriteSequenceAsync(
+                         diskStore,
+                         identity,
+                         key,
+                         cancellationToken).ConfigureAwait(false) is { } diskSequence &&
+                     diskSequence > payload.StartSnapshot.Sequence))
                 {
                     throw PointConflict("An asserted key changed after the transaction began.");
                 }
@@ -38,27 +63,42 @@ static class CommitValidator
         }
 
         var now = state.Clock.UtcNow;
-        payload.Operations.ForEach(operation =>
+        await payload.Operations.ForEachAsync(async operation =>
         {
             ValidateActiveFamily(state, operation.Family);
             if (operation.Kind == CommitOperationKind.Put &&
                 operation.InsertOnly &&
-                ResolvePriorExists(state, payload, operation, now))
+                await ResolvePriorExistsAsync(
+                    state,
+                    payload,
+                    operation,
+                    now,
+                    diskStore,
+                    cancellationToken).ConfigureAwait(false))
             {
                 throw PantsException.InvalidArgument("Insert requires an absent key.");
             }
 
             if (payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict)
             {
-                ValidateWriteConflict(state, payload, operation);
+                await ValidateWriteConflictAsync(
+                    state,
+                    payload,
+                    operation,
+                    diskStore,
+                    scanMemoryBudget,
+                    cancellationToken).ConfigureAwait(false);
             }
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    static void ValidateWriteConflict(
+    static async ValueTask ValidateWriteConflictAsync(
         RuntimeState state,
         CommitPayload payload,
-        TransactionIntentOperation operation)
+        TransactionIntentOperation operation,
+        LocalDiskStore? diskStore,
+        ResourceBudget? scanMemoryBudget,
+        CancellationToken cancellationToken)
     {
         var family = GetFamily(state, operation.Family);
         switch (operation.Kind)
@@ -67,6 +107,21 @@ static class CommitValidator
             case CommitOperationKind.Delete:
                 if (family.TryGetValue(operation.Key, out var current) &&
                     current.WriteSequence > payload.StartSnapshot.Sequence)
+                {
+                    throw PointConflict("A write-set key changed after the transaction began.");
+                }
+
+                // The in-memory tier no longer has this key at all (e.g. its write was flushed
+                // and released — RuntimeState.ReleaseFlushedGeneration — after this transaction
+                // began but before it committed); the durable SST is the only remaining witness.
+                if (current is null &&
+                    await ResolveDiskWriteSequenceAsync(
+                        diskStore,
+                        operation.Family,
+                        operation.Key,
+                        cancellationToken).ConfigureAwait(false) is
+                    { } diskSequence &&
+                    diskSequence > payload.StartSnapshot.Sequence)
                 {
                     throw PointConflict("A write-set key changed after the transaction began.");
                 }
@@ -83,6 +138,18 @@ static class CommitValidator
                 if (family.Any(pair =>
                         IsInRange(pair.Key, operation.Key, operation.EndExclusive) &&
                         pair.Value.WriteSequence > payload.StartSnapshot.Sequence))
+                {
+                    throw RangeConflict("A covered range changed after the transaction began.");
+                }
+
+                if (await HasDiskMutationInRangeAsync(
+                        diskStore,
+                        operation.Family,
+                        operation.Key,
+                        operation.EndExclusive,
+                        payload.StartSnapshot.Sequence,
+                        scanMemoryBudget,
+                        cancellationToken).ConfigureAwait(false))
                 {
                     throw RangeConflict("A covered range changed after the transaction began.");
                 }
@@ -109,22 +176,215 @@ static class CommitValidator
         }
     }
 
-    static bool ResolvePriorExists(
+    static async ValueTask<bool> ResolvePriorExistsAsync(
         RuntimeState state,
         CommitPayload payload,
         TransactionIntentOperation operation,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        LocalDiskStore? diskStore,
+        CancellationToken cancellationToken)
     {
         var prior = payload.Operations.LatestBefore(operation.Ordinal, operation.Key);
-        return prior switch
+        if (prior is { IsDeleted: true })
         {
-            { IsDeleted: true } => false,
-            { IsDeleted: false } => true,
-            _ => ResolveVisibleCell(
-                GetFamily(state, operation.Family),
-                operation.Key,
-                now)?.Value is not null
-        };
+            return false;
+        }
+
+        if (prior is { IsDeleted: false })
+        {
+            return true;
+        }
+
+        return await ResolveCurrentExistsAsync(
+            state,
+            operation.Family,
+            operation.Key,
+            now,
+            diskStore,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    static async ValueTask<bool> ResolveCurrentExistsAsync(
+        RuntimeState state,
+        ColumnFamilyIdentity family,
+        byte[] key,
+        DateTimeOffset now,
+        LocalDiskStore? diskStore,
+        CancellationToken cancellationToken)
+    {
+        if (GetFamily(state, family).TryGetValue(key, out var current))
+        {
+            return current.Value is not null && !current.IsExpired(now);
+        }
+
+        var diskEntry = await ResolveDiskEntryAsync(
+            diskStore,
+            family,
+            key,
+            cancellationToken).ConfigureAwait(false);
+        var currentRangeSequence = state.RangeTombstones[family]
+            .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
+            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Max();
+        if (currentRangeSequence is { } rangeSequence &&
+            (diskEntry is null || rangeSequence > checked((long)diskEntry.Sequence)))
+        {
+            return false;
+        }
+
+        return diskEntry is { IsDelete: false } &&
+               !UnixTimestamp.IsExpired(diskEntry.Expiration, now);
+    }
+
+    /// <summary>
+    /// Falls through to the current manifest once the in-memory tier no longer has the key — it
+    /// may have been written before this process started, or released from
+    /// <see cref="RuntimeState.FamilyData"/> after a flush durably published it (see
+    /// <see cref="RuntimeState.ReleaseFlushedGeneration"/>). Returns the durable sequence at
+    /// which the key last changed (put or delete), or <c>null</c> if it has no durable record.
+    /// </summary>
+    static async ValueTask<long?> ResolveDiskWriteSequenceAsync(
+        LocalDiskStore? diskStore,
+        ColumnFamilyIdentity family,
+        byte[] key,
+        CancellationToken cancellationToken)
+    {
+        if (diskStore is null)
+        {
+            return null;
+        }
+
+        var sequence = await diskStore.GetLatestMutationSequenceAsync(
+                GetDiskCandidates(diskStore, family, key),
+                key,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return sequence is { } value ? checked((long)value) : null;
+    }
+
+    static async ValueTask<SstEntry?> ResolveDiskEntryAsync(
+        LocalDiskStore? diskStore,
+        ColumnFamilyIdentity family,
+        byte[] key,
+        CancellationToken cancellationToken)
+    {
+        if (diskStore is null)
+        {
+            return null;
+        }
+
+        var candidates = GetDiskCandidates(diskStore, family, key);
+        return candidates.Length == 0
+            ? null
+            : await diskStore.TryReadPointValueAsync(candidates, key, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    static async ValueTask<SstEntry?> ResolveDiskCellEntryAsync(
+        LocalDiskStore? diskStore,
+        IReadOnlyList<FileMeta> visibleFiles,
+        byte[] key,
+        CancellationToken cancellationToken)
+    {
+        if (diskStore is null)
+        {
+            return null;
+        }
+
+        var candidates = visibleFiles
+            .Where(file =>
+                diskStore.IsSstAvailable(file) &&
+                LocalDiskStore.IsWithinFileRange(file, key))
+            .OrderByDescending(static file => file.SstSequence)
+            .ToArray();
+        return candidates.Length == 0
+            ? null
+            : await diskStore.TryReadPointValueAsync(candidates, key, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    static async ValueTask<CellState?> ResolveDiskCellAsync(
+        LocalDiskStore? diskStore,
+        IReadOnlyList<FileMeta> visibleFiles,
+        byte[] key,
+        CancellationToken cancellationToken)
+    {
+        var entry = await ResolveDiskCellEntryAsync(
+            diskStore,
+            visibleFiles,
+            key,
+            cancellationToken).ConfigureAwait(false);
+        return entry is null
+            ? null
+            : CellState.FromUnixMilliseconds(
+                entry.IsDelete ? null : entry.Value,
+                checked((long)entry.Sequence),
+                entry.Expiration);
+    }
+
+    static async ValueTask<CellState?> ResolveStartCellAsync(
+        DatabaseVersion startSnapshot,
+        ColumnFamilyIdentity family,
+        ImmutableSortedDictionary<byte[], CellState> startFamily,
+        byte[] key,
+        LocalDiskStore? diskStore,
+        CancellationToken cancellationToken)
+    {
+        if (startFamily.TryGetValue(key, out var startCell))
+        {
+            return startCell;
+        }
+
+        var diskCell = await ResolveDiskCellAsync(
+            diskStore,
+            startSnapshot.GetVisibleFiles(family.Id),
+            key,
+            cancellationToken).ConfigureAwait(false);
+        var coveringRangeSequence = startSnapshot.RangeTombstones[family]
+            .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
+            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Max();
+        return coveringRangeSequence is { } rangeSequence &&
+               (diskCell is null || rangeSequence > diskCell.WriteSequence)
+            ? new CellState(null, rangeSequence, null)
+            : diskCell;
+    }
+
+    static FileMeta[] GetDiskCandidates(
+        LocalDiskStore diskStore,
+        ColumnFamilyIdentity family,
+        byte[] key) => diskStore.GetVisibleFilesSnapshot()
+        .GetValueOrDefault(family.Id, [])
+        .Where(file =>
+            diskStore.IsSstAvailable(file) &&
+            LocalDiskStore.IsWithinFileRange(file, key))
+        .OrderByDescending(static file => file.SstSequence)
+        .ToArray();
+
+    static async ValueTask<bool> HasDiskMutationInRangeAsync(
+        LocalDiskStore? diskStore,
+        ColumnFamilyIdentity family,
+        byte[] start,
+        byte[] end,
+        long afterSequence,
+        ResourceBudget? scanMemoryBudget,
+        CancellationToken cancellationToken)
+    {
+        if (diskStore is null)
+        {
+            return false;
+        }
+
+        var candidates = diskStore.GetVisibleFilesSnapshot()
+            .GetValueOrDefault(family.Id, []);
+        return await diskStore.HasMutationInRangeAsync(
+                candidates,
+                start,
+                end,
+                checked((ulong)afterSequence),
+                scanMemoryBudget,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     static void ValidateActiveFamily(
@@ -149,14 +409,6 @@ static class CommitValidator
             : throw PantsException.Create(
                 PantsErrorCode.InvalidArgument,
                 $"Column family '{identity.Name}' is unavailable.");
-
-    static CellState? ResolveVisibleCell(
-        ImmutableSortedDictionary<byte[], CellState> family,
-        byte[] key,
-        DateTimeOffset now) =>
-        family.TryGetValue(key, out var cell) && !cell.IsExpired(now) && cell.Value is not null
-            ? cell
-            : null;
 
     static bool Matches(
         TransactionReadValue expected,

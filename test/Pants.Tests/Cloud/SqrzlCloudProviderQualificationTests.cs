@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Tests.Cloud;
 [Trait("Category", "Sqrzl")]
 public sealed class SqrzlCloudProviderQualificationTests
 {
-    const string Endpoint = "http://127.0.0.1:9000";
+    static readonly string Endpoint = ResolveEndpoint();
     static readonly HttpClient HealthClient = new()
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -56,6 +56,18 @@ public sealed class SqrzlCloudProviderQualificationTests
             CreateS3Location(),
             CreateGcsXmlLocation(),
             CreateAzureLocation()));
+
+    [Fact]
+    public Task ShouldPreserveAcceptedDurabilityAfterDeadlineGivenSqrzlS3() =>
+        PreserveAcceptedDurabilityAfterDeadlineAsync(CreateS3Location());
+
+    [Fact]
+    public Task ShouldPreserveAcceptedDurabilityAfterDeadlineGivenSqrzlAzureBlob() =>
+        PreserveAcceptedDurabilityAfterDeadlineAsync(CreateAzureLocation());
+
+    [Fact]
+    public Task ShouldPreserveAcceptedDurabilityAfterDeadlineGivenSqrzlGcs() =>
+        PreserveAcceptedDurabilityAfterDeadlineAsync(CreateGcsJsonLocation());
 
     static async Task RunObjectContractAsync(PantsCloudStorageLocation providerLocation)
     {
@@ -177,6 +189,81 @@ public sealed class SqrzlCloudProviderQualificationTests
         Assert.Equal("engine-value", Encoding.UTF8.GetString(value.Span));
     }
 
+    static async Task PreserveAcceptedDurabilityAfterDeadlineAsync(
+        PantsCloudStorageLocation providerLocation)
+    {
+        await RequireSqrzlAsync();
+        using var sourceCache = new TemporaryDirectory();
+        using var replacementCache = new TemporaryDirectory();
+        using var failpoint = new BlockingCloudWalUploadFailpointHandler();
+        var location = providerLocation with
+        {
+            Prefix = $"deadline/{Guid.NewGuid():N}"
+        };
+        var options = PantsOpenOptions.CloudMulti(
+                sourceCache.Path,
+                PantsCloudStorageTopology.Shared(location))
+            .WithBackgroundCompaction(false)
+            .WithStorageTimeout(TimeSpan.FromMilliseconds(250))
+            .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(500));
+        var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoint));
+
+        await using (var transaction = await database.BeginTransactionAsync(
+                         database.DefaultColumnFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
+            var commit = transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
+            await failpoint.WaitUntilEnteredAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                    commit.WaitAsync(TimeSpan.FromSeconds(5)));
+                Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                failpoint.Release();
+            }
+        }
+
+        await WaitForLateResponseAsync(database);
+        await database.ShutdownAsync(TimeSpan.FromSeconds(10));
+        await database.DisposeAsync();
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.CloudMulti(
+                    replacementCache.Path,
+                    PantsCloudStorageTopology.Shared(location))
+                .WithBackgroundCompaction(false));
+        await using var reader = await reopened.BeginTransactionAsync(
+            reopened.DefaultColumnFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "accepted-value"u8.ToArray(),
+            (await reader.GetAsync("accepted-key"u8.ToArray()))?.ToArray());
+    }
+
+    static async Task WaitForLateResponseAsync(IPantsDatabase database)
+    {
+        var timeout = TimeSpan.FromSeconds(10);
+        using var cancellation = new CancellationTokenSource(timeout);
+        while (!cancellation.IsCancellationRequested)
+        {
+            var metrics = await database.GetRuntimeMetricsAsync(cancellation.Token);
+            if (metrics.RuntimeLateResponsesTotal >= 1)
+            {
+                return;
+            }
+
+            await Task.Yield();
+        }
+
+        throw new TimeoutException("The accepted Sqrzl cloud obligation did not finish.");
+    }
+
     static async Task RequireSqrzlAsync()
     {
         try
@@ -195,6 +282,29 @@ public sealed class SqrzlCloudProviderQualificationTests
                 "Start it with 'docker compose up -d sqrzl'.",
                 exception);
         }
+    }
+
+    static string ResolveEndpoint()
+    {
+        var configuredEndpoint = Environment.GetEnvironmentVariable("PANTS_SQRZL_ENDPOINT");
+        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return configuredEndpoint.TrimEnd('/');
+        }
+
+        var configuredPort = Environment.GetEnvironmentVariable("PANTS_SQRZL_API_PORT");
+        if (string.IsNullOrWhiteSpace(configuredPort))
+        {
+            configuredPort = "9000";
+        }
+
+        if (!ushort.TryParse(configuredPort, out var port) || port == 0)
+        {
+            throw new InvalidOperationException(
+                "PANTS_SQRZL_API_PORT must be an integer from 1 through 65535.");
+        }
+
+        return $"http://127.0.0.1:{port}";
     }
 
     static PantsCloudStorageLocation CreateS3Location() => new(

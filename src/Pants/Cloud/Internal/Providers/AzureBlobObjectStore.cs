@@ -65,6 +65,36 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
+    public async ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        ValidateRange(offset, length);
+        using var response = await SendReadAsync(
+                token => CreateRangeRequestAsync(objectKey, offset, length, token),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (data.Length != length)
+        {
+            throw new PantsIOException("Azure Blob ranged GET returned an unexpected byte count.");
+        }
+
+        var version = response.Headers.ETag?.Tag ??
+                      throw new PantsIOException(
+                          "Azure Blob ranged GET response did not include an ETag.");
+        return new CloudObject(data, version);
+    }
+
     public async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken)
@@ -169,6 +199,20 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
+        await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        return request;
+    }
+
+    async ValueTask<HttpRequestMessage> CreateRangeRequestAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
+        request.Headers.Range = new RangeHeaderValue(
+            checked((long)offset),
+            checked((long)offset + length - 1));
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
     }
@@ -440,6 +484,15 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         }
 
         return string.Empty;
+    }
+
+    static void ValidateRange(ulong offset, int length)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        if (offset > long.MaxValue || offset > (ulong)(long.MaxValue - length + 1))
+        {
+            throw PantsException.InvalidArgument("The cloud object range is too large.");
+        }
     }
 
     Uri BuildObjectUri(string objectKey)

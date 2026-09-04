@@ -1,7 +1,7 @@
 # Midge compatibility qualification
 
 Pants is qualified against Midge commit
-`c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33`. Normal builds do not clone or
+`75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`. Normal builds do not clone or
 compile Midge. They use the committed contract manifest and fixtures under
 `test/Pants.Tests/Fixtures/Compatibility`.
 
@@ -56,6 +56,20 @@ next starts, so the single-writer lease is never bypassed. Both offline
 verifiers run between handoffs and must leave the fixture byte-for-byte
 unchanged. Qualification builds Midge without failpoints; fixture refresh alone
 enables them to capture otherwise transient storage states.
+
+Each writer commits one atomic transaction batch in the default and an
+additional column family. The batch covers put, insert, TTL, point-delete, and
+range-delete semantics. The create boundary remains WAL-only for both local
+producers and for Pants simulated-cloud writes; current Midge eagerly publishes
+CloudStrict writes to SSTs. Later boundaries force an SST flush from each
+engine. Consequently the four scenarios prove both WAL and SST recovery where
+the producer exposes those states, as well as manifest, catalog, lease, and
+column-family compatibility. They also prove that each engine can extend the
+other engine's database rather than merely parse frozen bytes.
+
+The current-baseline review, including compatibility and scalability changes
+since the previous pin, is recorded in
+[`MidgeCurrentBaselineReview.md`](MidgeCurrentBaselineReview.md).
 
 ## Fixture policy
 

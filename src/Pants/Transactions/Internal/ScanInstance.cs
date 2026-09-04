@@ -7,14 +7,14 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     CancellationToken _cancellationToken;
     int _disposed;
     int _emitted;
-    IEnumerator<PantsEntry>? _entries;
-    Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>>? _entriesFactory;
+    IAsyncEnumerator<PantsEntry>? _entries;
+    Func<CancellationToken, ValueTask<IAsyncEnumerator<PantsEntry>>>? _entriesFactory;
     int _enumerationStarted;
     Exception? _failure;
     int _snapshotReleased;
 
     internal ScanInstance(
-        Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
+        Func<CancellationToken, ValueTask<IAsyncEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
         Func<ValueTask> releaseSnapshot)
     {
@@ -22,6 +22,18 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         _releaseSnapshot = releaseSnapshot ?? throw new ArgumentNullException(nameof(releaseSnapshot));
         _bounds = new ScanBounds(query);
         Direction = _bounds.Direction;
+    }
+
+    internal ScanInstance(
+        Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
+        PantsScanQuery query,
+        Func<ValueTask> releaseSnapshot)
+        : this(
+            async cancellationToken => new SyncAsyncEnumerator(
+                await entriesFactory(cancellationToken).ConfigureAwait(false)),
+            query,
+            releaseSnapshot)
+    {
     }
 
     public PantsEntry Current { get; private set; }
@@ -59,7 +71,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
             Exception error = PantsException.Create(
                 PantsErrorCode.Busy,
                 "A Pants scan is a single-pass cursor and has already been enumerated.");
-            Fail(error);
+            FailAsync(error).AsTask().GetAwaiter().GetResult();
             throw error;
         }
 
@@ -73,7 +85,11 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         {
             State = PantsIteratorState.Exhausted;
             Current = default;
-            _entries?.Dispose();
+            if (_entries is not null)
+            {
+                await _entries.DisposeAsync().ConfigureAwait(false);
+            }
+
             _entries = null;
         }
 
@@ -92,7 +108,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
             }
 
             await EnsureEntriesInitializedAsync().ConfigureAwait(false);
-            while (_entries!.MoveNext())
+            while (await _entries!.MoveNextAsync().ConfigureAwait(false))
             {
                 var candidate = _entries.Current;
                 var key = candidate.Key.Span;
@@ -111,7 +127,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         }
         catch (Exception exception)
         {
-            Fail(exception);
+            await FailAsync(exception).ConfigureAwait(false);
             try
             {
                 await ReleaseSnapshotAsync().ConfigureAwait(false);
@@ -142,17 +158,25 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     {
         State = PantsIteratorState.Exhausted;
         Current = default;
-        _entries?.Dispose();
+        if (_entries is not null)
+        {
+            await _entries.DisposeAsync().ConfigureAwait(false);
+        }
+
         _entries = null;
         await ReleaseSnapshotAsync().ConfigureAwait(false);
     }
 
-    void Fail(Exception exception)
+    async ValueTask FailAsync(Exception exception)
     {
         _failure ??= exception;
         State = PantsIteratorState.Failed;
         Current = default;
-        _entries?.Dispose();
+        if (_entries is not null)
+        {
+            await _entries.DisposeAsync().ConfigureAwait(false);
+        }
+
         _entries = null;
     }
 
@@ -160,4 +184,17 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         Interlocked.Exchange(ref _snapshotReleased, 1) == 0
             ? _releaseSnapshot()
             : ValueTask.CompletedTask;
+
+    sealed class SyncAsyncEnumerator(IEnumerator<PantsEntry> entries) : IAsyncEnumerator<PantsEntry>
+    {
+        public PantsEntry Current => entries.Current;
+
+        public ValueTask DisposeAsync()
+        {
+            entries.Dispose();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<bool> MoveNextAsync() => ValueTask.FromResult(entries.MoveNext());
+    }
 }

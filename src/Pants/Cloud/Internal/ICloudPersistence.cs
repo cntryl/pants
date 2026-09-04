@@ -13,8 +13,4 @@ interface ICloudPersistence : ICloudDdlAuthority
     ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken);
 
     ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken);
-
-    ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
-        string name,
-        CancellationToken cancellationToken);
 }

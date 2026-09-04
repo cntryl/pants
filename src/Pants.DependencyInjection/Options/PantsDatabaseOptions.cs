@@ -21,6 +21,8 @@ public sealed class PantsDatabaseOptions
 
     public TimeSpan StorageTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    public TimeSpan? RuntimeResponseTimeout { get; set; }
+
     public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public bool BackgroundCompaction { get; set; } = true;
@@ -32,6 +34,8 @@ public sealed class PantsDatabaseOptions
     public long? TransactionMemoryPoolBytes { get; set; }
 
     public int? WalBufferSizeBytes { get; set; }
+
+    public TimeSpan LeaseTimeToLive { get; set; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan LeaseClockSkewTolerance { get; set; } = TimeSpan.FromSeconds(15);
 

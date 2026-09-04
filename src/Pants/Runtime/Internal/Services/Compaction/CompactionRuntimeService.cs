@@ -3,10 +3,13 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Compaction;
 sealed class CompactionRuntimeService(
     int capacity,
     LocalDiskStore? diskStore,
-    RuntimeTelemetry telemetry)
+    RuntimeTelemetry telemetry,
+    long memoryBudgetBytes)
     : ChannelRuntimeService<CompactionRuntimeRequest, CompactionResult>(capacity)
 {
     int _compactingSsts;
+
+    public ResourceBudget BufferBudget { get; } = new(memoryBudgetBytes);
 
     public int CompactingSsts => Volatile.Read(ref _compactingSsts);
 
@@ -15,13 +18,15 @@ sealed class CompactionRuntimeService(
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations = true,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
             new CompactionRuntimeRequest(
                 state,
                 force,
                 outputPublisher,
-                flushMutableOperations),
+                flushMutableOperations,
+                prepareInputs),
             cancellationToken);
 
     protected override async ValueTask<CompactionResult> DispatchAsync(
@@ -41,6 +46,8 @@ sealed class CompactionRuntimeService(
                     request.OutputPublisher,
                     request.FlushMutableOperations,
                     telemetry.RecordCompaction,
+                    BufferBudget,
+                    request.PrepareInputs,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

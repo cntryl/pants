@@ -5,6 +5,7 @@ namespace Cntryl.Pants.Benches.Tier1;
 
 public class SingleflightBenchmarks : Tier1Benchmark
 {
+    long _requestId;
     RuntimeResponseSlot<int> _slot = null!;
     Task<int>[] _waiters = null!;
 
@@ -14,7 +15,10 @@ public class SingleflightBenchmarks : Tier1Benchmark
     [IterationSetup]
     public void Setup()
     {
-        _slot = new RuntimeResponseSlot<int>();
+        _slot = new RuntimeResponseSlot<int>(
+            new RuntimeResponseRegistry(new RuntimeTelemetry(), TimeProvider.System),
+            ++_requestId,
+            nameof(CompleteWaiters));
         _waiters = Enumerable.Range(0, WaiterCount).Select(_ => _slot.Response).ToArray();
     }
 

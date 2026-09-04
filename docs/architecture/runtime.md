@@ -5,6 +5,27 @@ immutable `DatabaseSnapshot` publication and admits commands through a bounded
 channel. Reads use frozen snapshots; mutations are serialized by the
 coordinator.
 
+Every command that expects a synchronous runtime response receives a monotonic request ID at
+admission and shares one `RuntimeResponseTimeout` budget for its response and nested cloud work.
+Queue time and every provider, lease, catalog, manifest, and publication call consume that same
+absolute monotonic budget; an expired budget is rejected before another provider request can be
+submitted. Individual provider calls remain capped by `StorageTimeout`, so neither nesting nor
+retry resets the aggregate deadline. If the caller's own
+cancellation expires first it remains authoritative. If the runtime-response budget expires,
+Pants removes the live waiter, retains only bounded and expiring request-kind/timing metadata, and
+reports `PantsTimeoutException` with an outcome-unknown diagnostic. The accepted command is not
+cancelled: commits, provider publication, fencing, and cleanup remain runtime-owned. A later
+terminal response is consumed once and counted by `RuntimeLateResponsesTotal`; current waiters,
+bounded tombstones, and total abandonments are available in `PantsRuntimeMetrics`.
+
+Open/recovery is not an admitted runtime-response wait: provider/storage calls made while opening
+share one startup `RuntimeResponseTimeout` budget while each request remains capped by
+`StorageTimeout`. Callerless durability retries have an explicit unbounded aggregate owner, bounded
+provider calls, backoff, and a runtime/recovery lifecycle; they never inherit an abandoned caller's
+cancellation token. Shutdown preparation is governed by the explicit timeout passed to
+`ShutdownAsync` (or `ShutdownTimeout` during disposal), while work already admitted before caller
+abandonment remains owned until it reaches a terminal runtime state.
+
 Persistence work runs through bounded, single-purpose services. Typed,
 immutable requests cross the `WalRuntimeService`, `FlushRuntimeService`, and
 `CompactionRuntimeService` boundaries; the coordinator remains the sole owner
@@ -43,3 +64,11 @@ implements expiry, conditional takeover, renewal, and fencing over
 `ICloudLeaseStore`. `CloudObjectLeaseStore` persists the Midge lease document
 through conditional object operations, allowing provider clients to supply
 ETag or generation semantics without entering the runtime layer.
+
+Local, simulated-cloud, and provider-cloud writers use the same `LeaseTimeToLive` and
+`LeaseClockSkewTolerance` profile. The 30-second default TTL retains the provider-cloud default
+and aligns local takeover with current Midge; older Pants builds used an independent 60-second
+local takeover delay. The exact boundary remains held, and takeover becomes eligible on the first
+clock tick after `last renewal + TTL + skew`. Heartbeats run at one third of TTL, bounded between
+1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
+release still validates the writer epoch/owner token, so a resumed old owner remains fenced.

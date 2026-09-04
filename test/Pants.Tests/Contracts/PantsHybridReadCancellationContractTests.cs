@@ -99,6 +99,10 @@ public sealed class PantsHybridReadCancellationContractTests
         var exception =
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(AssertionTimeout));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
+        await enumerator.DisposeAsync();
+        var metrics = await database.GetRuntimeMetricsAsync();
+        Assert.True(metrics.ScanBufferPeakBytes <= metrics.ScanBufferCapacityBytes);
+        Assert.Equal(0, metrics.ScanBufferUsedBytes);
     }
 
     static async ValueTask<IPantsDatabase> CreateDatabaseWithEvictedSstAsync(

@@ -2644,7 +2644,10 @@ public sealed class PantsBackgroundFlushPipelineTests
             ReadLayoutAsync()
         };
         start.TrySetResult();
-        await Task.WhenAll(work).WaitAsync(TimeSpan.FromSeconds(5));
+        // This is a deadlock watchdog, not a latency assertion. Windows hosted runners can
+        // legitimately take longer than five seconds while eight 132 KiB writes are flushed
+        // alongside repeated manifest reads.
+        await Task.WhenAll(work).WaitAsync(BackgroundWorkTimeout);
         await database.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
 
         var layout = await database.GetStorageLayoutAsync();

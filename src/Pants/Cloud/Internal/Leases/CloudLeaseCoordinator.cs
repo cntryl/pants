@@ -103,15 +103,17 @@ sealed class CloudLeaseCoordinator : IDisposable
                         nextEpoch,
                         _ownerToken,
                         now,
-                        now + _leaseDuration),
+                        AddSaturating(now, _leaseDuration)),
                     cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                if (now <= current.Lease.ExpiresAtUtc + _clockSkewTolerance)
+                if (now <= AddSaturating(current.Lease.ExpiresAtUtc, _clockSkewTolerance))
                 {
                     throw new PantsLeaseHeldException(
-                        $"Cloud primary lease is held at epoch {current.Lease.Epoch}.");
+                        $"Cloud primary lease is held at epoch {current.Lease.Epoch}; configured " +
+                        $"LeaseTimeToLive is {_leaseDuration:c} and LeaseClockSkewTolerance is " +
+                        $"{_clockSkewTolerance:c}.");
                 }
 
                 if (current.Lease.Epoch == ulong.MaxValue)
@@ -128,7 +130,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                         nextEpoch,
                         _ownerToken,
                         now,
-                        now + _leaseDuration),
+                        AddSaturating(now, _leaseDuration)),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -137,7 +139,9 @@ sealed class CloudLeaseCoordinator : IDisposable
                 throw new PantsLeaseHeldException("Lost the conditional cloud lease acquisition race.");
             }
 
-            Volatile.Write(ref _expiresAtUtcTicks, (now + _leaseDuration).UtcTicks);
+            Volatile.Write(
+                ref _expiresAtUtcTicks,
+                AddSaturating(now, _leaseDuration).UtcTicks);
             Volatile.Write(ref _epoch, nextEpoch);
             return nextEpoch;
         }
@@ -162,7 +166,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 throw new PantsFencedException("The cloud primary lease is owned by another writer.");
             }
 
-            var expiresAt = ObserveMonotonicUtcNow() + _leaseDuration;
+            var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
             var proposed = current.Lease with { ExpiresAtUtc = expiresAt };
             EnsureValid();
             CloudLeaseSnapshot? confirmed = null;
@@ -353,6 +357,11 @@ sealed class CloudLeaseCoordinator : IDisposable
         lease.Epoch == epoch &&
         StringComparer.Ordinal.Equals(lease.HolderId, _holderId) &&
         StringComparer.Ordinal.Equals(lease.OwnerToken, _ownerToken);
+
+    static DateTimeOffset AddSaturating(DateTimeOffset value, TimeSpan elapsed) =>
+        elapsed.Ticks > DateTimeOffset.MaxValue.UtcTicks - value.UtcTicks
+            ? DateTimeOffset.MaxValue
+            : new DateTimeOffset(value.UtcTicks + elapsed.Ticks, TimeSpan.Zero);
 
     DateTimeOffset ObserveMonotonicUtcNow() =>
         new(ObserveMonotonicUtcTicks(), TimeSpan.Zero);

@@ -54,7 +54,8 @@ static class CloudObjectStoreFactory
                 timeout,
                 credentialClient),
             PantsCloudProviderConfiguration.AwsS3 or
-                PantsCloudProviderConfiguration.S3Compatible => new S3ObjectStore(
+                PantsCloudProviderConfiguration.S3Compatible or
+                PantsCloudProviderConfiguration.OciObjectStorage => new S3ObjectStore(
                     location.Provider,
                     location.Prefix,
                     storageClient,

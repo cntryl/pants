@@ -21,7 +21,10 @@ static class TransactionSpillTestHarness
                 "transaction-spill/"),
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown storage mode.")
         })
-        .WithMemoryBudget(PantsMemoryBudget.FromBytes(8 * 1_024))
+        // The transaction pool remains deliberately tiny so these tests exercise spill.
+        // The engine-wide budget must also accommodate a decoded SST block now that cloud
+        // scans correctly read flushed data through the bounded scan pool.
+        .WithMemoryBudget(PantsMemoryBudget.FromBytes(512 * 1_024))
         .WithMemtableLimits(2 * 1_024)
         .WithTransactionMemoryPool(transactionMemoryPoolBytes);
 

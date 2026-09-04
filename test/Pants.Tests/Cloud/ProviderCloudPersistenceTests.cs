@@ -516,8 +516,9 @@ public sealed class ProviderCloudPersistenceTests
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             handler.FailWalWrites = true;
 
-            await Assert.ThrowsAsync<PantsInternalException>(() =>
+            var exception = await Assert.ThrowsAsync<PantsIOException>(() =>
                 transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+            Assert.Contains("indeterminate", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
 
         handler.FailWalWrites = false;

@@ -8,6 +8,66 @@ static class CloudObjectStoreExtensions
     const int MaximumListItems = 1_000_000;
     const int MaximumListBytes = 256 * 1024 * 1024;
 
+    public static ValueTask<CloudObject?> GetAsync(
+        this ICloudObjectStore objectStore,
+        string objectKey,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunAsync(
+            token => objectStore.GetAsync(objectKey, token),
+            cancellationToken);
+
+    public static ValueTask<CloudObject?> GetRangeAsync(
+        this ICloudObjectStore objectStore,
+        string objectKey,
+        ulong offset,
+        int length,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunAsync(
+            token => objectStore.GetRangeAsync(objectKey, offset, length, token),
+            cancellationToken);
+
+    public static ValueTask<CloudObjectMetadata?> HeadAsync(
+        this ICloudObjectStore objectStore,
+        string objectKey,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunAsync(
+            token => objectStore.HeadAsync(objectKey, token),
+            cancellationToken);
+
+    public static ValueTask<bool> PutAsync(
+        this ICloudObjectStore objectStore,
+        string objectKey,
+        ReadOnlyMemory<byte> data,
+        CloudObjectWriteCondition condition,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunMutationAsync(
+            token => objectStore.PutAsync(objectKey, data, condition, token),
+            cancellationToken);
+
+    public static ValueTask<CloudObjectListPage> ListPageAsync(
+        this ICloudObjectStore objectStore,
+        string prefix,
+        string? continuationToken,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunAsync(
+            token => objectStore.ListPageAsync(prefix, continuationToken, token),
+            cancellationToken);
+
+    public static ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+        this ICloudObjectStore objectStore,
+        string objectKey,
+        CloudObjectDeleteCondition condition,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        deadline.RunMutationAsync(
+            token => objectStore.DeleteAsync(objectKey, condition, token),
+            cancellationToken);
+
     public static async ValueTask<IReadOnlyList<string>> ListAllAsync(
         this ICloudObjectStore objectStore,
         string prefix,
@@ -59,6 +119,62 @@ static class CloudObjectStoreExtensions
             {
                 throw new PantsInternalException(
                     "Cloud LIST repeated continuation token.");
+            }
+        }
+    }
+
+    public static async ValueTask<IReadOnlyList<string>> ListAllAsync(
+        this ICloudObjectStore objectStore,
+        string prefix,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(objectStore);
+        ArgumentNullException.ThrowIfNull(prefix);
+        var objectKeys = new List<string>();
+        var continuationTokens = new HashSet<string>(StringComparer.Ordinal);
+        var aggregateBytes = 0;
+        var continuationToken = default(string);
+
+        for (var pageCount = 1; ; pageCount++)
+        {
+            if (pageCount > MaximumListPages)
+            {
+                throw new PantsInternalException(
+                    $"Cloud LIST page count exceeded limit of {MaximumListPages}.");
+            }
+
+            var page = await objectStore.ListPageAsync(
+                prefix,
+                continuationToken,
+                deadline,
+                cancellationToken).ConfigureAwait(false);
+            if (page.ObjectKeys.Count > MaximumListItems - objectKeys.Count)
+            {
+                throw new PantsInternalException(
+                    $"Cloud LIST item count exceeded limit of {MaximumListItems}.");
+            }
+
+            foreach (var objectKey in page.ObjectKeys)
+            {
+                aggregateBytes = AddBytes(aggregateBytes, Encoding.UTF8.GetByteCount(objectKey));
+                objectKeys.Add(objectKey);
+            }
+
+            continuationToken = string.IsNullOrEmpty(page.ContinuationToken)
+                ? null
+                : page.ContinuationToken;
+            if (continuationToken is null)
+            {
+                return objectKeys.ToArray();
+            }
+
+            aggregateBytes = AddBytes(
+                aggregateBytes,
+                Encoding.UTF8.GetByteCount(continuationToken));
+            if (!continuationTokens.Add(continuationToken))
+            {
+                throw new PantsInternalException("Cloud LIST repeated continuation token.");
             }
         }
     }

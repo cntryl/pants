@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "midgeSha": "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33",
+  "midgeSha": "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71",
   "artifacts": [
     {
       "id": "format-v3",
       "structure": "format-v3",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/FORMAT",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/FORMAT",
       "sha256": "6957d6a43d6025ad391726e82cd578d29eed380e92ecd0f7c279357ccdd26cca"
     },
     {
@@ -15,7 +15,7 @@
       "structure": "wal-tlv",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-tlv-put-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-tlv-put-v1.bin",
       "sha256": "2aa9187f7620c43a78b5315a619dd082605e1513ecf33c3bba9158afe8c21518"
     },
     {
@@ -23,7 +23,7 @@
       "structure": "wal-tlv",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-tlv-insert-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-tlv-insert-v1.bin",
       "sha256": "b85e67146a3913dc30884ff5d87d099280f6d281651de0b2b2740bc376c652a5"
     },
     {
@@ -31,7 +31,7 @@
       "structure": "wal-tlv",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-tlv-delete-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-tlv-delete-v1.bin",
       "sha256": "8d35800e5c687b8bff986f7a25bc0583353b26bf3c9081fcc0f640b6daddc47f"
     },
     {
@@ -39,7 +39,7 @@
       "structure": "wal-tlv",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-tlv-delete-range-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-tlv-delete-range-v1.bin",
       "sha256": "945dd7ede39ffd9bbcf1445c3b644a317b4946557e45bc3c4b830d4792505982"
     },
     {
@@ -47,7 +47,7 @@
       "structure": "wal-tlv",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-tlv-empty-value-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-tlv-empty-value-v1.bin",
       "sha256": "ccacb0ae6a19f7ee5505c8cd090a38bfe0eb5021cbde7683dfc00e5dc29e3d1c"
     },
     {
@@ -55,7 +55,7 @@
       "structure": "wal-transaction-batch",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-txn-batch-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-txn-batch-v1.bin",
       "sha256": "a795e9445b8f54cc8be71ed621e5c541cf179049bab9c0ac03ed27ee65899745"
     },
     {
@@ -63,7 +63,7 @@
       "structure": "wal-frame",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal-frame-put-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal-frame-put-v1.bin",
       "sha256": "a465b05a5b653db690dfe169bface50ea656543a6cade629dcfc53773ce06067"
     },
     {
@@ -71,7 +71,7 @@
       "structure": "wal-active-segment",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal/active/wal.log",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal/active/wal.log",
       "sha256": "78983f839f49fa6e447dde45918aa433dfcff79ee8154542cb6d7719228be6c7"
     },
     {
@@ -79,7 +79,7 @@
       "structure": "wal-sealed-epoch-segment",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/wal/sealed/00000000000000000001.wal",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/wal/sealed/00000000000000000001.wal",
       "sha256": "28f653bdeb4089eed59f198f85ea98492b000f8f75a73f6cc6e217768b64eeb8"
     },
     {
@@ -87,7 +87,7 @@
       "structure": "sst-v4-raw-block",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst-block-none-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst-block-none-v1.bin",
       "sha256": "a6d79e576921f75f4e66a0598cdb62f908e04aeeb06e28b03d3c77e7916cb14f"
     },
     {
@@ -95,7 +95,7 @@
       "structure": "sst-v4-lz4-block",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst-block-lz4-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst-block-lz4-v1.bin",
       "sha256": "ccb917f4d7868b68401640ccd43e9c62c5e5f2ac1a2f88b314274063462ac5cc"
     },
     {
@@ -103,7 +103,7 @@
       "structure": "sst-v4-zstd3-block",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst-block-zstd3-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst-block-zstd3-v1.bin",
       "sha256": "57e4fcd77730e3bda49d42ca79399c8215c121c0d6789a41ff080e6509fe5488"
     },
     {
@@ -111,7 +111,7 @@
       "structure": "sst-v4-zstd9-block",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst-block-zstd9-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst-block-zstd9-v1.bin",
       "sha256": "8671b9ea02cc04dc67280c326fbc8d7dbd82d7df5c54555ff2d8b097cb57866d"
     },
     {
@@ -119,7 +119,7 @@
       "structure": "sst-compression-input",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst-block-input-v1.bin",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst-block-input-v1.bin",
       "sha256": "43ff640a7ac719065d3b1cf968d381344a824546b2950d246620b3c73bf95427"
     },
     {
@@ -127,7 +127,7 @@
       "structure": "sst-v4-index",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst/structured-v4.sst",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst/structured-v4.sst",
       "sha256": "5d7850308e9e10f4d8b04dd9001e9c6271ea236ba9701dc9311a19c96f3f7081"
     },
     {
@@ -135,7 +135,7 @@
       "structure": "sst-v4-bloom",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst/structured-v4.sst",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst/structured-v4.sst",
       "sha256": "5d7850308e9e10f4d8b04dd9001e9c6271ea236ba9701dc9311a19c96f3f7081"
     },
     {
@@ -143,7 +143,7 @@
       "structure": "sst-v4-trie",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst/structured-v4.sst",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst/structured-v4.sst",
       "sha256": "5d7850308e9e10f4d8b04dd9001e9c6271ea236ba9701dc9311a19c96f3f7081"
     },
     {
@@ -151,7 +151,7 @@
       "structure": "sst-v4-range-tombstone",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst/structured-v4.sst",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst/structured-v4.sst",
       "sha256": "5d7850308e9e10f4d8b04dd9001e9c6271ea236ba9701dc9311a19c96f3f7081"
     },
     {
@@ -159,7 +159,7 @@
       "structure": "sst-v4-footer",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/sst/structured-v4.sst",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/sst/structured-v4.sst",
       "sha256": "5d7850308e9e10f4d8b04dd9001e9c6271ea236ba9701dc9311a19c96f3f7081"
     },
     {
@@ -167,16 +167,16 @@
       "structure": "manifest-snapshot",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/metadata/manifest.snapshot.json",
-      "sha256": "8e4b3812bd222a0be847f2066416694d86a8226a12fd7344576fe45bf63fbf50"
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/metadata/manifest.snapshot.json",
+      "sha256": "7cc3d1880e5051168e0899fb055de272856a0224dec625fa6da581bb49c501c9"
     },
     {
       "id": "manifest-journal",
       "structure": "manifest-journal",
       "producer": "midge",
       "coverage": "semantic",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/metadata/manifest.journal",
-      "sha256": "981c98fc04b80855ba61c19a9be9ffba16ca9ab1df5c7a778ecb6b3f2bd07aca",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/metadata/manifest.journal",
+      "sha256": "446a19fa8c7e73d94c8c4871f1232ad3f6298c90f1a1812c55b25ddc6ed9d93d",
       "rationale": "Midge fsync markers embed wall-clock milliseconds; Pants validates the framed edit and marker semantics rather than reproducing time-dependent bytes."
     },
     {
@@ -184,16 +184,16 @@
       "structure": "intent-log",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/metadata/intent_log.json",
-      "sha256": "6359c6abd2e061e3e21914217967c239c998bc82922ddc1f6fe563f2c3246ac7"
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/metadata/intent_log.json",
+      "sha256": "a43bfa13acd33fca185f47793588fdf583fc8145be553f7bd85db911b9d73926"
     },
     {
       "id": "local-lease",
       "structure": "local-lease",
       "producer": "midge",
       "coverage": "semantic",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/leases/local.midge_leader",
-      "sha256": "de76209de32bd89f9bba16e4a57a9658ef26fb081dac79ba4dcc35ccd975ef16",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/leases/local.midge_leader",
+      "sha256": "a23db6ff748b61e93b09e5a841035c44b7e8c3cfdf3b4b2c4117d282dde1a080",
       "rationale": "The holder identity and acquisition timestamp are process- and host-dependent."
     },
     {
@@ -201,8 +201,8 @@
       "structure": "cloud-lease",
       "producer": "midge",
       "coverage": "semantic",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/leases/cloud.midge_primary_lease",
-      "sha256": "f6fb8ee0cb60e1354184fd90e78a7f6f5c917b52407d1306022f60bbabfba524",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/leases/cloud.midge_primary_lease",
+      "sha256": "8d5cbae2ffb6f35951e3c0214efe83ac98ac6c632ca4e7367022c49d5acf7ff1",
       "rationale": "The holder identity, owner token, and timestamps are generated for each lease acquisition."
     },
     {
@@ -210,8 +210,8 @@
       "structure": "ddl-registry",
       "producer": "midge",
       "coverage": "semantic",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/ddl/ddl.registry.json",
-      "sha256": "32c2ca320be44fd854751341ddfe4f64a25873e8586fa65d81e9e25e0bbcdbc8",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/ddl/ddl.registry.json",
+      "sha256": "41f41db2d696b0203fca7deb7a69b5e677f1ac7cb00a85606e24acf690d751cb",
       "rationale": "DDL operation identifiers and creation timestamps are generated for each operation."
     },
     {
@@ -219,8 +219,8 @@
       "structure": "ddl-prepare",
       "producer": "midge",
       "coverage": "semantic",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/ddl/ddl.prepare.json",
-      "sha256": "6b5d904790971ae220325ad6f3b906640766f5034fba18a8a035b6692e4fb62c",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/ddl/ddl.prepare.json",
+      "sha256": "2e2442d181ee0585dd872210a8a83841602a4985a699af8945a17092112f7eb9",
       "rationale": "DDL operation identifiers and creation timestamps are generated for each operation."
     },
     {
@@ -228,7 +228,7 @@
       "structure": "cloud-wal-catalog",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/cloud/publication-catalog.v1.json",
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/cloud/publication-catalog.v1.json",
       "sha256": "fe53788be15955f86faa72f84ef593cb0722d40cf79357c542c121eeed164c4d"
     },
     {
@@ -236,7 +236,7 @@
       "structure": "cloud-object-keys",
       "producer": "midge",
       "coverage": "exact",
-      "path": "Wire/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/cloud-object-keys-v1.txt",
+      "path": "Wire/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/cloud-object-keys-v1.txt",
       "sha256": "62a468d050fd68092950986fb0552682d8c8703de60003fdbd07741632cf5e05"
     },
     {
@@ -244,16 +244,16 @@
       "structure": "generated-database-tree",
       "producer": "canonical",
       "coverage": "exact",
-      "path": "Storage/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/databases/midge-structured-v4-db.fixture.json",
-      "sha256": "748f33d2dd8c1710893c0f7afb532c898d8107aaafb631c6d70bd7344642ea11"
+      "path": "Storage/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/databases/midge-structured-v4-db.fixture.json",
+      "sha256": "9fe1171e7222c00ec126089f0f33e7e12c5c8ce40477f0e16da128e8c7a68733"
     },
     {
       "id": "midge-driver-cargo-lock",
       "structure": "midge-driver-dependency-lock",
       "producer": "canonical",
       "coverage": "exact",
-      "path": "Tooling/c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33/Cargo.lock",
-      "sha256": "e1740e05b3ff66b7744432f7346b8c585d8c437d9d1b69cb7e405fea836b046b"
+      "path": "Tooling/75dcc39f7a9b87df480ed91c3a5c93fe1389ca71/Cargo.lock",
+      "sha256": "1fe29024e1789245b1ca8b20274aea17573380d5e33cf8f1811b59a65f85f937"
     }
   ]
 }

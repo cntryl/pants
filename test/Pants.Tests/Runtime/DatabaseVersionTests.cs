@@ -24,6 +24,37 @@ public sealed class DatabaseVersionTests
     }
 
     [Fact]
+    public void ShouldExposeEmptyVisibleFilesGivenNoOverload()
+    {
+        var state = CreateState(1);
+
+        var version = state.CreateVersion();
+
+        Assert.Empty(version.GetVisibleFiles(0));
+    }
+
+    [Fact]
+    public void ShouldPinVisibleFilesAtSnapshotTimeIndependentOfLaterManifestChanges()
+    {
+        var state = CreateState(1);
+        var family = Assert.Single(state.FamilyData.Keys);
+        var atOpen = new Dictionary<uint, ImmutableArray<FileMeta>>
+        {
+            [family.Id] = [new FileMeta { Name = "000001.sst", ColumnFamilyId = family.Id }]
+        };
+
+        var opened = state.CreateVersion(atOpen);
+        var afterCompaction = state.CreateVersion(
+            new Dictionary<uint, ImmutableArray<FileMeta>>
+            {
+                [family.Id] = [new FileMeta { Name = "000002.sst", ColumnFamilyId = family.Id }]
+            });
+
+        Assert.Equal("000001.sst", Assert.Single(opened.GetVisibleFiles(family.Id)).Name);
+        Assert.Equal("000002.sst", Assert.Single(afterCompaction.GetVisibleFiles(family.Id)).Name);
+    }
+
+    [Fact]
     public void ShouldKeepVersionPublicationAllocationConstantGivenFiftyTimesMoreKeys()
     {
         var small = CreateState(1_000);

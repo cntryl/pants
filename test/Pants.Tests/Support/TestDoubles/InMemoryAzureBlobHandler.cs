@@ -22,7 +22,11 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     bool _failSstList;
     bool _failWalWrites;
     int _failedWalWriteAttempts;
+    int _replaceSstOnNextRange;
     int _sstDeleteAttempts;
+    long _sstRangeBytes;
+    int _sstRangeReads;
+    int _sstFullReads;
     int _unconditionalSstDeleteAttempts;
 
     public bool FailWalWrites
@@ -64,6 +68,9 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
         Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
 
+    public void ReplaceSstOnNextRange() =>
+        Volatile.Write(ref _replaceSstOnNextRange, 1);
+
     public bool FailSstList
     {
         get => Volatile.Read(ref _failSstList);
@@ -82,6 +89,34 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     public int UnconditionalSstDeleteAttempts =>
         Volatile.Read(ref _unconditionalSstDeleteAttempts);
+
+    public int SstFullReads => Volatile.Read(ref _sstFullReads);
+
+    public int SstRangeReads => Volatile.Read(ref _sstRangeReads);
+
+    public long SstRangeBytes => Volatile.Read(ref _sstRangeBytes);
+
+    public long SstStoredBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _objects
+                    .Where(static pair =>
+                        pair.Key.Contains("/sst/", StringComparison.Ordinal) &&
+                        pair.Key.EndsWith(".sst", StringComparison.Ordinal))
+                    .Sum(static pair => (long)pair.Value.Data.Length);
+            }
+        }
+    }
+
+    public void ResetSstReadMetrics()
+    {
+        Volatile.Write(ref _sstFullReads, 0);
+        Volatile.Write(ref _sstRangeReads, 0);
+        Volatile.Write(ref _sstRangeBytes, 0);
+    }
 
     public Task WaitForFailedWalWriteAsync(CancellationToken cancellationToken) =>
         _failedWalWrite.Task.WaitAsync(cancellationToken);
@@ -192,7 +227,37 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                     return new HttpResponseMessage(HttpStatusCode.NotFound);
                 }
 
-                return CreateResponse(HttpStatusCode.OK, value);
+                if (request.Method == HttpMethod.Get &&
+                    request.Headers.Range is not null &&
+                    key.Contains("/sst/", StringComparison.Ordinal) &&
+                    key.EndsWith(".sst", StringComparison.Ordinal) &&
+                    Interlocked.Exchange(ref _replaceSstOnNextRange, 0) != 0)
+                {
+                    value = (value.Data.ToArray(), value.Version + 1);
+                    _objects[key] = value;
+                }
+
+                if (request.Method == HttpMethod.Get &&
+                    key.Contains("/sst/", StringComparison.Ordinal) &&
+                    key.EndsWith(".sst", StringComparison.Ordinal))
+                {
+                    if (request.Headers.Range is null)
+                    {
+                        Interlocked.Increment(ref _sstFullReads);
+                    }
+                    else
+                    {
+                        var range = request.Headers.Range.Ranges.Single();
+                        var length = checked((range.To ?? value.Data.Length - 1) -
+                                             (range.From ?? 0) + 1);
+                        Interlocked.Increment(ref _sstRangeReads);
+                        Interlocked.Add(ref _sstRangeBytes, length);
+                    }
+                }
+
+                return CreateResponse(
+                    request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
+                    ApplyRange(request, value));
             }
         }
 
@@ -279,6 +344,21 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             Content = new ByteArrayContent(value.Data),
             Headers = { ETag = new EntityTagHeaderValue(FormatVersion(value.Version)) }
         };
+
+    static (byte[] Data, long Version) ApplyRange(
+        HttpRequestMessage request,
+        (byte[] Data, long Version) value)
+    {
+        var range = request.Headers.Range?.Ranges.SingleOrDefault();
+        if (range is null)
+        {
+            return value;
+        }
+
+        var start = checked((int)(range.From ?? 0));
+        var end = checked((int)(range.To ?? value.Data.Length - 1));
+        return (value.Data[start..(end + 1)], value.Version);
+    }
 
     HttpResponseMessage CreateListResponse(Uri requestUri)
     {

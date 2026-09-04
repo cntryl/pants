@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Transactions.Internal;
 
-sealed class CommitPayload
+sealed class CommitPayload : IDisposable
 {
     public CommitPayload(
         long transactionId,
@@ -35,4 +35,12 @@ sealed class CommitPayload
     public Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> Asserts { get; }
 
     public bool IsSpilled => Operations.IsSpilled;
+
+    public void Dispose()
+    {
+        if (Operations is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
 }

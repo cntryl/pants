@@ -61,17 +61,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
 
-    public async ValueTask<ReadOnlyMemory<byte>?> FetchSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        _lease.EnsureValid();
-        var value = await _sstStore.GetAsync(
-            PantsCloudObjectLayout.SstPrefix + name,
-            cancellationToken).ConfigureAwait(false);
-        return value?.Data;
-    }
-
     public async ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken)
@@ -379,10 +368,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
         var activeManifest = useRemoteMetadata ? remoteManifest : localManifest ?? remoteManifest;
 
-        var recoverySsts = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal);
         foreach (var file in activeManifest?.Files ?? [])
         {
-            var remote = await sstStore.GetAsync(
+            var remote = await sstStore.HeadAsync(
                 PantsCloudObjectLayout.SstPrefix + file.Name,
                 cancellationToken).ConfigureAwait(false);
             var localPath = Path.Combine(root, "sst", file.Name);
@@ -400,19 +388,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 continue;
             }
 
-            CloudSstValidator.Validate(remote.Data, file);
-            if (File.Exists(localPath))
+            if (file.SizeBytes != 0 && remote.SizeBytes != file.SizeBytes)
             {
-                continue;
-            }
-
-            if (localManifest is not null)
-            {
-                recoverySsts[file.Name] = remote.Data;
-            }
-            else
-            {
-                AtomicStagedFile.Write(localPath, remote.Data.Span);
+                throw new PantsCorruptionException(
+                    $"Cloud SST '{file.Name}' length differs from its manifest.");
             }
         }
 
@@ -424,7 +403,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return new ProviderCloudHydrationResult(
                 new Dictionary<ulong, ProviderPublishedWalSegment>(),
                 0,
-                recoverySsts,
                 false);
         }
 
@@ -465,7 +443,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         return new ProviderCloudHydrationResult(
             catalog.Segments,
             cloudDurableSequence,
-            recoverySsts,
             requiresSalvage);
     }
 
@@ -783,11 +760,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        var dependencyGuards = await ValidateManifestDependenciesAsync(
-            (ManifestState)manifest,
-            metadata,
-            cancellationToken).ConfigureAwait(false);
-
         for (var attempt = 0; attempt < 8; attempt++)
         {
             _lease.EnsureValid();
@@ -813,6 +785,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             {
                 return;
             }
+
+            var dependencyGuards = await ValidateManifestDependenciesAsync(
+                (ManifestState)manifest,
+                metadata,
+                cancellationToken).ConfigureAwait(false);
 
             var retired = new List<ProviderPublishedWalSegment>(candidates.Length);
             var walObjects = new Dictionary<ulong, CloudObject>();
@@ -959,11 +936,41 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         {
             _lease.EnsureValid();
             var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
-            var remote = await _sstStore.GetAsync(objectKey, cancellationToken)
+            var remote = await _sstStore.HeadAsync(objectKey, cancellationToken)
                 .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
                 $"Manifest cloud SST '{file.Name}' is missing during WAL pruning.");
             _lease.EnsureValid();
-            CloudSstValidator.Validate(remote.Data, file);
+            if (file.SizeBytes != 0 && remote.SizeBytes != file.SizeBytes)
+            {
+                throw new PantsCorruptionException(
+                    $"Manifest cloud SST '{file.Name}' length differs during WAL pruning.");
+            }
+
+            var factory = new ProviderCloudSstSourceFactory(_sstStore);
+            await using var source = await factory.OpenAsync(file, cancellationToken)
+                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+                $"Manifest cloud SST '{file.Name}' is missing during WAL pruning.");
+            var checksum = 0U;
+            for (long offset = 0; offset < source.Length;)
+            {
+                var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
+                var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
+                    .ConfigureAwait(false);
+                checksum = DiskFormat.Crc32CAppend(checksum, bytes);
+                offset = checked(offset + length);
+            }
+
+            if (file.ContentCrc32C.HasValue && checksum != file.ContentCrc32C.Value)
+            {
+                throw new PantsCorruptionException(
+                    $"Manifest cloud SST '{file.Name}' checksum differs during WAL pruning.");
+            }
+
+            await using var reader = await AsyncSstReader.OpenAsync(
+                    source,
+                    file,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             guards.Add(new CloudObjectIdentityGuard(_sstStore, objectKey, remote.Version));
         }

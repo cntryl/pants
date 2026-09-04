@@ -17,16 +17,24 @@ sealed class SstReader : IDisposable
         long fileLength,
         (byte[] FirstKey, SstBlockHandle Handle)[] index,
         byte[]? blockBlooms,
-        TrieIndex? trieIndex)
+        TrieIndex? trieIndex,
+        IReadOnlyList<RangeTombstone> rangeTombstones)
     {
         _file = file;
         _fileLength = fileLength;
         _index = index;
         _blockBlooms = blockBlooms;
         _trieIndex = trieIndex;
+        RangeTombstones = rangeTombstones;
     }
 
     public int DataBlockCount => _index.Length;
+
+    /// <summary>
+    /// The SST's range tombstones. Loaded eagerly by <see cref="Open"/> since a file's
+    /// tombstone set is small and bounded, unlike its data blocks.
+    /// </summary>
+    public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
 
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
@@ -131,7 +139,10 @@ sealed class SstReader : IDisposable
                 bloomHandle,
                 metadata.RangeHandle,
                 index.ToList());
-            var reader = new SstReader(file, fileLength, index, blockBlooms, trieIndex);
+            var rangeTombstones = metadata.RangeHandle is { } rangeHandle
+                ? SstCodec.DecodeRangeTombstones(SstCodec.ReadBlock(file, fileLength, rangeHandle))
+                : [];
+            var reader = new SstReader(file, fileLength, index, blockBlooms, trieIndex, rangeTombstones);
             file = null;
             return reader;
         }

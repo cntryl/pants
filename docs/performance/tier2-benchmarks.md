@@ -1,6 +1,6 @@
 # Tier 2 subsystem benchmarks
 
-Tier 2 uses fixed-operation workloads to expose subsystem regressions that are too broad for hot-path microbenchmarks. The inventory follows Midge at `c5ffc2d`: block-cache rotation and eviction, bloom/SST construction, batched compression, cross-thread event dispatch, multi-run iteration, memtable rotation, warm/cold range-cache access, read amplification, transaction lifecycle latency, and strict durability commit latency.
+Tier 2 uses fixed-operation workloads to expose subsystem regressions that are too broad for hot-path microbenchmarks. The workload inventory originated from Midge at `c5ffc2d`; that SHA is the historical performance-comparison boundary, not the current compatibility baseline. Current behavior and persisted-format compatibility are pinned separately to `75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`. The inventory covers block-cache rotation and eviction, bloom/SST construction, batched compression, cross-thread event dispatch, multi-run iteration, memtable rotation, warm/cold range-cache access, read amplification, transaction lifecycle latency, and strict durability commit latency.
 
 Run all Tier 2 rows with:
 

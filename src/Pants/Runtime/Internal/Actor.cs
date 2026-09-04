@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 
@@ -41,7 +42,9 @@ sealed class Actor : IAsyncDisposable
     readonly RuntimeWorker _manifestWorker;
     readonly PantsOpenOptions _options;
     readonly RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory;
+    readonly RuntimeResponseRegistry _runtimeResponses;
     readonly TimeProvider _runtimeTimeProvider;
+    readonly ResourceBudget _scanMemoryBudget;
 
     readonly RuntimeState _state;
     readonly StorageVerificationDelegate _storageVerifier;
@@ -65,6 +68,7 @@ sealed class Actor : IAsyncDisposable
     int _disposed;
     bool _garbageCollectionPending;
     long _nextVerificationBarrierToken;
+    long _nextRuntimeRequestId;
     int _persistenceAnomaly;
     PantsRuntimeMetrics _publishedRuntimeMetrics = new();
     int _queuedCommands;
@@ -94,7 +98,11 @@ sealed class Actor : IAsyncDisposable
         _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
         _failpoints = dependencies.Failpoints;
         _runtimeTimeProvider = dependencies.RuntimeTimeProvider;
+        _runtimeResponses = new RuntimeResponseRegistry(telemetry, _runtimeTimeProvider);
+        _scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
         var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
+        var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
+                                     options.LeaseHeartbeatInterval;
         _state = new RuntimeState(ttlClock, telemetry);
         switch (options.Storage)
         {
@@ -115,9 +123,10 @@ sealed class Actor : IAsyncDisposable
                     targetSstSizeBytes: options.TargetSstSizeBytes,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
-                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval,
+                    leaseHeartbeatInterval: leaseHeartbeatInterval,
                     startupPhases: startupPhases,
-                    leaseClock: leaseClock);
+                    leaseClock: leaseClock,
+                    leaseTimeToLive: options.LeaseTimeToLive);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -148,10 +157,11 @@ sealed class Actor : IAsyncDisposable
                         options.TargetSstSizeBytes,
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
-                        dependencies.LeaseHeartbeatInterval,
-                        simulatedHydration.RecoverySsts,
+                        leaseHeartbeatInterval,
+                        new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
                         startupPhases,
-                        leaseClock);
+                        leaseClock,
+                        options.LeaseTimeToLive);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         _diskStore.WriterEpoch,
@@ -180,6 +190,9 @@ sealed class Actor : IAsyncDisposable
 
                 break;
             case PantsStorageConfiguration.Cloud cloud:
+                var cloudStartupDeadline = OperationDeadline.FromBudget(
+                    options.RuntimeResponseTimeout,
+                    _runtimeTimeProvider);
                 var walStore = CloudObjectStoreFactory.Create(
                     cloud.Topology.Wal,
                     options.StorageTimeout,
@@ -196,7 +209,7 @@ sealed class Actor : IAsyncDisposable
                     new CloudObjectLeaseStore(controlStore, PantsCloudObjectLayout.LeaseObjectKey),
                     leaseClock,
                     $"pants-{Environment.ProcessId}-{Guid.NewGuid():N}",
-                    TimeSpan.FromSeconds(30),
+                    options.LeaseTimeToLive,
                     options.LeaseClockSkewTolerance,
                     options.LeaseLossCallback);
                 _cloudLease = cloudLease;
@@ -205,19 +218,24 @@ sealed class Actor : IAsyncDisposable
                     ulong cloudEpoch;
                     using (startupPhases.Measure(StartupPhase.Lease))
                     {
-                        cloudEpoch = cloudLease.AcquireAsync(CancellationToken.None)
+                        cloudEpoch = cloudStartupDeadline.RunMutationAsync(
+                                cloudLease.AcquireAsync,
+                                CancellationToken.None)
                             .AsTask().GetAwaiter().GetResult();
                     }
                     ProviderCloudHydrationResult hydration;
                     using (startupPhases.Measure(StartupPhase.CloudControlHydration))
                     {
-                        hydration = ProviderCloudPersistence.HydrateLocalCacheAsync(
-                            cloud.LocalCachePath,
-                            walStore,
-                            sstStore,
-                            controlStore,
-                            options.RecoveryPolicy,
-                            CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                        hydration = cloudStartupDeadline.RunAsync(
+                                token => ProviderCloudPersistence.HydrateLocalCacheAsync(
+                                    cloud.LocalCachePath,
+                                    walStore,
+                                    sstStore,
+                                    controlStore,
+                                    options.RecoveryPolicy,
+                                    token),
+                                CancellationToken.None)
+                            .AsTask().GetAwaiter().GetResult();
                     }
                     if (hydration.RequiresSalvage)
                     {
@@ -237,10 +255,11 @@ sealed class Actor : IAsyncDisposable
                         options.TargetSstSizeBytes,
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
-                        dependencies.LeaseHeartbeatInterval,
-                        hydration.RecoverySsts,
+                        leaseHeartbeatInterval,
+                        new ProviderCloudSstSourceFactory(sstStore),
                         startupPhases,
-                        leaseClock);
+                        leaseClock,
+                        options.LeaseTimeToLive);
                     var providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         walStore,
@@ -255,7 +274,9 @@ sealed class Actor : IAsyncDisposable
                         controlStore,
                         cloudLease,
                         dependencies.Failpoints).PublishAsync;
-                    providerPersistence.FenceWalCatalogAsync(CancellationToken.None)
+                    cloudStartupDeadline.RunMutationAsync(
+                            providerPersistence.FenceWalCatalogAsync,
+                            CancellationToken.None)
                         .AsTask().GetAwaiter().GetResult();
                     _cloudDdlCoordinator = new CloudDdlCoordinator(
                         cloud.LocalCachePath,
@@ -264,7 +285,9 @@ sealed class Actor : IAsyncDisposable
                         dependencies.Failpoints);
                     using (startupPhases.Measure(StartupPhase.IntentReconciliation))
                     {
-                        _cloudDdlCoordinator.ReconcileStartupAsync(_state, CancellationToken.None)
+                        cloudStartupDeadline.RunMutationAsync(
+                                token => _cloudDdlCoordinator.ReconcileStartupAsync(_state, token),
+                                CancellationToken.None)
                             .AsTask().GetAwaiter().GetResult();
                     }
                     Volatile.Write(
@@ -273,7 +296,7 @@ sealed class Actor : IAsyncDisposable
                     _cloudLeaseCancellation = new CancellationTokenSource();
                     _cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
                         cloudLease,
-                        dependencies.LeaseHeartbeatInterval,
+                        leaseHeartbeatInterval,
                         _cloudLeaseCancellation.Token);
                     _cloudMode = true;
                 }
@@ -309,6 +332,9 @@ sealed class Actor : IAsyncDisposable
 
             if (_cloudMode && _diskStore is not null && _cloudPersistence is not null)
             {
+                var recoveryDeadline = OperationDeadline.FromBudget(
+                    options.RuntimeResponseTimeout,
+                    _runtimeTimeProvider);
                 SealedWalSegment? recoveredSegment;
                 try
                 {
@@ -327,9 +353,13 @@ sealed class Actor : IAsyncDisposable
                     _diskStore.CompleteCloudWalSeal(recoveredSegment);
                 }
 
-                DrainCloudWalBacklogAsync(CancellationToken.None)
+                recoveryDeadline.RunMutationAsync(
+                        DrainCloudWalBacklogAsync,
+                        CancellationToken.None)
                     .AsTask().GetAwaiter().GetResult();
-                _cloudPersistence.CollectObsoleteSstsAsync(CancellationToken.None)
+                recoveryDeadline.RunMutationAsync(
+                        _cloudPersistence.CollectObsoleteSstsAsync,
+                        CancellationToken.None)
                     .AsTask().GetAwaiter().GetResult();
                 ApplyPendingPersistenceAnomaly(_state);
             }
@@ -370,7 +400,8 @@ sealed class Actor : IAsyncDisposable
             _compactionRuntime = new CompactionRuntimeService(
                 options.CoordinatorQueueCapacity,
                 _diskStore,
-                telemetry);
+                telemetry,
+                options.CompactionMemoryPoolBytes);
             _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
             _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
@@ -389,7 +420,9 @@ sealed class Actor : IAsyncDisposable
                 _compactionRuntime,
                 _cloudWalSealController,
                 _cloudMemtableSegments,
-                _hybridCache);
+                _hybridCache,
+                _scanMemoryBudget,
+                _runtimeResponses);
             _publishedRuntimeMetrics = _runtimeMetricsSnapshotFactory.Create(
                 _state,
                 Volatile.Read(ref _walCloudDurableSequence));
@@ -404,7 +437,7 @@ sealed class Actor : IAsyncDisposable
             });
             using (startupPhases.Measure(StartupPhase.VersionConstruction))
             {
-                _currentVersion = _state.CreateVersion();
+                _currentVersion = _state.CreateVersion(VisibleFilesSnapshot());
             }
             _loopTask = Task.Run(RunLoopAsync);
             if (UsesBackgroundImmutableFlushes)
@@ -621,8 +654,8 @@ sealed class Actor : IAsyncDisposable
     public ValueTask<ColumnFamilyIdentity> CreateColumnFamilyAsync(
         string name,
         CancellationToken cancellationToken) =>
-        SendAsync(
-            async state =>
+        SendWithinDeadlineAsync(
+            async (state, deadline) =>
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
@@ -641,11 +674,13 @@ sealed class Actor : IAsyncDisposable
                 if (_diskStore is not null && _cloudDdlCoordinator is not null)
                 {
                     var edit = LocalDiskStore.CreateColumnFamilyEdit(created);
-                    await _cloudWorker.ExecuteAsync(workerCancellationToken =>
-                            _cloudDdlCoordinator.ExecuteAsync(
+                    await ExecuteCloudWithinDeadlineAsync(
+                            deadline,
+                            workerCancellationToken => _cloudDdlCoordinator.ExecuteAsync(
                                 state,
                                 edit,
-                                workerCancellationToken))
+                                workerCancellationToken),
+                            mutation: true)
                         .ConfigureAwait(false);
                 }
                 else
@@ -669,8 +704,10 @@ sealed class Actor : IAsyncDisposable
                 {
                     try
                     {
-                        await _cloudWorker.ExecuteAsync(
-                                _cloudPersistence.MirrorMetadataAndSstsAsync)
+                        await ExecuteCloudWithinDeadlineAsync(
+                                deadline,
+                                _cloudPersistence.MirrorMetadataAndSstsAsync,
+                                mutation: true)
                             .ConfigureAwait(false);
                     }
                     catch (Exception)
@@ -701,8 +738,8 @@ sealed class Actor : IAsyncDisposable
                 _failpoints.Hit(Failpoint.BeforeDropAdmission);
             }
 
-            var dropped = await SendAsync(
-                async state =>
+            var dropped = await SendWithinDeadlineAsync(
+                async (state, deadline) =>
                 {
                     ThrowIfShuttingDown(state);
                     ThrowIfVerificationInProgress();
@@ -717,10 +754,12 @@ sealed class Actor : IAsyncDisposable
 
                     if (_cloudDdlCoordinator is not null)
                     {
-                        await _cloudWorker.ExecuteAsync(workerCancellationToken =>
-                                _cloudDdlCoordinator.ReconcilePendingAsync(
+                        await ExecuteCloudWithinDeadlineAsync(
+                                deadline,
+                                workerCancellationToken => _cloudDdlCoordinator.ReconcilePendingAsync(
                                     state,
-                                    workerCancellationToken))
+                                    workerCancellationToken),
+                                mutation: true)
                             .ConfigureAwait(false);
                         if (!IsActiveFamily(state, identity))
                         {
@@ -739,11 +778,13 @@ sealed class Actor : IAsyncDisposable
                     if (_diskStore is not null && _cloudDdlCoordinator is not null)
                     {
                         var edit = _diskStore.CreateDropColumnFamilyEdit(state, identity);
-                        await _cloudWorker.ExecuteAsync(workerCancellationToken =>
-                                _cloudDdlCoordinator.ExecuteAsync(
+                        await ExecuteCloudWithinDeadlineAsync(
+                                deadline,
+                                workerCancellationToken => _cloudDdlCoordinator.ExecuteAsync(
                                     state,
                                     edit,
-                                    workerCancellationToken))
+                                    workerCancellationToken),
+                                mutation: true)
                             .ConfigureAwait(false);
                     }
                     else
@@ -769,8 +810,10 @@ sealed class Actor : IAsyncDisposable
                     {
                         try
                         {
-                            await _cloudWorker.ExecuteAsync(
-                                    _cloudPersistence.MirrorMetadataAndSstsAsync)
+                            await ExecuteCloudWithinDeadlineAsync(
+                                    deadline,
+                                    _cloudPersistence.MirrorMetadataAndSstsAsync,
+                                    mutation: true)
                                 .ConfigureAwait(false);
                         }
                         catch (Exception)
@@ -793,8 +836,10 @@ sealed class Actor : IAsyncDisposable
                         {
                             try
                             {
-                                await _cloudWorker.ExecuteAsync(
-                                        _cloudPersistence.MirrorMetadataAndSstsAsync)
+                                await ExecuteCloudWithinDeadlineAsync(
+                                        deadline,
+                                        _cloudPersistence.MirrorMetadataAndSstsAsync,
+                                        mutation: true)
                                     .ConfigureAwait(false);
                             }
                             catch (Exception)
@@ -854,7 +899,6 @@ sealed class Actor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 var snapshotId = checked(++state.TransactionCounter);
-                _hybridCache?.RegisterSnapshot(snapshotId, snapshot.Sequence);
                 state.ActiveScanSnapshots[snapshotId] = new ScanSnapshotPin(
                     snapshotId,
                     snapshot.Sequence,
@@ -863,18 +907,18 @@ sealed class Actor : IAsyncDisposable
                 _telemetry.RecordSnapshotRegister();
                 return ValueTask.FromResult(snapshotId);
             },
-            cancellationToken);
+            cancellationToken,
+            snapshotId => _ = ReleaseAbandonedScanSnapshotAsync(snapshotId));
 
     public async ValueTask ReleaseScanSnapshotAsync(
         long snapshotId,
         CancellationToken cancellationToken)
     {
-        await SendAsync(
-            async state =>
+        await SendWithinDeadlineAsync(
+            async (state, deadline) =>
             {
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
-                    _hybridCache?.UnregisterSnapshot(snapshotId);
                     _telemetry.RecordSnapshotUnregister();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
                         .ConfigureAwait(false);
@@ -906,7 +950,6 @@ sealed class Actor : IAsyncDisposable
                     snapshot,
                     state.Clock.UtcNow,
                     _diskStore?.RootPath);
-                _hybridCache?.RegisterSnapshot(transactionId, snapshot.Sequence);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
@@ -916,7 +959,8 @@ sealed class Actor : IAsyncDisposable
                 _telemetry.RecordTransactionBegin(mode);
                 return ValueTask.FromResult<IPantsTransaction>(transaction);
             },
-            cancellationToken);
+            cancellationToken,
+            transaction => _ = DisposeAbandonedTransactionAsync(transaction));
 
     public IPantsTransaction BeginReadOnlyTransaction(
         DatabaseInstance database,
@@ -954,7 +998,6 @@ sealed class Actor : IAsyncDisposable
                 startedAt,
                 null,
                 false);
-            _hybridCache?.RegisterSnapshot(transactionId, version.Sequence);
             if (!_state.DirectReadOnlyTransactions.TryAdd(
                     transactionId,
                     new TransactionInfo(
@@ -964,7 +1007,6 @@ sealed class Actor : IAsyncDisposable
                         startedAt,
                         version)))
             {
-                _hybridCache?.UnregisterSnapshot(transactionId);
                 throw new PantsInternalException("A direct read-only transaction identifier collided.");
             }
 
@@ -986,7 +1028,6 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        _hybridCache?.UnregisterSnapshot(transactionId);
         _telemetry.RecordSnapshotUnregister();
         if (committed)
         {
@@ -1021,27 +1062,39 @@ sealed class Actor : IAsyncDisposable
         CommitPayload payload,
         CancellationToken cancellationToken)
     {
-        if (payload.Mode != PantsTransactionMode.ReadOnly &&
-            !IsSupported(writeOptions.Durability))
+        var delegated = false;
+        try
         {
-            throw PantsException.Create(
-                PantsErrorCode.InvalidArgument,
-                $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
-        }
-
-        if (RequiresWriteAdmission(payload))
-        {
-            var families = GetCommitFamilies(payload);
-            if (families.Any(_writeStallHints.ContainsKey))
+            if (payload.Mode != PantsTransactionMode.ReadOnly &&
+                !IsSupported(writeOptions.Durability))
             {
-                await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
+                throw PantsException.Create(
+                    PantsErrorCode.InvalidArgument,
+                    $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
+            }
+
+            if (RequiresWriteAdmission(payload))
+            {
+                var families = GetCommitFamilies(payload);
+                if (families.Any(_writeStallHints.ContainsKey))
+                {
+                    await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            delegated = true;
+            await SendCommitAsync(
+                writeOptions,
+                payload,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!delegated)
+            {
+                payload.Dispose();
             }
         }
-
-        await SendCommitAsync(
-            writeOptions,
-            payload,
-            cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask RollbackAsync(long transactionId, CancellationToken cancellationToken)
@@ -1051,7 +1104,6 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveTransactions.Remove(transactionId))
                 {
-                    _hybridCache?.UnregisterSnapshot(transactionId);
                     _telemetry.RecordSnapshotUnregister();
                     _telemetry.RecordTransactionRollback();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
@@ -1082,8 +1134,8 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        await SendAsync(
-            async state =>
+        await SendWithinDeadlineAsync(
+            async (state, deadline) =>
             {
                 ThrowIfShuttingDown(state);
                 ThrowIfVerificationInProgress();
@@ -1100,7 +1152,7 @@ sealed class Actor : IAsyncDisposable
 
                 try
                 {
-                    await MirrorCloudStorageAsync().ConfigureAwait(false);
+                    await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (
                     _cloudPersistence is not null &&
@@ -1149,8 +1201,8 @@ sealed class Actor : IAsyncDisposable
                 _failpoints.Hit(Failpoint.BeforeCompactionAdmission);
             }
 
-            var compacted = await SendAsync(
-                async state =>
+            var compacted = await SendWithinDeadlineAsync(
+                async (state, deadline) =>
                 {
                     ThrowIfShuttingDown(state);
                     ThrowIfVerificationInProgress();
@@ -1175,25 +1227,31 @@ sealed class Actor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
-                        await EnsureHybridSstsLocalAsync(
-                                _diskStore.GetManifestSstNames(),
+                        await deadline.RunAsync(
+                                token => EnsureHybridSstsLocalAsync(
+                                    _diskStore.GetCompactionInputNames(state, true),
+                                    token),
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        var result = await _compactionRuntime
-                            .CompactAsync(
-                                state,
-                                true,
-                                _cloudCompactionOutputPublisher,
-                                cancellationToken: CancellationToken.None)
+                        var result = await deadline.RunMutationAsync(
+                                token => _compactionRuntime.CompactAsync(
+                                    state,
+                                    true,
+                                    _cloudCompactionOutputPublisher,
+                                    prepareInputs: EnsureHybridSstsLocalAsync,
+                                    cancellationToken: token),
+                                cancellationToken)
                             .ConfigureAwait(false);
                         if (result.PersistenceAnomaly)
                         {
                             Volatile.Write(ref _persistenceAnomaly, 1);
                             MarkPersistenceAnomaly(state);
                         }
+
+                        PublishSnapshot(state);
                     }
 
-                    await MirrorCloudStorageAsync().ConfigureAwait(false);
+                    await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
                     _backgroundCompactionPending = false;
                     _readAmplificationCompactionPending = false;
                     state.UnflushedFamilies.Clear();
@@ -1278,7 +1336,8 @@ sealed class Actor : IAsyncDisposable
 
     async ValueTask RelieveWritePressureAsync(
         RuntimeState state,
-        CommitPayload payload)
+        CommitPayload payload,
+        OperationDeadline deadline)
     {
         if (_diskStore is null)
         {
@@ -1313,7 +1372,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
-        await MirrorCloudStorageAsync().ConfigureAwait(false);
+        await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
         state.UnflushedFamilies.Clear();
         ClearMemtableAccounting(state);
         await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
@@ -1343,8 +1402,7 @@ sealed class Actor : IAsyncDisposable
                 Volatile.Write(ref _publishedRuntimeMetrics, metrics);
                 return ValueTask.FromResult(metrics);
             },
-            cancellationToken,
-            true);
+            cancellationToken);
     }
 
     public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
@@ -1358,6 +1416,77 @@ sealed class Actor : IAsyncDisposable
         SendAsync(
             _ => ValueTask.FromResult(_telemetry.GetReadPathDiagnostics()),
             cancellationToken);
+
+    /// <summary>
+    /// Resolves a key's newest visible SST entry from a local or remote SST source, or
+    /// <c>null</c> if none of <paramref name="candidatesNewestFirst"/> contain it. Called
+    /// directly off the caller's thread (not the actor mailbox) — safe because it only reads
+    /// the lock-free reader/block caches, mirroring <see cref="RecordPointReadAsync"/>'s
+    /// existing non-mailbox fast path.
+    /// </summary>
+    public async ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        if (_diskStore is null)
+        {
+            return null;
+        }
+
+        if (_hybridCache is null)
+        {
+            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span);
+        }
+
+        if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        {
+            // The failpoint historically guarded whole-file hydration. It now guards admission
+            // to the equivalent remote ranged-read path.
+            await Task.Yield();
+            _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return await _diskStore.TryReadPointValueAsync(
+                candidatesNewestFirst,
+                key,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens manifest-selected local or remote SST sources for a scan's asynchronous k-way
+    /// merge. Remote files remain authoritative without being admitted to the local cache.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
+        IReadOnlyList<FileMeta> candidates,
+        PantsScanDirection direction,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        CancellationToken cancellationToken)
+    {
+        if (_diskStore is null)
+        {
+            return [];
+        }
+
+        if (_hybridCache is not null && candidates.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        {
+            await Task.Yield();
+            _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return await _diskStore.CreateScanSourcesAsync(
+                candidates,
+                direction,
+                startInclusive,
+                endExclusive,
+                _scanMemoryBudget,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public async ValueTask RecordPointReadAsync(
         ColumnFamilyIdentity columnFamily,
@@ -1421,25 +1550,29 @@ sealed class Actor : IAsyncDisposable
                         trace = new PantsPointReadTrace(0, []);
                     }
                 }
-                else
+                else if (_hybridCache is not null)
                 {
-                    var sstNames = _diskStore.GetPointReadSstNames(columnFamily, key.Span);
-                    var hydratedFromCloud = captureDiagnostics && _hybridCache is not null
-                        ? sstNames
-                            .Where(name => !_diskStore.IsSstLocal(name))
-                            .ToHashSet(StringComparer.Ordinal)
-                        : null;
-                    await EnsureHybridSstsLocalAsync(
-                            sstNames,
+                    var result = await _diskStore.RecordPointReadAsync(
+                            _telemetry,
+                            columnFamily,
+                            key,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    exceedsBudget = result.ExceedsBudget;
+                    if (captureDiagnostics)
+                    {
+                        trace = result.Trace;
+                    }
+                }
+                else
+                {
                     if (captureDiagnostics)
                     {
                         exceedsBudget = _diskStore.RecordPointRead(
                             _telemetry,
                             columnFamily,
                             key.Span,
-                            hydratedFromCloud,
+                            null,
                             out trace);
                     }
                     else
@@ -1460,28 +1593,9 @@ sealed class Actor : IAsyncDisposable
             },
             cancellationToken).ConfigureAwait(false);
 
-    public ValueTask<IScanReadValidator?> CreateScanReadValidatorAsync(
-        ColumnFamilyIdentity columnFamily,
-        ScanBounds bounds,
-        CancellationToken cancellationToken)
-        => SendAsync(
-            async _ =>
-            {
-                if (_diskStore is not null)
-                {
-                    await EnsureHybridSstsLocalAsync(
-                            _diskStore.GetScanSstNames(columnFamily, bounds),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                var validator = _diskStore?.CreateScanReadValidator(
-                    _telemetry,
-                    columnFamily,
-                    bounds);
-                return validator;
-            },
-            cancellationToken);
+    public IScanReadValidator? CreateScanReadValidator(
+        IReadOnlyList<AsyncSstScanSource> sources) =>
+        sources.Count == 0 ? null : new AsyncSstScanReadValidator(_telemetry, sources);
 
     public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
         CancellationToken cancellationToken) =>
@@ -1911,29 +2025,72 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
-    async ValueTask<T> SendAsync<T>(
+    ValueTask<T> SendAsync<T>(
         Func<RuntimeState, ValueTask<T>> operation,
         CancellationToken cancellationToken,
-        bool allowPostAdmissionCancellation = false)
+        Action<T>? abandonedResponse = null,
+        [CallerMemberName] string requestKind = "RuntimeCommand") =>
+        SendWithinDeadlineAsync(
+            (state, _) => operation(state),
+            cancellationToken,
+            abandonedResponse,
+            requestKind);
+
+    async ValueTask<T> SendWithinDeadlineAsync<T>(
+        Func<RuntimeState, OperationDeadline, ValueTask<T>> operation,
+        CancellationToken cancellationToken,
+        Action<T>? abandonedResponse = null,
+        [CallerMemberName] string requestKind = "RuntimeCommand")
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
             throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
         }
 
-        var command = new RuntimeCommand<T>(operation, cancellationToken);
+        var requestId = NextRuntimeRequestId();
+        var started = Stopwatch.GetTimestamp();
+        var deadline = OperationDeadline.FromStart(
+            _runtimeTimeProvider.GetTimestamp(),
+            _options.RuntimeResponseTimeout,
+            _runtimeTimeProvider);
+        var command = new RuntimeCommand<T>(
+            state => operation(state, deadline),
+            _runtimeResponses,
+            requestId,
+            requestKind,
+            abandonedResponse,
+            cancellationToken);
         Interlocked.Increment(ref _commandsEnqueued);
         var response = command.Response;
         var admitted = false;
         Interlocked.Increment(ref _queuedCommands);
-        var started = Stopwatch.GetTimestamp();
         try
         {
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
             admitted = true;
-            return allowPostAdmissionCancellation
-                ? await response.WaitAsync(cancellationToken).ConfigureAwait(false)
-                : await response.ConfigureAwait(false);
+            try
+            {
+                return await response.WaitAsync(
+                        _options.RuntimeResponseTimeout,
+                        _runtimeTimeProvider,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                if (command.AbandonResponse(_options.RuntimeResponseTimeout))
+                {
+                    throw CreateRuntimeResponseTimeout(requestKind, requestId);
+                }
+
+                return await response.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested &&
+                command.AbandonResponse(_options.RuntimeResponseTimeout))
+            {
+                throw;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -1969,31 +2126,69 @@ sealed class Actor : IAsyncDisposable
         CommitPayload payload,
         CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _disposed) != 0)
-        {
-            throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
-        }
-
-        if (RequiresWriteAdmission(payload))
-        {
-            ThrowIfRuntimeWorkerWriteStalled();
-        }
-
-        var command = new CommitRuntimeCommand(
-            writeOptions,
-            payload,
-            state => ExecuteCommitAsync(state, writeOptions, payload));
+        CommitRuntimeCommand? command = null;
+        ColumnFamilyIdentity[] commitFamilies = [];
+        var requestId = 0L;
         var admitted = false;
-        Interlocked.Increment(ref _queuedCommands);
+        var queued = false;
         var started = Stopwatch.GetTimestamp();
         try
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw PantsException.Create(PantsErrorCode.Aborted, "Pants database is disposed.");
+            }
+
+            if (RequiresWriteAdmission(payload))
+            {
+                ThrowIfRuntimeWorkerWriteStalled();
+            }
+
+            commitFamilies = GetCommitFamilies(payload);
+            requestId = NextRuntimeRequestId();
+            var operationDeadline = OperationDeadline.FromStart(
+                _runtimeTimeProvider.GetTimestamp(),
+                _options.RuntimeResponseTimeout,
+                _runtimeTimeProvider);
+            command = new CommitRuntimeCommand(
+                writeOptions,
+                payload,
+                state => ExecuteCommitAsync(state, writeOptions, payload, operationDeadline),
+                _runtimeResponses,
+                requestId,
+                nameof(CommitAsync),
+                operationDeadline);
+            Interlocked.Increment(ref _queuedCommands);
+            queued = true;
             await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
             admitted = true;
-            var writeStalled = await command.Task.ConfigureAwait(false);
+            bool writeStalled;
+            try
+            {
+                writeStalled = await command.Task.WaitAsync(
+                        _options.RuntimeResponseTimeout,
+                        _runtimeTimeProvider,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                if (command.AbandonResponse(_options.RuntimeResponseTimeout))
+                {
+                    throw CreateRuntimeResponseTimeout(nameof(CommitAsync), requestId);
+                }
+
+                writeStalled = await command.Task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested &&
+                command.AbandonResponse(_options.RuntimeResponseTimeout))
+            {
+                throw;
+            }
             if (writeStalled)
             {
-                foreach (var family in GetCommitFamilies(payload))
+                foreach (var family in commitFamilies)
                 {
                     _writeStallHints.TryAdd(family, 0);
                 }
@@ -2022,8 +2217,68 @@ sealed class Actor : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Decrement(ref _queuedCommands);
+            command?.UnregisterResponse();
+            if (queued)
+            {
+                Interlocked.Decrement(ref _queuedCommands);
+            }
+
+            if (!admitted)
+            {
+                if (command is null)
+                {
+                    payload.Dispose();
+                }
+                else
+                {
+                    command.DisposePayload();
+                }
+            }
+
             _telemetry.RecordCommandLatency(Stopwatch.GetElapsedTime(started));
+        }
+    }
+
+    long NextRuntimeRequestId()
+    {
+        var requestId = Interlocked.Increment(ref _nextRuntimeRequestId);
+        if (requestId <= 0)
+        {
+            throw new PantsInternalException("The runtime request ID space is exhausted.");
+        }
+
+        return requestId;
+    }
+
+    PantsTimeoutException CreateRuntimeResponseTimeout(string requestKind, long requestId) => new(
+        $"Runtime request '{requestKind}' with request ID {requestId} exceeded " +
+        $"RuntimeResponseTimeout {_options.RuntimeResponseTimeout:c} after admission; " +
+        "the operation may still complete, its outcome is unknown, and it is not automatically " +
+        "safe to retry.",
+        null,
+        true);
+
+    static async Task DisposeAbandonedTransactionAsync(IPantsTransaction transaction)
+    {
+        try
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The runtime retains ownership of shutdown cleanup after response abandonment.
+        }
+    }
+
+    async Task ReleaseAbandonedScanSnapshotAsync(long snapshotId)
+    {
+        try
+        {
+            await ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The runtime retains ownership of shutdown cleanup after response abandonment.
         }
     }
 
@@ -2089,16 +2344,26 @@ sealed class Actor : IAsyncDisposable
                     commits.Add((CommitRuntimeCommand)admitted);
                 }
 
-                if (commitCoalescer.CanAttempt(commits))
+                try
                 {
-                    await ExecuteCoalescedCommitsAsync(_state, commits, commitCoalescer)
-                        .ConfigureAwait(false);
+                    if (commitCoalescer.CanAttempt(commits))
+                    {
+                        await ExecuteCoalescedCommitsAsync(_state, commits, commitCoalescer)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        foreach (var commit in commits)
+                        {
+                            await commit.ExecuteAsync(_state).ConfigureAwait(false);
+                        }
+                    }
                 }
-                else
+                finally
                 {
                     foreach (var commit in commits)
                     {
-                        await commit.ExecuteAsync(_state).ConfigureAwait(false);
+                        commit.DisposePayload();
                     }
                 }
             }
@@ -2141,7 +2406,8 @@ sealed class Actor : IAsyncDisposable
                 await PrepareCommitAsync(
                         state,
                         command.Payload,
-                        command.WriteOptions.Durability)
+                        command.WriteOptions.Durability,
+                        command.Deadline)
                     .ConfigureAwait(false);
                 preparedCommands.Add(command);
             }
@@ -2379,10 +2645,12 @@ sealed class Actor : IAsyncDisposable
     async ValueTask<bool> ExecuteCommitAsync(
         RuntimeState state,
         PantsWriteOptions writeOptions,
-        CommitPayload payload)
+        CommitPayload payload,
+        OperationDeadline deadline)
     {
         EnsureCloudWriteAuthorityValid();
-        await PrepareCommitAsync(state, payload, writeOptions.Durability).ConfigureAwait(false);
+        await PrepareCommitAsync(state, payload, writeOptions.Durability, deadline)
+            .ConfigureAwait(false);
         if (payload.Operations.Count != 0)
         {
             ulong? writtenWalSegmentId = null;
@@ -2393,14 +2661,24 @@ sealed class Actor : IAsyncDisposable
             else
             {
                 writtenWalSegmentId = _diskStore.CurrentWalSegmentId;
-                await PersistCommitAsync(state, payload, writeOptions.Durability)
+                var automaticallyFlushed = await PersistCommitAsync(
+                        state,
+                        payload,
+                        writeOptions.Durability,
+                        deadline)
                     .ConfigureAwait(false);
-            }
-
-            ApplyCommittedOperations(state, payload, state.Sequence);
-            if (writtenWalSegmentId.HasValue)
-            {
+                ApplyCommittedOperations(state, payload, state.Sequence);
                 TrackCloudMemtableWrites(payload, writtenWalSegmentId.Value);
+                if (automaticallyFlushed)
+                {
+                    state.UnflushedFamilies.Clear();
+                    ClearMemtableAccounting(state);
+                    _cloudMemtableSegments?.Reinitialize([], _diskStore.CurrentWalSegmentId);
+                }
+            }
+            if (!writtenWalSegmentId.HasValue)
+            {
+                ApplyCommittedOperations(state, payload, state.Sequence);
             }
 
             if (_cloudPersistence is not null &&
@@ -2409,7 +2687,7 @@ sealed class Actor : IAsyncDisposable
                 PublishSnapshot(state);
                 try
                 {
-                    await CompleteCloudStrictCommitAsync(payload).ConfigureAwait(false);
+                    await CompleteCloudStrictCommitAsync(payload, deadline).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
@@ -2445,7 +2723,8 @@ sealed class Actor : IAsyncDisposable
     async ValueTask PrepareCommitAsync(
         RuntimeState state,
         CommitPayload payload,
-        PantsDurability durability)
+        PantsDurability durability,
+        OperationDeadline deadline)
     {
         ThrowIfShuttingDown(state);
         ThrowIfVerificationInProgress();
@@ -2461,7 +2740,6 @@ sealed class Actor : IAsyncDisposable
                 $"Transaction {payload.TransactionId} is not active.");
         }
 
-        _hybridCache?.UnregisterSnapshot(payload.TransactionId);
         _telemetry.RecordSnapshotUnregister();
         if (_diskStore is not null)
         {
@@ -2489,18 +2767,26 @@ sealed class Actor : IAsyncDisposable
             }
             else if (requiresCloudMaintenance)
             {
-                await MirrorCloudStorageAsync().ConfigureAwait(false);
+                await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
             }
             else if (_cloudPersistence is not null && payload.Operations.Count != 0)
             {
-                await _cloudWorker.ExecuteAsync(_cloudPersistence.ValidateWriteAuthorityAsync)
+                await ExecuteCloudWithinDeadlineAsync(
+                        deadline,
+                        _cloudPersistence.ValidateWriteAuthorityAsync,
+                        mutation: false)
                     .ConfigureAwait(false);
             }
         }
 
         try
         {
-            CommitValidator.Validate(state, payload);
+            await CommitValidator.ValidateAsync(
+                state,
+                payload,
+                _diskStore,
+                _scanMemoryBudget,
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (PantsWriteConflictException exception)
         {
@@ -2510,7 +2796,7 @@ sealed class Actor : IAsyncDisposable
 
         if (payload.Operations.Count != 0)
         {
-            await RelieveWritePressureAsync(state, payload).ConfigureAwait(false);
+            await RelieveWritePressureAsync(state, payload, deadline).ConfigureAwait(false);
         }
     }
 
@@ -2531,15 +2817,15 @@ sealed class Actor : IAsyncDisposable
     {
         if (state.ActiveTransactions.Remove(payload.TransactionId))
         {
-            _hybridCache?.UnregisterSnapshot(payload.TransactionId);
             _telemetry.RecordSnapshotUnregister();
         }
     }
 
-    async ValueTask PersistCommitAsync(
+    async ValueTask<bool> PersistCommitAsync(
         RuntimeState state,
         CommitPayload payload,
-        PantsDurability durability)
+        PantsDurability durability,
+        OperationDeadline deadline)
     {
         var diskStore = _diskStore ??
                         throw new PantsInternalException("Persistent commit has no disk store.");
@@ -2555,14 +2841,15 @@ sealed class Actor : IAsyncDisposable
             RecordPostDurabilityFailure(state, result.PostDurabilityFailure);
         }
 
+        var automaticallyFlushed = false;
         if (!UsesBackgroundImmutableFlushes &&
             _options.FlushAfterWalRecords > 0 &&
             diskStore.WalRecords >= _options.FlushAfterWalRecords)
         {
             await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
-            await MirrorCloudStorageAsync().ConfigureAwait(false);
-            state.UnflushedFamilies.Clear();
+            await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
             await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+            automaticallyFlushed = true;
         }
 
         try
@@ -2600,9 +2887,13 @@ sealed class Actor : IAsyncDisposable
                 ScheduleCloudWalBacklogDrain();
             }
         }
+
+        return automaticallyFlushed;
     }
 
-    async ValueTask CompleteCloudStrictCommitAsync(CommitPayload payload)
+    async ValueTask CompleteCloudStrictCommitAsync(
+        CommitPayload payload,
+        OperationDeadline deadline)
     {
         var controller = _cloudWalSealController ??
                          throw new PantsInternalException("CloudStrict has no WAL seal controller.");
@@ -2637,14 +2928,18 @@ sealed class Actor : IAsyncDisposable
 
         try
         {
-            await _cloudWorker.ExecuteAsync(DrainCloudWalBacklogWithFailureTrackingAsync)
+            await ExecuteCloudWithinDeadlineAsync(
+                    deadline,
+                    DrainCloudWalBacklogWithFailureTrackingAsync,
+                    mutation: true)
                 .ConfigureAwait(false);
         }
-        catch (PantsIOException exception)
+        catch (PantsException exception) when (IsRetryableCloudWalSealFailure(exception))
         {
             ScheduleCloudWalBacklogDrain();
-            throw new PantsInternalException(
-                "Cloud-strict WAL publication failed before acknowledgement.",
+            throw new PantsIOException(
+                "Cloud-strict WAL publication outcome is indeterminate; local recovery " +
+                "evidence is retained for retry.",
                 exception);
         }
     }
@@ -2827,7 +3122,8 @@ sealed class Actor : IAsyncDisposable
     }
 
     static bool IsRetryableCloudWalSealFailure(Exception exception) =>
-        RuntimeExceptionMapper.ToPublicException(exception) is PantsIOException;
+        RuntimeExceptionMapper.ToPublicException(exception) is PantsIOException or
+            PantsTimeoutException;
 
     static TimeSpan NextCloudWalSealRetryDelay(TimeSpan current) =>
         current >= MaximumCloudWalSealRetryDelay
@@ -3375,6 +3671,7 @@ sealed class Actor : IAsyncDisposable
                 }
 
                 state.ImmutableMemtableFlushes.Remove(current.Frozen.Id);
+                state.ReleaseFlushedGeneration(current.Frozen);
                 state.SignalWritePressureChanged();
                 var identity = current.Frozen.ColumnFamily;
                 if (!state.IsShuttingDown &&
@@ -3576,7 +3873,7 @@ sealed class Actor : IAsyncDisposable
         _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         await EnsureHybridSstsLocalAsync(
-                _diskStore.GetManifestSstNames(),
+                _diskStore.GetCompactionInputNames(state, false),
                 CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
@@ -3584,7 +3881,8 @@ sealed class Actor : IAsyncDisposable
                 state,
                 false,
                 _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes,
+                EnsureHybridSstsLocalAsync)
             .ConfigureAwait(false);
 
         if (result.PersistenceAnomaly)
@@ -3593,9 +3891,21 @@ sealed class Actor : IAsyncDisposable
             MarkPersistenceAnomaly(state);
         }
 
+        PublishSnapshot(state);
+
         if (result.PublicationCount > 0 || _hybridCache is not null)
         {
             await MirrorCloudStorageAsync().ConfigureAwait(false);
+        }
+
+        if (!UsesBackgroundImmutableFlushes)
+        {
+            state.UnflushedFamilies.Clear();
+            ClearMemtableAccounting(state);
+            _cloudMemtableSegments?.Reinitialize(
+                [],
+                _diskStore.CurrentWalSegmentId);
+            PublishSnapshot(state);
         }
     }
 
@@ -3630,7 +3940,7 @@ sealed class Actor : IAsyncDisposable
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordReadAmplificationCompactionTrigger();
         await EnsureHybridSstsLocalAsync(
-                _diskStore!.GetManifestSstNames(),
+                _diskStore!.GetCompactionInputNames(state, true),
                 CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
@@ -3638,12 +3948,16 @@ sealed class Actor : IAsyncDisposable
                 state,
                 true,
                 _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes)
+                !UsesBackgroundImmutableFlushes,
+                EnsureHybridSstsLocalAsync)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
         {
             state.UnflushedFamilies.Clear();
             ClearMemtableAccounting(state);
+            _cloudMemtableSegments?.Reinitialize(
+                [],
+                _diskStore.CurrentWalSegmentId);
         }
 
         if (result.PersistenceAnomaly)
@@ -3651,6 +3965,8 @@ sealed class Actor : IAsyncDisposable
             Volatile.Write(ref _persistenceAnomaly, 1);
             MarkPersistenceAnomaly(state);
         }
+
+        PublishSnapshot(state);
 
         if (result.PublicationCount > 0 || _hybridCache is not null)
         {
@@ -3788,7 +4104,7 @@ sealed class Actor : IAsyncDisposable
         _cloudMemtableSegments?.RecordFlush(identity);
     }
 
-    async ValueTask MirrorCloudStorageAsync()
+    async ValueTask MirrorCloudStorageAsync(OperationDeadline deadline = default)
     {
         if (_cloudPersistence is null)
         {
@@ -3798,10 +4114,25 @@ sealed class Actor : IAsyncDisposable
         ThrowIfVerificationInProgress();
 
         EnsureCloudWriteAuthorityValid();
-        await _cloudWorker.ExecuteAsync(MirrorCloudStorageWithFailureTrackingAsync)
+        deadline = deadline.IsBounded ? deadline : OperationDeadline.Unbounded;
+        await ExecuteCloudWithinDeadlineAsync(
+                deadline,
+                MirrorCloudStorageWithFailureTrackingAsync,
+                mutation: true)
             .ConfigureAwait(false);
         ApplyPendingPersistenceAnomaly(_state);
     }
+
+    ValueTask ExecuteCloudWithinDeadlineAsync(
+        OperationDeadline deadline,
+        Func<CancellationToken, ValueTask> operation,
+        bool mutation) => mutation
+        ? deadline.RunMutationAsync(
+            token => _cloudWorker.ExecuteAsync(operation, token),
+            CancellationToken.None)
+        : deadline.RunAsync(
+            token => _cloudWorker.ExecuteAsync(operation, token),
+            CancellationToken.None);
 
     async ValueTask MirrorCloudStorageCoreAsync(CancellationToken cancellationToken)
     {
@@ -3841,7 +4172,6 @@ sealed class Actor : IAsyncDisposable
             {
                 await _hybridCache.EvictIfNeededAsync(
                         _diskStore,
-                        persistence.FetchSstAsync,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -3877,27 +4207,8 @@ sealed class Actor : IAsyncDisposable
         await HybridCacheManager.EnsureLocalSstsAsync(
                 _diskStore,
                 names,
-                FetchHybridSstAsync,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    async ValueTask<ReadOnlyMemory<byte>?> FetchHybridSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        var persistence = _cloudPersistence ??
-                          throw new PantsInternalException("Hybrid cache hydration has no cloud backend.");
-        var result = (ReadOnlyMemory<byte>?)null;
-        await _cloudWorker.ExecuteAsync(
-                async workerCancellationToken =>
-                {
-                    result = await persistence.FetchSstAsync(name, workerCancellationToken)
-                        .ConfigureAwait(false);
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
-        return result;
     }
 
     static void RecordMemtableBytes(RuntimeState state, CommitPayload payload)
@@ -3999,18 +4310,30 @@ sealed class Actor : IAsyncDisposable
         return bytes;
     }
 
-    static void ClearMemtableAccounting(RuntimeState state)
+    void ClearMemtableAccounting(RuntimeState state)
     {
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
         {
+            if (_diskStore is not null)
+            {
+                state.ReleasePersistedFamily(identity);
+            }
+
             state.ActiveMemtableBytes[identity] = 0;
         }
     }
 
-    static void ClearMemtableAccounting(
+    void ClearMemtableAccounting(
         RuntimeState state,
-        ColumnFamilyIdentity identity) =>
+        ColumnFamilyIdentity identity)
+    {
+        if (_diskStore is not null)
+        {
+            state.ReleasePersistedFamily(identity);
+        }
+
         state.ActiveMemtableBytes[identity] = 0;
+    }
 
     static PantsStorageLayout EmptyStorageLayout(RuntimeState state) => new(
         state.Health,
@@ -4040,7 +4363,25 @@ sealed class Actor : IAsyncDisposable
 
     void PublishSnapshot(RuntimeState state)
     {
-        Volatile.Write(ref _currentVersion, state.CreateVersion());
+        lock (_directReadAdmissionGate)
+        {
+            Volatile.Write(ref _currentVersion, state.CreateVersion(VisibleFilesSnapshot()));
+            if (_diskStore?.SnapshotPinnedObsoleteFileCount > 0)
+            {
+                // A direct read can acquire only the newly-published version while this gate is
+                // held. Existing readers are already registered in ActiveSnapshotCount, so the
+                // store can now collect retired inputs only when no old version can reference them.
+                if (state.ActiveSnapshotCount == 0)
+                {
+                    _ = _diskStore.CollectObsoleteFiles(state);
+                }
+                else
+                {
+                    DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
+                }
+            }
+        }
+
         Volatile.Write(
             ref _publishedRuntimeMetrics,
             _runtimeMetricsSnapshotFactory.RefreshPublished(
@@ -4048,6 +4389,9 @@ sealed class Actor : IAsyncDisposable
                 state,
                 Volatile.Read(ref _walCloudDurableSequence)));
     }
+
+    IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> VisibleFilesSnapshot() =>
+        _diskStore?.GetVisibleFilesSnapshot() ?? ImmutableDictionary<uint, ImmutableArray<FileMeta>>.Empty;
 
     void EnsureCloudLeaseValid() => _cloudLease?.EnsureValid();
 

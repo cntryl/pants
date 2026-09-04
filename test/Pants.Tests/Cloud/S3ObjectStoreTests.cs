@@ -11,6 +11,26 @@ public sealed class S3ObjectStoreTests
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     [Fact]
+    public async Task ShouldIssueBoundedS3RangeRequest()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
+            };
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(client, string.Empty);
+
+        var value = await store.GetRangeAsync("object", 2, 3, CancellationToken.None);
+
+        Assert.Equal("cde", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
+    }
+
+    [Fact]
     public async Task ShouldSignAndConditionPathStyleS3RequestsWithoutDisclosingSecrets()
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get
@@ -171,6 +191,41 @@ public sealed class S3ObjectStoreTests
         Assert.Equal(
             CreateExpectedAwsAuthorization(request, expectedHost, accessKey, secretKey),
             request.Authorization);
+    }
+
+    [Fact]
+    public async Task ShouldRouteAndSignOciAsAFirstClassProvider()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>")
+        });
+        using var client = new HttpClient(handler);
+        const string secret = "oci-sensitive-secret";
+        var store = new S3ObjectStore(
+            new PantsCloudProviderConfiguration.OciObjectStorage(
+                "namespace",
+                "bucket",
+                "us-ashburn-1",
+                null,
+                new PantsOciCredentialSource.CustomerSecretKey("oci-access", secret)),
+            "database",
+            client,
+            TimeSpan.FromSeconds(5));
+
+        _ = await store.ListPageAsync("", null, CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(
+            "namespace.compat.objectstorage.us-ashburn-1.oraclecloud.com",
+            request.Uri.Host);
+        Assert.Equal("/bucket/", request.Uri.AbsolutePath);
+        Assert.Contains("prefix=database%2F", request.Uri.Query, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "AWS4-HMAC-SHA256 Credential=oci-access/",
+            request.Authorization,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, request.Authorization, StringComparison.Ordinal);
     }
 
     [Fact]
