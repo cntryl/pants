@@ -42,6 +42,9 @@ jobs:
       - name: Check formatting
         run: dotnet format Pants.slnx --verify-no-changes
 
+      - name: Start Sqrzl emulator
+        run: docker compose up -d sqrzl
+
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
@@ -50,52 +53,8 @@ jobs:
           dotnet test Pants.slnx
           --configuration Release
           --no-build
-          --filter "Category!=Sqrzl"
-
-  cloud-compatibility:
-    name: Sqrzl cloud providers
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install .NET 10 SDK
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
-          cache: true
-          cache-dependency-path: '**/packages.lock.json'
-
-      - name: Start Sqrzl emulator
-        run: docker compose up -d sqrzl
-
-      - name: Wait for Sqrzl emulator
-        shell: bash
-        run: |
-          for attempt in {1..30}; do
-            if curl --fail --silent --show-error http://127.0.0.1:9000/healthz; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker compose logs sqrzl
-          exit 1
-
-      - name: Build
-        run: dotnet build Pants.slnx --configuration Release
-
-      - name: Test cloud compatibility
-        run: >-
-          dotnet test test/Pants.Tests/Pants.Tests.csproj
-          --configuration Release
-          --no-build
-          --filter "Category=Sqrzl"
-          --logger "console;verbosity=detailed"
 
       - name: Stop Sqrzl emulator
         if: ${{ always() }}
         run: docker compose down --volumes
+
