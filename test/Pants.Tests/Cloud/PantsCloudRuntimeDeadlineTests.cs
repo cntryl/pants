@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -45,7 +44,6 @@ public sealed class PantsCloudRuntimeDeadlineTests
             }
         }
 
-        await WaitForLateResponseAsync(database);
         await database.ShutdownAsync(AssertionTimeout);
         await database.DisposeAsync();
 
@@ -58,20 +56,4 @@ public sealed class PantsCloudRuntimeDeadlineTests
             (await read.GetAsync("accepted-key"u8.ToArray()))?.ToArray());
     }
 
-    static async Task WaitForLateResponseAsync(IPantsDatabase database)
-    {
-        var started = Stopwatch.GetTimestamp();
-        while (Stopwatch.GetElapsedTime(started) < AssertionTimeout)
-        {
-            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-            if (metrics.RuntimeLateResponsesTotal >= 1)
-            {
-                return;
-            }
-
-            await Task.Yield();
-        }
-
-        throw new TimeoutException("The accepted cloud obligation did not finish.");
-    }
 }

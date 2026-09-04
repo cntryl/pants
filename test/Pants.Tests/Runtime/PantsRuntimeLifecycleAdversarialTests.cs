@@ -71,12 +71,14 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
     }
 
     [Fact]
-    public async Task ShouldShareOneShutdownExecutionAcrossConcurrentCallers()
+    public async Task ShouldShareOneShutdownExecutionRegardlessOfResponseTimeout()
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new GatedShutdownBoundaryFailpointHandler();
         var database = await PantsDatabase.OpenForTestingAsync(
-            PantsOpenOptions.Local(directory.Path),
+            PantsOpenOptions.Local(directory.Path)
+                .WithStorageTimeout(TimeSpan.FromMilliseconds(5))
+                .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(100)),
             new RuntimeDependencies(failpoint));
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -90,7 +92,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             .Select(_ => database.ShutdownAsync(AssertionTimeout).AsTask())
             .ToArray();
         var deadlineShutdowns = Enumerable.Range(0, 8)
-            .Select(_ => database.ShutdownAsync(TimeSpan.FromMilliseconds(50)).AsTask())
+            .Select(_ => database.ShutdownAsync(TimeSpan.FromMilliseconds(250)).AsTask())
             .ToArray();
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 

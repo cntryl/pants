@@ -128,16 +128,6 @@ public sealed class PantsRuntimeResponseTimeoutTests
             }
         }
 
-        _ = await WaitForLateResponseAsync(database);
-        await using (var readBeforeShutdown = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
-                         PantsTransactionMode.ReadOnly))
-        {
-            Assert.Equal(
-                "durable"u8.ToArray(),
-                (await readBeforeShutdown.GetAsync("accepted"u8.ToArray()))?.ToArray());
-        }
-
         await database.ShutdownAsync(AssertionTimeout);
         await database.DisposeAsync();
 

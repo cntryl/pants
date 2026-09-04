@@ -1962,7 +1962,8 @@ sealed class Actor : IAsyncDisposable
                 return ValueTask.FromResult(
                     _verificationBarrier?.Released ?? Task.CompletedTask);
             },
-            CancellationToken.None).AsTask();
+            CancellationToken.None,
+            enforceRuntimeResponseTimeout: false).AsTask();
         try
         {
             var verificationReleased = await admission
@@ -2012,7 +2013,8 @@ sealed class Actor : IAsyncDisposable
                 _shutdownPreparationCompleted = true;
                 return true;
             },
-            CancellationToken.None).AsTask();
+            CancellationToken.None,
+            enforceRuntimeResponseTimeout: false).AsTask();
         try
         {
             await preparation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -2034,7 +2036,8 @@ sealed class Actor : IAsyncDisposable
                             state.SignalWritePressureChanged();
                             return ValueTask.FromResult(true);
                         },
-                        CancellationToken.None)
+                        CancellationToken.None,
+                        enforceRuntimeResponseTimeout: false)
                     .ConfigureAwait(false);
             }
             catch (Exception)
@@ -2089,17 +2092,20 @@ sealed class Actor : IAsyncDisposable
         Func<RuntimeState, ValueTask<T>> operation,
         CancellationToken cancellationToken,
         Action<T>? abandonedResponse = null,
+        bool enforceRuntimeResponseTimeout = true,
         [CallerMemberName] string requestKind = "RuntimeCommand") =>
         SendWithinDeadlineAsync(
             (state, _) => operation(state),
             cancellationToken,
             abandonedResponse,
+            enforceRuntimeResponseTimeout,
             requestKind);
 
     async ValueTask<T> SendWithinDeadlineAsync<T>(
         Func<RuntimeState, OperationDeadline, ValueTask<T>> operation,
         CancellationToken cancellationToken,
         Action<T>? abandonedResponse = null,
+        bool enforceRuntimeResponseTimeout = true,
         [CallerMemberName] string requestKind = "RuntimeCommand")
     {
         if (Volatile.Read(ref _disposed) != 0)
@@ -2130,6 +2136,11 @@ sealed class Actor : IAsyncDisposable
             admitted = true;
             try
             {
+                if (!enforceRuntimeResponseTimeout)
+                {
+                    return await response.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 return await response.WaitAsync(
                         _options.RuntimeResponseTimeout,
                         _runtimeTimeProvider,
