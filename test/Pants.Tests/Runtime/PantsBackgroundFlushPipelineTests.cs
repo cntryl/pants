@@ -2623,7 +2623,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                     {
                         Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(
                             family,
-                            AssertionTimeout));
+                            BackgroundWorkTimeout));
                     }
                 }
             }
@@ -2651,7 +2651,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         // legitimately take longer than five seconds while eight 132 KiB writes are flushed
         // alongside repeated manifest reads.
         await Task.WhenAll(work).WaitAsync(BackgroundWorkTimeout);
-        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(BackgroundWorkTimeout);
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         var names = layout.Levels.SelectMany(static level => level.Files)
