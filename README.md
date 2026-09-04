@@ -12,8 +12,11 @@ service.
 Add the core package:
 
 ```console
-dotnet add package Cntryl.Pants
+dotnet add package Cntryl.Pants.Core
 ```
+
+Libraries that only need to expose Pants contracts can instead reference
+`Cntryl.Pants.Abstractions` without taking a dependency on the storage engine.
 
 For Microsoft dependency injection, also add:
 

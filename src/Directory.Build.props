@@ -1,0 +1,9 @@
+<Project>
+  <Import Project="../Directory.Build.props"/>
+
+  <PropertyGroup>
+    <AssemblyName>Cntryl.$(MSBuildProjectName)</AssemblyName>
+    <PackageId>$(AssemblyName)</PackageId>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+</Project>

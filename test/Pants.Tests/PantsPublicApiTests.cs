@@ -5,13 +5,22 @@ public sealed class PantsPublicApiTests
     [Fact]
     public void ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts()
     {
-        var publicTypes = typeof(PantsDatabase).Assembly
+        var publicTypes = typeof(IPantsDatabase).Assembly
             .GetExportedTypes();
 
+        Assert.Equal("Cntryl.Pants.Abstractions", typeof(IPantsDatabase).Assembly.GetName().Name);
+        Assert.Equal("Cntryl.Pants.Core", typeof(PantsDatabase).Assembly.GetName().Name);
+        Assert.NotEqual(typeof(IPantsDatabase).Assembly, typeof(PantsDatabase).Assembly);
+        Assert.Equal(typeof(IPantsDatabase).Assembly, typeof(PantsOpenOptions).Assembly);
+        Assert.Equal(typeof(PantsDatabase).Assembly, typeof(PantsCloudPreflightExtensions).Assembly);
+        Assert.DoesNotContain(
+            typeof(IPantsDatabase).Assembly.GetReferencedAssemblies(),
+            static assembly => assembly.Name == "Cntryl.Pants.Core");
         Assert.Contains(typeof(IPantsDatabase), publicTypes);
         Assert.Contains(typeof(IPantsTransaction), publicTypes);
         Assert.Contains(typeof(IPantsScan), publicTypes);
         Assert.Contains(typeof(IPantsColumnFamily), publicTypes);
+        Assert.DoesNotContain(typeof(PantsDatabase), publicTypes);
         Assert.All(
             publicTypes.Where(static type => type.Name.StartsWith("IPants", StringComparison.Ordinal)),
             static type => Assert.True(type.IsInterface));

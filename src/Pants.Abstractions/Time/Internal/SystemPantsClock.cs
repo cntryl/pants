@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Runtime.Internal;
+namespace Cntryl.Pants.Time.Internal;
 
 sealed class SystemPantsClock : IPantsClock
 {

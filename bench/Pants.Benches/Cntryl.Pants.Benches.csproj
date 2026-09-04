@@ -2,14 +2,8 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet"/>
-    <ProjectReference Include="..\..\src\Pants\Pants.csproj"/>
+    <ProjectReference Include="..\..\src\Pants.Core\Pants.Core.csproj"/>
   </ItemGroup>
-
-  <PropertyGroup>
-    <AssemblyName>Cntryl.Pants.Benches</AssemblyName>
-    <RootNamespace>Cntryl.Pants.Benches</RootNamespace>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>

@@ -1,0 +1,9 @@
+<Project>
+  <Import Project="../Directory.Build.props"/>
+
+  <PropertyGroup>
+    <RootNamespace>$(AssemblyName)</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
