@@ -22,7 +22,14 @@ public sealed class PantsRetainedWalTombstoneRecoveryTests
                 await seed.CommitAsync(PantsWriteOptions.Sync);
             }
 
-            retainedWal = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"));
+            await using (var wal = new FileStream(
+                             Path.Combine(directory.Path, "wal", "wal.log"),
+                             FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                retainedWal = new byte[checked((int)wal.Length)];
+                await wal.ReadExactlyAsync(retainedWal);
+            }
+
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await using (var delete = await database.Transactions.BeginAsync(
                              database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite))
