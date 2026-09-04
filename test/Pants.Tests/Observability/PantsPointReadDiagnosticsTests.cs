@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -9,7 +8,7 @@ public sealed class PantsPointReadDiagnosticsTests
     const long HybridLocalBudgetBytes = 128 * 1024;
 
     [Fact]
-    public void ShouldExposeImmutableSstTraceThroughReadonlyCollectionContract()
+    public void ShouldKeepSstTraceUnchangedWhenTheSourceCollectionIsMutated()
     {
         var expected = new PantsSstReadTrace(
             "expected.sst",
@@ -26,10 +25,6 @@ public sealed class PantsPointReadDiagnosticsTests
         source[0] = replacement;
         source.Add(replacement);
 
-        var property = typeof(PantsPointReadTrace).GetProperty(nameof(PantsPointReadTrace.Ssts));
-        Assert.NotNull(property);
-        Assert.Equal(typeof(IReadOnlyList<PantsSstReadTrace>), property.PropertyType);
-        Assert.IsType<ImmutableArray<PantsSstReadTrace>>(trace.Ssts);
         Assert.Same(expected, Assert.Single(trace.Ssts));
     }
 

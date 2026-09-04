@@ -342,6 +342,11 @@ static class CloudConfigurationPreflight
             return preflight.FailureKind;
         }
 
+        if (exception is PantsNotSupportedException or NotSupportedException)
+        {
+            return PantsCloudFailureKind.Unsupported;
+        }
+
         if (exception is AuthenticationException)
         {
             return PantsCloudFailureKind.EndpointOrTls;

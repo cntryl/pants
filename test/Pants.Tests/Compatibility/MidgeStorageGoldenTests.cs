@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -56,35 +55,17 @@ public sealed class MidgeStorageGoldenTests
     }
 
     [Fact]
-    public void ShouldValidateManifestJournalAndIntentGivenPinnedMidgeMetadataGoldens()
+    public void ShouldValidatePinnedMidgeManifestJournal()
     {
-        using var manifest = JsonDocument.Parse(
-            ReadStorageFixture("metadata/manifest.snapshot.json"));
         var journal = ReadStorageFixture("metadata/manifest.journal");
-        using var intent = JsonDocument.Parse(
-            ReadStorageFixture("metadata/intent_log.json"));
 
-        Assert.True(manifest.RootElement.GetProperty("last_persisted_sequence").GetUInt64() > 0);
-        Assert.NotEmpty(manifest.RootElement.GetProperty("files").EnumerateArray());
-        Assert.NotEmpty(journal);
         LocalDiskStore.ValidateManifestJournal(journal);
-        Assert.NotEmpty(intent.RootElement.EnumerateArray());
     }
 
     [Fact]
-    public async Task ShouldParseMidgeLeaseDocumentsGivenPinnedSemanticGoldens()
+    public async Task ShouldReadPinnedMidgeCloudLease()
     {
-        var local = ParseLease(ReadStorageFixture("leases/local.midge_leader"));
         var cloudBytes = ReadStorageFixture("leases/cloud.midge_primary_lease");
-        var cloud = ParseLease(cloudBytes);
-
-        Assert.Equal("1", local["epoch"]);
-        Assert.NotEmpty(local["holder_id"]);
-        _ = DateTimeOffset.Parse(local["acquired_at"], CultureInfo.InvariantCulture);
-        Assert.Equal("1", cloud["epoch"]);
-        Assert.NotEmpty(cloud["owner_token"]);
-        _ = DateTimeOffset.Parse(cloud["acquired_at"], CultureInfo.InvariantCulture);
-        _ = DateTimeOffset.Parse(cloud["expires_at"], CultureInfo.InvariantCulture);
 
         var objects = new TestCloudObjectStore();
         _ = await objects.PutAsync(
@@ -136,14 +117,6 @@ public sealed class MidgeStorageGoldenTests
     {
         var path = StorageFixturePath("databases/midge-structured-v4-db");
         var before = ComputeDirectoryHash(path);
-        using var descriptor = JsonDocument.Parse(
-            ReadStorageFixture("databases/midge-structured-v4-db.fixture.json"));
-        var descriptorRoot = descriptor.RootElement;
-
-        Assert.Equal(1, descriptorRoot.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal(PinnedMidgeSha, descriptorRoot.GetProperty("midgeSha").GetString());
-        Assert.Equal("midge-structured-v4-db", descriptorRoot.GetProperty("path").GetString());
-        Assert.Equal(before, descriptorRoot.GetProperty("sha256").GetString());
 
         var report = await PantsDatabase.VerifyPathAsync(path);
 
@@ -152,12 +125,6 @@ public sealed class MidgeStorageGoldenTests
         Assert.True(report.SstFilesVerified > 0);
         Assert.Equal(before, ComputeDirectoryHash(path));
     }
-
-    static Dictionary<string, string> ParseLease(byte[] bytes) =>
-        Encoding.UTF8.GetString(bytes)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(static line => line.Split(": ", 2))
-            .ToDictionary(static parts => parts[0], static parts => parts[1], StringComparer.Ordinal);
 
     static byte[] ReadStorageFixture(string relativePath) =>
         File.ReadAllBytes(StorageFixturePath(relativePath));

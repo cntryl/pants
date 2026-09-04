@@ -255,9 +255,18 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                     }
                 }
 
-                return CreateResponse(
+                var response = CreateResponse(
                     request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
                     ApplyRange(request, value));
+                if (request.Headers.Range?.Ranges.SingleOrDefault() is { } requestedRange)
+                {
+                    response.Content.Headers.ContentRange = new ContentRangeHeaderValue(
+                        requestedRange.From ?? 0,
+                        requestedRange.To ?? value.Data.Length - 1,
+                        value.Data.Length);
+                }
+
+                return response;
             }
         }
 

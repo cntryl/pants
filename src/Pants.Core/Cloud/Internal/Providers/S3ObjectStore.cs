@@ -318,9 +318,9 @@ sealed class S3ObjectStore : CloudObjectStore
             try
             {
                 using var request = await requestFactory(linked.Token).ConfigureAwait(false);
-                var response = await _httpClient.SendAsync(
+                var response = await CloudHttpResponseReader.SendAsync(
+                    _httpClient,
                     request,
-                    HttpCompletionOption.ResponseContentRead,
                     linked.Token).ConfigureAwait(false);
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {

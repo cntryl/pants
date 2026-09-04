@@ -8,10 +8,14 @@ The committed, machine-readable inventory is
 It records the compatibility-bearing public source symbols and integration
 tests discovered at that exact revision, their observable behavior, the
 expected Midge error when statically discoverable, the mapped Pants test, and
-coverage status. All 949 current entries are either mapped to an executable
-Pants test or carry a reviewed `n/a` rationale; none are planned. Public exports
-and public integration tests are canonical. Private Rust-only implementation
-tests do not override those contracts.
+coverage status. Its 949 entries are a historical mapping, not a current
+coverage certificate: some mappings reference removed shape/architecture
+tests, and it omits the newer source-test inventory. See the
+[behavior gap analysis](MidgeBehaviorGapAnalysis.md) for known uncovered
+scenarios, demonstrated differences, and unresolved baseline questions.
+Public exports and public integration tests are canonical. Source-level
+tests also establish observable behavior and resource guarantees; genuinely
+Rust-specific implementation checks do not override public contracts.
 
 Runtime decomposition is intentionally compatibility-neutral: coordinator,
 WAL, flush, compaction, immutable-flush, and commit-coalescing responsibilities

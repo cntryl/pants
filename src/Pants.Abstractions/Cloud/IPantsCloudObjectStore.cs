@@ -8,35 +8,37 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    ///     Reads bytes and their non-empty conditional version from one object observation.
+    ///     Do not combine a GET body with identity from an independent HEAD, even if lengths match.
+    ///     Returns null only when the object is absent; invalid responses must throw.
+    /// </summary>
     ValueTask<PantsCloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken = default);
 
-    async ValueTask<PantsCloudObject?> GetRangeAsync(
+    /// <summary>
+    ///     Reads a range and its version from the same object observation. The version uses the
+    ///     same identity as GET, HEAD, and conditional mutations (generation for GCS).
+    ///     Implementations must bound transfer and buffering by the requested range, not object
+    ///     size. Providers without ranged reads fail explicitly; there is no full-GET fallback.
+    /// </summary>
+    ValueTask<PantsCloudObject?> GetRangeAsync(
         string objectKey,
         ulong offset,
         int length,
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
-        var value = await GetAsync(objectKey, cancellationToken).ConfigureAwait(false);
-        if (value is null)
-        {
-            return null;
-        }
-
-        if (offset > (ulong)value.Data.Length || (ulong)length > (ulong)value.Data.Length - offset)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(length),
-                "The requested range is outside the cloud object.");
-        }
-
-        return new PantsCloudObject(
-            value.Data.Slice(checked((int)offset), length).ToArray(),
-            value.Version);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromException<PantsCloudObject?>(new PantsNotSupportedException(
+            "This cloud object store does not support bounded ranged reads. Implement GetRangeAsync to use this capability."));
     }
 
+    /// <summary>
+    ///     Reads metadata with a non-empty conditional identity. Independent metadata and body
+    ///     observations must not be treated as one version-bound read.
+    /// </summary>
     ValueTask<PantsCloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken = default);

@@ -17,7 +17,10 @@ public sealed class AzureBlobObjectStoreTests
             Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
             return new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Content = new ByteArrayContent("cde"u8.ToArray())
+                {
+                    Headers = { ContentRange = new ContentRangeHeaderValue(2, 4, 10) }
+                },
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             };
         });

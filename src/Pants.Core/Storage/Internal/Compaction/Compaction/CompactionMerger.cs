@@ -21,12 +21,12 @@ static class CompactionMerger
 
         var entries = contents
             .SelectMany(static content => content.Entries)
-            .Where(entry => !droppedRanges.Any(range => Covers(range, entry)))
             .GroupBy(static entry => entry.Key, ByteArrayComparer.Instance)
             .SelectMany(group => RetainVersions(
                 group.OrderByDescending(static entry => entry.Sequence),
                 horizon,
-                plan.PointTombstoneGcEligible))
+                plan.PointTombstoneGcEligible,
+                droppedRanges))
             .OrderBy(static entry => entry.Key, ByteArrayComparer.Instance)
             .ThenByDescending(static entry => entry.Sequence)
             .ToArray();
@@ -37,9 +37,12 @@ static class CompactionMerger
     static List<SstEntry> RetainVersions(
         IEnumerable<SstEntry> orderedEntries,
         ulong? horizon,
-        bool tombstoneGcEligible)
+        bool tombstoneGcEligible,
+        IReadOnlyList<RangeTombstone> droppedRanges)
     {
-        var versions = orderedEntries.ToArray();
+        var versions = ValidateAndDeduplicate(orderedEntries)
+            .Where(entry => !droppedRanges.Any(range => Covers(range, entry)))
+            .ToArray();
         if (versions.Length == 0)
         {
             return [];
@@ -64,6 +67,22 @@ static class CompactionMerger
         }
 
         return retained;
+    }
+
+    static IEnumerable<SstEntry> ValidateAndDeduplicate(IEnumerable<SstEntry> orderedEntries)
+    {
+        SstEntry? previous = null;
+        foreach (var entry in orderedEntries)
+        {
+            if (previous is not null && previous.Sequence == entry.Sequence)
+            {
+                CompactionVersionIdentity.RequireMatchingContent(previous, entry);
+                continue;
+            }
+
+            previous = entry;
+            yield return entry;
+        }
     }
 
     static bool CanDrop(ulong sequence, ulong? horizon, bool eligible) =>

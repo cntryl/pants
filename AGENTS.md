@@ -23,6 +23,8 @@ Follow `.editorconfig` and modern C# conventions: four-space C# indentation, two
 
 Use xUnit `[Fact]` and `[Theory]` tests with behavior-oriented names such as `ShouldRecoverAtomicCommitFromMidgeWalAfterReopen`. Add focused regression coverage for every observable change. Persistence changes require reopen/recovery tests and must preserve the pinned Midge FORMAT, WAL, SST, manifest, and lease contracts. Tests must be deterministic and clean up temporary storage through `TemporaryDirectory`.
 
+Test observable system behavior. Do not add integrity tests that inspect repository source, project files, workflows, documentation, fixture metadata, or reflected type shapes merely to enforce their contents or conventions. Keep behavioral persistence, corruption, and compatibility tests that exercise the engine or codecs.
+
 ## Commit & Pull Request Guidelines
 
 History currently uses concise, imperative subjects, for example `Initial Pants implementation`. Keep commits focused and avoid generated `bin`, `obj`, coverage, or benchmark artifacts. Pull requests should explain behavior and compatibility impact, list validation commands, and link relevant issues. Call out persisted-format, durability, recovery, public API, or dependency changes explicitly. Screenshots are unnecessary unless a future user-facing interface is affected.

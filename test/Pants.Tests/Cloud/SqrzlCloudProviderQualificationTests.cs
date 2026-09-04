@@ -86,7 +86,8 @@ public sealed class SqrzlCloudProviderQualificationTests
         const string key = "objects/value.bin";
         const string emptyKey = "objects/empty.bin";
         var initial = "hello-sqrzl"u8.ToArray();
-        var updated = "updated"u8.ToArray();
+        var updated = "world-sqrzl"u8.ToArray();
+        Assert.Equal(initial.Length, updated.Length);
 
         Assert.True(await store.PutAsync(
             key,
@@ -107,6 +108,7 @@ public sealed class SqrzlCloudProviderQualificationTests
             await store.HeadAsync(key, CancellationToken.None));
         Assert.Equal((ulong)initial.Length, metadata.SizeBytes);
         Assert.False(string.IsNullOrWhiteSpace(metadata.Version));
+        Assert.Equal(read.Version, metadata.Version);
 
         Assert.True(await store.PutAsync(
             key,
@@ -142,6 +144,7 @@ public sealed class SqrzlCloudProviderQualificationTests
                 CancellationToken.None));
         var current = Assert.IsType<CloudObject>(
             await store.GetAsync(key, CancellationToken.None));
+        Assert.Equal(updated, current.Data.ToArray());
         Assert.Equal(
             CloudObjectDeleteOutcome.Deleted,
             await store.DeleteAsync(
@@ -210,8 +213,10 @@ public sealed class SqrzlCloudProviderQualificationTests
                 sourceCache.Path,
                 PantsCloudStorageTopology.Shared(location))
             .WithBackgroundCompaction(false)
-            .WithStorageTimeout(TimeSpan.FromMilliseconds(250))
-            .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(500));
+            // The same budgets also cover real provider startup. Hold the failpoint
+            // through the deadline instead of requiring startup to finish in 500 ms.
+            .WithStorageTimeout(TimeSpan.FromSeconds(2))
+            .WithRuntimeResponseTimeout(TimeSpan.FromSeconds(5));
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -226,7 +231,7 @@ public sealed class SqrzlCloudProviderQualificationTests
             try
             {
                 var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                    commit.WaitAsync(TimeSpan.FromSeconds(5)));
+                    commit.WaitAsync(TimeSpan.FromSeconds(15)));
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -292,13 +297,13 @@ public sealed class SqrzlCloudProviderQualificationTests
 
     static string ResolveEndpoint()
     {
-        var configuredEndpoint = Environment.GetEnvironmentVariable("PANTS_SQRZL_ENDPOINT");
+        var configuredEndpoint = Environment.GetEnvironmentVariable("SQRZL_ENDPOINT");
         if (!string.IsNullOrWhiteSpace(configuredEndpoint))
         {
             return configuredEndpoint.TrimEnd('/');
         }
 
-        var configuredPort = Environment.GetEnvironmentVariable("PANTS_SQRZL_API_PORT");
+        var configuredPort = Environment.GetEnvironmentVariable("SQRZL_API_PORT");
         if (string.IsNullOrWhiteSpace(configuredPort))
         {
             configuredPort = "9000";
@@ -307,7 +312,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         if (!ushort.TryParse(configuredPort, out var port) || port == 0)
         {
             throw new InvalidOperationException(
-                "PANTS_SQRZL_API_PORT must be an integer from 1 through 65535.");
+                "SQRZL_API_PORT must be an integer from 1 through 65535.");
         }
 
         return $"http://127.0.0.1:{port}";

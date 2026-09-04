@@ -252,6 +252,18 @@ static class StreamingCompactionMerger
                     heads[sourceIndex] = iterators[sourceIndex].MoveNext()
                         ? iterators[sourceIndex].Current
                         : null;
+                    // Validate and collapse every copy of this logical version before visibility
+                    // or tombstone filtering can hide corruption. Only the existing handoff
+                    // entry is retained while duplicate heads advance, including within a reader.
+                    while (TrySelectNewestHead(heads, minKey, out var duplicateIndex, out var duplicate) &&
+                           duplicate.Sequence == entry.Sequence)
+                    {
+                        CompactionVersionIdentity.RequireMatchingContent(entry, duplicate);
+                        heads[duplicateIndex] = iterators[duplicateIndex].MoveNext()
+                            ? iterators[duplicateIndex].Current
+                            : null;
+                    }
+
                     if (droppedRanges.Any(range => Covers(range, entry)))
                     {
                         continue;

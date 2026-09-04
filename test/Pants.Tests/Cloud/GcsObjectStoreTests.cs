@@ -12,7 +12,9 @@ public sealed class GcsObjectStoreTests
         var handler = new RecordingHandler(request =>
         {
             Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
-            return Response(HttpStatusCode.PartialContent, "cde", "7");
+            var response = Response(HttpStatusCode.PartialContent, "cde", "7");
+            response.Content.Headers.ContentRange = new ContentRangeHeaderValue(2, 4, 10);
+            return response;
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);

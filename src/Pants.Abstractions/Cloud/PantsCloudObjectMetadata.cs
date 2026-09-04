@@ -23,6 +23,7 @@ public sealed record PantsCloudObjectMetadata
         ETag = eTag;
         Generation = generation;
         LastModifiedUtc = lastModifiedUtc;
+        _ = Version;
     }
 
     public ulong SizeBytes { get; }
@@ -33,5 +34,9 @@ public sealed record PantsCloudObjectMetadata
 
     public DateTimeOffset? LastModifiedUtc { get; }
 
-    public string Version => Generation ?? ETag;
+    /// <summary>
+    ///     The non-empty conditional identity: generation when supplied, otherwise ETag.
+    ///     Invalid metadata, including modified record copies, fails closed when consumed.
+    /// </summary>
+    public string Version => CloudObjectIdentity.RequireVersion(Generation ?? ETag);
 }

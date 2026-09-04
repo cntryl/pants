@@ -12,11 +12,11 @@ derivation, column-family identity and persistence, single-writer exclusion,
 lease loss, and strict/salvage recovery. Persistence suites exercise WAL,
 flush, compaction, manifest, intent-log, checkpoint, and no-space boundaries.
 
-The M1 completion test fails while any contract assigned to issues #1-#3 is
-still `planned`. Entries marked `mapped` name one or more executable Pants
-tests. Entries marked `n/a` are limited to Rust Cargo/workflow checks or Midge
-subprocess-driver plumbing; their observable recovery invariants remain mapped
-to deterministic Pants failpoint tests.
+The manifest is a review inventory, not an executable completion gate. Entries
+marked `mapped` identify behavioral Pants tests; tests do not validate manifest
+status strings or method names. Entries marked `n/a` identify Rust Cargo/workflow
+checks or Midge subprocess-driver plumbing; their observable recovery invariants
+remain covered by deterministic Pants failpoint tests.
 
 Cloud-specific failure-injection contracts remain assigned to their cloud
 milestones, but are now mapped to executable Pants tests. M1 itself claims only

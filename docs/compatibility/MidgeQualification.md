@@ -2,17 +2,17 @@
 
 Pants is qualified against Midge commit
 `75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`. Normal builds do not clone or
-compile Midge. They use the committed contract manifest and fixtures under
-`test/Pants.Tests/Fixtures/Compatibility`.
+compile Midge. Tests exercise Pants against the committed fixtures under
+`test/Pants.Tests/Fixtures/Compatibility`; the contract manifest is a review inventory.
 
 ## Baseline maintenance
 
 The former in-repository compatibility harness and Rust driver have been
-removed. The pinned manifest, metadata, lock hash, and fixtures remain the
-executable compatibility baseline consumed by `Pants.Tests`. Updating the
-Midge revision now requires an explicitly reviewed external regeneration of
-those committed artifacts. Commit the manifest, fixture metadata, and generated
-artifacts together.
+removed. The fixtures remain the executable compatibility baseline consumed by
+`Pants.Tests`. The pinned manifest, metadata, and lock hash retain provenance for
+review, not automated integrity gates. Updating the Midge revision requires an
+explicitly reviewed external regeneration of those committed artifacts. Commit
+the manifest, fixture metadata, and generated artifacts together.
 
 The current-baseline review, including compatibility and scalability changes
 since the previous pin, is recorded in
@@ -21,12 +21,13 @@ since the previous pin, is recorded in
 ## Fixture policy
 
 `fixture-metadata.json` records the producer, SHA-256 hash, and coverage kind
-for every persisted structure. Deterministic FORMAT, WAL, SST, manifest,
-intent, catalog, object-key, and generated-database tree artifacts require
-exact-byte coverage. Journal fsync times, lease identities and times, and DDL
-operation identifiers are semantic-only because Midge generates those values
-at runtime; each exception has a required rationale and is parsed by Pants
-tests.
+for persisted structures. These records describe fixture provenance; tests do
+not validate metadata schemas, recorded hashes, or inventory status strings.
+Compatibility tests exercise Pants codecs, lease handling, recovery, and offline
+verification against the fixtures. Byte comparisons cover persisted-format behavior
+or prove that a read-only operation leaves storage unchanged. Journal fsync times,
+lease identities and times, and DDL operation identifiers vary at runtime and are
+compared semantically where relevant.
 
 Generated healthy database fixtures must pass Pants validation. Canonical
 future-format and legacy fixtures instead retain their expected compatibility

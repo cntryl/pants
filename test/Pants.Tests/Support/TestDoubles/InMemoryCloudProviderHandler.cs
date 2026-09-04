@@ -89,10 +89,19 @@ sealed class InMemoryCloudProviderHandler : HttpMessageHandler
                 };
             }
 
-            return CreateObjectResponse(
+            var response = CreateObjectResponse(
                 request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
                 protocol,
                 ApplyRange(request, value));
+            if (request.Headers.Range?.Ranges.SingleOrDefault() is { } range)
+            {
+                response.Content.Headers.ContentRange = new ContentRangeHeaderValue(
+                    range.From ?? 0,
+                    range.To ?? value.Data.Length - 1,
+                    value.Data.Length);
+            }
+
+            return response;
         }
     }
 
