@@ -126,4 +126,50 @@ public sealed class PantsConfigurationParityTests
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
             .WithWalBufferSize(0));
     }
+
+    [Fact]
+    public void ShouldExposeOneValidatedLeaseTimingProfile()
+    {
+        var defaults = PantsOpenOptions.InMemory();
+        var explicitProfile = defaults
+            .WithLeaseClockSkewTolerance(TimeSpan.FromSeconds(1))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(10));
+        var maximum = defaults.WithLeaseTimeToLive(TimeSpan.MaxValue);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), defaults.LeaseTimeToLive);
+        Assert.Equal(TimeSpan.FromSeconds(10), defaults.LeaseHeartbeatInterval);
+        Assert.Equal(TimeSpan.FromSeconds(10), explicitProfile.LeaseTimeToLive);
+        Assert.Equal(TimeSpan.FromSeconds(1), explicitProfile.LeaseClockSkewTolerance);
+        Assert.Equal(TimeSpan.FromSeconds(10.0 / 3), explicitProfile.LeaseHeartbeatInterval);
+        Assert.Equal(TimeSpan.MaxValue, maximum.LeaseTimeToLive);
+        Assert.Equal(TimeSpan.FromSeconds(10), maximum.LeaseHeartbeatInterval);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void ShouldRejectLeaseTimeToLiveBelowSupportedMinimum(int milliseconds)
+    {
+        var error = Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions
+            .InMemory()
+            .WithLeaseTimeToLive(TimeSpan.FromMilliseconds(milliseconds)));
+
+        Assert.Contains("LeaseTimeToLive", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(11)]
+    public void ShouldRejectLeaseClockSkewAtOrAboveTimeToLive(int skewMilliseconds)
+    {
+        var error = Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions
+            .InMemory()
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero)
+            .WithLeaseTimeToLive(TimeSpan.FromMilliseconds(10))
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(skewMilliseconds)));
+
+        Assert.Contains("LeaseClockSkewTolerance", error.Message, StringComparison.Ordinal);
+        Assert.Contains("LeaseTimeToLive", error.Message, StringComparison.Ordinal);
+    }
 }

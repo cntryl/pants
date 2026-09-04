@@ -39,6 +39,96 @@ public sealed class FileLeaseTests
         Assert.Equal(6UL, lease.Epoch);
     }
 
+    [Fact]
+    public async Task ShouldTakeOverOnlyAfterConfiguredLeaseBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var ttl = TimeSpan.FromSeconds(2);
+        var skew = TimeSpan.FromSeconds(1);
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            17,
+            "previous-writer",
+            clock.UtcNow - ttl - skew);
+
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            skew,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: ttl));
+
+        clock.UtcNow += TimeSpan.FromTicks(1);
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            skew,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: ttl);
+
+        Assert.Equal(18UL, lease.Epoch);
+    }
+
+    [Fact]
+    public async Task ShouldNotTakeOverAtOldHardCodedBoundaryGivenLongLease()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            4,
+            "long-lived-writer",
+            clock.UtcNow - TimeSpan.FromSeconds(75));
+
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: TimeSpan.FromMinutes(2)));
+    }
+
+    [Fact]
+    public async Task ShouldFenceOldOwnerAfterConfiguredLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var ttl = TimeSpan.FromSeconds(2);
+        using var first = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: ttl);
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            first.Epoch,
+            "first-writer",
+            clock.UtcNow - ttl - TimeSpan.FromTicks(1));
+        using var second = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: ttl);
+
+        Assert.False(first.RenewForTesting());
+        Assert.Throws<PantsFencedException>(first.EnsureValid);
+        second.EnsureValid();
+        Assert.True(second.Epoch > first.Epoch);
+    }
+
     // ----- Issue #39: PantsOpenOptions.MinimumEpoch floor plumbed through to a local open -----
 
     [Fact]
