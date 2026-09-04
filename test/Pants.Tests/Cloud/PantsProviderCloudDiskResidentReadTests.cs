@@ -160,9 +160,11 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             handler.Release();
         }
 
+        // The canceled caller can observe its response before the admitted actor command finishes
+        // unwinding. This query is ordered behind that command and establishes the cleanup boundary.
+        var metrics = await reopened.GetRuntimeMetricsAsync();
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp", SearchOption.AllDirectories));
-        var metrics = await reopened.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.CompactionBufferUsedBytes);
         Assert.True(metrics.CompactionBufferPeakBytes <= metrics.CompactionBufferCapacityBytes);
     }
