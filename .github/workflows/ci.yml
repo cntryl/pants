@@ -43,18 +43,27 @@ jobs:
         run: dotnet format Pants.slnx --verify-no-changes
 
       - name: Start Sqrzl emulator
-        run: docker compose up -d sqrzl
+        if: matrix.os == 'ubuntu-latest'
+        run: docker compose up --detach --wait sqrzl
 
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
       - name: Test
+        if: matrix.os == 'ubuntu-latest'
         run: >-
           dotnet test Pants.slnx
           --configuration Release
           --no-build
 
-      - name: Stop Sqrzl emulator
-        if: ${{ always() }}
-        run: docker compose down --volumes
+      - name: Test without Sqrzl
+        if: matrix.os != 'ubuntu-latest'
+        run: >-
+          dotnet test Pants.slnx
+          --configuration Release
+          --no-build
+          --filter "Category!=Sqrzl"
 
+      - name: Stop Sqrzl emulator
+        if: ${{ always() && matrix.os == 'ubuntu-latest' }}
+        run: docker compose down --volumes

@@ -3,6 +3,32 @@ namespace Cntryl.Pants.Cloud;
 public sealed class CloudQualificationRepositoryTests
 {
     [Fact]
+    public void ShouldRunSqrzlQualificationOnlyOnLinuxCi()
+    {
+        var repository = FindRepositoryRoot();
+        var workflow = File.ReadAllText(Path.Combine(
+            repository,
+            ".github",
+            "workflows",
+            "ci.yml"));
+
+        Assert.Contains(
+            "if: matrix.os == 'ubuntu-latest'\n        run: docker compose up --detach --wait sqrzl",
+            workflow);
+        Assert.Contains(
+            "if: matrix.os != 'ubuntu-latest'\n        run: >-\n" +
+            "          dotnet test Pants.slnx\n" +
+            "          --configuration Release\n" +
+            "          --no-build\n" +
+            "          --filter \"Category!=Sqrzl\"",
+            workflow);
+        Assert.Contains(
+            "if: ${{ always() && matrix.os == 'ubuntu-latest' }}\n" +
+            "        run: docker compose down --volumes",
+            workflow);
+    }
+
+    [Fact]
     public void ShouldKeepCloudQualificationSqrzlOnly()
     {
         var repository = FindRepositoryRoot();
