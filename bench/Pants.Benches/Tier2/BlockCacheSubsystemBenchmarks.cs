@@ -2,7 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage;
 using Cntryl.Pants.Storage.Internal.Cache;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class BlockCacheSubsystemBenchmarks : Tier2Benchmark
 {

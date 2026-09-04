@@ -1,6 +1,6 @@
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 static class Tier3Database
 {
@@ -26,8 +26,8 @@ static class Tier3Database
         IEnumerable<(byte[] Key, byte[] Value)> entries,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         foreach (var (key, value) in entries)
         {
@@ -41,8 +41,8 @@ static class Tier3Database
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(key);
     }

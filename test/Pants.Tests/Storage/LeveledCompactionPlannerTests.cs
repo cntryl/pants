@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class LeveledCompactionPlannerTests
 {
@@ -51,8 +53,10 @@ public sealed class LeveledCompactionPlannerTests
             null,
             false);
         var healthy = LeveledCompactionPlanner.Pick(
-            [File("healthy-1.sst", 0, 1, "a", "b", columnFamilyId: 1),
-             File("healthy-2.sst", 0, 2, "c", "d", columnFamilyId: 1)],
+            [
+                File("healthy-1.sst", 0, 1, "a", "b", columnFamilyId: 1),
+                File("healthy-2.sst", 0, 2, "c", "d", columnFamilyId: 1)
+            ],
             1,
             Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
             null,

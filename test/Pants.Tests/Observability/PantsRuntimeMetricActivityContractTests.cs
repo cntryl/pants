@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Observability;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsRuntimeMetricActivityContractTests
 {
@@ -10,17 +13,17 @@ public sealed class PantsRuntimeMetricActivityContractTests
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithTtlClock(clock));
-        await using var snapshot = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var snapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         clock.UtcNow += TimeSpan.FromSeconds(7);
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(7, metrics.OldestSnapshotAgeSeconds);
         clock.UtcNow -= TimeSpan.FromSeconds(5);
-        Assert.Equal(7, (await database.GetRuntimeMetricsAsync()).OldestSnapshotAgeSeconds);
+        Assert.Equal(7, (await database.Diagnostics.GetRuntimeMetricsAsync()).OldestSnapshotAgeSeconds);
     }
 
     [Fact]
@@ -31,8 +34,8 @@ public sealed class PantsRuntimeMetricActivityContractTests
         {
             for (var index = 0; index < 250; index++)
             {
-                await using var snapshot = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var snapshot = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadOnly);
             }
         });
@@ -40,7 +43,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         {
             for (var index = 0; index < 1_000; index++)
             {
-                var metrics = await database.GetRuntimeMetricsAsync();
+                var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
                 Assert.True(metrics.OldestSnapshotAgeSeconds >= 0);
             }
         });
@@ -69,7 +72,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             new RuntimeDependencies(
                 failpoint,
                 runtimeTimeProvider: timeProvider));
-        var family = await database.CreateColumnFamilyAsync("timed-stall");
+        var family = await database.ColumnFamilies.CreateAsync("timed-stall");
         var value = new byte[flushThresholdBytes - keyAndEntryOverheadBytes];
         try
         {
@@ -81,21 +84,21 @@ public sealed class PantsRuntimeMetricActivityContractTests
 
             timeProvider.Advance(TimeSpan.FromSeconds(3));
 
-            var active = await database.GetRuntimeMetricsAsync();
+            var active = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(3_000_000_000, active.WriteStallActiveNanoseconds);
             Assert.Equal(3_000_000_000, active.WriteStallNanosecondsTotal);
             Assert.Equal(3_000_000_000, active.WriteStallNanosecondsMaximum);
 
             timeProvider.Advance(TimeSpan.FromSeconds(-5));
-            var afterBackwardMovement = await database.GetRuntimeMetricsAsync();
+            var afterBackwardMovement = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(3_000_000_000, afterBackwardMovement.WriteStallActiveNanoseconds);
             Assert.Equal(3_000_000_000, afterBackwardMovement.WriteStallNanosecondsTotal);
             Assert.Equal(3_000_000_000, afterBackwardMovement.WriteStallNanosecondsMaximum);
 
             clock.UtcNow -= TimeSpan.FromSeconds(2);
             failpoint.Release();
-            Assert.True(await database.WaitForWriteStallClearAsync(family, AssertionTimeout));
-            var completed = await database.GetRuntimeMetricsAsync();
+            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, AssertionTimeout));
+            var completed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, completed.WriteStallActiveNanoseconds);
             Assert.Equal(3_000_000_000, completed.WriteStallNanosecondsTotal);
             Assert.Equal(3_000_000_000, completed.WriteStallNanosecondsMaximum);
@@ -127,20 +130,20 @@ public sealed class PantsRuntimeMetricActivityContractTests
             new RuntimeDependencies(
                 failpoint,
                 runtimeTimeProvider: timeProvider));
-        var family = await database.CreateColumnFamilyAsync("between-reads");
+        var family = await database.ColumnFamilies.CreateAsync("between-reads");
         var value = new byte[flushThresholdBytes - keyAndEntryOverheadBytes];
         try
         {
-            _ = await database.GetRuntimeMetricsAsync();
+            _ = await database.Diagnostics.GetRuntimeMetricsAsync();
             await CommitAsync(database, family, new byte[] { 1 }, value);
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
             await CommitAsync(database, family, new byte[] { 2 }, value);
 
             timeProvider.Advance(TimeSpan.FromSeconds(4));
             failpoint.Release();
-            Assert.True(await database.WaitForWriteStallClearAsync(family, AssertionTimeout));
+            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, AssertionTimeout));
 
-            var completed = await database.GetRuntimeMetricsAsync();
+            var completed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(4_000_000_000, completed.WriteStallNanosecondsTotal);
             Assert.Equal(4_000_000_000, completed.WriteStallNanosecondsMaximum);
         }
@@ -158,7 +161,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             Failpoint.BeforeCompactionManifestPublish);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -169,11 +172,11 @@ public sealed class PantsRuntimeMetricActivityContractTests
         Task<PantsRuntimeMetrics>? metricsRequest = null;
         try
         {
-            firstCompaction = database.CompactAllAsync().AsTask();
+            firstCompaction = database.Maintenance.CompactAllAsync().AsTask();
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
-            pendingCompaction = database.CompactAllAsync().AsTask();
+            pendingCompaction = database.Maintenance.CompactAllAsync().AsTask();
 
-            metricsRequest = database.GetRuntimeMetricsAsync().AsTask();
+            metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
             Assert.True(metricsRequest.IsCompleted);
             var metrics = await metricsRequest;
@@ -212,8 +215,8 @@ public sealed class PantsRuntimeMetricActivityContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("pending"u8.ToArray(), "value"u8.ToArray());
@@ -224,10 +227,10 @@ public sealed class PantsRuntimeMetricActivityContractTests
         Task<PantsRuntimeMetrics>? metricsRequest = null;
         try
         {
-            flush = database.FlushAsync(database.DefaultColumnFamily).AsTask();
+            flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 
-            metricsRequest = database.GetRuntimeMetricsAsync().AsTask();
+            metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
             Assert.True(metricsRequest.IsCompleted);
             Assert.Equal(1, (await metricsRequest).PendingCloudUploads);
@@ -266,14 +269,14 @@ public sealed class PantsRuntimeMetricActivityContractTests
             new RuntimeDependencies(failpoint));
         await CommitCloudAsync(database, "occupy-upload-queue");
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
-        await using var blocked = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var blocked = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
         var commit = blocked.CommitAsync(PantsWriteOptions.CloudAsync).AsTask();
         try
         {
-            var metrics = await database.GetRuntimeMetricsAsync();
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(1, metrics.WriteStallsCloudTotal);
             Assert.Equal(1, metrics.WriteStallsTotal);
         }
@@ -307,7 +310,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         try
         {
             await CommitCloudAsync(database, "second-upload");
-            var saturated = await database.GetRuntimeMetricsAsync();
+            var saturated = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(2, saturated.PendingCloudUploads);
             Assert.Equal(0, saturated.WriteStallsCloudTotal);
 
@@ -316,7 +319,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
                     .AsTask()
                     .WaitAsync(AssertionTimeout));
 
-            var stalled = await database.GetRuntimeMetricsAsync();
+            var stalled = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(2, stalled.PendingCloudUploads);
             Assert.Equal(1, stalled.WriteStallsCloudTotal);
             Assert.Equal(1, stalled.WriteStallsTotal);
@@ -330,7 +333,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         PantsRuntimeMetrics drained;
         do
         {
-            drained = await database.GetRuntimeMetricsAsync(timeout.Token);
+            drained = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
             if (drained.PendingCloudUploads != 0)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
@@ -350,24 +353,24 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-compaction-stall/")
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
         await CommitCloudAndFlushAsync(database, "first");
         await CommitCloudAndFlushAsync(database, "second");
-        await using var blocked = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var blocked = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
-        var compaction = database.CompactAllAsync().AsTask();
+        var compaction = database.Maintenance.CompactAllAsync().AsTask();
         Task? commit = null;
         try
         {
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
             commit = blocked.CommitAsync(PantsWriteOptions.CloudAsync).AsTask();
 
-            var metrics = await database.GetRuntimeMetricsAsync();
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(1, metrics.WriteStallsCompactionTotal);
             Assert.Equal(1, metrics.WriteStallsTotal);
         }
@@ -396,21 +399,21 @@ public sealed class PantsRuntimeMetricActivityContractTests
             new RuntimeDependencies(failpoint));
         var value = new byte[256 * 1024];
         new Random(17).NextBytes(value);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("evict"u8.ToArray(), value);
             await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
         }
 
-        var flush = database.FlushAsync(database.DefaultColumnFamily).AsTask();
+        var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
         Task<PantsRuntimeMetrics>? metricsRequest = null;
         try
         {
             await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
 
-            metricsRequest = database.GetRuntimeMetricsAsync().AsTask();
+            metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
             Assert.True(metricsRequest.IsCompleted);
             Assert.True((await metricsRequest).HybridPendingEvictions > 0);
@@ -425,7 +428,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             }
         }
 
-        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).HybridPendingEvictions);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridPendingEvictions);
     }
 
     static async ValueTask CommitAsync(
@@ -434,7 +437,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
@@ -443,18 +446,18 @@ public sealed class PantsRuntimeMetricActivityContractTests
 
     static async ValueTask CommitAndFlushAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static async ValueTask CommitCloudAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
@@ -463,6 +466,6 @@ public sealed class PantsRuntimeMetricActivityContractTests
     static async ValueTask CommitCloudAndFlushAsync(IPantsDatabase database, string key)
     {
         await CommitCloudAsync(database, key);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 }

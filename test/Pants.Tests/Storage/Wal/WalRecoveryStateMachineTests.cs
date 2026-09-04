@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class WalRecoveryStateMachineTests
 {

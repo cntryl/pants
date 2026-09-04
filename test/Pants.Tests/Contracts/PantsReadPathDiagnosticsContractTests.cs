@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsReadPathDiagnosticsContractTests
 {
@@ -8,8 +10,8 @@ public sealed class PantsReadPathDiagnosticsContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
 
-        var before = await database.GetReadPathDiagnosticsAsync();
-        var after = await database.GetReadPathDiagnosticsAsync();
+        var before = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+        var after = await database.Diagnostics.GetReadPathDiagnosticsAsync();
 
         Assert.Equal(before, after);
     }
@@ -20,8 +22,8 @@ public sealed class PantsReadPathDiagnosticsContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 400; index += 2)
@@ -32,16 +34,16 @@ public sealed class PantsReadPathDiagnosticsContractTests
             await writer.CommitAsync(PantsWriteOptions.BestEffort);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var observedReject = false;
         for (var index = 1; index < 399; index += 2)
         {
-            var before = await database.GetRuntimeMetricsAsync();
-            await using var reader = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            var before = await database.Diagnostics.GetRuntimeMetricsAsync();
+            await using var reader = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-{index:0000}")));
-            var after = await database.GetRuntimeMetricsAsync();
+            var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             if (after.SstBloomRejectsTotal <= before.SstBloomRejectsTotal)
             {
                 continue;

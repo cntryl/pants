@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstRangeHandleTests
 {
     [Fact]
     public void ShouldClassifyUnsupportedMetadataVersionAsCompatibilityFailure()
     {
-        var metadata = BuildMetadataBytes(offset: 0, size: 0);
+        var metadata = BuildMetadataBytes(0, 0);
         BinaryPrimitives.WriteUInt32LittleEndian(
             metadata,
             DiskFormat.SstFormatVersion + 1);
@@ -18,7 +18,7 @@ public sealed class PantsSstRangeHandleTests
     [Fact]
     public void ShouldRejectRangeHandleGivenOffsetZeroAndSizePositive()
     {
-        var metadata = BuildMetadataBytes(offset: 0, size: 16);
+        var metadata = BuildMetadataBytes(0, 16);
 
         Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeMetadata(metadata));
     }
@@ -26,7 +26,7 @@ public sealed class PantsSstRangeHandleTests
     [Fact]
     public void ShouldRejectRangeHandleGivenSizeZeroAndOffsetPositive()
     {
-        var metadata = BuildMetadataBytes(offset: 16, size: 0);
+        var metadata = BuildMetadataBytes(16, 0);
 
         Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeMetadata(metadata));
     }
@@ -34,7 +34,7 @@ public sealed class PantsSstRangeHandleTests
     [Fact]
     public void ShouldDecodeAbsentRangeHandleGivenOffsetAndSizeBothZero()
     {
-        var metadata = BuildMetadataBytes(offset: 0, size: 0);
+        var metadata = BuildMetadataBytes(0, 0);
 
         var decoded = SstCodec.DecodeMetadata(metadata);
 
@@ -44,7 +44,7 @@ public sealed class PantsSstRangeHandleTests
     [Fact]
     public void ShouldDecodePresentRangeHandleGivenOffsetAndSizeBothPositive()
     {
-        var metadata = BuildMetadataBytes(offset: 8, size: 16);
+        var metadata = BuildMetadataBytes(8, 16);
 
         var decoded = SstCodec.DecodeMetadata(metadata);
 

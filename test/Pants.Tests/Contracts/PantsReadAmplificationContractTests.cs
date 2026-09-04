@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsReadAmplificationContractTests
 {
@@ -9,7 +11,7 @@ public sealed class PantsReadAmplificationContractTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
 
         Assert.Equal(new PantsReadAmplificationMetrics(), metrics);
     }
@@ -21,8 +23,8 @@ public sealed class PantsReadAmplificationContractTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await FlushGenerationAsync(database, 0);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         for (var read = 0; read < 5; read++)
@@ -32,7 +34,7 @@ public sealed class PantsReadAmplificationContractTests
             Assert.Equal("value-00", TestBytes.ToText(value.Value));
         }
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(5, metrics.ReadsTotal);
         Assert.Equal(5, metrics.SstsTouchedTotal);
         Assert.Equal(5, metrics.L0SstsTouchedTotal);
@@ -56,14 +58,14 @@ public sealed class PantsReadAmplificationContractTests
             await FlushGenerationAsync(database, generation);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("hot-key"u8.ToArray());
         Assert.NotNull(value);
         Assert.Equal("value-10", TestBytes.ToText(value.Value));
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(1, metrics.ReadsTotal);
         Assert.Equal(11, metrics.SstsTouchedTotal);
         Assert.Equal(11, metrics.L0SstsTouchedTotal);
@@ -86,13 +88,13 @@ public sealed class PantsReadAmplificationContractTests
             await FlushGenerationAsync(database, generation);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal("value-02", TestBytes.ToText(
             Assert.IsType<ReadOnlyMemory<byte>>(await reader.GetAsync("hot-key"u8.ToArray()))));
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(1, metrics.ReadsTotal);
         Assert.Equal(3, metrics.SstsTouchedTotal);
         Assert.Equal(3, metrics.L0SstsTouchedTotal);
@@ -112,15 +114,15 @@ public sealed class PantsReadAmplificationContractTests
             await FlushGenerationAsync(database, generation);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         for (var read = 0; read < 10; read++)
         {
             Assert.NotNull(await reader.GetAsync("hot-key"u8.ToArray()));
         }
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(10, metrics.ReadsTotal);
         Assert.Equal(20, metrics.SstsTouchedTotal);
         Assert.Equal(20, metrics.L0SstsTouchedTotal);
@@ -141,14 +143,14 @@ public sealed class PantsReadAmplificationContractTests
             await FlushGenerationAsync(database, generation);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await reader.GetAsync("hot-key"u8.ToArray()));
 
         var amplification =
-            await database.GetReadAmplificationMetricsAsync();
-        var runtime = await database.GetRuntimeMetricsAsync();
+            await database.Diagnostics.GetReadAmplificationMetricsAsync();
+        var runtime = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, amplification.SstBudgetViolationsTotal);
         Assert.Equal(1, amplification.CompactionTriggersTotal);
         Assert.Equal(1, runtime.ReadAmplificationCompactionTriggersTotal);
@@ -157,13 +159,13 @@ public sealed class PantsReadAmplificationContractTests
 
     static async Task FlushGenerationAsync(IPantsDatabase database, int generation)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(
             "hot-key"u8.ToArray(),
             TestBytes.FromString($"value-{generation:D2}"));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 }

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class TransactionSpillHardeningTestHarnessTests
 {
@@ -18,7 +19,8 @@ public sealed class TransactionSpillHardeningTestHarnessTests
             stream.Write(payload);
         }
 
-        Assert.Throws<PantsCorruptionException>(() => TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
+        Assert.Throws<PantsCorruptionException>(() =>
+            TransactionSpillHardeningTestHarness.ReadWalFrames(directory.Path));
     }
 
     static byte[] CreateWalPayloadWithUnsupportedCompression()

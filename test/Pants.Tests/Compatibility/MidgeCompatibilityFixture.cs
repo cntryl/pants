@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Compatibility;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Compatibility;
 
 static class MidgeCompatibilityFixture
 {

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 static class TestBytes
 {

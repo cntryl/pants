@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudValidationTests
 {
@@ -8,7 +8,7 @@ public sealed class PantsCloudValidationTests
     public void ShouldReportEverySharedRoleOnceWithoutResolvingCredentials()
     {
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "valid-bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.SharedProfile(
@@ -21,7 +21,7 @@ public sealed class PantsCloudValidationTests
 
         Assert.True(report.IsValid);
         var finding = Assert.Single(report.Findings);
-        Assert.Equal(PantsCloudValidationProviderKind.AwsS3, finding.Provider);
+        Assert.Equal(PantsCloudProviderId.AwsS3, finding.Provider);
         Assert.True(
             finding.Roles.SequenceEqual(ImmutableArray.Create(
                 PantsCloudStorageRole.Wal,
@@ -40,7 +40,7 @@ public sealed class PantsCloudValidationTests
         const string accessKey = "ACCESS-SENSITIVE";
         const string secretKey = "SECRET-SENSITIVE";
         const string querySecret = "QUERY-SENSITIVE";
-        var provider = new PantsCloudProviderConfiguration.S3Compatible(
+        var provider = new PantsS3CompatibleProvider(
             "tenant/bucket",
             "region/path",
             new Uri($"https://user:{secretKey}@example.test/path?token={querySecret}"),
@@ -67,7 +67,7 @@ public sealed class PantsCloudValidationTests
     [InlineData("valid-bucket", "us-east-1/path")]
     public void ShouldRejectInvalidNativeAwsIdentifiers(string bucket, string region)
     {
-        var provider = new PantsCloudProviderConfiguration.AwsS3(
+        var provider = new PantsAwsS3Provider(
             bucket,
             region,
             new PantsS3CredentialSource.Environment());
@@ -81,7 +81,7 @@ public sealed class PantsCloudValidationTests
     public void ShouldRejectCloudPrefixDotSegments(string prefix)
     {
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "valid-bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.Environment()),
@@ -95,7 +95,7 @@ public sealed class PantsCloudValidationTests
     {
         const string accessKey = "OCI-ACCESS-SENSITIVE";
         const string secretKey = "OCI-SECRET-SENSITIVE";
-        var provider = new PantsCloudProviderConfiguration.OciObjectStorage(
+        var provider = new PantsOciObjectStorageProvider(
             "namespace",
             "bucket_name",
             "us-ashburn-1",
@@ -113,14 +113,14 @@ public sealed class PantsCloudValidationTests
         Assert.DoesNotContain(accessKey, rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(secretKey, rendered, StringComparison.Ordinal);
         Assert.Equal(
-            PantsCloudValidationProviderKind.OciObjectStorage,
+            PantsCloudProviderId.OciObjectStorage,
             Assert.Single(report.Findings).Provider);
     }
 
     [Fact]
     public void ShouldRejectAwsDefaultCredentialIdentityForOci()
     {
-        var provider = new PantsCloudProviderConfiguration.OciObjectStorage(
+        var provider = new PantsOciObjectStorageProvider(
             "namespace",
             "bucket",
             "us-ashburn-1",
@@ -133,7 +133,7 @@ public sealed class PantsCloudValidationTests
     [Fact]
     public void ShouldProvideValueEqualityForDeterministicReports()
     {
-        var provider = new PantsCloudProviderConfiguration.AwsS3(
+        var provider = new PantsAwsS3Provider(
             "valid-bucket",
             "us-east-1",
             new PantsS3CredentialSource.Environment());
@@ -145,12 +145,12 @@ public sealed class PantsCloudValidationTests
     [Fact]
     public void ShouldValidateAzureAndGcsProviderShapes()
     {
-        var azure = new PantsCloudProviderConfiguration.AzureBlob(
+        var azure = new PantsAzureBlobProvider(
             "account1",
             "container",
             null,
             new PantsAzureCredentialSource.LightweightDefaultChain());
-        var gcs = new PantsCloudProviderConfiguration.Gcs(
+        var gcs = new PantsGcsProvider(
             "gcs-bucket",
             "project",
             null,
@@ -164,10 +164,10 @@ public sealed class PantsCloudValidationTests
         Assert.False(invalidAzure.Validate().IsValid);
         Assert.False(invalidGcs.Validate().IsValid);
         Assert.Equal(
-            PantsCloudValidationProviderKind.AzureBlob,
+            PantsCloudProviderId.AzureBlob,
             Assert.Single(azure.Validate().Findings).Provider);
         Assert.Equal(
-            PantsCloudValidationProviderKind.Gcs,
+            PantsCloudProviderId.Gcs,
             Assert.Single(gcs.Validate().Findings).Provider);
     }
 }

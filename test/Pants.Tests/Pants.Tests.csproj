@@ -1,11 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <AssemblyName>Cntryl.Pants.Tests</AssemblyName>
-    <RootNamespace>Cntryl.Pants.Tests</RootNamespace>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="coverlet.collector"/>
     <PackageReference Include="Microsoft.Extensions.Configuration"/>
@@ -16,18 +10,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Using Include="Xunit"/>
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\..\bench\Pants.Benches\Cntryl.Pants.Benches.csproj"/>
+    <ProjectReference Include="..\..\src\Pants.Abstractions\Pants.Abstractions.csproj"/>
+    <ProjectReference Include="..\..\src\Pants.Core\Pants.Core.csproj"/>
     <ProjectReference Include="..\..\src\Pants.DependencyInjection\Pants.DependencyInjection.csproj"/>
-    <ProjectReference Include="..\..\src\Pants\Pants.csproj"/>
   </ItemGroup>
 
   <ItemGroup>
     <None Update="Fixtures/Compatibility/**/*" CopyToOutputDirectory="PreserveNewest"/>
-    <None Update="MidgeContractManifest.json" CopyToOutputDirectory="PreserveNewest"/>
     <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest"/>
   </ItemGroup>
 

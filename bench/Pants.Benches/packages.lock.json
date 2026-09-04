@@ -153,9 +153,13 @@
         "resolved": "4.7.0",
         "contentHash": "VybpaOQQhqE6siHppMktjfGBw1GCwvCqiufqmP8F1nj7fTUNtW35LOEt3UZTEsECfo+ELAl/9o9nJx3U91i7vA=="
       },
-      "Cntryl.Pants": {
+      "Cntryl.Pants.Abstractions": {
+        "type": "Project"
+      },
+      "Cntryl.Pants.Core": {
         "type": "Project",
         "dependencies": {
+          "Cntryl.Pants.Abstractions": "[1.0.0, )",
           "K4os.Compression.LZ4": "[1.3.8, )",
           "System.IO.Hashing": "[10.0.0, )",
           "ZstdSharp.Port": "[0.8.8, )"

@@ -1,6 +1,6 @@
 using Cntryl.Pants.Storage;
 
-namespace Cntryl.Pants.DependencyInjection.Options;
+namespace Cntryl.Pants.Options;
 
 /// <summary>Bindable host settings used to construct immutable database-open options.</summary>
 public sealed class PantsDatabaseOptions

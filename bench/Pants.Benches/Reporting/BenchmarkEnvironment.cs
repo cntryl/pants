@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class BenchmarkEnvironment
 {
@@ -39,7 +39,7 @@ static class BenchmarkEnvironment
         }
 
         return Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") ??
-            RuntimeInformation.ProcessArchitecture.ToString();
+               RuntimeInformation.ProcessArchitecture.ToString();
     }
 
     static string Run(string fileName, string arguments)

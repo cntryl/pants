@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class LocalDiskStoreRotationRecoveryTests
 {
@@ -38,8 +41,8 @@ public sealed class LocalDiskStoreRotationRecoveryTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("rotation-key"u8.ToArray());
         Assert.Equal(

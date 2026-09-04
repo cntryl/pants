@@ -1,11 +1,11 @@
-namespace Cntryl.Pants.Tests.Support.Failpoints;
+namespace Cntryl.Pants.Support.Failpoints;
 
 /// <summary>
-/// Blocks a background flush immediately before it builds its SST — the frozen generation is
-/// already tracked in <c>RuntimeState.ImmutableMemtableFlushes</c> at this point (freeze happens
-/// before this failpoint fires) and stays there for as long as the flush is blocked, so tests can
-/// observe genuinely in-flight immutable-generation state instead of a flush that has already
-/// completed and been released by the time metrics are sampled.
+///     Blocks a background flush immediately before it builds its SST — the frozen generation is
+///     already tracked in <c>RuntimeState.ImmutableMemtableFlushes</c> at this point (freeze happens
+///     before this failpoint fires) and stays there for as long as the flush is blocked, so tests can
+///     observe genuinely in-flight immutable-generation state instead of a flush that has already
+///     completed and been released by the time metrics are sampled.
 /// </summary>
 sealed class BlockingFlushBuildFailpointHandler : IFailpointHandler
 {

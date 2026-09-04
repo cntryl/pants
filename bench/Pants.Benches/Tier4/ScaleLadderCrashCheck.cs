@@ -1,18 +1,18 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using Cntryl.Pants.Storage;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 /// <summary>
-/// The crash/WAL-replay-recovery check the scale-ladder report advertises: a genuinely separate
-/// child process durably commits a batch of records (<see cref="PantsWriteOptions.Sync"/>, so
-/// the WAL write is acknowledged before this process could plausibly be considered "done" with
-/// it), signals readiness, and is then killed abruptly by the parent — an actual crash boundary,
-/// not merely a clean shutdown followed by reopen. The parent then reopens the same database
-/// fresh and verifies every committed record recovered correctly through WAL replay.
+///     The crash/WAL-replay-recovery check the scale-ladder report advertises: a genuinely separate
+///     child process durably commits a batch of records (<see cref="PantsWriteOptions.Sync" />, so
+///     the WAL write is acknowledged before this process could plausibly be considered "done" with
+///     it), signals readiness, and is then killed abruptly by the parent — an actual crash boundary,
+///     not merely a clean shutdown followed by reopen. The parent then reopens the same database
+///     fresh and verifies every committed record recovered correctly through WAL replay.
 /// </summary>
 static class ScaleLadderCrashCheck
 {
@@ -31,7 +31,7 @@ static class ScaleLadderCrashCheck
             readyPath);
 
         using var child = Process.Start(start) ??
-                           throw new InvalidOperationException("Could not start the crash-check child.");
+                          throw new InvalidOperationException("Could not start the crash-check child.");
         var standardError = child.StandardError.ReadToEndAsync();
 
         using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -69,8 +69,8 @@ static class ScaleLadderCrashCheck
 
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         for (var index = 0; index < recordCount; index++)
         {
@@ -82,7 +82,7 @@ static class ScaleLadderCrashCheck
         }
 
         return (true, $"{recordCount:N0} durably-committed records recovered correctly " +
-                       "after an abrupt process kill.");
+                      "after an abrupt process kill.");
     }
 
     public static async Task RunChildAsync(string databasePath, int recordCount, string readyMarkerPath)
@@ -91,8 +91,8 @@ static class ScaleLadderCrashCheck
         await using var database = await PantsDatabase.OpenAsync(options);
         for (var index = 0; index < recordCount; index++)
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(KeyFor(index), ValueFor(index));
             await transaction.CommitAsync(PantsWriteOptions.Sync);
@@ -150,7 +150,7 @@ static class ScaleLadderCrashCheck
         catch (InvalidOperationException)
         {
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
         }
         catch (NotSupportedException)

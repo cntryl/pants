@@ -1,6 +1,7 @@
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Abstractions;
 
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsStartupPhaseDiagnosticsTests(ITestOutputHelper output)
 {

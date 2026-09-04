@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.Failpoints;
+namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class BlockingHybridEvictionFailpointHandler : IFailpointHandler
 {
@@ -9,8 +9,6 @@ sealed class BlockingHybridEvictionFailpointHandler : IFailpointHandler
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     int _armed;
-
-    public void Arm() => Volatile.Write(ref _armed, 1);
 
     public void Hit(Failpoint failpoint)
     {
@@ -23,6 +21,8 @@ sealed class BlockingHybridEvictionFailpointHandler : IFailpointHandler
         _blocked.TrySetResult();
         _release.Task.GetAwaiter().GetResult();
     }
+
+    public void Arm() => Volatile.Write(ref _armed, 1);
 
     public Task WaitUntilBlockedAsync(TimeSpan timeout) => _blocked.Task.WaitAsync(timeout);
 

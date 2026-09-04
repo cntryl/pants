@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstReadPathTests
 {

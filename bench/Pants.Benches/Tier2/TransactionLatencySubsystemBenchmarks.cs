@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class TransactionLatencySubsystemBenchmarks : Tier2Benchmark
 {
@@ -36,8 +36,8 @@ public class TransactionLatencySubsystemBenchmarks : Tier2Benchmark
     {
         for (var index = 0; index < TransactionCount; index++)
         {
-            await using var transaction = await _database.BeginTransactionAsync(
-                _database.DefaultColumnFamily,
+            await using var transaction = await _database.Transactions.BeginAsync(
+                _database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
         }
     }

@@ -1,17 +1,17 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 public class MvccSystemBenchmarks : Tier3Benchmark
 {
     const int KeyCount = 50_000;
     const int ReadBatchSize = 64;
-    string _path = null!;
     IPantsDatabase _database = null!;
-    IPantsTransaction _snapshot = null!;
     byte[][] _keys = null!;
     int _nextKey;
+    string _path = null!;
+    IPantsTransaction _snapshot = null!;
 
     [Params(Tier3StorageMode.Local, Tier3StorageMode.SimulatedCloud)]
     public Tier3StorageMode StorageMode { get; set; }
@@ -26,8 +26,8 @@ public class MvccSystemBenchmarks : Tier3Benchmark
             _database,
             _keys.Select(key => (key, Tier3Data.Value(64, 1))),
             Tier3Database.WriteOptions(StorageMode));
-        _snapshot = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        _snapshot = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await Tier3Database.PutBatchAsync(
             _database,
@@ -63,8 +63,8 @@ public class MvccSystemBenchmarks : Tier3Benchmark
     [Benchmark]
     public async Task BeginReadOnlyTransactionAsync()
     {
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
     }
 }

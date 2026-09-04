@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Runtime.Internal;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class MemtableBenchmarks : Tier1Benchmark
 {

@@ -1,12 +1,13 @@
 <Solution>
   <Folder Name="/bench/">
-    <Project Path="bench/Pants.Benches/Cntryl.Pants.Benches.csproj" />
+    <Project Path="bench/Pants.Benches/Cntryl.Pants.Benches.csproj"/>
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/Pants.DependencyInjection/Pants.DependencyInjection.csproj" />
-    <Project Path="src/Pants/Pants.csproj" />
+    <Project Path="src/Pants.Abstractions/Pants.Abstractions.csproj"/>
+    <Project Path="src/Pants.Core/Pants.Core.csproj"/>
+    <Project Path="src/Pants.DependencyInjection/Pants.DependencyInjection.csproj"/>
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/Pants.Tests/Pants.Tests.csproj" />
+    <Project Path="test/Pants.Tests/Pants.Tests.csproj"/>
   </Folder>
 </Solution>

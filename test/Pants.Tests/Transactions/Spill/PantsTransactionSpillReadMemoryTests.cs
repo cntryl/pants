@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class PantsTransactionSpillReadMemoryTests
 {
@@ -21,8 +23,8 @@ public sealed class PantsTransactionSpillReadMemoryTests
             .WithTransactionMemoryPool(1_024 * 1_024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("scan:000"u8.ToArray(), "before-range"u8.ToArray());
         transaction.Put("scan:010"u8.ToArray(), "deleted-by-range"u8.ToArray());
@@ -125,8 +127,8 @@ public sealed class PantsTransactionSpillReadMemoryTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("retained:a"u8.ToArray(), "alpha"u8.ToArray());
         TransactionSpillHardeningTestHarness.Fill(transaction, "outside", 4);

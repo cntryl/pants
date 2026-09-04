@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class ChannelRuntimeServiceTests
 {

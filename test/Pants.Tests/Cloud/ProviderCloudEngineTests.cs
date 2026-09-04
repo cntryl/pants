@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class ProviderCloudEngineTests
 {
@@ -17,7 +19,7 @@ public sealed class ProviderCloudEngineTests
     {
         await using var context = await ProviderCloudTestContext.CreateAsync();
 
-        var columnFamily = await context.Database.CreateColumnFamilyAsync("orders");
+        var columnFamily = await context.Database.ColumnFamilies.CreateAsync("orders");
         await PutAsync(context.Database, columnFamily, "key", "value");
 
         Assert.Equal("value", await GetAsync(context.Database, columnFamily, "key"));
@@ -28,8 +30,8 @@ public sealed class ProviderCloudEngineTests
     {
         await using var context = await ProviderCloudTestContext.CreateAsync();
         await PutAsync(context.Database, "key", "value");
-        await using (var transaction = await context.Database.BeginTransactionAsync(
-                         context.Database.DefaultColumnFamily,
+        await using (var transaction = await context.Database.Transactions.BeginAsync(
+                         context.Database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Delete("key"u8.ToArray());
@@ -44,8 +46,8 @@ public sealed class ProviderCloudEngineTests
     {
         await using var context = await ProviderCloudTestContext.CreateAsync();
         await PutAsync(context.Database, "key", "first");
-        await using var snapshot = await context.Database.BeginTransactionAsync(
-            context.Database.DefaultColumnFamily,
+        await using var snapshot = await context.Database.Transactions.BeginAsync(
+            context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         await PutAsync(context.Database, "key", "second");
@@ -68,8 +70,8 @@ public sealed class ProviderCloudEngineTests
     public async Task ShouldReadOwnWriteGivenProviderCloudMode()
     {
         await using var context = await ProviderCloudTestContext.CreateAsync();
-        await using var transaction = await context.Database.BeginTransactionAsync(
-            context.Database.DefaultColumnFamily,
+        await using var transaction = await context.Database.Transactions.BeginAsync(
+            context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
@@ -83,8 +85,8 @@ public sealed class ProviderCloudEngineTests
         await using var context = await ProviderCloudTestContext.CreateAsync();
         await PutAsync(context.Database, "a", "one");
         await PutAsync(context.Database, "b", "two");
-        await using var transaction = await context.Database.BeginTransactionAsync(
-            context.Database.DefaultColumnFamily,
+        await using var transaction = await context.Database.Transactions.BeginAsync(
+            context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var keys = new List<string>();
@@ -100,13 +102,13 @@ public sealed class ProviderCloudEngineTests
     public async Task ShouldRejectSyncAndBufferedDurabilityGivenProviderCloudWrite()
     {
         await using var context = await ProviderCloudTestContext.CreateAsync();
-        await using var sync = await context.Database.BeginTransactionAsync(
-            context.Database.DefaultColumnFamily,
+        await using var sync = await context.Database.Transactions.BeginAsync(
+            context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         sync.Put("sync"u8.ToArray(), "value"u8.ToArray());
         await Assert.ThrowsAsync<PantsNotSupportedException>(() => sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
-        await using var buffered = await context.Database.BeginTransactionAsync(
-            context.Database.DefaultColumnFamily,
+        await using var buffered = await context.Database.Transactions.BeginAsync(
+            context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         buffered.Put("buffered"u8.ToArray(), "value"u8.ToArray());
 
@@ -115,7 +117,7 @@ public sealed class ProviderCloudEngineTests
     }
 
     static ValueTask PutAsync(IPantsDatabase database, string key, string value) =>
-        PutAsync(database, database.DefaultColumnFamily, key, value);
+        PutAsync(database, database.ColumnFamilies.DefaultFamily, key, value);
 
     static async ValueTask PutAsync(
         IPantsDatabase database,
@@ -123,7 +125,7 @@ public sealed class ProviderCloudEngineTests
         string key,
         string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
@@ -131,14 +133,14 @@ public sealed class ProviderCloudEngineTests
     }
 
     static ValueTask<string?> GetAsync(IPantsDatabase database, string key) =>
-        GetAsync(database, database.DefaultColumnFamily, key);
+        GetAsync(database, database.ColumnFamilies.DefaultFamily, key);
 
     static async ValueTask<string?> GetAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));

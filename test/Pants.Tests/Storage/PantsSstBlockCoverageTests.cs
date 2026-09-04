@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstBlockCoverageTests
 {
@@ -8,9 +8,9 @@ public sealed class PantsSstBlockCoverageTests
     public void ShouldRejectUnreferencedBytesBetweenSstBlocks()
     {
         var exception = Assert.Throws<StorageException>(() => Validate(
-            footerOffset: 21,
-            metadata: new SstBlockHandle(0, 10),
-            index: new SstBlockHandle(11, 10)));
+            21,
+            new SstBlockHandle(0, 10),
+            new SstBlockHandle(11, 10)));
 
         Assert.Equal("SST block references leave unreferenced bytes.", exception.Message);
     }
@@ -19,9 +19,9 @@ public sealed class PantsSstBlockCoverageTests
     public void ShouldRejectOverlappingSstBlocks()
     {
         var exception = Assert.Throws<StorageException>(() => Validate(
-            footerOffset: 19,
-            metadata: new SstBlockHandle(0, 10),
-            index: new SstBlockHandle(9, 10)));
+            19,
+            new SstBlockHandle(0, 10),
+            new SstBlockHandle(9, 10)));
 
         Assert.Equal("SST block references overlap.", exception.Message);
     }
@@ -30,9 +30,9 @@ public sealed class PantsSstBlockCoverageTests
     public void ShouldRejectSstBlocksThatDoNotExactlyReachFooter()
     {
         var exception = Assert.Throws<StorageException>(() => Validate(
-            footerOffset: 20,
-            metadata: new SstBlockHandle(0, 10),
-            index: new SstBlockHandle(10, 9)));
+            20,
+            new SstBlockHandle(0, 10),
+            new SstBlockHandle(10, 9)));
 
         Assert.Equal("SST block references do not exactly reach the footer.", exception.Message);
     }
@@ -57,9 +57,9 @@ public sealed class PantsSstBlockCoverageTests
             footerOffset,
             metadata,
             index,
-            trie: null,
-            bloom: null,
-            range: null,
+            null,
+            null,
+            null,
             []);
 
     static byte[] EncodeIndexEntry(ReadOnlySpan<byte> key, SstBlockHandle handle)

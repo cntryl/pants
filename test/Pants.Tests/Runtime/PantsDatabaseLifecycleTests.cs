@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsDatabaseLifecycleTests
 {
@@ -7,8 +7,8 @@ public sealed class PantsDatabaseLifecycleTests
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        var error = await Assert.ThrowsAnyAsync<PantsException>(() => database
-            .BeginTransactionAsync(database.DefaultColumnFamily, (PantsTransactionMode)int.MaxValue)
+        var error = await Assert.ThrowsAnyAsync<PantsException>(() => database.Transactions
+            .BeginAsync(database.ColumnFamilies.DefaultFamily, (PantsTransactionMode)int.MaxValue)
             .AsTask());
 
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
@@ -18,8 +18,8 @@ public sealed class PantsDatabaseLifecycleTests
     public async Task ShouldRejectInvalidConflictPolicy()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
 
         var error = Assert.ThrowsAny<PantsException>(() =>
@@ -32,8 +32,8 @@ public sealed class PantsDatabaseLifecycleTests
     public async Task ShouldRemainClosingWhenShutdownIsBlockedByTransaction()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var error = await Assert.ThrowsAsync<PantsBusyException>(() => database
@@ -42,10 +42,10 @@ public sealed class PantsDatabaseLifecycleTests
 
         Assert.Equal(PantsErrorCode.Busy, error.Code);
         await Assert.ThrowsAsync<PantsBusyException>(() => transaction.GetAsync("missing"u8.ToArray()).AsTask());
-        var independentBegin = Task.Run(async () => await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var independentBegin = Task.Run(async () => await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly));
-        var independentCreate = Task.Run(async () => await database.CreateColumnFamilyAsync(
+        var independentCreate = Task.Run(async () => await database.ColumnFamilies.CreateAsync(
             "closing-family"));
 
         await Assert.ThrowsAsync<PantsBusyException>(() => independentBegin);
@@ -53,8 +53,8 @@ public sealed class PantsDatabaseLifecycleTests
 
         await transaction.RollbackAsync();
         await database.ShutdownAsync(TimeSpan.FromSeconds(1));
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly)
             .AsTask());
     }

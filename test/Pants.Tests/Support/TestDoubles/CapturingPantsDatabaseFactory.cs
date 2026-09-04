@@ -1,6 +1,4 @@
-using Cntryl.Pants.DependencyInjection;
-
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class CapturingPantsDatabaseFactory : IPantsDatabaseFactory
 {

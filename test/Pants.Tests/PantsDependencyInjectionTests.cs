@@ -1,7 +1,7 @@
-using Cntryl.Pants.DependencyInjection;
+using Cntryl.Pants.Support.TestDoubles;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Cntryl.Pants.Tests;
+namespace Cntryl.Pants;
 
 public sealed class PantsDependencyInjectionTests
 {
@@ -59,7 +59,7 @@ public sealed class PantsDependencyInjectionTests
 
         await serviceProvider.DisposeAsync();
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]

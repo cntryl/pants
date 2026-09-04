@@ -1,6 +1,7 @@
 using System.Text.Json;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsSimulatedCloudTests
 {
@@ -9,8 +10,8 @@ public sealed class PantsSimulatedCloudTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("cloud/key"u8.ToArray(), "cloud/value"u8.ToArray());
 
@@ -38,7 +39,7 @@ public sealed class PantsSimulatedCloudTests
             "epochs",
             "00000000000000000001",
             "00000000000000000001.wal")));
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(3, metrics.WalCloudDurableSequence);
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
     }
@@ -49,8 +50,8 @@ public sealed class PantsSimulatedCloudTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("remote/key"u8.ToArray(), "remote/value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -59,8 +60,8 @@ public sealed class PantsSimulatedCloudTests
         RemoveLocalCache(directory.Path);
 
         await using var recovered = await OpenAsync(directory.Path);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("remote/key"u8.ToArray());
         Assert.Equal("remote/value", TestBytes.ToText(value!.Value));
@@ -71,15 +72,15 @@ public sealed class PantsSimulatedCloudTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("flush/key"u8.ToArray(), "flush/value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "cloud_store", "sst"), "*.sst"));
         Assert.True(File.Exists(Path.Combine(
@@ -99,8 +100,8 @@ public sealed class PantsSimulatedCloudTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);

@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsPersistenceBoundaryParityTests
 {
@@ -17,10 +19,10 @@ public sealed class PantsPersistenceBoundaryParityTests
             for (var index = 0; index < 3; index++)
             {
                 await PutAsync(database, $"key-{index}", $"value-{index}");
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
-            await Assert.ThrowsAnyAsync<PantsException>(() => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(
@@ -30,8 +32,8 @@ public sealed class PantsPersistenceBoundaryParityTests
             Assert.Equal($"value-{index}", await ReadAsync(reopened, $"key-{index}"));
         }
 
-        await reopened.CompactAllAsync();
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        await reopened.Maintenance.CompactAllAsync();
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Theory]
@@ -49,13 +51,13 @@ public sealed class PantsPersistenceBoundaryParityTests
         {
             await PutAsync(database, "key", "value");
             await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.FlushAsync(database.DefaultColumnFamily).AsTask());
+                database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.Equal("value", await ReadAsync(reopened, "key"));
-        await reopened.FlushAsync(reopened.DefaultColumnFamily);
+        await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
     }
 
     [Fact]
@@ -68,15 +70,15 @@ public sealed class PantsPersistenceBoundaryParityTests
                          new RuntimeDependencies(createHandler)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.CreateColumnFamilyAsync("failed-create").AsTask());
-            Assert.Null(await database.GetColumnFamilyAsync("failed-create"));
+                database.ColumnFamilies.CreateAsync("failed-create").AsTask());
+            Assert.Null(await database.ColumnFamilies.GetAsync("failed-create"));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        Assert.Null(await reopened.GetColumnFamilyAsync("failed-create"));
-        var retained = await reopened.CreateColumnFamilyAsync("retained");
-        await reopened.FlushAsync(retained);
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("failed-create"));
+        var retained = await reopened.ColumnFamilies.CreateAsync("retained");
+        await reopened.Maintenance.FlushAsync(retained);
     }
 
     [Theory]
@@ -92,12 +94,12 @@ public sealed class PantsPersistenceBoundaryParityTests
                          new RuntimeDependencies(handler)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.CreateColumnFamilyAsync("recovered-create").AsTask());
+                database.ColumnFamilies.CreateAsync("recovered-create").AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("recovered-create"));
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("recovered-create"));
     }
 
     [Fact]
@@ -106,8 +108,8 @@ public sealed class PantsPersistenceBoundaryParityTests
         using var directory = new TemporaryDirectory();
         await using var seed = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        var seeded = await seed.CreateColumnFamilyAsync("retained");
-        await using (var transaction = await seed.BeginTransactionAsync(
+        var seeded = await seed.ColumnFamilies.CreateAsync("retained");
+        await using (var transaction = await seed.Transactions.BeginAsync(
                          seeded,
                          PantsTransactionMode.ReadWrite))
         {
@@ -115,7 +117,7 @@ public sealed class PantsPersistenceBoundaryParityTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await seed.FlushAsync(seeded);
+        await seed.Maintenance.FlushAsync(seeded);
         await seed.DisposeAsync();
 
         var handler = new OneShotFailpointHandler(Failpoint.BeforeManifestJournalAppend);
@@ -124,9 +126,9 @@ public sealed class PantsPersistenceBoundaryParityTests
                          new RuntimeDependencies(handler)))
         {
             var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await database.GetColumnFamilyAsync("retained"));
-            await Assert.ThrowsAnyAsync<PantsException>(() => database.DropColumnFamilyAsync(family).AsTask());
-            await using var reader = await database.BeginTransactionAsync(
+                await database.ColumnFamilies.GetAsync("retained"));
+            await Assert.ThrowsAnyAsync<PantsException>(() => database.ColumnFamilies.DropAsync(family).AsTask());
+            await using var reader = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadOnly);
             Assert.Equal("value", TestBytes.ToText((await reader.GetAsync("key"u8.ToArray()))!.Value));
@@ -134,7 +136,7 @@ public sealed class PantsPersistenceBoundaryParityTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("retained"));
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("retained"));
     }
 
     [Theory]
@@ -178,8 +180,8 @@ public sealed class PantsPersistenceBoundaryParityTests
 
     static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Sync);
@@ -187,8 +189,8 @@ public sealed class PantsPersistenceBoundaryParityTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is null ? null : TestBytes.ToText(value.Value);

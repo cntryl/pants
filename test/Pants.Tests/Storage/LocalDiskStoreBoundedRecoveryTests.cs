@@ -1,12 +1,14 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 /// <summary>
-/// Slice 4a (issue #219): normal recovery loads/validates manifest-SST metadata via bounded
-/// positional reads (<see cref="SstReader.Open"/>) and replays only WAL mutations above the
-/// manifest's durable per-family frontier — it must not decode every published SST's data
-/// blocks. Strict-mode footer/metadata/index/checksum validation must still work without that
-/// whole-corpus hydration; a corrupted *data block* is an explicitly deferred detection,
-/// surfaced by the first read that touches it rather than by recovery itself.
+///     Slice 4a (issue #219): normal recovery loads/validates manifest-SST metadata via bounded
+///     positional reads (<see cref="SstReader.Open" />) and replays only WAL mutations above the
+///     manifest's durable per-family frontier — it must not decode every published SST's data
+///     blocks. Strict-mode footer/metadata/index/checksum validation must still work without that
+///     whole-corpus hydration; a corrupted *data block* is an explicitly deferred detection,
+///     surfaced by the first read that touches it rather than by recovery itself.
 /// </summary>
 public sealed class LocalDiskStoreBoundedRecoveryTests
 {
@@ -24,7 +26,7 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
                 await PutAsync(database, $"key-{index:D4}", new string('v', 4096) + index);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         CorruptFirstSstDataByte(directory.Path);
@@ -33,8 +35,8 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
         // — as opposed to a corrupted footer/metadata/index/whole-file-checksum mismatch — does
         // not fail Open.
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         // A key in an untouched block is unaffected — recovery, and the point read resolving
@@ -45,8 +47,7 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
         // The corruption in the first block is deferred, not silently ignored: it surfaces as a
         // corruption error at the first read that actually touches that block, per the issue's
         // explicitly allowed "detectable by ... the first affected read" boundary.
-        await Assert.ThrowsAsync<StorageException>(
-            () => reader.GetAsync(TestBytes.FromString("key-0000")).AsTask());
+        await Assert.ThrowsAsync<StorageException>(() => reader.GetAsync(TestBytes.FromString("key-0000")).AsTask());
     }
 
     [Fact]
@@ -56,7 +57,7 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
         await using (var database = await OpenAsync(directory.Path))
         {
             await PutAsync(database, "key", "value");
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         CorruptSstFooter(directory.Path);
@@ -74,7 +75,7 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
         await using (var database = await OpenAsync(directory.Path))
         {
             await PutAsync(database, "flushed", "from-sst");
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await PutAsync(database, "unflushed", "from-wal");
         }
 
@@ -89,8 +90,8 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
 
     static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -98,8 +99,8 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;

@@ -2,8 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class S3ObjectStoreTests
 {
@@ -18,7 +19,10 @@ public sealed class S3ObjectStoreTests
             Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
             return new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Content = new ByteArrayContent("cde"u8.ToArray())
+                {
+                    Headers = { ContentRange = new ContentRangeHeaderValue(2, 4, 10) }
+                },
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             };
         });
@@ -43,7 +47,7 @@ public sealed class S3ObjectStoreTests
         using var client = new HttpClient(handler);
         const string secret = "do-not-log-this-secret";
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.S3Compatible(
+            new PantsS3CompatibleProvider(
                 "bucket",
                 "us-test-1",
                 new Uri("https://objects.example.test/base"),
@@ -57,7 +61,7 @@ public sealed class S3ObjectStoreTests
         var replaced = await store.PutAsync(
             "metadata/manifest.json",
             "next"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectWriteCondition.IfVersion("\"v1\""),
             CancellationToken.None);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
@@ -86,7 +90,7 @@ public sealed class S3ObjectStoreTests
         });
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.StaticCredentials("access", "secret")),
@@ -118,7 +122,7 @@ public sealed class S3ObjectStoreTests
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
             "metadata/manifest.json",
             "replacement"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectWriteCondition.IfVersion("\"v1\""),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -145,7 +149,7 @@ public sealed class S3ObjectStoreTests
 
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
             "metadata/manifest.json",
-            new CloudObjectDeleteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectDeleteCondition.IfVersion("\"v1\""),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -176,7 +180,7 @@ public sealed class S3ObjectStoreTests
         const string accessKey = "access";
         const string secretKey = "secret";
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 bucket,
                 "us-east-1",
                 new PantsS3CredentialSource.StaticCredentials(accessKey, secretKey)),
@@ -203,7 +207,7 @@ public sealed class S3ObjectStoreTests
         using var client = new HttpClient(handler);
         const string secret = "oci-sensitive-secret";
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.OciObjectStorage(
+            new PantsOciObjectStorageProvider(
                 "namespace",
                 "bucket",
                 "us-ashburn-1",
@@ -238,7 +242,7 @@ public sealed class S3ObjectStoreTests
         });
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.StaticCredentials("access", "secret")),
@@ -292,12 +296,12 @@ public sealed class S3ObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("""
-                <ListBucketResult>
-                  <Contents><Key>database/sst/inside.sst</Key></Contents>
-                  <Contents><Key>foreign/sst/outside.sst</Key></Contents>
-                  <IsTruncated>false</IsTruncated>
-                </ListBucketResult>
-                """)
+                                        <ListBucketResult>
+                                          <Contents><Key>database/sst/inside.sst</Key></Contents>
+                                          <Contents><Key>foreign/sst/outside.sst</Key></Contents>
+                                          <IsTruncated>false</IsTruncated>
+                                        </ListBucketResult>
+                                        """)
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, "database");
@@ -352,7 +356,7 @@ public sealed class S3ObjectStoreTests
         var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
         var outcome = await store.DeleteAsync(
             "sst/object.sst",
-            new CloudObjectDeleteCondition.IfVersion("\"v12\""),
+            new PantsCloudObjectDeleteCondition.IfVersion("\"v12\""),
             CancellationToken.None);
 
         Assert.Equal(12UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
@@ -363,7 +367,7 @@ public sealed class S3ObjectStoreTests
     }
 
     [Fact]
-    public void ShouldResolveSharedProfileAndRouteEveryS3ProviderVariant()
+    public async Task ShouldResolveSharedProfileAndRouteEveryS3ProviderVariant()
     {
         using var directory = new TemporaryDirectory();
         var credentialsPath = Path.Combine(directory.Path, "credentials");
@@ -371,13 +375,13 @@ public sealed class S3ObjectStoreTests
             credentialsPath,
             "[qualification]\naws_access_key_id = profile-access\naws_secret_access_key = profile-secret\n");
         using var client = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
-        PantsCloudProviderConfiguration[] providers =
+        IPantsCloudProvider[] providers =
         [
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.SharedProfile("qualification", credentialsPath)),
-            new PantsCloudProviderConfiguration.S3Compatible(
+            new PantsS3CompatibleProvider(
                 "bucket",
                 "us-east-1",
                 new Uri("https://objects.example.test"),
@@ -385,15 +389,18 @@ public sealed class S3ObjectStoreTests
                 new PantsS3CredentialSource.SharedProfile("qualification", credentialsPath))
         ];
 
-        Assert.All(providers, provider => Assert.IsType<S3ObjectStore>(
-            CloudObjectStoreFactory.Create(
+        foreach (var provider in providers)
+        {
+            await using var store = await CloudObjectStoreFactory.CreateAsync(
                 new PantsCloudStorageLocation(provider, "prefix"),
                 TimeSpan.FromSeconds(5),
-                client)));
+                client);
+            Assert.IsType<S3ObjectStore>(store);
+        }
     }
 
     static S3ObjectStore CreateStore(HttpClient client, string prefix) => new(
-        new PantsCloudProviderConfiguration.S3Compatible(
+        new PantsS3CompatibleProvider(
             "bucket",
             "us-test-1",
             new Uri("https://objects.example.test/base"),

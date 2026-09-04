@@ -1,0 +1,13 @@
+<Project>
+  <Import Project="../Directory.Build.props"/>
+
+  <PropertyGroup>
+    <AssemblyName>Cntryl.$(MSBuildProjectName)</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit"/>
+  </ItemGroup>
+</Project>

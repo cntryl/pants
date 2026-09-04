@@ -3,8 +3,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class AzureBlobObjectStoreTests
 {
@@ -16,13 +17,16 @@ public sealed class AzureBlobObjectStoreTests
             Assert.Equal("bytes=2-4", request.Headers.Range?.ToString());
             return new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent("cde"u8.ToArray()),
+                Content = new ByteArrayContent("cde"u8.ToArray())
+                {
+                    Headers = { ContentRange = new ContentRangeHeaderValue(2, 4, 10) }
+                },
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             };
         });
         using var client = new HttpClient(handler);
         var store = new AzureBlobObjectStore(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -48,7 +52,7 @@ public sealed class AzureBlobObjectStoreTests
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
         using var client = new HttpClient(handler);
         var store = new AzureBlobObjectStore(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test/account"),
@@ -63,7 +67,7 @@ public sealed class AzureBlobObjectStoreTests
         var replaced = await store.PutAsync(
             PantsCloudObjectLayout.LeaseObjectKey,
             "next"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectWriteCondition.IfVersion("\"v1\""),
             CancellationToken.None);
 
         Assert.NotNull(value);
@@ -87,7 +91,7 @@ public sealed class AzureBlobObjectStoreTests
         using var client = new HttpClient(handler);
         const string secret = "c2VjcmV0LWtleQ==";
         var store = new AzureBlobObjectStore(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 null,
@@ -99,7 +103,7 @@ public sealed class AzureBlobObjectStoreTests
         Assert.True(await store.PutAsync(
             "metadata/manifest.json",
             "{}"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
 
         var request = Assert.Single(handler.Requests);
@@ -116,7 +120,7 @@ public sealed class AzureBlobObjectStoreTests
         const string account = "account";
         const string secret = "c2VjcmV0LWtleQ==";
         var store = new AzureBlobObjectStore(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 account,
                 "container",
                 null,
@@ -128,12 +132,12 @@ public sealed class AzureBlobObjectStoreTests
         Assert.True(await store.PutAsync(
             "metadata/create.json",
             "create"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
         Assert.True(await store.PutAsync(
             "metadata/update.json",
             "update"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectWriteCondition.IfVersion("\"v1\""),
             CancellationToken.None));
 
         Assert.Collection(
@@ -163,18 +167,18 @@ public sealed class AzureBlobObjectStoreTests
     }
 
     [Fact]
-    public void ShouldSelectAzureClientGivenProviderLocation()
+    public async Task ShouldSelectAzureClientGivenProviderLocation()
     {
         using var client = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
                 new PantsAzureCredentialSource.SasToken("sig=value")),
             "database");
 
-        var store = CloudObjectStoreFactory.Create(
+        await using var store = await CloudObjectStoreFactory.CreateAsync(
             location,
             TimeSpan.FromSeconds(5),
             client);
@@ -215,7 +219,7 @@ public sealed class AzureBlobObjectStoreTests
             });
         using var client = new HttpClient(handler);
         var store = new AzureBlobObjectStore(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -250,7 +254,7 @@ public sealed class AzureBlobObjectStoreTests
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
             "metadata/manifest.json",
             "replacement"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectWriteCondition.IfVersion("\"v1\""),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -277,7 +281,7 @@ public sealed class AzureBlobObjectStoreTests
 
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
             "metadata/manifest.json",
-            new CloudObjectDeleteCondition.IfVersion("\"v1\""),
+            new PantsCloudObjectDeleteCondition.IfVersion("\"v1\""),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -324,14 +328,14 @@ public sealed class AzureBlobObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("""
-                <EnumerationResults>
-                  <Blobs>
-                    <Blob><Name>database/sst/inside.sst</Name></Blob>
-                    <Blob><Name>foreign/sst/outside.sst</Name></Blob>
-                  </Blobs>
-                  <NextMarker />
-                </EnumerationResults>
-                """)
+                                        <EnumerationResults>
+                                          <Blobs>
+                                            <Blob><Name>database/sst/inside.sst</Name></Blob>
+                                            <Blob><Name>foreign/sst/outside.sst</Name></Blob>
+                                          </Blobs>
+                                          <NextMarker />
+                                        </EnumerationResults>
+                                        """)
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, "database");
@@ -358,7 +362,7 @@ public sealed class AzureBlobObjectStoreTests
         var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
         var outcome = await store.DeleteAsync(
             "sst/object.sst",
-            new CloudObjectDeleteCondition.IfVersion("\"v9\""),
+            new PantsCloudObjectDeleteCondition.IfVersion("\"v9\""),
             CancellationToken.None);
 
         Assert.Equal(9UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
@@ -369,7 +373,7 @@ public sealed class AzureBlobObjectStoreTests
     }
 
     static AzureBlobObjectStore CreateStore(HttpClient client, string prefix) => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "account",
             "container",
             new Uri("https://storage.example.test/account"),

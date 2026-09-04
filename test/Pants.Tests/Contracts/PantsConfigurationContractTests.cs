@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Contracts;
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsConfigurationContractTests
 {
@@ -9,18 +9,20 @@ public sealed class PantsConfigurationContractTests
         var options = PantsOpenOptions.InMemory()
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+        var plan = RuntimePlan.Resolve(options);
 
-        Assert.Equal(budget, options.MemoryBudgetBytes);
-        Assert.True(2 * options.MemtableSizeLimitBytes + options.TransactionMemoryPoolBytes <= budget);
-        Assert.True(options.BlockCacheBytes <= budget);
+        Assert.Equal(budget, plan.MemoryBudgetBytes);
+        Assert.True(2 * plan.MemtableSizeLimitBytes + plan.TransactionMemoryPoolBytes <= budget);
+        Assert.True(plan.BlockCacheBytes <= budget);
     }
 
     [Fact]
     public void ShouldRejectInvalidMemoryAndTimeoutConfiguration()
     {
-        var memoryError = Assert.ThrowsAny<PantsException>(() => PantsOpenOptions
-            .InMemory()
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(2)));
+        var memoryError = Assert.ThrowsAny<PantsException>(() =>
+            PantsOpenOptionsValidator.Validate(PantsOpenOptions
+                .InMemory()
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(2))));
         var timeoutError = Assert.ThrowsAny<PantsException>(() => PantsOpenOptions
             .InMemory()
             .WithStorageTimeout(TimeSpan.Zero));
@@ -36,13 +38,13 @@ public sealed class PantsConfigurationContractTests
     {
         var credentials = new PantsS3CredentialSource.Environment();
         var wal = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3("wal", "us-east-1", credentials),
+            new PantsAwsS3Provider("wal", "us-east-1", credentials),
             "database-a");
         var sst = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3("sst", "us-east-1", credentials),
+            new PantsAwsS3Provider("sst", "us-east-1", credentials),
             "database-a");
         var control = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3("control", "us-east-1", credentials),
+            new PantsAwsS3Provider("control", "us-east-1", credentials),
             "database-a");
         var topology = PantsCloudStorageTopology.Shared(wal)
             .WithSst(sst)
@@ -50,11 +52,11 @@ public sealed class PantsConfigurationContractTests
         var options = PantsOpenOptions.CloudMulti("./cache", topology);
 
         var storage = Assert.IsType<PantsStorageConfiguration.Cloud>(options.Storage);
-        Assert.Equal("wal", Assert.IsType<PantsCloudProviderConfiguration.AwsS3>(storage.Topology.Wal.Provider).Bucket);
-        Assert.Equal("sst", Assert.IsType<PantsCloudProviderConfiguration.AwsS3>(storage.Topology.Sst.Provider).Bucket);
+        Assert.Equal("wal", Assert.IsType<PantsAwsS3Provider>(storage.Topology.Wal.Provider).Bucket);
+        Assert.Equal("sst", Assert.IsType<PantsAwsS3Provider>(storage.Topology.Sst.Provider).Bucket);
         Assert.Equal(
             "control",
-            Assert.IsType<PantsCloudProviderConfiguration.AwsS3>(storage.Topology.Control.Provider).Bucket);
+            Assert.IsType<PantsAwsS3Provider>(storage.Topology.Control.Provider).Bucket);
     }
 
     [Fact]

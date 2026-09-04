@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class LegacyWalSegmentNamingRecoveryTests
 {
@@ -32,8 +34,8 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("legacy-key"u8.ToArray());
         Assert.Equal(

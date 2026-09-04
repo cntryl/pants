@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace Cntryl.Pants.Tests.Observability;
+namespace Cntryl.Pants.Observability;
 
 sealed class RuntimeMeterMeasurements : IDisposable
 {

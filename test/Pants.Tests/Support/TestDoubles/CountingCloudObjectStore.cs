@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class CountingCloudObjectStore : ICloudObjectStore
 {
@@ -42,9 +42,9 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         var exists = _objects.TryGetValue(objectKey, out var current);
         var accepted = condition switch
         {
-            CloudObjectWriteCondition.Unconditional => true,
-            CloudObjectWriteCondition.IfAbsent => !exists,
-            CloudObjectWriteCondition.IfVersion expected =>
+            PantsCloudObjectWriteCondition.Unconditional => true,
+            PantsCloudObjectWriteCondition.IfAbsent => !exists,
+            PantsCloudObjectWriteCondition.IfVersion expected =>
                 exists && StringComparer.Ordinal.Equals(expected.Version, current.Version),
             _ => false
         };
@@ -82,7 +82,7 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
             return ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
         }
 
-        if (condition is CloudObjectDeleteCondition.IfVersion expected &&
+        if (condition is PantsCloudObjectDeleteCondition.IfVersion expected &&
             !StringComparer.Ordinal.Equals(expected.Version, current.Version))
         {
             return ValueTask.FromResult(CloudObjectDeleteOutcome.ConditionNotMet);

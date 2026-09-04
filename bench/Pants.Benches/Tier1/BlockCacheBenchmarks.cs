@@ -2,7 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage;
 using Cntryl.Pants.Storage.Internal.Cache;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class BlockCacheBenchmarks : Tier1Benchmark
 {
@@ -10,8 +10,8 @@ public class BlockCacheBenchmarks : Tier1Benchmark
     SstBlockCache _cache = null!;
     SstBlockCacheKey _hitKey;
     SstBlockCacheKey _missKey;
-    SstBlockCacheKey[] _writeKeys = null!;
     int _nextBlock;
+    SstBlockCacheKey[] _writeKeys = null!;
 
     [GlobalSetup]
     public void Setup()

@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Storage;
+using System.Globalization;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class FileLeaseTests
 {
@@ -22,7 +25,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: TimeSpan.FromSeconds(60)));
+            TimeSpan.FromSeconds(60)));
 
         await WriteLeaseRecordAsync(
             directory.Path,
@@ -36,7 +39,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: TimeSpan.FromSeconds(60)));
+            TimeSpan.FromSeconds(60)));
 
         clock.UtcNow += TimeSpan.FromTicks(1);
         using var lease = FileLease.Acquire(
@@ -46,7 +49,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: TimeSpan.FromSeconds(60));
+            TimeSpan.FromSeconds(60));
 
         Assert.Equal(6UL, lease.Epoch);
     }
@@ -71,7 +74,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: ttl));
+            ttl));
 
         clock.UtcNow += TimeSpan.FromTicks(1);
         using var lease = FileLease.Acquire(
@@ -81,7 +84,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: ttl);
+            ttl);
 
         Assert.Equal(18UL, lease.Epoch);
     }
@@ -104,7 +107,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: TimeSpan.FromMinutes(2)));
+            TimeSpan.FromMinutes(2)));
     }
 
     [Fact]
@@ -120,7 +123,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: ttl);
+            ttl);
         await WriteLeaseRecordAsync(
             directory.Path,
             first.Epoch,
@@ -133,7 +136,7 @@ public sealed class FileLeaseTests
             null,
             LongHeartbeatInterval,
             clock,
-            leaseTimeToLive: ttl);
+            ttl);
 
         Assert.False(first.RenewForTesting());
         Assert.Throws<PantsFencedException>(first.EnsureValid);
@@ -306,7 +309,7 @@ public sealed class FileLeaseTests
             var parts = line.Split(": ", 2);
             if (parts.Length == 2 && parts[0] == "epoch")
             {
-                return ulong.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
+                return ulong.Parse(parts[1], CultureInfo.InvariantCulture);
             }
         }
 

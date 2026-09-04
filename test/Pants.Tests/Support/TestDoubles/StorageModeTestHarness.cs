@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 static class StorageModeTestHarness
 {
@@ -20,8 +20,8 @@ static class StorageModeTestHarness
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
         await transaction.CommitAsync(GetWriteOptions(mode));
@@ -38,8 +38,8 @@ static class StorageModeTestHarness
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(key);
     }

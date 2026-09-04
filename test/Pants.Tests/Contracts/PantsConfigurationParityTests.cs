@@ -1,19 +1,20 @@
-namespace Cntryl.Pants.Tests.Contracts;
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsConfigurationParityTests
 {
     [Fact]
     public void ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder()
     {
-        var defaults = PantsOpenOptions.Local("relative-database");
-        var first = defaults
+        var defaultOptions = PantsOpenOptions.Local("relative-database");
+        var defaults = RuntimePlan.Resolve(defaultOptions);
+        var first = RuntimePlan.Resolve(defaultOptions
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy)
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128L * 1024 * 1024));
-        var second = defaults
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128L * 1024 * 1024)));
+        var second = RuntimePlan.Resolve(defaultOptions
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(128L * 1024 * 1024))
             .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy)
-            .WithPerformanceGoal(PantsPerformanceGoal.Throughput);
+            .WithPerformanceGoal(PantsPerformanceGoal.Throughput));
 
         Assert.Equal(PantsPerformanceGoal.Latency, defaults.PerformanceGoal);
         Assert.Equal(PantsWorkloadProfile.Mixed, defaults.WorkloadProfile);
@@ -28,28 +29,28 @@ public sealed class PantsConfigurationParityTests
         Assert.Equal(first.L0CompactionTrigger, second.L0CompactionTrigger);
         Assert.Equal(
             "relative-database",
-            Assert.IsType<PantsStorageConfiguration.Local>(defaults.Storage).Path);
+            Assert.IsType<PantsStorageConfiguration.Local>(defaultOptions.Storage).Path);
     }
 
     [Fact]
     public void ShouldDeriveDistinctWorkloadAndPerformanceProfilesWithinTheBudget()
     {
         const long budget = 1024L * 1024 * 1024;
-        var latency = PantsOpenOptions.InMemory()
+        var latency = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Latency)
-            .WithWorkloadProfile(PantsWorkloadProfile.ReadMostly);
-        var throughput = PantsOpenOptions.InMemory()
+            .WithWorkloadProfile(PantsWorkloadProfile.ReadMostly));
+        var throughput = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
-            .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy);
-        var rangeScan = PantsOpenOptions.InMemory()
+            .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy));
+        var rangeScan = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
-            .WithWorkloadProfile(PantsWorkloadProfile.RangeScan);
-        var economy = PantsOpenOptions.InMemory()
+            .WithWorkloadProfile(PantsWorkloadProfile.RangeScan));
+        var economy = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
-            .WithPerformanceGoal(PantsPerformanceGoal.Economy);
+            .WithPerformanceGoal(PantsPerformanceGoal.Economy));
 
         Assert.True(latency.MemtableSizeLimitBytes < throughput.MemtableSizeLimitBytes);
         Assert.True(latency.BlockSizeBytes < rangeScan.BlockSizeBytes);
@@ -73,8 +74,8 @@ public sealed class PantsConfigurationParityTests
     [InlineData(131_072)]
     public void ShouldAccountForEveryPoolWithinSmallExplicitBudgets(long budget)
     {
-        var options = PantsOpenOptions.InMemory()
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+        var options = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget)));
 
         Assert.Equal(budget, options.MemoryBudgetBytes);
         Assert.True(options.TransactionMemoryPoolBytes > 0);
@@ -91,8 +92,8 @@ public sealed class PantsConfigurationParityTests
     [Fact]
     public void ShouldAllocateTenPercentOfExplicitBudgetToTransactionsByDefault()
     {
-        var options = PantsOpenOptions.InMemory()
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(1_000));
+        var options = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(1_000)));
 
         Assert.Equal(100, options.TransactionMemoryPoolBytes);
     }
@@ -100,13 +101,13 @@ public sealed class PantsConfigurationParityTests
     [Fact]
     public void ShouldValidateEveryExplicitConfigurationBoundary()
     {
-        var valid = PantsOpenOptions.InMemory()
+        var valid = RuntimePlan.Resolve(PantsOpenOptions.InMemory()
             .WithStorageTimeout(TimeSpan.FromMilliseconds(1))
             .WithTransactionMemoryPool(1024)
             .WithMemtableLimits(2048, 1024)
             .WithWalBufferSize(4096)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(8192))
-            .WithBlockCachePolicy(PantsBlockCachePolicy.TinyLfu);
+            .WithBlockCachePolicy(PantsBlockCachePolicy.TinyLfu));
 
         Assert.Equal(TimeSpan.FromMilliseconds(1), valid.StorageTimeout);
         Assert.Equal(1024, valid.TransactionMemoryPoolBytes);
@@ -118,9 +119,10 @@ public sealed class PantsConfigurationParityTests
             .WithStorageTimeout(TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond - 1)));
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
             .WithStorageTimeout(TimeSpan.Zero));
-        Assert.Throws<PantsResourceLimitException>(() => PantsOpenOptions.InMemory()
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(1024))
-            .WithTransactionMemoryPool(1025));
+        Assert.Throws<PantsResourceLimitException>(() => RuntimePlan.Resolve(
+            PantsOpenOptions.InMemory()
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(1024))
+                .WithTransactionMemoryPool(1025)));
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
             .WithMemtableLimits(1024, 1025));
         Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions.InMemory()
@@ -130,11 +132,12 @@ public sealed class PantsConfigurationParityTests
     [Fact]
     public void ShouldExposeOneValidatedLeaseTimingProfile()
     {
-        var defaults = PantsOpenOptions.InMemory();
-        var explicitProfile = defaults
+        var defaultOptions = PantsOpenOptions.InMemory();
+        var defaults = RuntimePlan.Resolve(defaultOptions);
+        var explicitProfile = RuntimePlan.Resolve(defaultOptions
             .WithLeaseClockSkewTolerance(TimeSpan.FromSeconds(1))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(10));
-        var maximum = defaults.WithLeaseTimeToLive(TimeSpan.MaxValue);
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(10)));
+        var maximum = RuntimePlan.Resolve(defaultOptions.WithLeaseTimeToLive(TimeSpan.MaxValue));
 
         Assert.Equal(TimeSpan.FromSeconds(30), defaults.LeaseTimeToLive);
         Assert.Equal(TimeSpan.FromSeconds(10), defaults.LeaseHeartbeatInterval);

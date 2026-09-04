@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalLogicalByteMetricsTests
 {
@@ -86,7 +88,7 @@ public sealed class PantsWalLogicalByteMetricsTests
         Assert.Equal(expectedBytes, verification.WalRecoveryBytesReplayed);
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        var recovery = await reopened.GetRecoveryMetricsAsync();
+        var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
         Assert.Equal(expectedRecords, recovery.WalRecordsReplayed);
         Assert.Equal(expectedBytes, recovery.WalBytesReplayed);
     }

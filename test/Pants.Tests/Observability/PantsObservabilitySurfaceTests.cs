@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Observability;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsObservabilitySurfaceTests
 {
@@ -12,8 +14,8 @@ public sealed class PantsObservabilitySurfaceTests
         await using (var database = await PantsDatabase.OpenAsync(
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false)))
         {
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.Put("alpha"u8.ToArray(), "value-alpha"u8.ToArray());
@@ -21,10 +23,10 @@ public sealed class PantsObservabilitySurfaceTests
                 await transaction.CommitAsync(PantsWriteOptions.Sync);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
-            metrics = await database.GetRuntimeMetricsAsync();
-            layout = await database.GetStorageLayoutAsync();
-            online = await database.VerifyStorageAsync(TimeSpan.FromSeconds(5));
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+            layout = await database.Diagnostics.GetStorageLayoutAsync();
+            online = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
         }
 
         var offline = await PantsDatabase.VerifyPathAsync(directory.Path);

@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsStorageModeBehaviorTests
 {
@@ -12,7 +14,7 @@ public sealed class PantsStorageModeBehaviorTests
 
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
 
-        Assert.Equal("default", database.DefaultColumnFamily.Name);
+        Assert.Equal("default", database.ColumnFamilies.DefaultFamily.Name);
     }
 
     [Theory]
@@ -82,16 +84,16 @@ public sealed class PantsStorageModeBehaviorTests
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
         byte[] value = [0, 1, 2, 3, 255, 254, 253];
 
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("binary-key"u8.ToArray(), value);
             await writer.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(value, (await reader.GetAsync("binary-key"u8.ToArray()))?.ToArray());
     }
@@ -105,8 +107,8 @@ public sealed class PantsStorageModeBehaviorTests
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
         await StorageModeTestHarness.PutAsync(database, mode, "key", "value");
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.Delete("key"u8.ToArray());
@@ -126,8 +128,8 @@ public sealed class PantsStorageModeBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
 
         transaction.Delete("missing"u8.ToArray());

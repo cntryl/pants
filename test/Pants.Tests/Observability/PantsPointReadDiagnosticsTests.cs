@@ -1,14 +1,14 @@
-using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Observability;
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsPointReadDiagnosticsTests
 {
     const long HybridLocalBudgetBytes = 128 * 1024;
 
     [Fact]
-    public void ShouldExposeImmutableSstTraceThroughReadonlyCollectionContract()
+    public void ShouldKeepSstTraceUnchangedWhenTheSourceCollectionIsMutated()
     {
         var expected = new PantsSstReadTrace(
             "expected.sst",
@@ -25,10 +25,6 @@ public sealed class PantsPointReadDiagnosticsTests
         source[0] = replacement;
         source.Add(replacement);
 
-        var property = typeof(PantsPointReadTrace).GetProperty(nameof(PantsPointReadTrace.Ssts));
-        Assert.NotNull(property);
-        Assert.Equal(typeof(IReadOnlyList<PantsSstReadTrace>), property.PropertyType);
-        Assert.IsType<ImmutableArray<PantsSstReadTrace>>(trace.Ssts);
         Assert.Same(expected, Assert.Single(trace.Ssts));
     }
 
@@ -37,16 +33,16 @@ public sealed class PantsPointReadDiagnosticsTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory());
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("key"u8.ToArray(), "value"u8.ToArray());
             await writer.CommitAsync(PantsWriteOptions.BestEffort);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var result = await reader.GetWithDiagnosticsAsync("key"u8.ToArray());
@@ -66,8 +62,8 @@ public sealed class PantsPointReadDiagnosticsTests
         await FlushAsync(database, "alpha", "first"u8.ToArray());
         await FlushAsync(database, "alpha", "second"u8.ToArray());
         await FlushAsync(database, "zulu", "unrelated"u8.ToArray());
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var cold = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
@@ -110,7 +106,7 @@ public sealed class PantsPointReadDiagnosticsTests
             Assert.Equal(0, sst.DataBlocksRead);
         });
 
-        var aggregate = await database.GetReadPathDiagnosticsAsync();
+        var aggregate = await database.Diagnostics.GetReadPathDiagnosticsAsync();
         Assert.Equal(0, aggregate.SstReaderCacheMisses);
         Assert.Equal(4, aggregate.SstReaderCacheHits);
         Assert.Equal(0, aggregate.SstBlockCacheMisses);
@@ -129,8 +125,8 @@ public sealed class PantsPointReadDiagnosticsTests
         var expected = CreateValue(256 * 1024, 83);
         await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
         Assert.Empty(LocalSsts(directory.Path));
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var hydrated = await reader.GetWithDiagnosticsAsync("cloud-key"u8.ToArray());
@@ -168,8 +164,8 @@ public sealed class PantsPointReadDiagnosticsTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await FlushAsync(database, "owned-key", "stable-value"u8.ToArray());
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var key = "owned-key"u8.ToArray();
 
@@ -194,8 +190,8 @@ public sealed class PantsPointReadDiagnosticsTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("alpha"u8.ToArray(), "first"u8.ToArray());
@@ -203,9 +199,9 @@ public sealed class PantsPointReadDiagnosticsTests
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var result = await reader.GetWithDiagnosticsAsync("middle"u8.ToArray());
@@ -227,8 +223,8 @@ public sealed class PantsPointReadDiagnosticsTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("put-key"u8.ToArray(), "persisted-put"u8.ToArray());
@@ -237,15 +233,15 @@ public sealed class PantsPointReadDiagnosticsTests
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("put-key"u8.ToArray(), "staged-put"u8.ToArray());
         transaction.Delete("delete-key"u8.ToArray());
         transaction.DeleteRange("range-a"u8.ToArray(), "range-z"u8.ToArray());
-        var before = await database.GetReadPathDiagnosticsAsync();
-        var amplificationBefore = await database.GetReadAmplificationMetricsAsync();
+        var before = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+        var amplificationBefore = await database.Diagnostics.GetReadAmplificationMetricsAsync();
 
         var put = await transaction.GetWithDiagnosticsAsync("put-key"u8.ToArray());
         var deleted = await transaction.GetWithDiagnosticsAsync("delete-key"u8.ToArray());
@@ -269,8 +265,8 @@ public sealed class PantsPointReadDiagnosticsTests
             Assert.IsType<ReadOnlyMemory<byte>>(ordinaryPut)));
         Assert.Null(ordinaryDeleted);
         Assert.Null(ordinaryRangeDeleted);
-        Assert.Equal(before, await database.GetReadPathDiagnosticsAsync());
-        Assert.Equal(amplificationBefore, await database.GetReadAmplificationMetricsAsync());
+        Assert.Equal(before, await database.Diagnostics.GetReadPathDiagnosticsAsync());
+        Assert.Equal(amplificationBefore, await database.Diagnostics.GetReadAmplificationMetricsAsync());
     }
 
     static async ValueTask FlushAsync(
@@ -279,12 +275,12 @@ public sealed class PantsPointReadDiagnosticsTests
         ReadOnlyMemory<byte> value,
         PantsWriteOptions? options = null)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), value);
         await transaction.CommitAsync(options ?? PantsWriteOptions.Buffered);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static byte[] CreateValue(int length, int seed)

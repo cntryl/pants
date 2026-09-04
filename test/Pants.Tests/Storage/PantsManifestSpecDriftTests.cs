@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsManifestSpecDriftTests
 {
@@ -50,7 +52,7 @@ public sealed class PantsManifestSpecDriftTests
     {
         await using (var database = await OpenAsync(path))
         {
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         using var document = JsonDocument.Parse(
@@ -168,9 +170,9 @@ public sealed class PantsManifestSpecDriftTests
         Assert.Contains("durable-family", rawJournalText, StringComparison.Ordinal);
 
         await using var reopened = await OpenAsync(directory.Path);
-        var afterRepair = await reopened.CreateColumnFamilyAsync("after-repair");
+        var afterRepair = await reopened.ColumnFamilies.CreateAsync("after-repair");
         var visibleAfterRepair = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("after-repair"));
+            await reopened.ColumnFamilies.GetAsync("after-repair"));
         Assert.Equal(afterRepair.Id, visibleAfterRepair.Id);
         rawJournalText = Encoding.UTF8.GetString(await File.ReadAllBytesAsync(journalPath));
         Assert.DoesNotContain("torn-tail-family", rawJournalText, StringComparison.Ordinal);
@@ -218,8 +220,8 @@ public sealed class PantsManifestSpecDriftTests
             PantsOpenOptions.Local(directory.Path).WithRecoveryPolicy(recoveryPolicy),
             new RuntimeDependencies(failpoint));
 
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("durable-family"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("durable-family"));
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.Empty(Directory.GetFiles(directory.Path, "manifest.journal.salvage-retained*"));
     }
 
@@ -232,7 +234,7 @@ public sealed class PantsManifestSpecDriftTests
 
         await using (var database = await OpenAsync(directory.Path))
         {
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         using var document = JsonDocument.Parse(
@@ -248,15 +250,15 @@ public sealed class PantsManifestSpecDriftTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         var sstFiles = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
         var sstName = Assert.Single(sstFiles);
@@ -287,7 +289,7 @@ public sealed class PantsManifestSpecDriftTests
         uint subsequentId;
         await using (var database = await OpenAsync(directory.Path))
         {
-            subsequentId = (await database.CreateColumnFamilyAsync("subsequent")).Id;
+            subsequentId = (await database.ColumnFamilies.CreateAsync("subsequent")).Id;
         }
 
         using var document = JsonDocument.Parse(
@@ -334,7 +336,7 @@ public sealed class PantsManifestSpecDriftTests
         await using (var database = await OpenAsync(directory.Path))
         {
             var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await database.GetColumnFamilyAsync("current"));
+                await database.ColumnFamilies.GetAsync("current"));
             Assert.Equal(1u, family.Id);
         }
 
@@ -413,9 +415,9 @@ public sealed class PantsManifestSpecDriftTests
         await using (var database = await OpenAsync(directory.Path))
         {
             var resurrected = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await database.GetColumnFamilyAsync("after"));
+                await database.ColumnFamilies.GetAsync("after"));
             Assert.Equal(1u, resurrected.Id);
-            Assert.Null(await database.GetColumnFamilyAsync("before"));
+            Assert.Null(await database.ColumnFamilies.GetAsync("before"));
         }
 
         using var document = JsonDocument.Parse(

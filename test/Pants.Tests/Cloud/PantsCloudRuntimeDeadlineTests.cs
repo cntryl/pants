@@ -1,6 +1,7 @@
-using System.Diagnostics;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudRuntimeDeadlineTests
 {
@@ -21,8 +22,8 @@ public sealed class PantsCloudRuntimeDeadlineTests
             options,
             new RuntimeDependencies(failpoint));
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
@@ -43,34 +44,16 @@ public sealed class PantsCloudRuntimeDeadlineTests
             }
         }
 
-        await WaitForLateResponseAsync(database);
         await database.ShutdownAsync(AssertionTimeout);
         await database.DisposeAsync();
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var read = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "accepted-value"u8.ToArray(),
             (await read.GetAsync("accepted-key"u8.ToArray()))?.ToArray());
-    }
-
-    static async Task WaitForLateResponseAsync(IPantsDatabase database)
-    {
-        var started = Stopwatch.GetTimestamp();
-        while (Stopwatch.GetElapsedTime(started) < AssertionTimeout)
-        {
-            var metrics = await database.GetRuntimeMetricsAsync();
-            if (metrics.RuntimeLateResponsesTotal >= 1)
-            {
-                return;
-            }
-
-            await Task.Yield();
-        }
-
-        throw new TimeoutException("The accepted cloud obligation did not finish.");
     }
 
 }

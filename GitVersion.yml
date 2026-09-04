@@ -1,6 +1,6 @@
-# Pants keeps a stable 1.0 assembly identity while packages advance on main.
+# Pants keeps a stable 1.0 assembly identity while 2.x packages advance on main.
 mode: ContinuousDeployment
-next-version: 1.0.0
+next-version: 2.0.0
 
 branches:
   main:

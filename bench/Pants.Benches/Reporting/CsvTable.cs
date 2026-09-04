@@ -1,6 +1,6 @@
 using Microsoft.VisualBasic.FileIO;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class CsvTable
 {

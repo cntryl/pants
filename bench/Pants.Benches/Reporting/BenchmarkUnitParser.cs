@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class BenchmarkUnitParser
 {

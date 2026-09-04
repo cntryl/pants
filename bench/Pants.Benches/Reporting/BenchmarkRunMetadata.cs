@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 sealed record BenchmarkRunMetadata(
     string Engine,

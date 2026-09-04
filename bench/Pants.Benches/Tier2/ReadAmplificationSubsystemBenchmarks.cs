@@ -1,14 +1,14 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class ReadAmplificationSubsystemBenchmarks : Tier2Benchmark
 {
     const int LookupCount = 1_000;
-    string _path = null!;
     IPantsDatabase _database = null!;
-    byte[][] _uniformKeys = null!;
+    string _path = null!;
     byte[][] _skewedKeys = null!;
+    byte[][] _uniformKeys = null!;
 
     [GlobalSetup]
     public async Task SetupAsync()
@@ -26,10 +26,10 @@ public class ReadAmplificationSubsystemBenchmarks : Tier2Benchmark
                     PantsWriteOptions.Buffered);
             }
 
-            await _database.FlushAsync(_database.DefaultColumnFamily);
+            await _database.Maintenance.FlushAsync(_database.ColumnFamilies.DefaultFamily);
         }
 
-        _uniformKeys = Enumerable.Range(0, LookupCount).Select(index => Tier2Data.Key((index * 7919) % 10_000)).ToArray();
+        _uniformKeys = Enumerable.Range(0, LookupCount).Select(index => Tier2Data.Key(index * 7919 % 10_000)).ToArray();
         _skewedKeys = Enumerable.Range(0, LookupCount).Select(index => Tier2Data.Key(index % 100)).ToArray();
     }
 

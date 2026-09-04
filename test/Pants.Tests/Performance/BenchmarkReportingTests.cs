@@ -1,6 +1,7 @@
-using Cntryl.Pants.Benches.Reporting;
+using Cntryl.Pants.Reporting;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Performance;
+namespace Cntryl.Pants.Performance;
 
 public sealed class BenchmarkReportingTests
 {
@@ -10,30 +11,26 @@ public sealed class BenchmarkReportingTests
     [InlineData("1.5 μs", 1_500)]
     [InlineData("2 ms", 2_000_000)]
     [InlineData("0.25 s", 250_000_000)]
-    public void ShouldNormalizeTimeGivenSupportedBenchmarkUnit(string value, double expected)
-    {
+    public void ShouldNormalizeTimeGivenSupportedBenchmarkUnit(string value, double expected) =>
         Assert.Equal(expected, BenchmarkUnitParser.ParseTimeNanoseconds(value));
-    }
 
     [Theory]
     [InlineData("12 B", 12)]
     [InlineData("1.5 KB", 1_536)]
     [InlineData("2 MB", 2_097_152)]
     [InlineData("0.5 GB", 536_870_912)]
-    public void ShouldNormalizeAllocationGivenSupportedBenchmarkUnit(string value, double expected)
-    {
+    public void ShouldNormalizeAllocationGivenSupportedBenchmarkUnit(string value, double expected) =>
         Assert.Equal(expected, BenchmarkUnitParser.ParseBytes(value));
-    }
 
     [Fact]
     public void ShouldParseQuotedThousandsAndMissingErrorGivenBenchmarkCsvRow()
     {
         const string csv = "Method,Job,Scenario,Mean,Error,Allocated\n" +
-            "RunAsync,Dry,Local-16,\"3,239.7 μs\",NA,2.88 MB\n";
+                           "RunAsync,Dry,Local-16,\"3,239.7 μs\",NA,2.88 MB\n";
 
         var result = Assert.Single(BenchmarkCsvReader.Read(
             csv,
-            "Cntryl.Pants.Benches.Tier4.YcsbAWorkloadBenchmarks",
+            "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks",
             new Dictionary<string, int> { ["RunAsync"] = 10_000 }));
 
         Assert.Equal(3_239_700, result.MeanNanoseconds);
@@ -51,7 +48,7 @@ public sealed class BenchmarkReportingTests
 
         var exception = Assert.Throws<InvalidDataException>(() => BenchmarkCsvReader.Read(
             csv,
-            "Cntryl.Pants.Benches.Tier4.YcsbAWorkloadBenchmarks",
+            "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks",
             new Dictionary<string, int> { ["RunAsync"] = 10_000 }));
 
         Assert.Contains("Duplicate benchmark scenario", exception.Message);
@@ -64,7 +61,7 @@ public sealed class BenchmarkReportingTests
 
         Assert.Throws<InvalidDataException>(() => BenchmarkCsvReader.Read(
             csv,
-            "Cntryl.Pants.Benches.Tier4.YcsbAWorkloadBenchmarks",
+            "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks",
             new Dictionary<string, int> { ["RunAsync"] = 10_000 }));
     }
 
@@ -137,28 +134,28 @@ public sealed class BenchmarkReportingTests
     }
 
     static string MidgeJson(string sourceSha) => $$"""
-        {
-          "schema_version": "cntryl-stress.v2",
-          "tool_version": "0.3.0",
-          "environment": {
-            "git_commit": "{{sourceSha}}",
-            "cpu_model": "test cpu",
-            "os": "test os",
-            "rustc_version": "rustc test"
-          },
-          "summaries": [
-            {
-              "benchmark_id": "tier2/read",
-              "name": "point read",
-              "tier": 2,
-              "primary_metric": "ns_per_op",
-              "stats": { "mean": 125.5 },
-              "quality": "acceptable",
-              "trust_class": "gate",
-              "correctness": { "passed": true },
-              "parameters": { "storage": "local", "clients": "16" }
-            }
-          ]
-        }
-        """;
+                                                   {
+                                                     "schema_version": "cntryl-stress.v2",
+                                                     "tool_version": "0.3.0",
+                                                     "environment": {
+                                                       "git_commit": "{{sourceSha}}",
+                                                       "cpu_model": "test cpu",
+                                                       "os": "test os",
+                                                       "rustc_version": "rustc test"
+                                                     },
+                                                     "summaries": [
+                                                       {
+                                                         "benchmark_id": "tier2/read",
+                                                         "name": "point read",
+                                                         "tier": 2,
+                                                         "primary_metric": "ns_per_op",
+                                                         "stats": { "mean": 125.5 },
+                                                         "quality": "acceptable",
+                                                         "trust_class": "gate",
+                                                         "correctness": { "passed": true },
+                                                         "parameters": { "storage": "local", "clients": "16" }
+                                                       }
+                                                     ]
+                                                   }
+                                                   """;
 }

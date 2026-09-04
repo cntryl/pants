@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsMemoryManagementContractTests
 {
@@ -17,8 +19,8 @@ public sealed class PantsMemoryManagementContractTests
 
         for (var index = 0; index < 64; index++)
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString($"key-{index:000}"), new byte[1024]);
             try
@@ -34,12 +36,12 @@ public sealed class PantsMemoryManagementContractTests
 
             if (index % 10 == 0)
             {
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        var metrics = await database.GetRuntimeMetricsAsync();
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.True(stalled || committed > 0);
         Assert.NotEqual(PantsEngineHealth.WriteStalled, metrics.Health);

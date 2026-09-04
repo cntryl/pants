@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.DependencyInjection;
+namespace Cntryl.Pants;
 
 sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
 {

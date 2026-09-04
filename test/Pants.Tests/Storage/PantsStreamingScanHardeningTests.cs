@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsStreamingScanHardeningTests
 {
@@ -10,9 +12,9 @@ public sealed class PantsStreamingScanHardeningTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await CreateMultiBlockDatabaseAsync(directory.Path);
-        var before = await database.GetReadPathDiagnosticsAsync();
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery
         {
@@ -24,7 +26,7 @@ public sealed class PantsStreamingScanHardeningTests
         Assert.Equal(
             direction == PantsScanDirection.Forward ? "key-0000" : "key-0127",
             TestBytes.ToText(entry.Key));
-        var after = await database.GetReadPathDiagnosticsAsync();
+        var after = await database.Diagnostics.GetReadPathDiagnosticsAsync();
         Assert.Equal(before.DataBlocksRead + 1, after.DataBlocksRead);
     }
 
@@ -34,8 +36,8 @@ public sealed class PantsStreamingScanHardeningTests
         using var directory = new TemporaryDirectory();
         await using var database = await CreateMultiBlockDatabaseAsync(directory.Path);
         CorruptDataBlock(directory.Path, 1);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
@@ -70,23 +72,23 @@ public sealed class PantsStreamingScanHardeningTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await CreateMultiBlockDatabaseAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
         Assert.True(await enumerator.MoveNextAsync());
 
-        await database.CompactAllAsync();
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await database.Maintenance.CompactAllAsync();
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put(TestBytes.FromString("key-new"), TestBytes.FromString("new"));
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var count = 1;
         while (await enumerator.MoveNextAsync())
         {
@@ -101,8 +103,8 @@ public sealed class PantsStreamingScanHardeningTests
     {
         var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path).WithBackgroundCompaction(false));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         for (var index = 0; index < 128; index++)
         {
@@ -112,7 +114,7 @@ public sealed class PantsStreamingScanHardeningTests
         }
 
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         return database;
     }
 

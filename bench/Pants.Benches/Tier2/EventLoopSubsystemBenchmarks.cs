@@ -1,7 +1,7 @@
 using System.Threading.Channels;
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class EventLoopSubsystemBenchmarks : Tier2Benchmark
 {

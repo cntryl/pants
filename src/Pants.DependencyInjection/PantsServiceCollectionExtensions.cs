@@ -1,11 +1,10 @@
-using Cntryl.Pants;
-using Cntryl.Pants.DependencyInjection;
-using Cntryl.Pants.DependencyInjection.Options;
-using Cntryl.Pants.DependencyInjection.Options.Internal;
+using Cntryl.Pants.Options;
+using Cntryl.Pants.Options.Internal;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
-namespace Microsoft.Extensions.DependencyInjection;
+namespace Cntryl.Pants;
 
 public static class PantsServiceCollectionExtensions
 {
@@ -80,7 +79,7 @@ public static class PantsServiceCollectionExtensions
 
         var optionsBuilder = AddValidatedOptions(services, serviceKey);
         services.AddKeyedPants(
-            (object)serviceKey,
+            serviceKey,
             serviceProvider => PantsDatabaseOptionsMapper.Create(
                 serviceProvider
                     .GetRequiredService<IOptionsMonitor<PantsDatabaseOptions>>()

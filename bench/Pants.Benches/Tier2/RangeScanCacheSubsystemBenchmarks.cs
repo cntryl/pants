@@ -2,15 +2,15 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage;
 using Cntryl.Pants.Storage.Internal.Cache;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class RangeScanCacheSubsystemBenchmarks : Tier2Benchmark
 {
     const int BlockCount = 256;
     readonly byte[] _block = Tier2Data.Value(4 * 1024);
     SstBlockCache _coldCache = null!;
-    SstBlockCache _warmCache = null!;
     SstBlockCacheKey[] _keys = null!;
+    SstBlockCache _warmCache = null!;
 
     [IterationSetup]
     public void Setup()

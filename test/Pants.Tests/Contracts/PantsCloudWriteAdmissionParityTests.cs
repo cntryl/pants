@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsCloudWriteAdmissionParityTests
 {
@@ -19,15 +22,15 @@ public sealed class PantsCloudWriteAdmissionParityTests
 
         try
         {
-            await using var readOnly = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var readOnly = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             await readOnly.CommitAsync(PantsWriteOptions.Sync)
                 .AsTask()
                 .WaitAsync(AssertionTimeout);
 
-            await using var empty = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var empty = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             await empty.CommitAsync(PantsWriteOptions.CloudAsync)
                 .AsTask()
@@ -54,8 +57,8 @@ public sealed class PantsCloudWriteAdmissionParityTests
 
         try
         {
-            await using var assertionOnly = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var assertionOnly = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             assertionOnly.AssertValue("missing"u8.ToArray(), null);
 
@@ -83,8 +86,8 @@ public sealed class PantsCloudWriteAdmissionParityTests
 
     static async ValueTask CommitWriteAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class ReadOnlyCoordinatorFastPathTests
 {
@@ -9,8 +9,8 @@ public sealed class ReadOnlyCoordinatorFastPathTests
             await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory()));
         var before = database.CoordinatorCommandsEnqueued;
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         {
             Assert.Null(await transaction.GetAsync("missing"u8.ToArray()));

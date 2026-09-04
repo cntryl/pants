@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsBestEffortDurabilityTests
 {
@@ -25,7 +27,7 @@ public sealed class PantsBestEffortDurabilityTests
                 .Select(static index => ($"key-{index}", $"value-{index}"))
                 .ToArray();
             await CommitAsync(database, PantsWriteOptions.BestEffort, entries);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await CommitAsync(database, PantsWriteOptions.Buffered, ("durable-marker", "marker"));
         }
 
@@ -55,8 +57,8 @@ public sealed class PantsBestEffortDurabilityTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         for (var index = 0; index < 50_000; index++)
         {
@@ -77,8 +79,8 @@ public sealed class PantsBestEffortDurabilityTests
         PantsWriteOptions writeOptions,
         params (string Key, string Value)[] entries)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         foreach (var (key, value) in entries)
         {
@@ -90,8 +92,8 @@ public sealed class PantsBestEffortDurabilityTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is null ? null : TestBytes.ToText(value.Value);

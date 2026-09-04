@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class CredentialHttpHandler(
     Func<RecordedCredentialRequest, int, HttpResponseMessage> responseFactory) : HttpMessageHandler

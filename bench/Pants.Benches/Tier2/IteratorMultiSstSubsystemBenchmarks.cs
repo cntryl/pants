@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Runtime.Internal;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class IteratorMultiSstSubsystemBenchmarks : Tier2Benchmark
 {
@@ -29,7 +29,7 @@ public class IteratorMultiSstSubsystemBenchmarks : Tier2Benchmark
         for (var index = 0; index < KeysPerRun; index++)
         {
             entries.Add(
-                Tier2Data.Key((run * KeysPerRun) + index),
+                Tier2Data.Key(run * KeysPerRun + index),
                 new CellState(Tier2Data.Value(64), index, null));
         }
 

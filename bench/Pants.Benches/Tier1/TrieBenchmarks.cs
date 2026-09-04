@@ -1,15 +1,15 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Sst.Trie;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class TrieBenchmarks : Tier1Benchmark
 {
-    IReadOnlyList<byte[]> _keys = null!;
     byte[] _encoded = null!;
-    TrieIndex _trie = null!;
     byte[] _hit = null!;
+    IReadOnlyList<byte[]> _keys = null!;
     byte[] _miss = null!;
+    TrieIndex _trie = null!;
 
     [GlobalSetup]
     public void Setup()

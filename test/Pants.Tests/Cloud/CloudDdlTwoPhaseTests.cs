@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudDdlTwoPhaseTests
 {
@@ -25,19 +27,19 @@ public sealed class CloudDdlTwoPhaseTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            _ = await database.CreateColumnFamilyAsync("two-phase");
+            _ = await database.ColumnFamilies.CreateAsync("two-phase");
         }
 
         await using (var reopened = await PantsDatabase.OpenAsync(options))
         {
             var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await reopened.GetColumnFamilyAsync("two-phase"));
-            await reopened.DropColumnFamilyAsync(active);
+                await reopened.ColumnFamilies.GetAsync("two-phase"));
+            await reopened.ColumnFamilies.DropAsync(active);
         }
 
         await using (var finalOpen = await PantsDatabase.OpenAsync(options))
         {
-            Assert.Null(await finalOpen.GetColumnFamilyAsync("two-phase"));
+            Assert.Null(await finalOpen.ColumnFamilies.GetAsync("two-phase"));
         }
 
         using var registry = ReadRegistry(directory.Path);
@@ -63,11 +65,11 @@ public sealed class CloudDdlTwoPhaseTests
             CreateOptions(directory.Path),
             new RuntimeDependencies(failpoints));
 
-        await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-retry").AsTask());
-        Assert.Null(await database.GetColumnFamilyAsync("cas-retry"));
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.ColumnFamilies.CreateAsync("cas-retry").AsTask());
+        Assert.Null(await database.ColumnFamilies.GetAsync("cas-retry"));
         Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
 
-        var created = await database.CreateColumnFamilyAsync("cas-retry");
+        var created = await database.ColumnFamilies.CreateAsync("cas-retry");
 
         Assert.Equal("cas-retry", created.Name);
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
@@ -86,16 +88,17 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(() => database.CreateColumnFamilyAsync("cas-reopen").AsTask());
-            Assert.Null(await database.GetColumnFamilyAsync("cas-reopen"));
+            await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.ColumnFamilies.CreateAsync("cas-reopen").AsTask());
+            Assert.Null(await database.ColumnFamilies.GetAsync("cas-reopen"));
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
-        Assert.Null(await reopened.GetColumnFamilyAsync("cas-reopen"));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("cas-reopen"));
 
-        var created = await reopened.CreateColumnFamilyAsync("cas-reopen");
+        var created = await reopened.ColumnFamilies.CreateAsync("cas-reopen");
 
         Assert.Equal("cas-reopen", created.Name);
         using var registry = ReadRegistry(directory.Path);
@@ -114,12 +117,12 @@ public sealed class CloudDdlTwoPhaseTests
                          new RuntimeDependencies(failpoints)))
         {
             await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.CreateColumnFamilyAsync("torn-prepare").AsTask());
+                database.ColumnFamilies.CreateAsync("torn-prepare").AsTask());
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        Assert.Null(await reopened.GetColumnFamilyAsync("torn-prepare"));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("torn-prepare"));
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
     }
 
@@ -133,20 +136,20 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            var created = await database.CreateColumnFamilyAsync("local-retry");
+            var created = await database.ColumnFamilies.CreateAsync("local-retry");
 
             Assert.Equal("local-retry", created.Name);
-            Assert.NotNull(await database.GetColumnFamilyAsync("local-retry"));
+            Assert.NotNull(await database.ColumnFamilies.GetAsync("local-retry"));
             Assert.Equal(
                 PantsEngineHealth.Degraded,
-                (await database.GetRuntimeMetricsAsync()).Health);
+                (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("local-retry"));
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("local-retry"));
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -159,8 +162,8 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            var created = await database.CreateColumnFamilyAsync("live-local-retry");
-            await using (var transaction = await database.BeginTransactionAsync(
+            var created = await database.ColumnFamilies.CreateAsync("live-local-retry");
+            await using (var transaction = await database.Transactions.BeginAsync(
                              created,
                              PantsTransactionMode.ReadWrite))
             {
@@ -168,13 +171,13 @@ public sealed class CloudDdlTwoPhaseTests
                 await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
             }
 
-            await database.FlushAsync(created);
+            await database.Maintenance.FlushAsync(created);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var recovered = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("live-local-retry"));
-        await using var reader = await reopened.BeginTransactionAsync(
+            await reopened.ColumnFamilies.GetAsync("live-local-retry"));
+        await using var reader = await reopened.Transactions.BeginAsync(
             recovered,
             PantsTransactionMode.ReadOnly);
 
@@ -194,8 +197,8 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            var created = await database.CreateColumnFamilyAsync("wal-local-retry");
-            await using var transaction = await database.BeginTransactionAsync(
+            var created = await database.ColumnFamilies.CreateAsync("wal-local-retry");
+            await using var transaction = await database.Transactions.BeginAsync(
                 created,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
@@ -204,8 +207,8 @@ public sealed class CloudDdlTwoPhaseTests
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var recovered = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("wal-local-retry"));
-        await using var reader = await reopened.BeginTransactionAsync(
+            await reopened.ColumnFamilies.GetAsync("wal-local-retry"));
+        await using var reader = await reopened.Transactions.BeginAsync(
             recovered,
             PantsTransactionMode.ReadOnly);
 
@@ -222,7 +225,7 @@ public sealed class CloudDdlTwoPhaseTests
         var options = CreateOptions(directory.Path);
         await using (var seed = await PantsDatabase.OpenAsync(options))
         {
-            _ = await seed.CreateColumnFamilyAsync("drop-local-failure");
+            _ = await seed.ColumnFamilies.CreateAsync("drop-local-failure");
         }
 
         var failpoints = new DdlFailpointHandler("BeforeDdlLocalCommit");
@@ -231,19 +234,19 @@ public sealed class CloudDdlTwoPhaseTests
                          new RuntimeDependencies(failpoints)))
         {
             var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await database.GetColumnFamilyAsync("drop-local-failure"));
+                await database.ColumnFamilies.GetAsync("drop-local-failure"));
 
-            await database.DropColumnFamilyAsync(active);
+            await database.ColumnFamilies.DropAsync(active);
 
-            Assert.Null(await database.GetColumnFamilyAsync("drop-local-failure"));
+            Assert.Null(await database.ColumnFamilies.GetAsync("drop-local-failure"));
             Assert.Equal(
                 PantsEngineHealth.Degraded,
-                (await database.GetRuntimeMetricsAsync()).Health);
+                (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
             Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        Assert.Null(await reopened.GetColumnFamilyAsync("drop-local-failure"));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("drop-local-failure"));
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
     }
 
@@ -258,14 +261,14 @@ public sealed class CloudDdlTwoPhaseTests
             new RuntimeDependencies(cloudHttpClient: client));
         handler.FailMetadataWrites = true;
 
-        var created = await database.CreateColumnFamilyAsync("mirror-failure");
+        var created = await database.ColumnFamilies.CreateAsync("mirror-failure");
 
         var resolved = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await database.GetColumnFamilyAsync("mirror-failure"));
+            await database.ColumnFamilies.GetAsync("mirror-failure"));
         Assert.Equal(created.Id, resolved.Id);
-        Assert.Equal(PantsEngineHealth.Degraded, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Degraded, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         handler.FailMetadataWrites = false;
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             created,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
@@ -281,13 +284,13 @@ public sealed class CloudDdlTwoPhaseTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateProviderOptions(directory.Path),
             new RuntimeDependencies(cloudHttpClient: client));
-        var created = await database.CreateColumnFamilyAsync("drop-mirror-failure");
+        var created = await database.ColumnFamilies.CreateAsync("drop-mirror-failure");
         handler.FailMetadataWrites = true;
 
-        await database.DropColumnFamilyAsync(created);
+        await database.ColumnFamilies.DropAsync(created);
 
-        Assert.Null(await database.GetColumnFamilyAsync(created.Name));
-        Assert.Equal(PantsEngineHealth.Degraded, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Null(await database.ColumnFamilies.GetAsync(created.Name));
+        Assert.Equal(PantsEngineHealth.Degraded, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         handler.FailMetadataWrites = false;
     }
 
@@ -301,14 +304,14 @@ public sealed class CloudDdlTwoPhaseTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            _ = await database.CreateColumnFamilyAsync("history-replay");
+            _ = await database.ColumnFamilies.CreateAsync("history-replay");
         }
 
         File.Delete(Path.Combine(directory.Path, "ddl.prepare.json"));
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("history-replay"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("history-replay"));
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -317,7 +320,7 @@ public sealed class CloudDdlTwoPhaseTests
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
         await using var seed = await PantsDatabase.OpenAsync(options);
-        var family = await seed.CreateColumnFamilyAsync("lost-response");
+        var family = await seed.ColumnFamilies.CreateAsync("lost-response");
         await seed.DisposeAsync();
 
         var failpoints = new DdlFailpointHandler("AfterDdlRemoteCas");
@@ -325,12 +328,12 @@ public sealed class CloudDdlTwoPhaseTests
             options,
             new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await database.GetColumnFamilyAsync(family.Name));
+            await database.ColumnFamilies.GetAsync(family.Name));
 
-        await database.DropColumnFamilyAsync(active);
+        await database.ColumnFamilies.DropAsync(active);
 
-        Assert.Null(await database.GetColumnFamilyAsync(family.Name));
-        Assert.Equal(PantsEngineHealth.Degraded, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Null(await database.ColumnFamilies.GetAsync(family.Name));
+        Assert.Equal(PantsEngineHealth.Degraded, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
     }
 
@@ -340,8 +343,8 @@ public sealed class CloudDdlTwoPhaseTests
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
         await using var seed = await PantsDatabase.OpenAsync(options);
-        var family = await seed.CreateColumnFamilyAsync("ambiguous-drop");
-        await using (var transaction = await seed.BeginTransactionAsync(
+        var family = await seed.ColumnFamilies.CreateAsync("ambiguous-drop");
+        await using (var transaction = await seed.Transactions.BeginAsync(
                          family,
                          PantsTransactionMode.ReadWrite))
         {
@@ -358,12 +361,12 @@ public sealed class CloudDdlTwoPhaseTests
             options,
             new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await database.GetColumnFamilyAsync(family.Name));
+            await database.ColumnFamilies.GetAsync(family.Name));
 
         await Assert.ThrowsAsync<PantsFencedException>(() =>
-            database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
-        Assert.NotNull(await database.GetColumnFamilyAsync(family.Name));
-        await using (var transaction = await database.BeginTransactionAsync(
+            database.ColumnFamilies.DropDiscardingUnflushedAsync(active).AsTask());
+        Assert.NotNull(await database.ColumnFamilies.GetAsync(family.Name));
+        await using (var transaction = await database.Transactions.BeginAsync(
                          active,
                          PantsTransactionMode.ReadWrite))
         {
@@ -372,9 +375,9 @@ public sealed class CloudDdlTwoPhaseTests
                 transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
         }
 
-        await database.DropColumnFamilyAsync(active);
+        await database.ColumnFamilies.DropAsync(active);
 
-        Assert.Null(await database.GetColumnFamilyAsync(family.Name));
+        Assert.Null(await database.ColumnFamilies.GetAsync(family.Name));
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
     }
 
@@ -387,8 +390,8 @@ public sealed class CloudDdlTwoPhaseTests
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
         await using var seed = await PantsDatabase.OpenAsync(options);
-        var family = await seed.CreateColumnFamilyAsync("ambiguous-maintenance");
-        await using (var transaction = await seed.BeginTransactionAsync(
+        var family = await seed.ColumnFamilies.CreateAsync("ambiguous-maintenance");
+        await using (var transaction = await seed.Transactions.BeginAsync(
                          family,
                          PantsTransactionMode.ReadWrite))
         {
@@ -405,13 +408,13 @@ public sealed class CloudDdlTwoPhaseTests
             options,
             new RuntimeDependencies(failpoints));
         var active = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await database.GetColumnFamilyAsync(family.Name));
+            await database.ColumnFamilies.GetAsync(family.Name));
         await Assert.ThrowsAsync<PantsFencedException>(() =>
-            database.DropColumnFamilyDiscardingUnflushedAsync(active).AsTask());
+            database.ColumnFamilies.DropDiscardingUnflushedAsync(active).AsTask());
 
         var maintenance = compact
-            ? database.CompactAllAsync().AsTask()
-            : database.FlushAsync(active).AsTask();
+            ? database.Maintenance.CompactAllAsync().AsTask()
+            : database.Maintenance.FlushAsync(active).AsTask();
 
         await Assert.ThrowsAsync<PantsFencedException>(() => maintenance);
     }
@@ -423,7 +426,7 @@ public sealed class CloudDdlTwoPhaseTests
     static PantsOpenOptions CreateProviderOptions(string path)
     {
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),

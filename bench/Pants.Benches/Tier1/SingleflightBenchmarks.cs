@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Runtime.Internal;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class SingleflightBenchmarks : Tier1Benchmark
 {
@@ -9,8 +9,7 @@ public class SingleflightBenchmarks : Tier1Benchmark
     RuntimeResponseSlot<int> _slot = null!;
     Task<int>[] _waiters = null!;
 
-    [Params(1, 4, 16, 64)]
-    public int WaiterCount { get; set; }
+    [Params(1, 4, 16, 64)] public int WaiterCount { get; set; }
 
     [IterationSetup]
     public void Setup()

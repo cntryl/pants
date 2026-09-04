@@ -1,5 +1,12 @@
 # Current Midge baseline review
 
+This is the historical qualification record for the pin below, not a current
+certificate of complete behavior parity. The
+[2026-09-04 gap analysis](MidgeBehaviorGapAnalysis.md) identifies stale test
+mappings, uncovered scenarios, and concrete compaction/recovery differences.
+In particular, retained-payload bounds do not establish indexed read-work or
+complete-overlap compaction guarantees.
+
 Pants feature and persisted-format compatibility is pinned to Midge commit
 `75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`. The committed driver lock has
 SHA-256 `1fe29024e1789245b1ca8b20274aea17573380d5e33cf8f1811b59a65f85f937`.
@@ -27,12 +34,13 @@ large transaction-batch record. Pants now accepts and emits that legal
 `COMPRESSION` tag and verifies it with a focused codec regression plus a
 current-Midge-generated database fixture.
 
-## Executable closure evidence
+## Historical closure evidence
 
-- The machine-readable inventory contains 949 entries: 852 map to executable
-  Pants tests and 97 have reviewed implementation/tooling or live-account
-  qualification `n/a` rationales.
-  There are no planned entries.
+- The machine-readable inventory contains 949 entries: 852 were marked mapped
+  and 97 were assigned implementation/tooling or live-account qualification
+  `n/a` rationales. Some mapped tests have since been removed and the remaining
+  assertions and exclusions require revalidation; no planned entries in this
+  old inventory does not mean no current behavior gaps.
 - Current Midge regenerates all 31 fixture artifacts. Deterministic bytes are
   compared exactly; time-, identity-, and process-dependent artifacts are
   parsed and validated under documented semantic exceptions.
@@ -43,10 +51,11 @@ current-Midge-generated database fixture.
 - FORMAT v3, SST v4, WAL, manifest, intent, DDL, lease, publication-catalog,
   cloud-key, checksum, and compression bytes remain compatible. No persisted
   format revision was introduced.
-- Scalability is closed by the disk-resident retained-memory equation and
-  deterministic ownership/resource proofs in
-  [`disk-resident-scale-ladder.md`](../performance/disk-resident-scale-ladder.md).
-  Large scale-ladder runs remain optional operational qualification.
+- The disk-resident retained-memory equation and deterministic ownership/resource
+  proofs in [`disk-resident-scale-ladder.md`](../performance/disk-resident-scale-ladder.md)
+  establish evidence for retained-memory bounds, not closure of all Midge
+  cardinality-dependent work guarantees. Large scale-ladder runs remain
+  separate operational qualification.
 
 The older `c5ffc2d` benchmark reader is retained only for reproducible
 like-for-like historical performance artifacts. It is not the current feature

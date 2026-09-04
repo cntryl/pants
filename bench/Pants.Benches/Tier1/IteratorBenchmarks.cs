@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Runtime.Internal;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class IteratorBenchmarks : Tier1Benchmark
 {

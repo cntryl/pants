@@ -1,7 +1,7 @@
 using System.Text.Json;
 using BenchmarkDotNet.Running;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class PracticalBenchmarkRunner
 {

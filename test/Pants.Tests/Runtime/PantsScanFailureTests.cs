@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsScanFailureTests
 {
@@ -85,18 +87,18 @@ public sealed class PantsScanFailureTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("corrupt-key"u8.ToArray(), "corrupt-value"u8.ToArray());
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await CorruptFirstSstDataByteAsync(directory.Path);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
@@ -107,7 +109,7 @@ public sealed class PantsScanFailureTests
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);
         Assert.Equal(PantsIteratorState.Failed, scan.State);
-        Assert.Equal(1, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+        Assert.Equal(1, (await database.Diagnostics.GetRuntimeMetricsAsync()).ActiveSnapshots);
     }
 
     static async Task CorruptFirstSstDataByteAsync(string databasePath)

@@ -1,10 +1,16 @@
-namespace Cntryl.Pants.Tests.Support.Failpoints;
+namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class BlockingCloudWalUploadFailpointHandler : IFailpointHandler, IDisposable
 {
     readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly ManualResetEventSlim _release = new(false);
     int _hit;
+
+    public void Dispose()
+    {
+        _release.Set();
+        _release.Dispose();
+    }
 
     public void Hit(Failpoint failpoint)
     {
@@ -25,10 +31,4 @@ sealed class BlockingCloudWalUploadFailpointHandler : IFailpointHandler, IDispos
         await _entered.Task.WaitAsync(timeout);
 
     public void Release() => _release.Set();
-
-    public void Dispose()
-    {
-        _release.Set();
-        _release.Dispose();
-    }
 }

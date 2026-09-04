@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudMirrorEfficiencyTests
 {
@@ -10,22 +13,22 @@ public sealed class PantsCloudMirrorEfficiencyTests
         await using var database = await OpenSeededAsync(directory.Path, failpoints);
         var baseline = failpoints.HitCount;
 
-        await using (var committed = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var committed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             await committed.CommitAsync(PantsWriteOptions.CloudStrict);
         }
 
-        await using (var rolledBack = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var rolledBack = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             await rolledBack.RollbackAsync();
         }
 
-        await using (var disposed = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var disposed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         {
             Assert.NotNull(await disposed.GetAsync("seed"u8.ToArray()));
@@ -61,7 +64,7 @@ public sealed class PantsCloudMirrorEfficiencyTests
         var sstWriteTime = File.GetLastWriteTimeUtc(remoteSst);
         var manifestWriteTime = File.GetLastWriteTimeUtc(remoteManifest);
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal(baseline, failpoints.HitCount);
         Assert.Equal(sstWriteTime, File.GetLastWriteTimeUtc(remoteSst));
@@ -76,15 +79,15 @@ public sealed class PantsCloudMirrorEfficiencyTests
             PantsOpenOptions.SimulatedCloud(path, "pants-tests", "mirror-efficiency/")
                 .WithBackgroundCompaction(false),
             new RuntimeDependencies(failpoints));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("seed"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         return database;
     }
 }

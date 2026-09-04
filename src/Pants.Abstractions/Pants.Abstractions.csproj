@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cntryl.Pants.Core"/>
+    <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
+  </ItemGroup>
+
+</Project>

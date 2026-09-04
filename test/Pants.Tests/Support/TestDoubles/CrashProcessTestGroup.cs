@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class CrashProcessTestGroup

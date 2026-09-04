@@ -1,34 +1,49 @@
-namespace Cntryl.Pants.Tests;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants;
 
 public sealed class PantsPublicApiTests
 {
     [Fact]
-    public void ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts()
+    public async Task DatabaseCapabilitiesMatchAvailableFacets()
     {
-        var publicTypes = typeof(PantsDatabase).Assembly
-            .GetExportedTypes();
+        using var localDirectory = new TemporaryDirectory();
+        using var cloudDirectory = new TemporaryDirectory();
+        await using var memory = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using var local = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(localDirectory.Path));
+        await using var cloud = await PantsDatabase.OpenAsync(PantsOpenOptions.SimulatedCloud(
+            cloudDirectory.Path,
+            "contracts",
+            "capabilities"));
 
-        Assert.Contains(typeof(IPantsDatabase), publicTypes);
-        Assert.Contains(typeof(IPantsTransaction), publicTypes);
-        Assert.Contains(typeof(IPantsScan), publicTypes);
-        Assert.Contains(typeof(IPantsColumnFamily), publicTypes);
-        Assert.All(
-            publicTypes.Where(static type => type.Name.StartsWith("IPants", StringComparison.Ordinal)),
-            static type => Assert.True(type.IsInterface));
-        Assert.All(
-            publicTypes.Where(static type => type.IsClass && type.Name.EndsWith("Metrics", StringComparison.Ordinal)),
-            static type => Assert.True(type.IsSealed));
+        Assert.False(memory.Capabilities.IsPersistent);
+        Assert.False(memory.Capabilities.IsCloudBacked);
+        Assert.Null(memory.PersistentStorage);
+        Assert.Null(memory.Cloud);
+        Assert.True(local.Capabilities.IsPersistent);
+        Assert.False(local.Capabilities.IsCloudBacked);
+        Assert.NotNull(local.PersistentStorage);
+        Assert.Null(local.Cloud);
+        Assert.True(cloud.Capabilities.IsPersistent);
+        Assert.True(cloud.Capabilities.IsCloudBacked);
+        Assert.NotNull(cloud.PersistentStorage);
+        Assert.NotNull(cloud.Cloud);
     }
 
     [Fact]
-    public void DatabaseFactoryReturnsPublicAbstraction()
+    public void OptionsExposeRawGroupsForRuntimeValidation()
     {
-        var returnType = typeof(PantsDatabase)
-            .GetMethod(nameof(PantsDatabase.OpenAsync))!
-            .ReturnType;
+        var options = PantsOpenOptions.Create(
+            new PantsStorageConfiguration.InMemory(),
+            PantsRuntimeConfiguration.Default,
+            PantsMemoryConfiguration.Default,
+            PantsLeaseConfiguration.Default);
 
-        Assert.Equal(typeof(ValueTask<IPantsDatabase>), returnType);
-        Assert.True(typeof(PantsDatabase).IsAbstract && typeof(PantsDatabase).IsSealed);
+        Assert.NotNull(options.Runtime);
+        Assert.NotNull(options.Memory);
+        Assert.NotNull(options.Lease);
+        PantsOpenOptionsValidator.Validate(options);
     }
 
     [Fact]
@@ -37,8 +52,8 @@ public sealed class PantsPublicApiTests
         await using var first = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
         await using var second = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        var exception = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => second.BeginTransactionAsync(
-            first.DefaultColumnFamily,
+        var exception = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => second.Transactions.BeginAsync(
+            first.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly).AsTask());
 
         Assert.Equal(PantsErrorCode.InvalidArgument, exception.Code);

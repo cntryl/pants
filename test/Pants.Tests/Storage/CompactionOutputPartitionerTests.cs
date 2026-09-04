@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class CompactionOutputPartitionerTests
 {
@@ -48,8 +50,8 @@ public sealed class CompactionOutputPartitionerTests
                 Entry("k", 3, 20),
                 Entry("k", 2, 20),
                 Entry("k", 1, 20),
-                Entry("m", 4, 1),
-                Entry("n", 5, 1)
+                Entry("m", 4),
+                Entry("n", 5)
             ],
             []);
 
@@ -126,6 +128,6 @@ public sealed class CompactionOutputPartitionerTests
         TestBytes.FromString(end),
         sequence);
 
-    static long EstimatedRangeBytes(IReadOnlyList<RangeTombstone> ranges) => ranges.Sum(
-        static range => range.Start.Length + range.End.Length + 16L);
+    static long EstimatedRangeBytes(IReadOnlyList<RangeTombstone> ranges) =>
+        ranges.Sum(static range => range.Start.Length + range.End.Length + 16L);
 }

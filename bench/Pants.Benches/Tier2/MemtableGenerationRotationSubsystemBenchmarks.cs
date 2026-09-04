@@ -2,7 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Flush;
 using Cntryl.Pants.Storage.Internal.Wal;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class MemtableGenerationRotationSubsystemBenchmarks : Tier2Benchmark
 {

@@ -1,6 +1,7 @@
-using Cntryl.Pants.Benches.Tier4;
+using Cntryl.Pants.Support.TestDoubles;
+using Cntryl.Pants.Tier4;
 
-namespace Cntryl.Pants.Tests.Performance;
+namespace Cntryl.Pants.Performance;
 
 public sealed class ScaleLadderQualificationTests
 {
@@ -60,9 +61,9 @@ public sealed class ScaleLadderQualificationTests
     public void ShouldIncludeWalAndSstBytesInWriteAmplification()
     {
         var amplification = ScaleLadderRunner.CalculateWriteAmplification(
-            logicalBytes: 100,
-            sstBytesWritten: 200,
-            walBytesWritten: 50);
+            100,
+            200,
+            50);
 
         Assert.Equal(2.5, amplification);
     }
@@ -71,8 +72,8 @@ public sealed class ScaleLadderQualificationTests
     public void ShouldDescribeCacheStateAndPrefixCardinalityPrecisely()
     {
         Assert.Equal("Block-cache-cold (OS page cache not reset)", ScaleLadderRunner.ColdCacheQualifier);
-        Assert.Contains("1,000-key group", ScaleLadderRunner.PrefixScanMetricName(warm: false));
-        Assert.Contains("1,000-key group", ScaleLadderRunner.PrefixScanMetricName(warm: true));
+        Assert.Contains("1,000-key group", ScaleLadderRunner.PrefixScanMetricName(false));
+        Assert.Contains("1,000-key group", ScaleLadderRunner.PrefixScanMetricName(true));
         var query = ScaleLadderRunner.CreatePrefixQueryForGroup(42);
         Assert.NotNull(query.Prefix);
         Assert.Null(query.StartInclusive);
@@ -85,10 +86,8 @@ public sealed class ScaleLadderQualificationTests
     [InlineData(false, false)]
     public void ShouldFailQualificationWhenAnyRecoveryCheckFails(
         bool reopenCorrect,
-        bool crashRecoveryPassed)
-    {
+        bool crashRecoveryPassed) =>
         Assert.Equal(1, ScaleLadderRunner.ExitCodeFor(reopenCorrect, crashRecoveryPassed));
-    }
 
     [Fact]
     public async Task ShouldLaunchTheFrameworkDependentReopenProbeWithTheTierBudget()
@@ -100,8 +99,8 @@ public sealed class ScaleLadderQualificationTests
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budgetBytes));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             foreach (var mutation in ScaleLadderRunner.CreateMutationsForRecord(0))
             {
@@ -109,7 +108,7 @@ public sealed class ScaleLadderQualificationTests
             }
 
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         var result = await ScaleLadderReopenProbe.RunAsync(directory.Path, 1, budgetBytes);
@@ -122,7 +121,7 @@ public sealed class ScaleLadderQualificationTests
     [Fact]
     public async Task ShouldRecoverAcknowledgedWalAfterAnAbruptChildProcessCrash()
     {
-        var result = await ScaleLadderCrashCheck.RunAsync(recordCount: 16);
+        var result = await ScaleLadderCrashCheck.RunAsync(16);
 
         Assert.True(result.Success, result.Detail);
     }

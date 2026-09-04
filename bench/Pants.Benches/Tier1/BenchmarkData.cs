@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 static class BenchmarkData
 {

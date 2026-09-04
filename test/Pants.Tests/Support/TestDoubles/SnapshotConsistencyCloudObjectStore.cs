@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
 {
@@ -66,9 +66,9 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
             var exists = _objects.TryGetValue(objectKey, out var current);
             var accepted = condition switch
             {
-                CloudObjectWriteCondition.Unconditional => true,
-                CloudObjectWriteCondition.IfAbsent => !exists,
-                CloudObjectWriteCondition.IfVersion expected =>
+                PantsCloudObjectWriteCondition.Unconditional => true,
+                PantsCloudObjectWriteCondition.IfAbsent => !exists,
+                PantsCloudObjectWriteCondition.IfVersion expected =>
                     exists && StringComparer.Ordinal.Equals(
                         expected.Version,
                         FormatVersion(current.Version)),
@@ -117,7 +117,7 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
                 return ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
             }
 
-            if (condition is CloudObjectDeleteCondition.IfVersion expected &&
+            if (condition is PantsCloudObjectDeleteCondition.IfVersion expected &&
                 !StringComparer.Ordinal.Equals(
                     expected.Version,
                     FormatVersion(current.Version)))

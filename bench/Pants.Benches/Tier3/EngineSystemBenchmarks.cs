@@ -1,14 +1,14 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 public class EngineSystemBenchmarks : Tier3Benchmark
 {
     const int KeyCount = 4_096;
-    string _path = null!;
     IPantsDatabase _database = null!;
     byte[][] _keys = null!;
     int _nextKey;
+    string _path = null!;
 
     [Params(Tier3StorageMode.Local, Tier3StorageMode.SimulatedCloud)]
     public Tier3StorageMode StorageMode { get; set; }
@@ -23,7 +23,7 @@ public class EngineSystemBenchmarks : Tier3Benchmark
             _database,
             _keys.Select((key, index) => (key, Tier3Data.Value(64, index))),
             Tier3Database.WriteOptions(StorageMode));
-        await _database.FlushAsync(_database.DefaultColumnFamily);
+        await _database.Maintenance.FlushAsync(_database.ColumnFamilies.DefaultFamily);
     }
 
     [GlobalCleanup]

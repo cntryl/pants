@@ -7,17 +7,17 @@ using Cntryl.Pants.Scan;
 using Cntryl.Pants.Storage;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 /// <summary>
-/// Slice 6e (issue #219): a scale-ladder qualification run — ingests a base record count into a
-/// local, non-hybrid database, then reports ingest throughput, database size, startup/steady-state
-/// RSS, block-cache-cold/warm point and prefix-scan latency percentiles, physical write/read
-/// amplification, compaction debt and peak RSS, a clean reopen, and a
-/// crash/WAL-replay-recovery check. Deliberately outside
-/// BenchmarkDotNet's iteration/warmup machinery (which would multiply run time many-fold for a
-/// multi-million-record ingest) — this runs each tier exactly once, like a real qualification
-/// pass, not a micro-benchmark.
+///     Slice 6e (issue #219): a scale-ladder qualification run — ingests a base record count into a
+///     local, non-hybrid database, then reports ingest throughput, database size, startup/steady-state
+///     RSS, block-cache-cold/warm point and prefix-scan latency percentiles, physical write/read
+///     amplification, compaction debt and peak RSS, a clean reopen, and a
+///     crash/WAL-replay-recovery check. Deliberately outside
+///     BenchmarkDotNet's iteration/warmup machinery (which would multiply run time many-fold for a
+///     multi-million-record ingest) — this runs each tier exactly once, like a real qualification
+///     pass, not a micro-benchmark.
 /// </summary>
 static class ScaleLadderRunner
 {
@@ -86,8 +86,8 @@ static class ScaleLadderRunner
         for (long batchStart = 0; batchStart < recordCount; batchStart += BatchSize)
         {
             var batchCount = (int)Math.Min(BatchSize, recordCount - batchStart);
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 for (var offset = 0; offset < batchCount; offset++)
@@ -107,7 +107,7 @@ static class ScaleLadderRunner
             var ingested = batchStart + batchCount;
             if (ingested % FlushEveryRecords < BatchSize)
             {
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
             if (ingested % 1_000_000 < BatchSize)
@@ -119,15 +119,15 @@ static class ScaleLadderRunner
             }
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await database.CompactAllAsync();
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await database.Maintenance.CompactAllAsync();
         ingestStopwatch.Stop();
         await ingestAndCompactionPeakMonitor.StopAsync();
         var ingestAndCompactionPeakRss = ingestAndCompactionPeakMonitor.PeakBytes;
 
         var steadyStateRss = MeasureRssBytes();
         var databaseSizeBytes = DirectorySize(databasePath);
-        var runtimeAfterIngest = await database.GetRuntimeMetricsAsync();
+        var runtimeAfterIngest = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         // Fixed sample sets, replayed identically for both the cold and warm passes — see
         // MeasurePointLatenciesAsync's doc comment for why a fresh random draw per pass would
@@ -140,8 +140,8 @@ static class ScaleLadderRunner
         var warmPoint = await MeasurePointLatenciesAsync(database, pointSampleIndices);
         var warmPrefix = await MeasurePrefixLatenciesAsync(database, recordCount, prefixSampleGroups);
 
-        var amplification = await database.GetReadAmplificationMetricsAsync();
-        var runtimeFinal = await database.GetRuntimeMetricsAsync();
+        var amplification = await database.Diagnostics.GetReadAmplificationMetricsAsync();
+        var runtimeFinal = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         await database.DisposeAsync();
 
@@ -149,13 +149,13 @@ static class ScaleLadderRunner
         var reopened = await PantsDatabase.OpenAsync(options);
         reopenStopwatch.Stop();
         var reopenRss = MeasureRssBytes();
-        var reopenSpotCheck = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        var reopenSpotCheck = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var reopenValue = await reopenSpotCheck.GetAsync(KeyFor(recordCount / 2));
         await reopenSpotCheck.DisposeAsync();
         var reopenCorrect = reopenValue is { } value &&
-                             value.Span.SequenceEqual(ValueFor(recordCount / 2));
+                            value.Span.SequenceEqual(ValueFor(recordCount / 2));
 
         // Must fully release this process's own handle (including its write lease) before a
         // separate process can open the same database path below — Pants is single-writer.
@@ -206,8 +206,8 @@ static class ScaleLadderRunner
             reopenCorrect && reopenProbeSucceeded,
             populatedReopenPeakRssBytes,
             reopenProbeBudgetBytes,
-            CrashRecoveryPassed: false,
-            CrashRecoveryDetail: "(not yet run)");
+            false,
+            "(not yet run)");
     }
 
     static long[] BuildPointSampleIndices(long recordCount, Random random) =>
@@ -224,10 +224,10 @@ static class ScaleLadderRunner
     }
 
     /// <summary>
-    /// Replays the same fixed <paramref name="sampleIndices"/> for both the cold and warm
-    /// passes — reusing a fresh random draw for "warm" would query different keys/blocks than
-    /// "cold" touched, at which point neither the SST reader/block caches nor the OS page cache
-    /// have anything warm to serve from, making the two passes indistinguishable.
+    ///     Replays the same fixed <paramref name="sampleIndices" /> for both the cold and warm
+    ///     passes — reusing a fresh random draw for "warm" would query different keys/blocks than
+    ///     "cold" touched, at which point neither the SST reader/block caches nor the OS page cache
+    ///     have anything warm to serve from, making the two passes indistinguishable.
     /// </summary>
     static async Task<LatencySummary> MeasurePointLatenciesAsync(
         IPantsDatabase database,
@@ -237,8 +237,8 @@ static class ScaleLadderRunner
         for (var i = 0; i < sampleIndices.Length; i++)
         {
             var index = sampleIndices[i];
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             var stopwatch = Stopwatch.StartNew();
             var value = await transaction.GetAsync(KeyFor(index));
@@ -265,8 +265,8 @@ static class ScaleLadderRunner
         {
             var group = sampleGroups[i];
             var expectedCount = (int)Math.Min(GroupSize, Math.Max(0, recordCount - group * GroupSize));
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             var stopwatch = Stopwatch.StartNew();
             await using var scan = await transaction.ScanAsync(CreatePrefixQueryForGroup(group));
@@ -367,7 +367,7 @@ static class ScaleLadderRunner
 
     static long MeasureRssBytes()
     {
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.Collect(2, GCCollectionMode.Forced, true);
         GC.WaitForPendingFinalizers();
         GC.Collect();
         using var process = Process.GetCurrentProcess();
@@ -508,12 +508,12 @@ static class ScaleLadderRunner
                 $"{WarmPointLatency.P99Microseconds:F0} μs");
             Row(
                 builder,
-                PrefixScanMetricName(warm: false),
+                PrefixScanMetricName(false),
                 $"{ColdPrefixLatency.P50Microseconds:F0} / {ColdPrefixLatency.P95Microseconds:F0} / " +
                 $"{ColdPrefixLatency.P99Microseconds:F0} μs");
             Row(
                 builder,
-                PrefixScanMetricName(warm: true),
+                PrefixScanMetricName(true),
                 $"{WarmPrefixLatency.P50Microseconds:F0} / {WarmPrefixLatency.P95Microseconds:F0} / " +
                 $"{WarmPrefixLatency.P99Microseconds:F0} μs");
             Row(

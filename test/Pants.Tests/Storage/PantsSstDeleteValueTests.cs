@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstDeleteValueTests
 {

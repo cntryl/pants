@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.DependencyInjection;
+namespace Cntryl.Pants;
 
 sealed record PantsDatabaseRegistration(
     Func<IServiceProvider, PantsOpenOptions> OptionsFactory);

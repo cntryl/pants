@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsHybridReadCancellationContractTests
 {
@@ -15,8 +18,8 @@ public sealed class PantsHybridReadCancellationContractTests
         await using var database = await CreateProviderDatabaseWithMissingLocalSstAsync(
             directory.Path,
             client);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         using var cancellation = new CancellationTokenSource();
         handler.Arm();
@@ -48,8 +51,8 @@ public sealed class PantsHybridReadCancellationContractTests
         await using var database = await CreateDatabaseWithEvictedSstAsync(
             directory.Path,
             failpoint);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         using var cancellation = new CancellationTokenSource();
 
@@ -78,8 +81,8 @@ public sealed class PantsHybridReadCancellationContractTests
         await using var database = await CreateDatabaseWithEvictedSstAsync(
             directory.Path,
             failpoint);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         using var cancellation = new CancellationTokenSource();
@@ -100,7 +103,7 @@ public sealed class PantsHybridReadCancellationContractTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(AssertionTimeout));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
         await enumerator.DisposeAsync();
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.ScanBufferPeakBytes <= metrics.ScanBufferCapacityBytes);
         Assert.Equal(0, metrics.ScanBufferUsedBytes);
     }
@@ -116,12 +119,12 @@ public sealed class PantsHybridReadCancellationContractTests
             new RuntimeDependencies(failpoints));
         try
         {
-            await using var writer = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 97));
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             Assert.Empty(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"));
             return database;
         }
@@ -137,7 +140,7 @@ public sealed class PantsHybridReadCancellationContractTests
         HttpClient client)
     {
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -148,12 +151,12 @@ public sealed class PantsHybridReadCancellationContractTests
             new RuntimeDependencies(cloudHttpClient: client));
         try
         {
-            await using var writer = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 101));
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             File.Delete(Assert.Single(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst")));
             return database;
         }

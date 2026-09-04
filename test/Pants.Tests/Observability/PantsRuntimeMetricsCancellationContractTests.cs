@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Observability;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsRuntimeMetricsCancellationContractTests
 {
@@ -11,7 +13,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
-        var metrics = await database.GetRuntimeMetricsAsync(deadline.Token);
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token);
 
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
     }
@@ -25,9 +27,9 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         canceled.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            database.GetRuntimeMetricsAsync(canceled.Token).AsTask());
+            database.Diagnostics.GetRuntimeMetricsAsync(canceled.Token).AsTask());
 
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -37,7 +39,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         await database.ShutdownAsync(TimeSpan.FromSeconds(2));
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]
@@ -49,7 +51,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoint));
         using var deadline = new CancellationTokenSource();
-        var request = database.GetRuntimeMetricsAsync(deadline.Token).AsTask();
+        var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
 
         try
         {
@@ -62,7 +64,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             failpoint.Release();
         }
 
-        var metrics = await database.GetRuntimeMetricsAsync()
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
             .AsTask().WaitAsync(AssertionTimeout);
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
     }
@@ -76,7 +78,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoint));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        var request = database.GetRuntimeMetricsAsync(deadline.Token).AsTask();
+        var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
 
         try
         {
@@ -108,7 +110,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             for (var attempt = 0; attempt < 5; attempt++)
             {
                 using var deadline = new CancellationTokenSource();
-                var request = database.GetRuntimeMetricsAsync(deadline.Token).AsTask();
+                var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
                 if (attempt == 0)
                 {
                     await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
@@ -123,7 +125,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
             failpoint.Release();
         }
 
-        var metrics = await database.GetRuntimeMetricsAsync()
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
             .AsTask().WaitAsync(AssertionTimeout);
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
     }

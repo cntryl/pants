@@ -10,24 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  authorize:
-    name: Require main
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Require main
-        env:
-          REF: ${{ github.ref }}
-        shell: bash
-        run: |
-          if [[ "$REF" != refs/heads/main ]]; then
-            echo "::error title=Invalid release ref::Publish must run from refs/heads/main; got $REF"
-            exit 1
-          fi
-
   version:
-    needs: authorize
     uses: ./.github/workflows/version.yml
     permissions:
       contents: read
@@ -36,18 +19,31 @@ jobs:
     name: Publish NuGet packages
     needs: version
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       PACKAGE_VERSION: ${{ needs.version.outputs.semver }}
       PACKAGE_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" != refs/heads/main ]]; then
+            echo "::error title=Invalid release ref::Publish must run from refs/heads/main; got $REF"
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v6
@@ -57,10 +53,9 @@ jobs:
           cache-dependency-path: '**/packages.lock.json'
 
       - name: Validate package version
-        shell: bash
         run: |
-          if [[ ! "$PACKAGE_VERSION" =~ ^1\.0\.[0-9]+$ ]]; then
-            echo "::error title=Invalid package version::Expected 1.0.x, got $PACKAGE_VERSION"
+          if [[ ! "$PACKAGE_VERSION" =~ ^2\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid package version::Expected 2.x, got $PACKAGE_VERSION"
             exit 1
           fi
 
@@ -68,61 +63,31 @@ jobs:
         run: dotnet restore Pants.slnx --locked-mode
 
       - name: Pack NuGet packages
-        shell: bash
-        run: |
-          dotnet pack src/Pants/Pants.csproj \
-            --configuration Release \
-            --no-restore \
-            --output artifacts/packages \
-            -p:PackageVersion="$PACKAGE_VERSION"
-          dotnet pack src/Pants.DependencyInjection/Pants.DependencyInjection.csproj \
-            --configuration Release \
-            --no-restore \
-            --output artifacts/packages \
-            -p:PackageVersion="$PACKAGE_VERSION"
+        run: >
+          dotnet pack Pants.slnx
+          --configuration Release
+          --no-restore
+          --output artifacts/packages
+          -p:PackageVersion="$PACKAGE_VERSION"
 
       - name: Verify package set
-        shell: bash
         run: |
-          test -f "artifacts/packages/Cntryl.Pants.${PACKAGE_VERSION}.nupkg"
+          test -f "artifacts/packages/Cntryl.Pants.Abstractions.${PACKAGE_VERSION}.nupkg"
+          test -f "artifacts/packages/Cntryl.Pants.Core.${PACKAGE_VERSION}.nupkg"
           test -f "artifacts/packages/Cntryl.Pants.DependencyInjection.${PACKAGE_VERSION}.nupkg"
-          test "$(find artifacts/packages -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 2
+          test "$(find artifacts/packages -maxdepth 1 -name '*.nupkg' -type f | wc -l)" -eq 3
 
       - name: Publish to GitHub Packages
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          dotnet nuget push "artifacts/packages/Cntryl.Pants.${PACKAGE_VERSION}.nupkg" \
-            --api-key "$NUGET_AUTH_TOKEN" \
-            --source "$PACKAGE_SOURCE" \
-            --skip-duplicate
-          dotnet nuget push "artifacts/packages/Cntryl.Pants.DependencyInjection.${PACKAGE_VERSION}.nupkg" \
-            --api-key "$NUGET_AUTH_TOKEN" \
-            --source "$PACKAGE_SOURCE" \
-            --skip-duplicate
-
-  tag:
-    name: Tag published version
-    needs:
-      - version
-      - publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    env:
-      PACKAGE_VERSION: ${{ needs.version.outputs.semver }}
-    steps:
-      - name: Check out the published commit
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          fetch-tags: true
+        run: >
+          dotnet nuget push "artifacts/packages/*.nupkg"
+          --api-key "$NUGET_AUTH_TOKEN"
+          --source "$PACKAGE_SOURCE"
+          --skip-duplicate
 
       - name: Create tag if missing
         id: tag
-        shell: bash
         run: |
           tag="v${PACKAGE_VERSION}"
           if git show-ref --tags --verify --quiet "refs/tags/$tag"; then

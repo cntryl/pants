@@ -1,6 +1,4 @@
-using System.Globalization;
-
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class BenchmarkCsvReader
 {
@@ -16,7 +14,8 @@ static class BenchmarkCsvReader
         IReadOnlyDictionary<string, int> operationsPerMethod)
     {
         var tier = TierFromType(benchmarkType);
-        var results = CsvTable.Parse(csv).Select(row => ReadRow(row, benchmarkType, tier, operationsPerMethod)).ToArray();
+        var results = CsvTable.Parse(csv).Select(row => ReadRow(row, benchmarkType, tier, operationsPerMethod))
+            .ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
@@ -49,7 +48,7 @@ static class BenchmarkCsvReader
             .ToArray();
         var parameterText = string.Join(";", parameters);
         var scenarioId = $"pants:{benchmarkType}:{method}" +
-            (parameterText.Length == 0 ? string.Empty : $":{parameterText}");
+                         (parameterText.Length == 0 ? string.Empty : $":{parameterText}");
         var errorRaw = row.GetValueOrDefault("Error");
         double? error = string.IsNullOrWhiteSpace(errorRaw) || errorRaw.Equals("NA", StringComparison.OrdinalIgnoreCase)
             ? null

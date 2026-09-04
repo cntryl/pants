@@ -1,13 +1,13 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Wal;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class TlvBenchmarks : Tier1Benchmark
 {
-    WalRecord _record8 = null!;
-    WalRecord _record64 = null!;
     WalRecord _record256 = null!;
+    WalRecord _record64 = null!;
+    WalRecord _record8 = null!;
 
     [GlobalSetup]
     public void Setup()

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Runtime.Cloud;
+namespace Cntryl.Pants.Runtime.Cloud;
 
 public sealed class CloudWorkSchedulerTests
 {

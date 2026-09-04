@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 sealed class RetentionMeasuringTransactionOperationSource(ITransactionOperationSource inner)
     : ITransactionOperationSource

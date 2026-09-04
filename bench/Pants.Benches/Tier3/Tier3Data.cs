@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 static class Tier3Data
 {

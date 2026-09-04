@@ -268,25 +268,29 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
-      "Cntryl.Pants": {
-        "type": "Project",
-        "dependencies": {
-          "K4os.Compression.LZ4": "[1.3.8, )",
-          "System.IO.Hashing": "[10.0.0, )",
-          "ZstdSharp.Port": "[0.8.8, )"
-        }
+      "Cntryl.Pants.Abstractions": {
+        "type": "Project"
       },
       "cntryl.pants.benches": {
         "type": "Project",
         "dependencies": {
           "BenchmarkDotNet": "[0.15.8, )",
-          "Cntryl.Pants": "[1.0.0, )"
+          "Cntryl.Pants.Core": "[1.0.0, )"
+        }
+      },
+      "Cntryl.Pants.Core": {
+        "type": "Project",
+        "dependencies": {
+          "Cntryl.Pants.Abstractions": "[1.0.0, )",
+          "K4os.Compression.LZ4": "[1.3.8, )",
+          "System.IO.Hashing": "[10.0.0, )",
+          "ZstdSharp.Port": "[0.8.8, )"
         }
       },
       "Cntryl.Pants.DependencyInjection": {
         "type": "Project",
         "dependencies": {
-          "Cntryl.Pants": "[1.0.0, )",
+          "Cntryl.Pants.Core": "[1.0.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.11, )",
           "Microsoft.Extensions.Options.ConfigurationExtensions": "[10.0.11, )"
         }

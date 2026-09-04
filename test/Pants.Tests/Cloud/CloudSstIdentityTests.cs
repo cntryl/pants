@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudSstIdentityTests
 {
@@ -19,10 +19,8 @@ public sealed class CloudSstIdentityTests
     [InlineData("000000_01_1.sst")]
     [InlineData("000000_01_00000000000000000001_extra.sst")]
     [InlineData("000000_01_00000000000000000001.txt")]
-    public void ShouldRejectNonCanonicalSstIdentity(string name)
-    {
+    public void ShouldRejectNonCanonicalSstIdentity(string name) =>
         Assert.False(CloudSstIdentity.TryParse(name, out _));
-    }
 
     [Fact]
     public void ShouldParseCanonicalSstObjectIdentity()

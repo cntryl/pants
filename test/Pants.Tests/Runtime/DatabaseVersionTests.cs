@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class DatabaseVersionTests
 {

@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Storage.Flush;
+namespace Cntryl.Pants.Storage.Flush;
 
 public sealed class MutableMemtableOperationsTests
 {

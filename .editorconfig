@@ -51,6 +51,3 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
-
-[src/Pants.DependencyInjection/PantsServiceCollectionExtensions.cs]
-dotnet_diagnostic.IDE0130.severity = none

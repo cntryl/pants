@@ -1,6 +1,8 @@
 using System.Text;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudSstGarbageCollectionTests
 {
@@ -13,7 +15,7 @@ public sealed class CloudSstGarbageCollectionTests
         Assert.True(await store.PutAsync(
             objectKey,
             "orphan"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
         var collector = new CloudSstGarbageCollector(
             store,
@@ -50,7 +52,7 @@ public sealed class CloudSstGarbageCollectionTests
             initialNames.UnionWith(handler.GetObjectPaths("/sst/"));
             failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
 
-            await Assert.ThrowsAsync<PantsIOException>(() => database.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
 
             orphanPath = Assert.Single(
                 handler.GetObjectPaths("/sst/"),
@@ -66,7 +68,7 @@ public sealed class CloudSstGarbageCollectionTests
                 handler.GetObjectPaths("/sst/"),
                 StringComparer.Ordinal);
 
-            await successor.CompactAllAsync();
+            await successor.Maintenance.CompactAllAsync();
 
             Assert.Equal(orphanPath, Assert.Single(handler.GetObjectPaths("/sst/")));
             await AssertReadableAsync(successor, "successor-adoption");
@@ -102,7 +104,7 @@ public sealed class CloudSstGarbageCollectionTests
         Assert.Equal(2, obsoletePaths.Length);
         handler.FailSstList = true;
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         Assert.All(obsoletePaths, path => Assert.Contains(
             path,
@@ -112,7 +114,7 @@ public sealed class CloudSstGarbageCollectionTests
         Assert.Equal(0, handler.SstDeleteAttempts);
         Assert.Equal(
             PantsEngineHealth.Degraded,
-            (await database.GetRuntimeMetricsAsync()).Health);
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         await AssertReadableAsync(database, "list-failure");
         handler.FailSstList = false;
     }
@@ -129,7 +131,7 @@ public sealed class CloudSstGarbageCollectionTests
         Assert.Equal(2, obsoletePaths.Length);
         handler.FailSstDeletes = true;
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         Assert.All(obsoletePaths, path => Assert.Contains(
             path,
@@ -140,7 +142,7 @@ public sealed class CloudSstGarbageCollectionTests
         Assert.Equal(0, handler.UnconditionalSstDeleteAttempts);
         Assert.Equal(
             PantsEngineHealth.Degraded,
-            (await database.GetRuntimeMetricsAsync()).Health);
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         await AssertReadableAsync(database, "delete-failure");
         handler.FailSstDeletes = false;
     }
@@ -232,7 +234,7 @@ public sealed class CloudSstGarbageCollectionTests
         await using var database = await OpenProviderAsync(cache.Path, client);
         await PrepareTwoSstsAsync(database, "provider-collection");
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         Assert.Single(handler.GetObjectPaths("/sst/"));
         Assert.Equal(2, handler.SstDeleteAttempts);
@@ -248,7 +250,7 @@ public sealed class CloudSstGarbageCollectionTests
                 .WithBackgroundCompaction(false));
         await PrepareTwoSstsAsync(database, "simulated-collection");
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         Assert.Single(GetSimulatedCloudSstPaths(directory.Path));
         await AssertReadableAsync(database, "simulated-collection");
@@ -263,7 +265,7 @@ public sealed class CloudSstGarbageCollectionTests
         await CommitAndFlushAsync(database, "provider-reference/key");
         var referencedPath = Assert.Single(handler.GetObjectPaths("/sst/"));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal(referencedPath, Assert.Single(handler.GetObjectPaths("/sst/")));
         await AssertValueAsync(database, "provider-reference/key");
@@ -278,7 +280,7 @@ public sealed class CloudSstGarbageCollectionTests
         await CommitAndFlushAsync(database, "simulated-reference/key");
         var referencedPath = Assert.Single(GetSimulatedCloudSstPaths(directory.Path));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal(referencedPath, Assert.Single(GetSimulatedCloudSstPaths(directory.Path)));
         await AssertValueAsync(database, "simulated-reference/key");
@@ -300,7 +302,7 @@ public sealed class CloudSstGarbageCollectionTests
 
     static PantsCloudStorageLocation CreateAzureLocation() =>
         new(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -311,17 +313,17 @@ public sealed class CloudSstGarbageCollectionTests
     {
         await CommitAndFlushAsync(database, $"{prefix}/first");
         await CommitAndFlushAsync(database, $"{prefix}/second");
-        Assert.Equal(2, (await database.GetRuntimeMetricsAsync()).SstCount);
+        Assert.Equal(2, (await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
     }
 
     static async Task CommitAndFlushAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static async Task AssertReadableAsync(IPantsDatabase database, string prefix)
@@ -332,8 +334,8 @@ public sealed class CloudSstGarbageCollectionTests
 
     static async Task AssertValueAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(Encoding.UTF8.GetBytes(key));
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
@@ -350,10 +352,6 @@ public sealed class CloudSstGarbageCollectionTests
         params string[] extraListedKeys) : ICloudObjectStore
     {
         readonly SnapshotConsistencyCloudObjectStore _inner = new();
-
-        public void Seed(string key) => _inner.Seed(key, "data"u8);
-
-        public bool Contains(string key) => _inner.GetData(key) is not null;
 
         public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
             _inner.GetAsync(objectKey, cancellationToken);
@@ -386,5 +384,9 @@ public sealed class CloudSstGarbageCollectionTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(string objectKey,
             CloudObjectDeleteCondition condition, CancellationToken cancellationToken) =>
             _inner.DeleteAsync(objectKey, condition, cancellationToken);
+
+        public void Seed(string key) => _inner.Seed(key, "data"u8);
+
+        public bool Contains(string key) => _inner.GetData(key) is not null;
     }
 }

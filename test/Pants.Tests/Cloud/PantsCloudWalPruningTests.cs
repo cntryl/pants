@@ -1,6 +1,7 @@
 using System.Text.Json;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudWalPruningTests
 {
@@ -11,7 +12,7 @@ public sealed class PantsCloudWalPruningTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -20,8 +21,8 @@ public sealed class PantsCloudWalPruningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, location).WithBackgroundCompaction(false),
             new RuntimeDependencies(cloudHttpClient: client));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("provider"u8.ToArray(), "value"u8.ToArray());
@@ -30,7 +31,7 @@ public sealed class PantsCloudWalPruningTests
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.False(handler.ContainsObjectPath("/wal/epochs/"));
         using var catalog = JsonDocument.Parse(
@@ -50,10 +51,10 @@ public sealed class PantsCloudWalPruningTests
                          options,
                          new RuntimeDependencies(cloudHttpClient: client)))
         {
-            var other = await database.CreateColumnFamilyAsync("provider-other");
+            var other = await database.ColumnFamilies.CreateAsync("provider-other");
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "provider-default-first"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
@@ -63,10 +64,10 @@ public sealed class PantsCloudWalPruningTests
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "provider-default-last"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
 
@@ -75,7 +76,7 @@ public sealed class PantsCloudWalPruningTests
                          options,
                          new RuntimeDependencies(cloudHttpClient: client)))
         {
-            await reopened.FlushAsync(reopened.DefaultColumnFamily);
+            await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
             Assert.NotEmpty(ReadProviderCatalogSegments(handler));
             await reopened.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
@@ -85,8 +86,8 @@ public sealed class PantsCloudWalPruningTests
             options,
             new RuntimeDependencies(cloudHttpClient: client));
         var recoveredOther = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await recovered.GetColumnFamilyAsync("provider-other"));
-        await using var reader = await recovered.BeginTransactionAsync(
+            await recovered.ColumnFamilies.GetAsync("provider-other"));
+        await using var reader = await recovered.Transactions.BeginAsync(
             recoveredOther,
             PantsTransactionMode.ReadOnly);
 
@@ -107,7 +108,8 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeSstWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -127,7 +129,8 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeMetadataWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -147,7 +150,8 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(() => database.FlushAsync(database.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -161,8 +165,8 @@ public sealed class PantsCloudWalPruningTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.Put("covered"u8.ToArray(), "value"u8.ToArray());
@@ -171,7 +175,7 @@ public sealed class PantsCloudWalPruningTests
 
             Assert.NotEmpty(RemoteWalPaths(directory.Path));
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
             Assert.Empty(ReadCatalogSegments(directory.Path));
             Assert.Empty(RemoteWalPaths(directory.Path));
@@ -179,8 +183,8 @@ public sealed class PantsCloudWalPruningTests
 
         RemoveLocalCache(directory.Path);
         await using var recovered = await PantsDatabase.OpenAsync(options);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
             await reader.GetAsync("covered"u8.ToArray()))));
@@ -195,8 +199,8 @@ public sealed class PantsCloudWalPruningTests
         string retiredRelativePath;
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.Put("retired"u8.ToArray(), "value"u8.ToArray());
@@ -206,7 +210,7 @@ public sealed class PantsCloudWalPruningTests
             var retiredPath = Assert.Single(RemoteWalPaths(directory.Path));
             retiredBytes = await File.ReadAllBytesAsync(retiredPath);
             retiredRelativePath = Path.GetRelativePath(CloudRoot(directory.Path), retiredPath);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         var restoredPath = Path.Combine(CloudRoot(directory.Path), retiredRelativePath);
@@ -215,8 +219,8 @@ public sealed class PantsCloudWalPruningTests
         RemoveLocalCache(directory.Path);
 
         await using var recovered = await PantsDatabase.OpenAsync(options);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -233,10 +237,10 @@ public sealed class PantsCloudWalPruningTests
         {
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "missing-sst"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
 
@@ -257,10 +261,10 @@ public sealed class PantsCloudWalPruningTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            var other = await database.CreateColumnFamilyAsync("other");
+            var other = await database.ColumnFamilies.CreateAsync("other");
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "default-first"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
@@ -270,11 +274,11 @@ public sealed class PantsCloudWalPruningTests
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "default-last"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
             Assert.NotEmpty(RemoteWalPaths(directory.Path));
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
@@ -283,8 +287,8 @@ public sealed class PantsCloudWalPruningTests
         ResetDirectory(Path.Combine(directory.Path, "wal"));
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var otherFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("other"));
-        await using var reader = await reopened.BeginTransactionAsync(
+            await reopened.ColumnFamilies.GetAsync("other"));
+        await using var reader = await reopened.Transactions.BeginAsync(
             otherFamily,
             PantsTransactionMode.ReadOnly);
 
@@ -301,28 +305,28 @@ public sealed class PantsCloudWalPruningTests
         {
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "range-10"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "range-15"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "range-25"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.DeleteRange("range-10"u8.ToArray(), "range-20"u8.ToArray());
                 await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             Assert.Empty(RemoteWalPaths(directory.Path));
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
@@ -330,8 +334,8 @@ public sealed class PantsCloudWalPruningTests
         ResetDirectory(Path.Combine(directory.Path, "wal"));
         ResetDirectory(Path.Combine(directory.Path, "sst"));
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Null(await reader.GetAsync("range-10"u8.ToArray()));
@@ -349,15 +353,15 @@ public sealed class PantsCloudWalPruningTests
         {
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "covered"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             Assert.Empty(RemoteWalPaths(directory.Path));
 
             await CommitValueAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "retained"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             Assert.NotEmpty(RemoteWalPaths(directory.Path));
@@ -367,8 +371,8 @@ public sealed class PantsCloudWalPruningTests
         ResetDirectory(Path.Combine(directory.Path, "wal"));
         ResetDirectory(Path.Combine(directory.Path, "sst"));
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -382,7 +386,7 @@ public sealed class PantsCloudWalPruningTests
             .WithBackgroundCompaction(false);
 
     static PantsCloudStorageLocation CreateProviderLocation() => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "account",
             "container",
             new Uri("https://storage.example.test"),
@@ -391,8 +395,8 @@ public sealed class PantsCloudWalPruningTests
 
     static async Task CommitProviderValueAsync(IPantsDatabase database)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("provider-proof"u8.ToArray(), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -404,7 +408,7 @@ public sealed class PantsCloudWalPruningTests
         ReadOnlyMemory<byte> key,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, "value"u8.ToArray());

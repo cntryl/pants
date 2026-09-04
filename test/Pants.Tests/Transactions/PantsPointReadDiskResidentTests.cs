@@ -1,10 +1,12 @@
-namespace Cntryl.Pants.Tests.Transactions;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Transactions;
 
 /// <summary>
-/// Slice 2 (issue #219) acceptance coverage: a point read's returned value — not only
-/// diagnostics — must be resolved from SST blocks once the writing memtable generation has
-/// been released from <c>RuntimeState.FamilyData</c> (see
-/// <c>RuntimeState.ReleaseFlushedGeneration</c> and <c>TransactionInstance.ReadVisibleValue</c>).
+///     Slice 2 (issue #219) acceptance coverage: a point read's returned value — not only
+///     diagnostics — must be resolved from SST blocks once the writing memtable generation has
+///     been released from <c>RuntimeState.FamilyData</c> (see
+///     <c>RuntimeState.ReleaseFlushedGeneration</c> and <c>TransactionInstance.ReadVisibleValue</c>).
 /// </summary>
 public sealed class PantsPointReadDiskResidentTests
 {
@@ -15,7 +17,7 @@ public sealed class PantsPointReadDiskResidentTests
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "present", "flushed-value");
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal("flushed-value", await ReadAsync(database, "present"));
     }
@@ -26,7 +28,7 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "present", "value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Null(await ReadAsync(database, "absent"));
     }
@@ -37,9 +39,9 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "key", "old-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await PutAsync(database, "key", "new-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal("new-value", await ReadAsync(database, "key"));
     }
@@ -50,16 +52,16 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
         await PutAsync(database, "key", "old-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await PutAsync(database, "zulu", "separate-file");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await PutAsync(database, "key", "new-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         Assert.Equal("new-value", await ReadAsync(database, "key"));
     }
@@ -74,7 +76,7 @@ public sealed class PantsPointReadDiskResidentTests
             await PutAsync(database, "large-key", new string((char)('0' + version), 40 * 1_024));
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal(new string('3', 40 * 1_024), await ReadAsync(database, "large-key"));
     }
@@ -86,10 +88,10 @@ public sealed class PantsPointReadDiskResidentTests
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "deleted", "old-value");
         await DeleteAsync(database, "deleted");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
@@ -109,10 +111,10 @@ public sealed class PantsPointReadDiskResidentTests
         await PutAsync(database, "alpha", "one");
         await PutAsync(database, "bravo", "two");
         await PutAsync(database, "charlie", "three");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.DeleteRange(
@@ -121,8 +123,8 @@ public sealed class PantsPointReadDiskResidentTests
             await deleting.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
@@ -140,7 +142,7 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "key", "old-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await PutAsync(database, "key", "new-in-memory-value");
 
         Assert.Equal("new-in-memory-value", await ReadAsync(database, "key"));
@@ -152,7 +154,7 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "key", "value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         await DeleteAsync(database, "key");
 
@@ -166,7 +168,7 @@ public sealed class PantsPointReadDiskResidentTests
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         await using var database = await OpenAsync(directory.Path, clock);
         await PutAsync(database, "key", "value", TimeSpan.FromSeconds(1));
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         clock.UtcNow += TimeSpan.FromSeconds(2);
 
@@ -180,7 +182,7 @@ public sealed class PantsPointReadDiskResidentTests
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         await using var database = await OpenAsync(directory.Path, clock);
         await PutAsync(database, "key", "value", TimeSpan.FromHours(1));
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         clock.UtcNow += TimeSpan.FromSeconds(1);
 
@@ -193,14 +195,14 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "key", "original");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        await using var olderSnapshot = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var olderSnapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         await PutAsync(database, "key", "overwritten");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         var seenByOlderSnapshot = await olderSnapshot.GetAsync(TestBytes.FromString("key"));
         Assert.Equal("original", TestBytes.ToText(seenByOlderSnapshot!.Value));
@@ -219,8 +221,8 @@ public sealed class PantsPointReadDiskResidentTests
         string value,
         TimeSpan? timeToLive = null)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value), timeToLive);
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -228,8 +230,8 @@ public sealed class PantsPointReadDiskResidentTests
 
     static async Task DeleteAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Delete(TestBytes.FromString(key));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -237,8 +239,8 @@ public sealed class PantsPointReadDiskResidentTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;

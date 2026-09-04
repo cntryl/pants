@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsRecoveryMetricsContractTests
 {
@@ -8,7 +10,7 @@ public sealed class PantsRecoveryMetricsContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
 
-        var recovery = await database.GetRecoveryMetricsAsync();
+        var recovery = await database.Diagnostics.GetRecoveryMetricsAsync();
 
         Assert.Equal(0, recovery.WalRecordsReplayed);
         Assert.Equal(0, recovery.WalBytesReplayed);
@@ -25,8 +27,8 @@ public sealed class PantsRecoveryMetricsContractTests
         {
             for (var index = 0; index < 20; index++)
             {
-                await using var transaction = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(
                     TestBytes.FromString($"recovery-key-{index}"),
@@ -37,7 +39,7 @@ public sealed class PantsRecoveryMetricsContractTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        var recovery = await reopened.GetRecoveryMetricsAsync();
+        var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
 
         Assert.True(recovery.WalRecordsReplayed > 0);
         Assert.True(recovery.WalBytesReplayed > 0);
@@ -55,8 +57,8 @@ public sealed class PantsRecoveryMetricsContractTests
             .WithTransactionMemoryPool(1_024);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             var value = new byte[900];
             for (var index = 0; index < 6; index++)
@@ -69,8 +71,8 @@ public sealed class PantsRecoveryMetricsContractTests
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        var recovery = await reopened.GetRecoveryMetricsAsync();
-        var runtime = await reopened.GetRuntimeMetricsAsync();
+        var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
+        var runtime = await reopened.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(8, recovery.WalRecordsReplayed);
         Assert.True(recovery.WalBytesReplayed > 0);

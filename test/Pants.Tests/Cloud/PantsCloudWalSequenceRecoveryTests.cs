@@ -1,7 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudWalSequenceRecoveryTests
 {
@@ -96,8 +97,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         string key,
         string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -108,8 +109,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         string key,
         string expected)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = Assert.IsType<ReadOnlyMemory<byte>>(
             await transaction.GetAsync(TestBytes.FromString(key)));
@@ -126,7 +127,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
             dependencies);
 
     static PantsCloudStorageLocation CreateProviderLocation() => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "account",
             "container",
             new Uri("https://storage.example.test"),

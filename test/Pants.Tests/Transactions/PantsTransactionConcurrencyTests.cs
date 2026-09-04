@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Transactions;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Transactions;
 
 public sealed class PantsTransactionConcurrencyTests
 {
@@ -58,7 +60,7 @@ public sealed class PantsTransactionConcurrencyTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await PutAsync(database, "key", "v1");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await using var transaction = await BeginWriteAsync(database);
         transaction.AssertValue("key"u8.ToArray(), "v1"u8.ToArray());
         transaction.Put("unrelated"u8.ToArray(), "value"u8.ToArray());
@@ -76,7 +78,7 @@ public sealed class PantsTransactionConcurrencyTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await PutAsync(database, "key", "old");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await using (var deleting = await BeginWriteAsync(database))
         {
             deleting.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
@@ -104,13 +106,13 @@ public sealed class PantsTransactionConcurrencyTests
         stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         stale.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
         await PutAsync(database, "key", "newer");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
             stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
         Assert.True(conflict.IsRangeConflict);
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.InRange(metrics.ScanBufferPeakBytes, 1, metrics.ScanBufferCapacityBytes);
         Assert.Equal(0, metrics.ScanBufferUsedBytes);
     }
@@ -122,7 +124,7 @@ public sealed class PantsTransactionConcurrencyTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await PutAsync(database, "key", "old");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await using var transaction = await BeginWriteAsync(database);
         transaction.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         transaction.DeleteRange("a"u8.ToArray(), "z"u8.ToArray());
@@ -152,7 +154,7 @@ public sealed class PantsTransactionConcurrencyTests
         stale.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         stale.Put("key"u8.ToArray(), "stale"u8.ToArray());
         await PutAsync(database, "key", "newer");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
             stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
@@ -175,7 +177,7 @@ public sealed class PantsTransactionConcurrencyTests
             await newer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
             stale.CommitAsync(PantsWriteOptions.Buffered).AsTask());
@@ -190,7 +192,7 @@ public sealed class PantsTransactionConcurrencyTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         await PutAsync(database, "key", "old");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await using (var deleting = await BeginWriteAsync(database))
         {
             deleting.Delete("key"u8.ToArray());
@@ -293,10 +295,10 @@ public sealed class PantsTransactionConcurrencyTests
     }
 
     static ValueTask<IPantsTransaction> BeginWriteAsync(IPantsDatabase database) =>
-        database.BeginTransactionAsync(database.DefaultColumnFamily, PantsTransactionMode.ReadWrite);
+        database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
 
     static ValueTask<IPantsTransaction> BeginReadAsync(IPantsDatabase database) =>
-        database.BeginTransactionAsync(database.DefaultColumnFamily, PantsTransactionMode.ReadOnly);
+        database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
 
     static async Task PutAsync(IPantsDatabase database, string key, string value)
     {

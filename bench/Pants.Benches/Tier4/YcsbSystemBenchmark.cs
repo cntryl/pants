@@ -2,23 +2,22 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Scan;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public abstract class YcsbSystemBenchmark : Tier4Benchmark
 {
     public const int InitialKeyCount = 50_000;
     public const int OperationCount = 1_000;
     const int BatchSize = 1_000;
-    string _path = null!;
     IPantsDatabase _database = null!;
+    string _path = null!;
     byte[] _value = null!;
 
     protected abstract YcsbWorkload Workload { get; }
 
     public abstract IEnumerable<YcsbScenario> Scenarios { get; }
 
-    [ParamsSource(nameof(Scenarios))]
-    public YcsbScenario Scenario { get; set; } = null!;
+    [ParamsSource(nameof(Scenarios))] public YcsbScenario Scenario { get; set; } = null!;
 
     [GlobalSetup]
     public async Task SetupAsync()
@@ -92,7 +91,7 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
             case YcsbWorkload.D:
                 if (selector < 95)
                 {
-                    await Tier4Database.GetAsync(_database, Tier4Data.Key(InitialKeyCount - 1 - (keyIndex % 1_000)));
+                    await Tier4Database.GetAsync(_database, Tier4Data.Key(InitialKeyCount - 1 - keyIndex % 1_000));
                 }
                 else
                 {
@@ -145,8 +144,8 @@ public abstract class YcsbSystemBenchmark : Tier4Benchmark
 
     async ValueTask ScanAsync(int keyIndex)
     {
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery
         {

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class TestCloudLeaseStore : ICloudLeaseStore
 {

@@ -2,7 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Sst;
 using Cntryl.Pants.Storage.Internal.Sst.Compression;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class CompressionSubsystemBenchmarks : Tier2Benchmark
 {

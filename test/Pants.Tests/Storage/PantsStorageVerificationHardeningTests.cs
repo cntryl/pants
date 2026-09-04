@@ -1,7 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Runtime;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsStorageVerificationHardeningTests
@@ -170,7 +173,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
 
-        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+        var report = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(report.Authoritative);
     }
@@ -203,7 +206,7 @@ public sealed class PantsStorageVerificationHardeningTests
             new RuntimeDependencies(
                 storageVerifier: verifier,
                 verificationBarrierResponse: barrierResponse));
-        var verification = database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(1)).AsTask();
 
         try
         {
@@ -212,7 +215,7 @@ public sealed class PantsStorageVerificationHardeningTests
             Assert.False(verification.IsCompleted);
             await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
             await Assert.ThrowsAsync<PantsBusyException>(() =>
-                database.CreateColumnFamilyAsync("still-pinned").AsTask());
+                database.ColumnFamilies.CreateAsync("still-pinned").AsTask());
         }
         finally
         {
@@ -231,7 +234,7 @@ public sealed class PantsStorageVerificationHardeningTests
             new RuntimeDependencies(storageVerifier: (_, _) =>
                 ValueTask.FromResult(HealthyReport())));
 
-        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+        var report = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2));
 
         Assert.False(report.Authoritative);
     }
@@ -247,7 +250,7 @@ public sealed class PantsStorageVerificationHardeningTests
         var sstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
         await File.WriteAllTextAsync(Path.Combine(sstDirectory.FullName, "orphan.sst"), "orphan");
 
-        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(2));
+        var report = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(PantsEngineHealth.Degraded, report.Health);
     }
@@ -279,14 +282,15 @@ public sealed class PantsStorageVerificationHardeningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
-        var verification = database
-            .VerifyStorageAsync(TimeSpan.FromSeconds(5))
+        var verification = database.PersistentStorage!
+            .VerifyAsync(TimeSpan.FromSeconds(5))
             .AsTask();
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsBusyException>(() => database.CreateColumnFamilyAsync("blocked").AsTask());
-            await Assert.ThrowsAsync<PantsBusyException>(() => database.SetBackgroundCompactionAsync(false).AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() => database.ColumnFamilies.CreateAsync("blocked").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                database.Maintenance.SetBackgroundCompactionAsync(false).AsTask());
         }
         finally
         {
@@ -294,7 +298,7 @@ public sealed class PantsStorageVerificationHardeningTests
         }
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
-        Assert.Equal("allowed", (await database.CreateColumnFamilyAsync("allowed")).Name);
+        Assert.Equal("allowed", (await database.ColumnFamilies.CreateAsync("allowed")).Name);
     }
 
     [Fact]
@@ -312,18 +316,18 @@ public sealed class PantsStorageVerificationHardeningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
-        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
             await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
             await Assert.ThrowsAsync<PantsBusyException>(() =>
-                database.CreateColumnFamilyAsync("still-pinned").AsTask());
+                database.ColumnFamilies.CreateAsync("still-pinned").AsTask());
             await Assert.ThrowsAsync<PantsBusyException>(() =>
                 transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
@@ -333,7 +337,7 @@ public sealed class PantsStorageVerificationHardeningTests
             _ = await CreateColumnFamilyEventuallyAsync(database, "after-verification");
         }
 
-        var created = await database.GetColumnFamilyAsync("after-verification");
+        var created = await database.ColumnFamilies.GetAsync("after-verification");
 
         Assert.Equal("after-verification", Assert.IsAssignableFrom<IPantsColumnFamily>(created).Name);
     }
@@ -354,8 +358,8 @@ public sealed class PantsStorageVerificationHardeningTests
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
         using var cancellation = new CancellationTokenSource();
-        var verification = database
-            .VerifyStorageAsync(TimeSpan.FromSeconds(5), cancellation.Token)
+        var verification = database.PersistentStorage!
+            .VerifyAsync(TimeSpan.FromSeconds(5), cancellation.Token)
             .AsTask();
 
         try
@@ -364,7 +368,7 @@ public sealed class PantsStorageVerificationHardeningTests
             cancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verification);
             await Assert.ThrowsAsync<PantsBusyException>(() =>
-                database.CreateColumnFamilyAsync("still-pinned").AsTask());
+                database.ColumnFamilies.CreateAsync("still-pinned").AsTask());
         }
         finally
         {
@@ -390,15 +394,15 @@ public sealed class PantsStorageVerificationHardeningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
-        var firstVerification = database
-            .VerifyStorageAsync(TimeSpan.FromSeconds(5))
+        var firstVerification = database.PersistentStorage!
+            .VerifyAsync(TimeSpan.FromSeconds(5))
             .AsTask();
 
         try
         {
             await started.Task.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsTimeoutException>(() => database
-                .VerifyStorageAsync(TimeSpan.FromMilliseconds(25))
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => database.PersistentStorage!
+                .VerifyAsync(TimeSpan.FromMilliseconds(25))
                 .AsTask()
                 .WaitAsync(AssertionTimeout));
             Assert.Equal(1, Volatile.Read(ref invocations));
@@ -437,7 +441,7 @@ public sealed class PantsStorageVerificationHardeningTests
             new RuntimeDependencies(
                 storageVerifier: verifier,
                 verificationBarrierResponse: barrierResponse));
-        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         try
         {
@@ -464,10 +468,11 @@ public sealed class PantsStorageVerificationHardeningTests
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoint));
 
-        await Assert.ThrowsAsync<PantsIOException>(() => database.VerifyStorageAsync(TimeSpan.FromSeconds(1)).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(1)).AsTask());
 
-        Assert.Equal("barrier-released", (await database
-            .CreateColumnFamilyAsync("barrier-released")).Name);
+        Assert.Equal("barrier-released", (await database.ColumnFamilies
+            .CreateAsync("barrier-released")).Name);
     }
 
     [Fact]
@@ -485,7 +490,7 @@ public sealed class PantsStorageVerificationHardeningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
-        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         try
         {
@@ -493,7 +498,7 @@ public sealed class PantsStorageVerificationHardeningTests
             await Assert.ThrowsAsync<PantsTimeoutException>(() => verification.WaitAsync(AssertionTimeout));
             await Assert.ThrowsAsync<PantsTimeoutException>(() =>
                 database.ShutdownAsync(TimeSpan.FromMilliseconds(25)).AsTask());
-            await Assert.ThrowsAsync<PantsBusyException>(() => database.CreateColumnFamilyAsync("closing").AsTask());
+            await Assert.ThrowsAsync<PantsBusyException>(() => database.ColumnFamilies.CreateAsync("closing").AsTask());
             await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
                 PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
         }
@@ -504,7 +509,7 @@ public sealed class PantsStorageVerificationHardeningTests
 
         await using var reopened = await OpenEventuallyAsync(directory.Path);
 
-        Assert.True(reopened.IsPrimaryLeaseHealthy);
+        Assert.True(reopened.PersistentStorage!.IsPrimaryLeaseHealthy);
     }
 
     [Fact]
@@ -522,7 +527,7 @@ public sealed class PantsStorageVerificationHardeningTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(storageVerifier: verifier));
-        var verification = database.VerifyStorageAsync(TimeSpan.FromMilliseconds(25)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         var longShutdown = Task.CompletedTask;
         try
@@ -552,7 +557,7 @@ public sealed class PantsStorageVerificationHardeningTests
             timeout.Token.ThrowIfCancellationRequested();
             try
             {
-                return await database.CreateColumnFamilyAsync(name, timeout.Token);
+                return await database.ColumnFamilies.CreateAsync(name, timeout.Token);
             }
             catch (PantsBusyException)
             {

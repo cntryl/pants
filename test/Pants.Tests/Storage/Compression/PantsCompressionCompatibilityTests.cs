@@ -1,8 +1,9 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage.Compression;
+namespace Cntryl.Pants.Storage.Compression;
 
 public sealed class PantsCompressionCompatibilityTests
 {
@@ -34,8 +35,7 @@ public sealed class PantsCompressionCompatibilityTests
     [Fact]
     public void ShouldRejectUnrecognizedCompressionAlgorithmAsCorruption()
     {
-        var exception = Assert.Throws<PantsCorruptionException>(
-            () => DiskFormat.Decompress("payload"u8.ToArray(), 99));
+        var exception = Assert.Throws<PantsCorruptionException>(() => DiskFormat.Decompress("payload"u8.ToArray(), 99));
 
         Assert.Contains("compression", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -178,7 +178,7 @@ public sealed class PantsCompressionCompatibilityTests
         {
             await WriteRecordsAndFlushAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 [
                     new KeyValuePair<byte[], byte[]>("empty"u8.ToArray(), []),
                     new KeyValuePair<byte[], byte[]>("random"u8.ToArray(), incompressible)
@@ -187,8 +187,8 @@ public sealed class PantsCompressionCompatibilityTests
 
         await using var reopened =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency));
-        await using var read = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var read = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Empty((await read.GetAsync("empty"u8.ToArray()))!.Value.ToArray());
@@ -204,16 +204,16 @@ public sealed class PantsCompressionCompatibilityTests
         await using (var latency =
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
-            var family = await latency.CreateColumnFamilyAsync("policies");
+            var family = await latency.ColumnFamilies.CreateAsync("policies");
             await WriteRecordsAndFlushAsync(latency, family, latencyRecords);
         }
 
         await using var economy =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await economy.GetColumnFamilyAsync("policies"));
+            await economy.ColumnFamilies.GetAsync("policies"));
         await WriteRecordsAndFlushAsync(economy, reopenedFamily, economyRecords);
-        await using var read = await economy.BeginTransactionAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
+        await using var read = await economy.Transactions.BeginAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
         var rows = await ReadAllAsync(read);
 
         Assert.Equal(latencyRecords.Length + economyRecords.Length, rows.Count);
@@ -233,7 +233,7 @@ public sealed class PantsCompressionCompatibilityTests
         await using (var latency =
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Latency)))
         {
-            var family = await latency.CreateColumnFamilyAsync("policies");
+            var family = await latency.ColumnFamilies.CreateAsync("policies");
             foreach (var batch in batches[..3])
             {
                 await WriteRecordsAndFlushAsync(latency, family, batch);
@@ -248,12 +248,12 @@ public sealed class PantsCompressionCompatibilityTests
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Economy)))
         {
             var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await economy.GetColumnFamilyAsync("policies"));
+                await economy.ColumnFamilies.GetAsync("policies"));
             await WriteRecordsAndFlushAsync(economy, family, batches[3]);
             Assert.Contains(
                 SortedSstFiles(directory.Path).SelectMany(static file => SstBlockAlgorithms(file.Bytes)),
                 algorithm => algorithm == (byte)CompressionAlgorithm.Zstd9);
-            await economy.CompactAllAsync();
+            await economy.Maintenance.CompactAllAsync();
         }
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
@@ -265,8 +265,8 @@ public sealed class PantsCompressionCompatibilityTests
         await using var reopened =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("policies"));
-        await using var read = await reopened.BeginTransactionAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
+            await reopened.ColumnFamilies.GetAsync("policies"));
+        await using var read = await reopened.Transactions.BeginAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
         var rows = await ReadAllAsync(read);
         Assert.Equal(batches.Sum(static batch => batch.Length), rows.Count);
         foreach (var record in batches.SelectMany(static batch => batch))
@@ -307,8 +307,8 @@ public sealed class PantsCompressionCompatibilityTests
         await using var reopened =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var family = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("adaptive"));
-        await using var read = await reopened.BeginTransactionAsync(family, PantsTransactionMode.ReadOnly);
+            await reopened.ColumnFamilies.GetAsync("adaptive"));
+        await using var read = await reopened.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly);
         var rows = await ReadAllAsync(read);
 
         Assert.Equal(PantsEngineHealth.Healthy, report.Health);
@@ -333,18 +333,18 @@ public sealed class PantsCompressionCompatibilityTests
         await using (var database =
                      await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput)))
         {
-            var family = await database.CreateColumnFamilyAsync("adaptive");
+            var family = await database.ColumnFamilies.CreateAsync("adaptive");
             await WriteRecordsAndFlushAsync(database, family, firstBatch);
             await WriteRecordsAndFlushAsync(database, family, secondBatch);
-            await database.CompactAllAsync();
+            await database.Maintenance.CompactAllAsync();
         }
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         await using var reopened =
             await PantsDatabase.OpenAsync(LocalOptions(directory.Path, PantsPerformanceGoal.Throughput));
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("adaptive"));
-        await using var read = await reopened.BeginTransactionAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
+            await reopened.ColumnFamilies.GetAsync("adaptive"));
+        await using var read = await reopened.Transactions.BeginAsync(reopenedFamily, PantsTransactionMode.ReadOnly);
         var rows = await ReadAllAsync(read);
 
         Assert.Equal(PantsEngineHealth.Healthy, report.Health);
@@ -390,7 +390,7 @@ public sealed class PantsCompressionCompatibilityTests
         IPantsColumnFamily family,
         IReadOnlyList<KeyValuePair<byte[], byte[]>> records)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         foreach (var record in records)
@@ -399,7 +399,7 @@ public sealed class PantsCompressionCompatibilityTests
         }
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
-        await database.FlushAsync(family);
+        await database.Maintenance.FlushAsync(family);
     }
 
     static async Task WriteFreshAdaptiveDatabaseAsync(
@@ -408,7 +408,7 @@ public sealed class PantsCompressionCompatibilityTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             LocalOptions(path, PantsPerformanceGoal.Throughput));
-        var family = await database.CreateColumnFamilyAsync("adaptive");
+        var family = await database.ColumnFamilies.CreateAsync("adaptive");
         await WriteRecordsAndFlushAsync(database, family, records);
     }
 

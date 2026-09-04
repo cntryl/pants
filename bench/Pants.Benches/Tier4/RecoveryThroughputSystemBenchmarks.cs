@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
 {
@@ -10,8 +10,7 @@ public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
     [Params(Tier4StorageMode.Local, Tier4StorageMode.SimulatedCloud)]
     public Tier4StorageMode StorageMode { get; set; }
 
-    [ParamsAllValues]
-    public RecoveryState State { get; set; }
+    [ParamsAllValues] public RecoveryState State { get; set; }
 
     [GlobalSetup]
     public async Task SetupAsync()
@@ -22,10 +21,10 @@ public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
             database,
             Enumerable.Range(0, KeyCount).Select(index => (Tier4Data.Key(index), Tier4Data.Value(64, index))),
             Tier4Database.WriteOptions(StorageMode));
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         if (State == RecoveryState.Compacted)
         {
-            await database.CompactAllAsync();
+            await database.Maintenance.CompactAllAsync();
         }
 
         await database.ShutdownAsync(TimeSpan.FromSeconds(10));

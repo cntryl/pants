@@ -1,11 +1,15 @@
 using System.Text;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 [Trait("Category", "Sqrzl")]
 public sealed class SqrzlCloudProviderQualificationTests
 {
     static readonly string Endpoint = ResolveEndpoint();
+
     static readonly HttpClient HealthClient = new()
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -76,21 +80,24 @@ public sealed class SqrzlCloudProviderQualificationTests
         {
             Prefix = $"qualification/{Guid.NewGuid():N}"
         };
-        var store = CloudObjectStoreFactory.Create(location, TimeSpan.FromSeconds(10));
+        await using var store = await CloudObjectStoreFactory.CreateAsync(
+            location,
+            TimeSpan.FromSeconds(10));
         const string key = "objects/value.bin";
         const string emptyKey = "objects/empty.bin";
         var initial = "hello-sqrzl"u8.ToArray();
-        var updated = "updated"u8.ToArray();
+        var updated = "world-sqrzl"u8.ToArray();
+        Assert.Equal(initial.Length, updated.Length);
 
         Assert.True(await store.PutAsync(
             key,
             initial,
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
         Assert.False(await store.PutAsync(
             key,
             "duplicate"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
 
         var read = Assert.IsType<CloudObject>(
@@ -101,16 +108,17 @@ public sealed class SqrzlCloudProviderQualificationTests
             await store.HeadAsync(key, CancellationToken.None));
         Assert.Equal((ulong)initial.Length, metadata.SizeBytes);
         Assert.False(string.IsNullOrWhiteSpace(metadata.Version));
+        Assert.Equal(read.Version, metadata.Version);
 
         Assert.True(await store.PutAsync(
             key,
             updated,
-            new CloudObjectWriteCondition.IfVersion(read.Version),
+            new PantsCloudObjectWriteCondition.IfVersion(read.Version),
             CancellationToken.None));
         Assert.False(await store.PutAsync(
             key,
             initial,
-            new CloudObjectWriteCondition.IfVersion(read.Version),
+            new PantsCloudObjectWriteCondition.IfVersion(read.Version),
             CancellationToken.None));
         Assert.Equal(
             updated,
@@ -119,7 +127,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         Assert.True(await store.PutAsync(
             emptyKey,
             ReadOnlyMemory<byte>.Empty,
-            new CloudObjectWriteCondition.Unconditional(),
+            new PantsCloudObjectWriteCondition.Unconditional(),
             CancellationToken.None));
         Assert.Empty((await store.GetAsync(emptyKey, CancellationToken.None))!.Data.ToArray());
 
@@ -132,19 +140,20 @@ public sealed class SqrzlCloudProviderQualificationTests
             CloudObjectDeleteOutcome.ConditionNotMet,
             await store.DeleteAsync(
                 key,
-                new CloudObjectDeleteCondition.IfVersion(read.Version),
+                new PantsCloudObjectDeleteCondition.IfVersion(read.Version),
                 CancellationToken.None));
         var current = Assert.IsType<CloudObject>(
             await store.GetAsync(key, CancellationToken.None));
+        Assert.Equal(updated, current.Data.ToArray());
         Assert.Equal(
             CloudObjectDeleteOutcome.Deleted,
             await store.DeleteAsync(
                 key,
-                new CloudObjectDeleteCondition.IfVersion(current.Version),
+                new PantsCloudObjectDeleteCondition.IfVersion(current.Version),
                 CancellationToken.None));
         var missingDelete = await store.DeleteAsync(
             key,
-            new CloudObjectDeleteCondition.Unconditional(),
+            new PantsCloudObjectDeleteCondition.Unconditional(),
             CancellationToken.None);
         Assert.Contains(
             missingDelete,
@@ -166,23 +175,23 @@ public sealed class SqrzlCloudProviderQualificationTests
             topology.Control with { Prefix = prefix });
 
         await using (var database = await PantsDatabase.OpenAsync(
-            PantsOpenOptions.CloudMulti(sourceCache.Path, topology)
-                .WithBackgroundCompaction(false)))
+                         PantsOpenOptions.CloudMulti(sourceCache.Path, topology)
+                             .WithBackgroundCompaction(false)))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("engine-key"u8.ToArray(), "engine-value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await database.ShutdownAsync(TimeSpan.FromSeconds(10));
         }
 
         await using var recovered = await PantsDatabase.OpenAsync(
             PantsOpenOptions.CloudMulti(replacementCache.Path, topology)
                 .WithBackgroundCompaction(false));
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = Assert.IsType<ReadOnlyMemory<byte>>(
             await reader.GetAsync("engine-key"u8.ToArray()));
@@ -204,14 +213,16 @@ public sealed class SqrzlCloudProviderQualificationTests
                 sourceCache.Path,
                 PantsCloudStorageTopology.Shared(location))
             .WithBackgroundCompaction(false)
-            .WithStorageTimeout(TimeSpan.FromMilliseconds(250))
-            .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(500));
+            // The same budgets also cover real provider startup. Hold the failpoint
+            // through the deadline instead of requiring startup to finish in 500 ms.
+            .WithStorageTimeout(TimeSpan.FromSeconds(2))
+            .WithRuntimeResponseTimeout(TimeSpan.FromSeconds(5));
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
@@ -220,7 +231,7 @@ public sealed class SqrzlCloudProviderQualificationTests
             try
             {
                 var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                    commit.WaitAsync(TimeSpan.FromSeconds(5)));
+                    commit.WaitAsync(TimeSpan.FromSeconds(15)));
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -238,8 +249,8 @@ public sealed class SqrzlCloudProviderQualificationTests
                     replacementCache.Path,
                     PantsCloudStorageTopology.Shared(location))
                 .WithBackgroundCompaction(false));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "accepted-value"u8.ToArray(),
@@ -252,7 +263,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         using var cancellation = new CancellationTokenSource(timeout);
         while (!cancellation.IsCancellationRequested)
         {
-            var metrics = await database.GetRuntimeMetricsAsync(cancellation.Token);
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(cancellation.Token);
             if (metrics.RuntimeLateResponsesTotal >= 1)
             {
                 return;
@@ -277,7 +288,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
         {
-            throw new Xunit.Sdk.XunitException(
+            throw new XunitException(
                 $"Sqrzl qualification requires a running emulator at {Endpoint}. " +
                 "Start it with 'docker compose up -d sqrzl'.",
                 exception);
@@ -286,13 +297,13 @@ public sealed class SqrzlCloudProviderQualificationTests
 
     static string ResolveEndpoint()
     {
-        var configuredEndpoint = Environment.GetEnvironmentVariable("PANTS_SQRZL_ENDPOINT");
+        var configuredEndpoint = Environment.GetEnvironmentVariable("SQRZL_ENDPOINT");
         if (!string.IsNullOrWhiteSpace(configuredEndpoint))
         {
             return configuredEndpoint.TrimEnd('/');
         }
 
-        var configuredPort = Environment.GetEnvironmentVariable("PANTS_SQRZL_API_PORT");
+        var configuredPort = Environment.GetEnvironmentVariable("SQRZL_API_PORT");
         if (string.IsNullOrWhiteSpace(configuredPort))
         {
             configuredPort = "9000";
@@ -301,14 +312,14 @@ public sealed class SqrzlCloudProviderQualificationTests
         if (!ushort.TryParse(configuredPort, out var port) || port == 0)
         {
             throw new InvalidOperationException(
-                "PANTS_SQRZL_API_PORT must be an integer from 1 through 65535.");
+                "SQRZL_API_PORT must be an integer from 1 through 65535.");
         }
 
         return $"http://127.0.0.1:{port}";
     }
 
     static PantsCloudStorageLocation CreateS3Location() => new(
-        new PantsCloudProviderConfiguration.S3Compatible(
+        new PantsS3CompatibleProvider(
             "pants-sqrzl-s3",
             "us-east-1",
             new Uri(Endpoint),
@@ -317,7 +328,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         string.Empty);
 
     static PantsCloudStorageLocation CreateAzureLocation() => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "admin",
             "pants-sqrzl-azure",
             new Uri($"{Endpoint}/admin"),
@@ -326,7 +337,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         string.Empty);
 
     static PantsCloudStorageLocation CreateGcsXmlLocation() => new(
-        new PantsCloudProviderConfiguration.Gcs(
+        new PantsGcsProvider(
             "pants-sqrzl-gcs-xml",
             "sqrzl",
             new Uri(Endpoint),
@@ -335,7 +346,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         string.Empty);
 
     static PantsCloudStorageLocation CreateGcsJsonLocation() => new(
-        new PantsCloudProviderConfiguration.Gcs(
+        new PantsGcsProvider(
             "pants-sqrzl-gcs-json",
             "sqrzl",
             new Uri(Endpoint),

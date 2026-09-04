@@ -1,6 +1,6 @@
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 static class Tier2Database
 {
@@ -10,8 +10,8 @@ static class Tier2Database
         ReadOnlyMemory<byte> value,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
         await transaction.CommitAsync(writeOptions);
@@ -21,8 +21,8 @@ static class Tier2Database
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(key);
     }

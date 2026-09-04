@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsProviderCloudDiskResidentReadTests
 {
@@ -13,8 +15,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
                          options,
                          new RuntimeDependencies(cloudHttpClient: client)))
         {
-            await using var writer = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             for (var index = 0; index < 96; index++)
             {
@@ -22,7 +24,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             }
 
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         foreach (var path in Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"))
@@ -34,8 +36,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var value = await reader.GetAsync(Key(48));
@@ -76,15 +78,15 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         handler.ReplaceSstOnNextRange();
 
         await Assert.ThrowsAnyAsync<PantsException>(() => reader.GetAsync(Key(48)).AsTask());
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-        Assert.Equal(0, (await reopened.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
+        Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
     }
 
     [Fact]
@@ -100,8 +102,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         handler.Arm();
         try
@@ -115,7 +117,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         }
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-        Assert.Equal(0, (await reopened.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
+        Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
     }
 
     [Fact]
@@ -125,19 +127,19 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         using var handler = new GatedSstReadHttpHandler(new InMemoryAzureBlobHandler());
         using var client = new HttpClient(handler, false);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
                          new RuntimeDependencies(cloudHttpClient: client)))
         {
             for (var batch = 0; batch < 3; batch++)
             {
-                await using var writer = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var writer = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 writer.Put(Key(batch), Value(batch));
                 await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
         }
 
@@ -147,7 +149,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             new RuntimeDependencies(cloudHttpClient: client));
         using var cancellation = new CancellationTokenSource();
         handler.Arm();
-        var compaction = reopened.CompactAllAsync(cancellation.Token).AsTask();
+        var compaction = reopened.Maintenance.CompactAllAsync(cancellation.Token).AsTask();
         try
         {
             await handler.WaitUntilRequestStartsAsync(TimeSpan.FromSeconds(5));
@@ -162,7 +164,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
 
         // The canceled caller can observe its response before the admitted actor command finishes
         // unwinding. This query is ordered behind that command and establishes the cleanup boundary.
-        var metrics = await reopened.GetRuntimeMetricsAsync();
+        var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp", SearchOption.AllDirectories));
         Assert.Equal(0, metrics.CompactionBufferUsedBytes);
@@ -174,8 +176,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var writer = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var writer = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         for (var index = 0; index < 96; index++)
         {
@@ -183,7 +185,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         }
 
         await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static void RemoveLocalSsts(string path)
@@ -197,7 +199,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
     static PantsOpenOptions CreateOptions(string path)
     {
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),

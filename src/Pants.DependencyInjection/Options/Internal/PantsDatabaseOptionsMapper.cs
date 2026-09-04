@@ -1,8 +1,7 @@
 using Cntryl.Pants.Cloud;
-using Cntryl.Pants.DependencyInjection.Options;
 using Cntryl.Pants.Storage;
 
-namespace Cntryl.Pants.DependencyInjection.Options.Internal;
+namespace Cntryl.Pants.Options.Internal;
 
 static class PantsDatabaseOptionsMapper
 {
@@ -18,28 +17,33 @@ static class PantsDatabaseOptionsMapper
                 "A memtable flush threshold requires a memtable size limit.");
         }
 
-        return PantsOpenOptions.FromSettings(
+        var result = PantsOpenOptions.Create(
             CreateStorage(options.Storage),
-            options.PerformanceGoal,
-            options.MemoryBudgetBytes is { } memoryBudgetBytes
-                ? PantsMemoryBudget.FromBytes(memoryBudgetBytes)
-                : PantsMemoryBudget.Auto,
-            options.WorkloadProfile,
-            options.RecoveryPolicy,
-            options.BlockCachePolicy,
-            CreateCloudWritePolicy(options.CloudWritePolicy),
-            options.StorageTimeout,
-            options.RuntimeResponseTimeout,
-            options.ShutdownTimeout,
-            options.BackgroundCompaction,
-            options.MemtableSizeLimitBytes,
-            options.MemtableFlushThresholdBytes,
-            options.TransactionMemoryPoolBytes,
-            options.WalBufferSizeBytes,
-            options.LeaseTimeToLive,
-            options.LeaseClockSkewTolerance,
+            new PantsRuntimeConfiguration(
+                options.PerformanceGoal,
+                options.WorkloadProfile,
+                options.StorageTimeout,
+                options.RuntimeResponseTimeout,
+                options.ShutdownTimeout),
+            new PantsMemoryConfiguration(
+                options.MemoryBudgetBytes is { } memoryBudgetBytes
+                    ? PantsMemoryBudget.FromBytes(memoryBudgetBytes)
+                    : PantsMemoryBudget.Auto,
+                options.BlockCachePolicy,
+                options.MemtableSizeLimitBytes,
+                options.MemtableFlushThresholdBytes,
+                options.TransactionMemoryPoolBytes,
+                options.WalBufferSizeBytes),
+            new PantsLeaseConfiguration(
+                options.LeaseTimeToLive,
+                options.LeaseClockSkewTolerance,
+                options.MinimumEpoch),
             CreateCompaction(options.Compaction),
-            options.MinimumEpoch);
+            options.RecoveryPolicy,
+            CreateCloudWritePolicy(options.CloudWritePolicy))
+            .WithBackgroundCompaction(options.BackgroundCompaction);
+        PantsOpenOptionsValidator.Validate(result);
+        return result;
     }
 
     static PantsStorageConfiguration CreateStorage(PantsStorageOptions options) =>
@@ -70,7 +74,7 @@ static class PantsDatabaseOptionsMapper
     {
         var cloud = options.Cloud ?? throw new InvalidOperationException(
             "Cloud settings are required for cloud storage.");
-        PantsCloudStorageLocation? shared = cloud.Shared is null
+        var shared = cloud.Shared is null
             ? null
             : CreateLocation(cloud.Shared);
         var wal = cloud.Wal is null ? shared : CreateLocation(cloud.Wal);
@@ -94,31 +98,31 @@ static class PantsDatabaseOptionsMapper
             options.Prefix ?? throw new InvalidOperationException(
                 "A cloud location prefix must not be null."));
 
-    static PantsCloudProviderConfiguration CreateProvider(PantsCloudProviderOptions options)
+    static IPantsCloudProvider CreateProvider(PantsCloudProviderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options.Credential);
         return options.Kind switch
         {
-            PantsCloudProviderKind.AwsS3 => new PantsCloudProviderConfiguration.AwsS3(
+            PantsCloudProviderKind.AwsS3 => new PantsAwsS3Provider(
                 RequireText(options.Bucket, "The AWS S3 bucket must not be empty."),
                 RequireText(options.Region, "The AWS region must not be empty."),
                 CreateS3Credential(options.Credential)),
             PantsCloudProviderKind.S3Compatible =>
-                new PantsCloudProviderConfiguration.S3Compatible(
+                new PantsS3CompatibleProvider(
                     RequireText(options.Bucket, "The S3-compatible bucket must not be empty."),
                     RequireText(options.Region, "The S3-compatible region must not be empty."),
                     options.Endpoint ?? throw new InvalidOperationException(
                         "The S3-compatible endpoint is required."),
                     options.PathStyle,
                     CreateS3Credential(options.Credential, false)),
-            PantsCloudProviderKind.AzureBlob => new PantsCloudProviderConfiguration.AzureBlob(
+            PantsCloudProviderKind.AzureBlob => new PantsAzureBlobProvider(
                 RequireText(options.Account, "The Azure account must not be empty."),
                 RequireText(options.Container, "The Azure container must not be empty."),
                 options.Endpoint,
                 CreateAzureCredential(options.Credential)),
             PantsCloudProviderKind.Gcs => CreateGcsProvider(options),
             PantsCloudProviderKind.OciObjectStorage =>
-                new PantsCloudProviderConfiguration.OciObjectStorage(
+                new PantsOciObjectStorageProvider(
                     RequireText(options.Namespace, "The OCI namespace must not be empty."),
                     RequireText(options.Bucket, "The OCI bucket must not be empty."),
                     RequireText(options.Region, "The OCI region must not be empty."),
@@ -127,7 +131,7 @@ static class PantsDatabaseOptionsMapper
             _ => throw new InvalidOperationException("The cloud provider kind is invalid.")
         };
 
-        static PantsCloudProviderConfiguration.Gcs CreateGcsProvider(
+        static PantsGcsProvider CreateGcsProvider(
             PantsCloudProviderOptions options)
         {
             if (options.Credential.Kind == PantsCloudCredentialKind.GcsHmacKey &&
@@ -137,7 +141,7 @@ static class PantsDatabaseOptionsMapper
                     "GCS HMAC credentials require the XML API style.");
             }
 
-            return new PantsCloudProviderConfiguration.Gcs(
+            return new PantsGcsProvider(
                 RequireText(options.Bucket, "The GCS bucket must not be empty."),
                 RequireText(options.ProjectId, "The GCS project ID must not be empty."),
                 options.Endpoint,

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests.Compatibility;
+namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeCompatibilityFixtureTests
 {
@@ -26,10 +26,10 @@ public sealed class MidgeCompatibilityFixtureTests
 
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
 
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();

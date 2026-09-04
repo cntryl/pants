@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class SstBlockIteratorTests
 {
@@ -42,7 +44,7 @@ public sealed class SstBlockIteratorTests
         using var iterator = SstBlockIterator.Create(
             reader,
             PantsScanDirection.Forward,
-            startInclusive: lowerBound);
+            lowerBound);
         var observed = Drain(iterator);
 
         var expected = entries.Where(entry => entry.Key.AsSpan().SequenceCompareTo(lowerBound) >= 0);
@@ -73,8 +75,8 @@ public sealed class SstBlockIteratorTests
     public void ShouldNotRetainMoreThanOneDecodedBlockAtATimeAsFileGrows()
     {
         using var directory = new TemporaryDirectory();
-        var (smallPath, _) = CreateMultiBlockSst(directory.Path, blockCount: 4, entriesPerBlock: 8);
-        var (largePath, _) = CreateMultiBlockSst(directory.Path, blockCount: 64, entriesPerBlock: 8, fileName: "large.sst");
+        var (smallPath, _) = CreateMultiBlockSst(directory.Path, 4, 8);
+        var (largePath, _) = CreateMultiBlockSst(directory.Path, 64, 8, "large.sst");
 
         var smallPeakBlockBytes = MeasurePeakDecodedBlockBytes(smallPath);
         var largePeakBlockBytes = MeasurePeakDecodedBlockBytes(largePath);
@@ -97,7 +99,7 @@ public sealed class SstBlockIteratorTests
         };
         RangeTombstone[] tombstones =
         [
-            new RangeTombstone(
+            new(
                 TestBytes.FromString("key-0000"),
                 TestBytes.FromString("key-0003"),
                 5)
@@ -115,7 +117,7 @@ public sealed class SstBlockIteratorTests
     public void ShouldReleaseTheFinalDecodedBlockAsSoonAsItIsExhausted()
     {
         using var directory = new TemporaryDirectory();
-        var (path, _) = CreateMultiBlockSst(directory.Path, blockCount: 1);
+        var (path, _) = CreateMultiBlockSst(directory.Path, 1);
         using var reader = SstReader.Open(path);
         var budget = new ResourceBudget(1024 * 1024);
         using var iterator = SstBlockIterator.Create(

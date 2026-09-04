@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsFailureInjectionTests
 {
@@ -10,8 +12,8 @@ public sealed class PantsFailureInjectionTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoints));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
@@ -19,8 +21,8 @@ public sealed class PantsFailureInjectionTests
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Contains(nameof(Failpoint.BeforeWalAppend), error.Message, StringComparison.Ordinal);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("key"u8.ToArray()));
         Assert.Equal(1, failpoints.HitCount);
@@ -36,8 +38,8 @@ public sealed class PantsFailureInjectionTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoints));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
@@ -45,16 +47,16 @@ public sealed class PantsFailureInjectionTests
         }
 
         await Assert.ThrowsAsync<PantsIOException>(() =>
-            database.FlushAsync(database.DefaultColumnFamily).AsTask());
-        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Single(Directory.GetFiles(
             Path.Combine(directory.Path, "sst", ".flush-staging"),
             "*.tmp"));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ObsoleteFileBacklog);
         Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Empty(Directory.GetFiles(
             Path.Combine(directory.Path, "sst", ".flush-staging"),
@@ -70,8 +72,8 @@ public sealed class PantsFailureInjectionTests
                          PantsOpenOptions.Local(directory.Path),
                          new RuntimeDependencies(failpoints)))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("first"u8.ToArray(), "one"u8.ToArray());
             transaction.Put("second"u8.ToArray(), "two"u8.ToArray());
@@ -81,8 +83,8 @@ public sealed class PantsFailureInjectionTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("first"u8.ToArray()));
         Assert.Null(await reader.GetAsync("second"u8.ToArray()));
