@@ -312,7 +312,8 @@ public sealed class PantsDiskResidentDifferentialTests
         var readyPath = Path.Combine(path, CrashReadyFileName);
         while (!File.Exists(readyPath))
         {
-            if (child.HasExited)
+            // The child can publish readiness and exit between these two observations.
+            if (child.HasExited && !File.Exists(readyPath))
             {
                 throw new XunitException(
                     $"Differential crash child exited with {child.ExitCode} before readiness.");

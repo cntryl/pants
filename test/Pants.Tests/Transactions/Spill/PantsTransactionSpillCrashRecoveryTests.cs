@@ -177,7 +177,8 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         {
             while (!File.Exists(readyPath))
             {
-                if (child.HasExited)
+                // The child can publish readiness and exit between these two observations.
+                if (child.HasExited && !File.Exists(readyPath))
                 {
                     throw new XunitException(
                         $"Transaction spill crash child exited with code {child.ExitCode} before readiness.");

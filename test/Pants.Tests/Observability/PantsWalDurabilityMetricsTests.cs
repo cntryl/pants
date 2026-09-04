@@ -290,10 +290,8 @@ public sealed class PantsWalDurabilityMetricsTests
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.WalAppendNanosecondsTotal >= 50_000_000);
-        Assert.True(
-            metrics.WalFsyncNanosecondsTotal < metrics.WalAppendNanosecondsTotal,
-            $"Expected fsync {metrics.WalFsyncNanosecondsTotal} ns to exclude " +
-            $"the delayed append {metrics.WalAppendNanosecondsTotal} ns.");
+        Assert.Equal(1, metrics.WalFsyncCount);
+        Assert.InRange(metrics.WalFsyncNanosecondsTotal, 1, failpoints.FsyncWindowNanoseconds);
     }
 
     static async ValueTask CommitAsync(
