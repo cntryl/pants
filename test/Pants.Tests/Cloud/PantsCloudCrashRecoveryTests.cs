@@ -331,7 +331,8 @@ public sealed class PantsCloudCrashRecoveryTests
         var readyPath = Path.Combine(databasePath, ReadyFileName);
         while (!File.Exists(readyPath))
         {
-            if (child.HasExited)
+            // The child can publish readiness and exit between these two observations.
+            if (child.HasExited && !File.Exists(readyPath))
             {
                 throw new XunitException(
                     $"Crash child exited with code {child.ExitCode} before readiness.");
