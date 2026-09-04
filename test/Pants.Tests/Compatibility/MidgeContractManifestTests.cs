@@ -240,6 +240,22 @@ public sealed class MidgeContractManifestTests
     }
 
     [Fact]
+    public void ShouldMarkLiveProviderQualificationAsNotApplicable()
+    {
+        var entry = Assert.Single(
+            ReadEntries("tests/cloud_provider_engine_qualification.rs"),
+            static candidate =>
+                candidate.GetProperty("sourceSymbolOrTest").GetString() ==
+                "should_recover_engine_from_real_s3_after_local_cache_loss_if_configured");
+
+        Assert.Equal("n/a", entry.GetProperty("status").GetString());
+        Assert.Contains(
+            "Sqrzl",
+            Assert.IsType<string>(entry.GetProperty("rationale").GetString()),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ShouldMapEveryExternalAdopterSmokeContractToExecutablePantsTest()
     {
         var entries = ReadEntries("tests/external_adopter_smoke.rs");
