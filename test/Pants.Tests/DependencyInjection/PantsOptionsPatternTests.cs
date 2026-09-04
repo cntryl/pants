@@ -183,6 +183,7 @@ public sealed class PantsOptionsPatternTests
     [InlineData(PantsCloudProviderKind.S3Compatible)]
     [InlineData(PantsCloudProviderKind.AzureBlob)]
     [InlineData(PantsCloudProviderKind.Gcs)]
+    [InlineData(PantsCloudProviderKind.OciObjectStorage)]
     public async Task AddPantsProjectsEveryCloudProviderWithItsDefaultCredential(
         PantsCloudProviderKind providerKind)
     {
@@ -234,6 +235,11 @@ public sealed class PantsOptionsPatternTests
             case PantsCloudProviderKind.Gcs:
                 var gcs = Assert.IsType<PantsCloudProviderConfiguration.Gcs>(location.Provider);
                 Assert.IsType<PantsGcsCredentialSource.ApplicationDefault>(gcs.Credential);
+                break;
+            case PantsCloudProviderKind.OciObjectStorage:
+                var oci = Assert.IsType<PantsCloudProviderConfiguration.OciObjectStorage>(
+                    location.Provider);
+                Assert.IsType<PantsOciCredentialSource.Environment>(oci.Credentials);
                 break;
             default:
                 throw new InvalidOperationException("Unexpected provider kind.");
@@ -313,6 +319,18 @@ public sealed class PantsOptionsPatternTests
         PantsCloudProviderKind.Gcs,
         PantsCloudCredentialKind.GcsMetadataServer,
         typeof(PantsGcsCredentialSource.MetadataServer))]
+    [InlineData(
+        PantsCloudProviderKind.OciObjectStorage,
+        PantsCloudCredentialKind.OciCustomerSecretKey,
+        typeof(PantsOciCredentialSource.CustomerSecretKey))]
+    [InlineData(
+        PantsCloudProviderKind.OciObjectStorage,
+        PantsCloudCredentialKind.OciEnvironment,
+        typeof(PantsOciCredentialSource.Environment))]
+    [InlineData(
+        PantsCloudProviderKind.OciObjectStorage,
+        PantsCloudCredentialKind.OciSharedProfile,
+        typeof(PantsOciCredentialSource.SharedProfile))]
     public async Task AddPantsProjectsEveryCloudCredentialVariant(
         PantsCloudProviderKind providerKind,
         PantsCloudCredentialKind credentialKind,
@@ -358,6 +376,7 @@ public sealed class PantsOptionsPatternTests
             PantsCloudProviderConfiguration.AwsS3 aws => aws.Credentials,
             PantsCloudProviderConfiguration.AzureBlob azure => azure.Credential,
             PantsCloudProviderConfiguration.Gcs gcs => gcs.Credential,
+            PantsCloudProviderConfiguration.OciObjectStorage oci => oci.Credentials,
             _ => throw new InvalidOperationException("Unexpected provider configuration.")
         };
         Assert.Equal(expectedCredentialType, credential.GetType());
@@ -494,6 +513,17 @@ public sealed class PantsOptionsPatternTests
                 Kind = kind,
                 Bucket = "bucket",
                 ProjectId = "project"
+            },
+            PantsCloudProviderKind.OciObjectStorage => new PantsCloudProviderOptions
+            {
+                Kind = kind,
+                Namespace = "namespace",
+                Bucket = "bucket",
+                Region = "us-ashburn-1",
+                Credential = new PantsCloudCredentialOptions
+                {
+                    Kind = PantsCloudCredentialKind.OciEnvironment
+                }
             },
             _ => throw new InvalidOperationException("Unexpected provider kind.")
         };
