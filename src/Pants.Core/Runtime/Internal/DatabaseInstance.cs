@@ -2,25 +2,50 @@ using System.Text;
 
 namespace Cntryl.Pants.Runtime.Internal;
 
-sealed class DatabaseInstance : IPantsDatabase
+sealed class DatabaseInstance :
+    IPantsDatabase,
+    IPantsColumnFamilyCatalog,
+    IPantsTransactionFactory,
+    IPantsDatabaseMaintenance,
+    IPantsDatabaseDiagnostics,
+    IPantsPersistentStorage,
+    IPantsCloudDatabase
 {
-    readonly Actor _actor;
     readonly object _handleOwner = new();
+    readonly RuntimeComposition _runtime;
     readonly Lock _shutdownGate = new();
     int _lifecycleState;
     Task? _shutdownTask;
 
-    internal DatabaseInstance(PantsOpenOptions options, RuntimeDependencies dependencies)
+    DatabaseInstance(
+        PantsOpenOptions options,
+        TransactionMemoryPool transactionMemoryPool,
+        IPantsClock clock,
+        RuntimeTelemetry telemetry,
+        RuntimeComposition runtime)
     {
         Options = options;
-        TransactionMemoryPool = new TransactionMemoryPool(options.TransactionMemoryPoolBytes);
-        Clock = new MonotonicPantsClock(options.TtlClock);
-        Telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
-        _actor = new Actor(options, Clock, Telemetry, dependencies);
-        DefaultColumnFamily = CreateHandle(new ColumnFamilyIdentity(
+        TransactionMemoryPool = transactionMemoryPool;
+        Clock = clock;
+        Telemetry = telemetry;
+        _runtime = runtime;
+        DefaultFamily = CreateHandle(new ColumnFamilyIdentity(
             0,
             "default",
             RuntimeState.DefaultFamilyVersion));
+        var isPersistent = options.Storage is not PantsStorageConfiguration.InMemory;
+        var isCloudBacked = options.Storage is PantsStorageConfiguration.Cloud or
+            PantsStorageConfiguration.SimulatedCloud;
+        Capabilities = new PantsDatabaseCapabilities(
+            isPersistent,
+            isCloudBacked,
+            Enum.GetValues<PantsDurability>().Where(_runtime.Coordinator.IsSupported));
+        ColumnFamilies = this;
+        Transactions = this;
+        Maintenance = this;
+        Diagnostics = this;
+        PersistentStorage = isPersistent ? this : null;
+        Cloud = isCloudBacked ? this : null;
     }
 
     internal IPantsClock Clock { get; }
@@ -29,29 +54,29 @@ sealed class DatabaseInstance : IPantsDatabase
 
     internal RuntimeTelemetry Telemetry { get; }
 
-    public PantsOpenOptions Options { get; }
+    internal long CoordinatorCommandsEnqueued => _runtime.Coordinator.CommandsEnqueued;
 
-    public IPantsColumnFamily DefaultColumnFamily { get; }
+    public IPantsColumnFamily DefaultFamily { get; }
 
-    public async ValueTask<IPantsColumnFamily> CreateColumnFamilyAsync(
+    public async ValueTask<IPantsColumnFamily> CreateAsync(
         string name,
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
         ValidateColumnFamilyName(name);
-        var identity = await _actor
+        var identity = await _runtime.Coordinator
             .CreateColumnFamilyAsync(name, cancellationToken)
             .ConfigureAwait(false);
         return CreateHandle(identity);
     }
 
-    public async ValueTask<IPantsColumnFamily?> GetColumnFamilyAsync(
+    public async ValueTask<IPantsColumnFamily?> GetAsync(
         string name,
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
         ArgumentNullException.ThrowIfNull(name);
-        var identity = await _actor
+        var identity = await _runtime.Coordinator
             .GetActiveColumnFamilyIdentityAsync(name, cancellationToken)
             .ConfigureAwait(false);
         return identity is { } value
@@ -59,11 +84,11 @@ sealed class DatabaseInstance : IPantsDatabase
             : null;
     }
 
-    public async ValueTask<IReadOnlyList<IPantsColumnFamily>> ListColumnFamiliesAsync(
+    public async ValueTask<IReadOnlyList<IPantsColumnFamily>> ListAsync(
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
-        var identities = await _actor
+        var identities = await _runtime.Coordinator
             .ListColumnFamiliesAsync(cancellationToken)
             .ConfigureAwait(false);
         return identities
@@ -72,129 +97,39 @@ sealed class DatabaseInstance : IPantsDatabase
             .ToArray();
     }
 
-    public ValueTask DropColumnFamilyAsync(
+    public ValueTask DropAsync(
         IPantsColumnFamily columnFamily,
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
         var handle = ValidateDroppableColumnFamily(columnFamily);
-        return _actor.DropColumnFamilyAsync(handle.Identity, false, cancellationToken);
+        return _runtime.Coordinator.DropColumnFamilyAsync(handle.Identity, false, cancellationToken);
     }
 
-    public ValueTask DropColumnFamilyDiscardingUnflushedAsync(
+    public ValueTask DropDiscardingUnflushedAsync(
         IPantsColumnFamily columnFamily,
         CancellationToken cancellationToken = default)
     {
         EnsureOpen();
         var handle = ValidateDroppableColumnFamily(columnFamily);
-        return _actor.DropColumnFamilyAsync(handle.Identity, true, cancellationToken);
+        return _runtime.Coordinator.DropColumnFamilyAsync(handle.Identity, true, cancellationToken);
     }
 
-    public async ValueTask<IPantsTransaction> BeginTransactionAsync(
-        IPantsColumnFamily columnFamily,
-        PantsTransactionMode mode,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        var handle = ValidateColumnFamily(columnFamily);
-        if (!Enum.IsDefined(mode))
-        {
-            throw PantsException.InvalidArgument("Transaction mode is invalid.");
-        }
+    public PantsOpenOptions Options { get; }
 
-        using var activity = PantsDiagnostics.ActivitySource.StartActivity(
-            "PantsDatabase.BeginTransaction");
-        activity?.SetTag("pants.column_family.id", handle.Id);
-        activity?.SetTag("pants.transaction.mode", mode.ToString());
-        if (mode == PantsTransactionMode.ReadOnly)
-        {
-            return _actor.BeginReadOnlyTransaction(this, handle, cancellationToken);
-        }
+    public PantsDatabaseCapabilities Capabilities { get; }
 
-        return await _actor.BeginTransactionAsync(this, handle, mode, cancellationToken)
-            .ConfigureAwait(false);
-    }
+    public IPantsColumnFamilyCatalog ColumnFamilies { get; }
 
-    public ValueTask FlushAsync(
-        IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        var handle = ValidateColumnFamily(columnFamily);
-        return _actor.FlushAsync(handle.Identity, cancellationToken);
-    }
+    public IPantsTransactionFactory Transactions { get; }
 
-    public ValueTask CompactAllAsync(CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.CompactAsync(cancellationToken);
-    }
+    public IPantsDatabaseMaintenance Maintenance { get; }
 
-    public ValueTask SetBackgroundCompactionAsync(
-        bool enabled,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.SetBackgroundCompactionAsync(enabled, cancellationToken);
-    }
+    public IPantsDatabaseDiagnostics Diagnostics { get; }
 
-    public ValueTask<bool> WaitForWriteStallClearAsync(
-        IPantsColumnFamily columnFamily,
-        TimeSpan timeout,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        var handle = ValidateColumnFamily(columnFamily);
-        return _actor.WaitForWriteStallClearAsync(
-            handle.Identity,
-            timeout,
-            cancellationToken);
-    }
+    public IPantsPersistentStorage? PersistentStorage { get; }
 
-    public bool IsPrimaryLeaseHealthy => _actor.IsPrimaryLeaseHealthy;
-
-    public ValueTask<PantsRuntimeMetrics> GetRuntimeMetricsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.GetRuntimeMetricsAsync(cancellationToken);
-    }
-
-    public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.GetReadAmplificationMetricsAsync(cancellationToken);
-    }
-
-    public ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.GetReadPathDiagnosticsAsync(cancellationToken);
-    }
-
-    public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.GetRecoveryMetricsAsync(cancellationToken);
-    }
-
-    public ValueTask<PantsStorageLayout> GetStorageLayoutAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.GetStorageLayoutAsync(cancellationToken);
-    }
-
-    public ValueTask<PantsStorageVerificationReport> VerifyStorageAsync(
-        TimeSpan timeout,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureOpen();
-        return _actor.VerifyStorageAsync(timeout, cancellationToken);
-    }
+    public IPantsCloudDatabase? Cloud { get; }
 
     public async ValueTask ShutdownAsync(
         TimeSpan timeout,
@@ -257,15 +192,147 @@ sealed class DatabaseInstance : IPantsDatabase
             return;
         }
 
-        await ShutdownAsync(Options.ShutdownTimeout).ConfigureAwait(false);
+        await ShutdownAsync(Options.Runtime.ShutdownTimeout).ConfigureAwait(false);
+    }
+
+    public ValueTask<PantsRuntimeMetrics> GetRuntimeMetricsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.GetRuntimeMetricsAsync(cancellationToken);
+    }
+
+    public ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.GetReadAmplificationMetricsAsync(cancellationToken);
+    }
+
+    public ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.GetReadPathDiagnosticsAsync(cancellationToken);
+    }
+
+    public ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.GetRecoveryMetricsAsync(cancellationToken);
+    }
+
+    public ValueTask<PantsStorageLayout> GetStorageLayoutAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.GetStorageLayoutAsync(cancellationToken);
+    }
+
+    public ValueTask FlushAsync(
+        IPantsColumnFamily columnFamily,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        var handle = ValidateColumnFamily(columnFamily);
+        return _runtime.Coordinator.FlushAsync(handle.Identity, cancellationToken);
+    }
+
+    public ValueTask CompactAllAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.CompactAsync(cancellationToken);
+    }
+
+    public ValueTask SetBackgroundCompactionAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.SetBackgroundCompactionAsync(enabled, cancellationToken);
+    }
+
+    public ValueTask<bool> WaitForWriteStallClearAsync(
+        IPantsColumnFamily columnFamily,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        var handle = ValidateColumnFamily(columnFamily);
+        return _runtime.Coordinator.WaitForWriteStallClearAsync(
+            handle.Identity,
+            timeout,
+            cancellationToken);
+    }
+
+    public bool IsPrimaryLeaseHealthy => _runtime.Coordinator.IsPrimaryLeaseHealthy;
+
+    public ValueTask<PantsStorageVerificationReport> VerifyAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.VerifyStorageAsync(timeout, cancellationToken);
+    }
+
+    public async ValueTask<IPantsTransaction> BeginAsync(
+        IPantsColumnFamily columnFamily,
+        PantsTransactionMode mode,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        var handle = ValidateColumnFamily(columnFamily);
+        if (!Enum.IsDefined(mode))
+        {
+            throw PantsException.InvalidArgument("Transaction mode is invalid.");
+        }
+
+        using var activity = PantsDiagnostics.ActivitySource.StartActivity(
+            "PantsDatabase.BeginTransaction");
+        activity?.SetTag("pants.column_family.id", handle.Id);
+        activity?.SetTag("pants.transaction.mode", mode.ToString());
+        if (mode == PantsTransactionMode.ReadOnly)
+        {
+            return _runtime.Coordinator.BeginReadOnlyTransaction(this, handle, cancellationToken);
+        }
+
+        return await _runtime.Coordinator.BeginTransactionAsync(this, handle, mode, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal static async ValueTask<DatabaseInstance> OpenAsync(
+        PantsOpenOptions options,
+        RuntimeDependencies dependencies,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(dependencies);
+        var plan = RuntimePlan.Resolve(options);
+        var transactionMemoryPool = new TransactionMemoryPool(plan.TransactionMemoryPoolBytes);
+        var clock = new MonotonicPantsClock(options.TtlClock);
+        var telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
+        var runtime = await RuntimeBootstrapper.OpenAsync(
+                plan,
+                clock,
+                telemetry,
+                dependencies,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return new DatabaseInstance(
+            options,
+            transactionMemoryPool,
+            clock,
+            telemetry,
+            runtime);
     }
 
     async Task RunShutdownAttemptAsync(TaskCompletionSource completion)
     {
         try
         {
-            await _actor.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
-            await _actor.DisposeAsync().ConfigureAwait(false);
+            await _runtime.Coordinator.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            await _runtime.DisposeAsync().ConfigureAwait(false);
             Volatile.Write(ref _lifecycleState, 2);
             completion.TrySetResult();
         }
@@ -316,7 +383,7 @@ sealed class DatabaseInstance : IPantsDatabase
         CancellationToken cancellationToken)
     {
         EnsureOpen();
-        return _actor.CommitAsync(options, transaction.BuildCommitPayload(), cancellationToken);
+        return _runtime.Coordinator.CommitAsync(options, transaction.BuildCommitPayload(), cancellationToken);
     }
 
     internal ValueTask RollbackTransactionAsync(long transactionId, CancellationToken cancellationToken)
@@ -326,34 +393,34 @@ sealed class DatabaseInstance : IPantsDatabase
             return ValueTask.CompletedTask;
         }
 
-        return _actor.RollbackAsync(transactionId, cancellationToken);
+        return _runtime.Coordinator.RollbackAsync(transactionId, cancellationToken);
     }
 
     internal ValueTask RecordReadOnlyTransactionRollbackAsync(long transactionId) =>
-        _actor.RecordReadOnlyTransactionRollbackAsync(transactionId);
+        _runtime.Coordinator.RecordReadOnlyTransactionRollbackAsync(transactionId);
 
     internal ValueTask RecordReadOnlyTransactionCommitAsync(long transactionId) =>
-        _actor.RecordReadOnlyTransactionCommitAsync(transactionId);
+        _runtime.Coordinator.RecordReadOnlyTransactionCommitAsync(transactionId);
 
     internal ValueTask<long> RegisterScanSnapshotAsync(
         DatabaseVersion snapshot,
         CancellationToken cancellationToken) =>
-        _actor.RegisterScanSnapshotAsync(snapshot, cancellationToken);
+        _runtime.Coordinator.RegisterScanSnapshotAsync(snapshot, cancellationToken);
 
     internal ValueTask ReleaseScanSnapshotAsync(long snapshotId) =>
-        _actor.ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None);
+        _runtime.Coordinator.ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None);
 
     internal ValueTask RecordPointReadAsync(
         ColumnFamilyIdentity columnFamily,
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken) =>
-        _actor.RecordPointReadAsync(columnFamily, key, cancellationToken);
+        _runtime.Coordinator.RecordPointReadAsync(columnFamily, key, cancellationToken);
 
     internal ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken) =>
-        _actor.TryReadPointValueAsync(candidatesNewestFirst, key, cancellationToken);
+        _runtime.Coordinator.TryReadPointValueAsync(candidatesNewestFirst, key, cancellationToken);
 
     internal ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
         IReadOnlyList<FileMeta> candidates,
@@ -361,7 +428,7 @@ sealed class DatabaseInstance : IPantsDatabase
         byte[]? startInclusive,
         byte[]? endExclusive,
         CancellationToken cancellationToken) =>
-        _actor.CreateScanSourcesAsync(
+        _runtime.Coordinator.CreateScanSourcesAsync(
             candidates,
             direction,
             startInclusive,
@@ -372,15 +439,13 @@ sealed class DatabaseInstance : IPantsDatabase
         ColumnFamilyIdentity columnFamily,
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken) =>
-        _actor.RecordPointReadWithDiagnosticsAsync(columnFamily, key, cancellationToken);
+        _runtime.Coordinator.RecordPointReadWithDiagnosticsAsync(columnFamily, key, cancellationToken);
 
     internal IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>
-        _actor.CreateScanReadValidator(sources);
+        _runtime.Coordinator.CreateScanReadValidator(sources);
 
-    internal bool IsSupported(PantsDurability durability) => _actor.IsSupported(durability);
-
-    internal long CoordinatorCommandsEnqueued => _actor.CommandsEnqueued;
+    internal bool IsSupported(PantsDurability durability) => _runtime.Coordinator.IsSupported(durability);
 
     static void ValidateColumnFamilyName(string name)
     {

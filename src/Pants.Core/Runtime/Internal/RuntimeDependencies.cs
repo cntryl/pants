@@ -14,7 +14,7 @@ sealed class RuntimeDependencies
         long? hybridLocalStorageBudgetBytes = null)
     {
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
-        StorageVerifier = storageVerifier ?? Cntryl.Pants.Storage.Internal.StorageVerifier.VerifyPathAsync;
+        StorageVerifier = storageVerifier ?? Storage.Internal.StorageVerifier.VerifyPathAsync;
         LeaseHeartbeatInterval = leaseHeartbeatInterval;
         CloudHttpClient = cloudHttpClient;
         VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;

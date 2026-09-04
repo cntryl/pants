@@ -6,7 +6,7 @@ using System.Text;
 
 namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-sealed class S3ObjectStore : ICloudObjectStore
+sealed class S3ObjectStore : CloudObjectStore
 {
     const int MaximumAttempts = 3;
     static readonly string EmptyPayloadHash = Hex(SHA256.HashData([]));
@@ -17,14 +17,17 @@ sealed class S3ObjectStore : ICloudObjectStore
     readonly bool _pathStyle;
     readonly string _prefix;
     readonly string _region;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
+    int _disposed;
 
     public S3ObjectStore(
-        PantsCloudProviderConfiguration provider,
+        IPantsCloudProvider provider,
         string prefix,
         HttpClient httpClient,
         TimeSpan timeout,
-        HttpClient? credentialHttpClient = null)
+        HttpClient? credentialHttpClient = null,
+        TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         if (timeout < TimeSpan.FromMilliseconds(1))
@@ -34,7 +37,7 @@ sealed class S3ObjectStore : ICloudObjectStore
 
         (_bucket, _region, _endpoint, _pathStyle, _credentialProvider) = provider switch
         {
-            PantsCloudProviderConfiguration.AwsS3 aws => (
+            PantsAwsS3Provider aws => (
                 aws.Bucket,
                 aws.Region,
                 CreateAwsEndpoint(aws.Bucket, aws.Region),
@@ -44,8 +47,9 @@ sealed class S3ObjectStore : ICloudObjectStore
                     aws.Region,
                     true,
                     credentialHttpClient ?? httpClient,
-                    timeout)),
-            PantsCloudProviderConfiguration.S3Compatible compatible => (
+                    timeout,
+                    timeProvider ?? TimeProvider.System)),
+            PantsS3CompatibleProvider compatible => (
                 compatible.Bucket,
                 compatible.Region,
                 compatible.Endpoint,
@@ -55,8 +59,9 @@ sealed class S3ObjectStore : ICloudObjectStore
                     compatible.Region,
                     false,
                     credentialHttpClient ?? httpClient,
-                    timeout)),
-            PantsCloudProviderConfiguration.OciObjectStorage oci => (
+                    timeout,
+                    timeProvider ?? TimeProvider.System)),
+            PantsOciObjectStorageProvider oci => (
                 oci.Bucket,
                 oci.Region,
                 oci.EffectiveEndpoint,
@@ -66,10 +71,12 @@ sealed class S3ObjectStore : ICloudObjectStore
                     oci.Region,
                     false,
                     credentialHttpClient ?? httpClient,
-                    timeout)),
+                    timeout,
+                    timeProvider ?? TimeProvider.System)),
             _ => throw PantsException.InvalidArgument("An S3 provider configuration is required.")
         };
         _prefix = NormalizePrefix(prefix);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _timeout = timeout;
     }
 
@@ -91,7 +98,17 @@ sealed class S3ObjectStore : ICloudObjectStore
             _ => throw PantsException.InvalidArgument("An OCI credential source is required.")
         };
 
-    public async ValueTask<CloudObject?> GetAsync(
+    public override ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            (_credentialProvider as IDisposable)?.Dispose();
+        }
+
+        return base.DisposeAsync();
+    }
+
+    public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -116,7 +133,7 @@ sealed class S3ObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public async ValueTask<CloudObject?> GetRangeAsync(
+    public override async ValueTask<CloudObject?> GetRangeAsync(
         string objectKey,
         ulong offset,
         int length,
@@ -156,7 +173,7 @@ sealed class S3ObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public async ValueTask<CloudObjectMetadata?> HeadAsync(
+    public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -186,7 +203,7 @@ sealed class S3ObjectStore : ICloudObjectStore
             response.Content.Headers.LastModified);
     }
 
-    public async ValueTask<bool> PutAsync(
+    public override async ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
@@ -210,7 +227,7 @@ sealed class S3ObjectStore : ICloudObjectStore
         return true;
     }
 
-    public async ValueTask<CloudObjectListPage> ListPageAsync(
+    public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
         CancellationToken cancellationToken)
@@ -249,7 +266,7 @@ sealed class S3ObjectStore : ICloudObjectStore
         return new CloudObjectListPage(objectKeys, truncated ? nextToken : null);
     }
 
-    public async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+    public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
         CancellationToken cancellationToken)
@@ -264,7 +281,7 @@ sealed class S3ObjectStore : ICloudObjectStore
         }
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
-            condition is CloudObjectDeleteCondition.IfVersion &&
+            condition is PantsCloudObjectDeleteCondition.IfVersion &&
             await HasS3ErrorCodeAsync(
                 response,
                 "PreconditionFailed",
@@ -368,12 +385,12 @@ sealed class S3ObjectStore : ICloudObjectStore
         switch (condition)
         {
             case null:
-            case CloudObjectWriteCondition.Unconditional:
+            case PantsCloudObjectWriteCondition.Unconditional:
                 break;
-            case CloudObjectWriteCondition.IfAbsent:
+            case PantsCloudObjectWriteCondition.IfAbsent:
                 request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
                 break;
-            case CloudObjectWriteCondition.IfVersion expected:
+            case PantsCloudObjectWriteCondition.IfVersion expected:
                 request.Headers.IfMatch.Add(new EntityTagHeaderValue(expected.Version));
                 break;
             default:
@@ -405,9 +422,9 @@ sealed class S3ObjectStore : ICloudObjectStore
         var request = new HttpRequestMessage(HttpMethod.Delete, BuildObjectUri(objectKey));
         switch (condition)
         {
-            case CloudObjectDeleteCondition.Unconditional:
+            case PantsCloudObjectDeleteCondition.Unconditional:
                 break;
-            case CloudObjectDeleteCondition.IfVersion expected:
+            case PantsCloudObjectDeleteCondition.IfVersion expected:
                 request.Headers.IfMatch.Add(new EntityTagHeaderValue(
                     RequireVersion(expected.Version)));
                 break;
@@ -430,7 +447,7 @@ sealed class S3ObjectStore : ICloudObjectStore
     {
         var credentials = await _credentialProvider.GetCredentialsAsync(cancellationToken)
             .ConfigureAwait(false);
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var timestamp = now.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
         var date = now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var payloadHash = payload.Length == 0

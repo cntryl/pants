@@ -34,8 +34,8 @@ sealed class AsyncSstScanSource : IAsyncDisposable
 
     public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
 
+    public ValueTask DisposeAsync() => _iterator.DisposeAsync();
+
     public ValueTask<bool> MoveNextAsync(CancellationToken cancellationToken) =>
         _iterator.MoveNextAsync(cancellationToken);
-
-    public ValueTask DisposeAsync() => _iterator.DisposeAsync();
 }

@@ -1,6 +1,7 @@
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudLeaseCoordinatorTests
 {
@@ -227,9 +228,12 @@ public sealed class CloudLeaseCoordinatorTests
     [Theory]
     [InlineData("")]
     [InlineData("epoch: 1\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\n")]
-    [InlineData("epoch: 0\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
-    [InlineData("epoch: nope\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
-    [InlineData("epoch: 1\nholder_id: holder\nholder_id: duplicate\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
+    [InlineData(
+        "epoch: 0\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
+    [InlineData(
+        "epoch: nope\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
+    [InlineData(
+        "epoch: 1\nholder_id: holder\nholder_id: duplicate\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
     public async Task ShouldRejectMalformedCloudLeaseDocument(string document)
     {
         var objects = new TestCloudObjectStore();
@@ -607,10 +611,10 @@ public sealed class CloudLeaseCoordinatorTests
         Assert.Contains("owner_token: ", document, StringComparison.Ordinal);
         Assert.Contains("acquired_at: 2026-08-21T12:00:00.0000000Z\n", document, StringComparison.Ordinal);
         Assert.Contains("expires_at: 2026-08-21T12:00:30.0000000Z\n", document, StringComparison.Ordinal);
-        Assert.IsType<CloudObjectWriteCondition.IfAbsent>(objects.LastCondition);
+        Assert.IsType<PantsCloudObjectWriteCondition.IfAbsent>(objects.LastCondition);
 
         clock.UtcNow += TimeSpan.FromSeconds(5);
         await lease.RenewAsync(CancellationToken.None);
-        Assert.IsType<CloudObjectWriteCondition.IfVersion>(objects.LastCondition);
+        Assert.IsType<PantsCloudObjectWriteCondition.IfVersion>(objects.LastCondition);
     }
 }

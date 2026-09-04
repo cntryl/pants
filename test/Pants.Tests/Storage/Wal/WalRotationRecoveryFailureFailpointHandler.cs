@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+namespace Cntryl.Pants.Storage.Wal;
 
 sealed class WalRotationRecoveryFailureFailpointHandler : IFailpointHandler
 {

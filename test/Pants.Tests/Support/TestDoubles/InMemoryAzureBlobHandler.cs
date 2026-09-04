@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Xml.Linq;
 
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 {
@@ -13,10 +13,10 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     readonly Lock _gate = new();
     readonly Dictionary<string, (byte[] Data, long Version)> _objects = new(StringComparer.Ordinal);
     bool _acknowledgeMetadataWritesWithoutPersisting;
+    int _acknowledgeNextSstWriteWithoutPersisting;
     bool _acknowledgeSstWritesWithoutPersisting;
     bool _acknowledgeWalCatalogWritesWithoutPersisting;
     bool _acknowledgeWalWritesWithoutPersisting;
-    int _acknowledgeNextSstWriteWithoutPersisting;
     bool _failMetadataWrites;
     bool _failSstDeletes;
     bool _failSstList;
@@ -24,9 +24,9 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     int _failedWalWriteAttempts;
     int _replaceSstOnNextRange;
     int _sstDeleteAttempts;
+    int _sstFullReads;
     long _sstRangeBytes;
     int _sstRangeReads;
-    int _sstFullReads;
     int _unconditionalSstDeleteAttempts;
 
     public bool FailWalWrites
@@ -64,12 +64,6 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         get => Volatile.Read(ref _acknowledgeMetadataWritesWithoutPersisting);
         set => Volatile.Write(ref _acknowledgeMetadataWritesWithoutPersisting, value);
     }
-
-    public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
-        Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
-
-    public void ReplaceSstOnNextRange() =>
-        Volatile.Write(ref _replaceSstOnNextRange, 1);
 
     public bool FailSstList
     {
@@ -110,6 +104,12 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             }
         }
     }
+
+    public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
+        Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
+
+    public void ReplaceSstOnNextRange() =>
+        Volatile.Write(ref _replaceSstOnNextRange, 1);
 
     public void ResetSstReadMetrics()
     {
@@ -249,7 +249,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                     {
                         var range = request.Headers.Range.Ranges.Single();
                         var length = checked((range.To ?? value.Data.Length - 1) -
-                                             (range.From ?? 0) + 1);
+                            (range.From ?? 0) + 1);
                         Interlocked.Increment(ref _sstRangeReads);
                         Interlocked.Add(ref _sstRangeBytes, length);
                     }

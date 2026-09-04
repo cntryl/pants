@@ -5,10 +5,12 @@ namespace Cntryl.Pants.Cloud.Internal.Providers;
 static class CloudObjectStoreFactory
 {
     internal static readonly TimeSpan CredentialConnectTimeout = TimeSpan.FromSeconds(1);
+
     internal static HttpClient StorageHttpClient { get; } = new(CreateStorageHandler())
     {
         Timeout = Timeout.InfiniteTimeSpan
     };
+
     internal static HttpClient CredentialHttpClient { get; } = new(CreateCredentialHandler())
     {
         Timeout = Timeout.InfiniteTimeSpan
@@ -37,37 +39,28 @@ static class CloudObjectStoreFactory
         return handler;
     }
 
-    public static ICloudObjectStore Create(
+    public static ValueTask<ICloudObjectStore> CreateAsync(
         PantsCloudStorageLocation location,
         TimeSpan timeout,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        TimeProvider? timeProvider = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(location);
         var storageClient = httpClient ?? StorageHttpClient;
         var credentialClient = httpClient ?? CredentialHttpClient;
-        return location.Provider switch
+        return OpenAsync();
+
+        async ValueTask<ICloudObjectStore> OpenAsync()
         {
-            PantsCloudProviderConfiguration.AzureBlob azure => new AzureBlobObjectStore(
-                azure,
-                location.Prefix,
-                storageClient,
-                timeout,
-                credentialClient),
-            PantsCloudProviderConfiguration.AwsS3 or
-                PantsCloudProviderConfiguration.S3Compatible or
-                PantsCloudProviderConfiguration.OciObjectStorage => new S3ObjectStore(
-                    location.Provider,
+            return (ICloudObjectStore)await location.Provider.OpenObjectStoreAsync(
+                new PantsCloudProviderContext(
                     location.Prefix,
-                    storageClient,
                     timeout,
-                    credentialClient),
-            PantsCloudProviderConfiguration.Gcs gcs => new GcsObjectStore(
-                gcs,
-                location.Prefix,
-                storageClient,
-                timeout,
-                credentialClient),
-            _ => throw new PantsNotSupportedException("The cloud provider is unsupported.")
-        };
+                    storageClient,
+                    credentialClient,
+                    timeProvider ?? TimeProvider.System),
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 }

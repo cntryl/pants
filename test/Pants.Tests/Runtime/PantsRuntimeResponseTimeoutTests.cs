@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsRuntimeResponseTimeoutTests
 {
@@ -11,17 +13,15 @@ public sealed class PantsRuntimeResponseTimeoutTests
     {
         Assert.Equal(
             TimeSpan.FromSeconds(60),
-            PantsOpenOptions.InMemory().RuntimeResponseTimeout);
+            RuntimePlan.Resolve(PantsOpenOptions.InMemory()).RuntimeResponseTimeout);
         Assert.Equal(
             TimeSpan.FromSeconds(75),
-            PantsOpenOptions.InMemory()
-                .WithStorageTimeout(TimeSpan.FromSeconds(45))
-                .RuntimeResponseTimeout);
+            RuntimePlan.Resolve(PantsOpenOptions.InMemory()
+                .WithStorageTimeout(TimeSpan.FromSeconds(45))).RuntimeResponseTimeout);
         Assert.Equal(
             TimeSpan.MaxValue,
-            PantsOpenOptions.InMemory()
-                .WithStorageTimeout(TimeSpan.MaxValue)
-                .RuntimeResponseTimeout);
+            RuntimePlan.Resolve(PantsOpenOptions.InMemory()
+                .WithStorageTimeout(TimeSpan.MaxValue)).RuntimeResponseTimeout);
     }
 
     [Fact]
@@ -31,7 +31,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
             .WithRuntimeResponseTimeout(TimeSpan.FromSeconds(90))
             .WithStorageTimeout(TimeSpan.FromSeconds(45));
 
-        Assert.Equal(TimeSpan.FromSeconds(90), options.RuntimeResponseTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(90), RuntimePlan.Resolve(options).RuntimeResponseTimeout);
     }
 
     [Theory]
@@ -61,7 +61,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
                 .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(100)),
             new RuntimeDependencies(failpoint));
         var started = Stopwatch.GetTimestamp();
-        var request = database.GetRuntimeMetricsAsync().AsTask();
+        var request = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
         try
         {
@@ -102,8 +102,8 @@ public sealed class PantsRuntimeResponseTimeoutTests
             options,
             new RuntimeDependencies(failpoint));
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("accepted"u8.ToArray(), "durable"u8.ToArray());
@@ -129,8 +129,8 @@ public sealed class PantsRuntimeResponseTimeoutTests
         }
 
         _ = await WaitForLateResponseAsync(database);
-        await using (var readBeforeShutdown = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var readBeforeShutdown = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         {
             Assert.Equal(
@@ -142,8 +142,8 @@ public sealed class PantsRuntimeResponseTimeoutTests
         await database.DisposeAsync();
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var read = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "durable"u8.ToArray(),
@@ -155,7 +155,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
         var deadline = Stopwatch.GetTimestamp() + (long)(AssertionTimeout.TotalSeconds * Stopwatch.Frequency);
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            var metrics = await database.GetRuntimeMetricsAsync();
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             if (metrics.RuntimeLateResponsesTotal == 1)
             {
                 return metrics;

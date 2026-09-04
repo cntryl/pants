@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class PantsTransactionSpillBehaviorTests
 {
@@ -13,8 +15,8 @@ public sealed class PantsTransactionSpillBehaviorTests
             mode,
             directory.Path);
         var expected = new Dictionary<string, byte[]>();
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 8; index++)
@@ -49,8 +51,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 12; index++)
@@ -80,8 +82,8 @@ public sealed class PantsTransactionSpillBehaviorTests
             mode,
             directory.Path);
         var expected = new Dictionary<string, byte[]>();
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 9; index++)
@@ -118,8 +120,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 11; index >= 0; index--)
@@ -132,8 +134,8 @@ public sealed class PantsTransactionSpillBehaviorTests
             await transaction.CommitAsync(TransactionSpillTestHarness.GetWriteOptions(mode));
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var actual = new List<string>();
@@ -157,8 +159,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 4; index++)
@@ -186,8 +188,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 4; index++)
@@ -202,8 +204,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         }
 
         Assert.Empty(TransactionSpillTestHarness.FindArtifacts(directory.Path));
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("test"u8.ToArray(), "value"u8.ToArray());
@@ -227,8 +229,8 @@ public sealed class PantsTransactionSpillBehaviorTests
                          mode,
                          directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             for (var index = 0; index < 4; index++)
             {
@@ -260,8 +262,8 @@ public sealed class PantsTransactionSpillBehaviorTests
                          mode,
                          directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             for (var index = 0; index < 4; index++)
             {
@@ -296,8 +298,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var database = await TransactionSpillTestHarness.OpenAsync(
             mode,
             directory.Path);
-        await using var spilling = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var spilling = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         for (var index = 0; index < 8; index++)
         {
@@ -307,8 +309,8 @@ public sealed class PantsTransactionSpillBehaviorTests
         }
 
         Assert.NotEmpty(TransactionSpillTestHarness.FindArtifacts(directory.Path));
-        await using (var foreground = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var foreground = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             foreground.Put("foreground"u8.ToArray(), "works"u8.ToArray());
@@ -346,8 +348,8 @@ public sealed class PantsTransactionSpillBehaviorTests
 
         async Task WriteAsync(string prefix, byte value)
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             if (Interlocked.Increment(ref readyCount) == 2)
             {
@@ -393,8 +395,8 @@ public sealed class PantsTransactionSpillBehaviorTests
             directory.Path,
             512);
         var expected = Enumerable.Repeat((byte)'v', 400).ToArray();
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 6; index++)
@@ -433,8 +435,8 @@ public sealed class PantsTransactionSpillBehaviorTests
             ["mixed-0004"] = Enumerable.Repeat((byte)'x', 256).ToArray(),
             ["mixed-0005"] = Enumerable.Repeat((byte)'y', 512).ToArray()
         };
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             foreach (var pair in expected)
@@ -460,8 +462,8 @@ public sealed class PantsTransactionSpillBehaviorTests
     public async Task ShouldNotCreateDiskArtifactsGivenLargeTransactionWhenMemoryMode()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 500; index++)
@@ -477,6 +479,6 @@ public sealed class PantsTransactionSpillBehaviorTests
             TestBytes.ToText((await TransactionSpillTestHarness.GetAsync(
                 database,
                 "mem-only-0000"u8.ToArray()))!.Value));
-        Assert.Empty((await database.GetStorageLayoutAsync()).Levels);
+        Assert.Empty((await database.Diagnostics.GetStorageLayoutAsync()).Levels);
     }
 }

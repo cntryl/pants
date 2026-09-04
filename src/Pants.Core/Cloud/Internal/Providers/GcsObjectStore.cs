@@ -7,22 +7,25 @@ using System.Text.Json;
 
 namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-sealed class GcsObjectStore : ICloudObjectStore
+sealed class GcsObjectStore : CloudObjectStore
 {
     const int MaximumAttempts = 3;
-    readonly PantsCloudProviderConfiguration.Gcs _configuration;
+    readonly PantsGcsProvider _configuration;
     readonly GcsCredential _credential;
     readonly Uri _endpoint;
     readonly HttpClient _httpClient;
     readonly string _prefix;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
+    int _disposed;
 
     public GcsObjectStore(
-        PantsCloudProviderConfiguration.Gcs configuration,
+        PantsGcsProvider configuration,
         string prefix,
         HttpClient httpClient,
         TimeSpan timeout,
-        HttpClient? credentialHttpClient = null)
+        HttpClient? credentialHttpClient = null,
+        TimeProvider? timeProvider = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -37,14 +40,26 @@ sealed class GcsObjectStore : ICloudObjectStore
         _credential = GcsCredentialResolver.Resolve(
             configuration.Credential,
             credentialHttpClient ?? httpClient,
-            timeout);
+            timeout,
+            timeProvider ?? TimeProvider.System);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         if (_credential.HmacAccessId is not null && configuration.ApiStyle != PantsGcsApiStyle.Xml)
         {
             throw PantsException.InvalidArgument("GCS HMAC credentials require the XML API style.");
         }
     }
 
-    public async ValueTask<CloudObject?> GetAsync(
+    public override ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            (_credential.TokenProvider as IDisposable)?.Dispose();
+        }
+
+        return base.DisposeAsync();
+    }
+
+    public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -70,7 +85,7 @@ sealed class GcsObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public async ValueTask<CloudObject?> GetRangeAsync(
+    public override async ValueTask<CloudObject?> GetRangeAsync(
         string objectKey,
         ulong offset,
         int length,
@@ -110,7 +125,7 @@ sealed class GcsObjectStore : ICloudObjectStore
         return new CloudObject(data, ReadGenerationHeader(response, "ranged GET"));
     }
 
-    public async ValueTask<CloudObjectMetadata?> HeadAsync(
+    public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -128,7 +143,7 @@ sealed class GcsObjectStore : ICloudObjectStore
             : ReadXmlMetadata(response);
     }
 
-    public async ValueTask<bool> PutAsync(
+    public override async ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
@@ -152,7 +167,7 @@ sealed class GcsObjectStore : ICloudObjectStore
         return true;
     }
 
-    public async ValueTask<CloudObjectListPage> ListPageAsync(
+    public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
         CancellationToken cancellationToken)
@@ -169,7 +184,7 @@ sealed class GcsObjectStore : ICloudObjectStore
             : ReadXmlListPage(body);
     }
 
-    public async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+    public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
         CancellationToken cancellationToken)
@@ -184,7 +199,7 @@ sealed class GcsObjectStore : ICloudObjectStore
         }
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
-            condition is CloudObjectDeleteCondition.IfVersion &&
+            condition is PantsCloudObjectDeleteCondition.IfVersion &&
             await HasGcsPredicateFailureAsync(response, cancellationToken).ConfigureAwait(false))
         {
             return CloudObjectDeleteOutcome.ConditionNotMet;
@@ -344,14 +359,14 @@ sealed class GcsObjectStore : ICloudObjectStore
                 ? BuildJsonDeleteUri(fullKey, condition)
                 : BuildXmlUri(fullKey));
         if (_configuration.ApiStyle == PantsGcsApiStyle.Xml &&
-            condition is CloudObjectDeleteCondition.IfVersion expected)
+            condition is PantsCloudObjectDeleteCondition.IfVersion expected)
         {
             request.Headers.TryAddWithoutValidation(
                 "x-goog-if-generation-match",
                 RequireVersion(expected.Version));
         }
-        else if (condition is not CloudObjectDeleteCondition.Unconditional &&
-                 condition is not CloudObjectDeleteCondition.IfVersion)
+        else if (condition is not PantsCloudObjectDeleteCondition.Unconditional &&
+                 condition is not PantsCloudObjectDeleteCondition.IfVersion)
         {
             throw PantsException.InvalidArgument(
                 "The cloud object delete condition is invalid.");
@@ -409,9 +424,9 @@ sealed class GcsObjectStore : ICloudObjectStore
             : $"upload/storage/v1/b/{bucket}/o?uploadType=media&name={escapedName}";
         var generation = condition switch
         {
-            null or CloudObjectWriteCondition.Unconditional => null,
-            CloudObjectWriteCondition.IfAbsent => "0",
-            CloudObjectWriteCondition.IfVersion expected => expected.Version,
+            null or PantsCloudObjectWriteCondition.Unconditional => null,
+            PantsCloudObjectWriteCondition.IfAbsent => "0",
+            PantsCloudObjectWriteCondition.IfVersion expected => expected.Version,
             _ => throw PantsException.InvalidArgument("The cloud object write condition is invalid.")
         };
         if (generation is not null)
@@ -432,9 +447,9 @@ sealed class GcsObjectStore : ICloudObjectStore
         var builder = new UriBuilder(BuildJsonMetadataUri(fullKey));
         switch (condition)
         {
-            case CloudObjectDeleteCondition.Unconditional:
+            case PantsCloudObjectDeleteCondition.Unconditional:
                 break;
-            case CloudObjectDeleteCondition.IfVersion expected:
+            case PantsCloudObjectDeleteCondition.IfVersion expected:
                 builder.Query = "ifGenerationMatch=" +
                                 Uri.EscapeDataString(RequireVersion(expected.Version));
                 break;
@@ -496,12 +511,12 @@ sealed class GcsObjectStore : ICloudObjectStore
         switch (condition)
         {
             case null:
-            case CloudObjectWriteCondition.Unconditional:
+            case PantsCloudObjectWriteCondition.Unconditional:
                 break;
-            case CloudObjectWriteCondition.IfAbsent:
+            case PantsCloudObjectWriteCondition.IfAbsent:
                 request.Headers.TryAddWithoutValidation("x-goog-if-generation-match", "0");
                 break;
-            case CloudObjectWriteCondition.IfVersion expected:
+            case PantsCloudObjectWriteCondition.IfVersion expected:
                 request.Headers.TryAddWithoutValidation(
                     "x-goog-if-generation-match",
                     expected.Version);
@@ -757,7 +772,7 @@ sealed class GcsObjectStore : ICloudObjectStore
                        throw new PantsInternalException("GCS HMAC access ID is unavailable.");
         var secret = _credential.HmacSecret ??
                      throw new PantsInternalException("GCS HMAC secret is unavailable.");
-        var date = DateTimeOffset.UtcNow.ToString("R", CultureInfo.InvariantCulture);
+        var date = _timeProvider.GetUtcNow().ToString("R", CultureInfo.InvariantCulture);
         request.Headers.Date = DateTimeOffset.ParseExact(date, "R", CultureInfo.InvariantCulture);
         var authorization = CreateGoog1Authorization(request, accessId, secret, date);
         request.Headers.Authorization = AuthenticationHeaderValue.Parse(authorization);

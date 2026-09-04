@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsRuntimeLifecycleAdversarialTests
 {
@@ -10,8 +13,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path);
         var failpoint = new RunLoopFaultFailpointHandler();
-        var actor = new Actor(
-            options,
+        var actor = await Actor.OpenAsync(
+            RuntimePlan.Resolve(options),
             new MonotonicPantsClock(options.TtlClock),
             new RuntimeTelemetry(),
             new RuntimeDependencies(failpoint));
@@ -38,8 +41,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("before-failure"u8.ToArray(), "value"u8.ToArray());
@@ -49,8 +52,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         await Assert.ThrowsAsync<PantsIOException>(() =>
             database.ShutdownAsync(AssertionTimeout).AsTask());
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("after-failure"u8.ToArray(), "value"u8.ToArray());
@@ -59,8 +62,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
 
         await database.ShutdownAsync(AssertionTimeout);
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var read = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "value",
@@ -75,8 +78,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoint));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("buffered"u8.ToArray(), "value"u8.ToArray());
@@ -118,8 +121,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         var transactions = new List<IPantsTransaction>();
         for (var index = 0; index < 10; index++)
         {
-            var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(
                 TestBytes.FromString($"key-{index}"),
@@ -127,10 +130,10 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             transactions.Add(transaction);
         }
 
-        var blocker = database.GetRuntimeMetricsAsync().AsTask();
+        var blocker = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
         var metrics = Enumerable.Range(0, 10)
-            .Select(_ => database.GetRuntimeMetricsAsync().AsTask())
+            .Select(_ => database.Diagnostics.GetRuntimeMetricsAsync().AsTask())
             .ToArray();
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
@@ -149,8 +152,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             await transaction.DisposeAsync();
         }
 
-        await using var read = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var read = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         for (var index = 0; index < 10; index++)
         {

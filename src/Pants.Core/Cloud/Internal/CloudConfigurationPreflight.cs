@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Net;
 using System.Security.Authentication;
 
@@ -6,10 +5,6 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 static class CloudConfigurationPreflight
 {
-    internal delegate ICloudObjectStore StoreFactory(
-        PantsCloudStorageLocation location,
-        TimeSpan remaining);
-
     public static ValueTask<PantsCloudValidationReport> RunAsync(
         PantsCloudStorageLocation location,
         PantsCloudPreflightOptions? options,
@@ -19,7 +14,7 @@ static class CloudConfigurationPreflight
         return RunLocationsAsync(
             [new CloudStorageLocations.Item(location, [PantsCloudStorageRole.Standalone])],
             options ?? PantsCloudPreflightOptions.Default,
-            static (candidate, remaining) => CloudObjectStoreFactory.Create(candidate, remaining),
+            static (candidate, remaining) => CloudObjectStoreFactory.CreateAsync(candidate, remaining),
             cancellationToken);
     }
 
@@ -32,7 +27,7 @@ static class CloudConfigurationPreflight
         return RunLocationsAsync(
             CloudStorageLocations.Unique(topology),
             options ?? PantsCloudPreflightOptions.Default,
-            static (location, remaining) => CloudObjectStoreFactory.Create(location, remaining),
+            static (location, remaining) => CloudObjectStoreFactory.CreateAsync(location, remaining),
             cancellationToken);
     }
 
@@ -109,7 +104,8 @@ static class CloudConfigurationPreflight
         ICloudObjectStore store;
         try
         {
-            store = factory(item.Location, Remaining(totalBudget, started));
+            store = await factory(item.Location, Remaining(totalBudget, started))
+                .ConfigureAwait(false);
         }
         catch (Exception exception) when (!callerToken.IsCancellationRequested)
         {
@@ -125,6 +121,8 @@ static class CloudConfigurationPreflight
                 Unverified(item, PantsCloudCheckCode.ObjectHead, "Provider backend did not resolve."),
                 Unverified(item, PantsCloudCheckCode.RangedRead, "Provider backend did not resolve."));
         }
+
+        await using var ownedStore = store.ConfigureAwait(false);
 
         var findings = new List<PantsCloudValidationFinding>(structural.Findings)
         {
@@ -271,46 +269,46 @@ static class CloudConfigurationPreflight
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
         string message) => Finding(
-            item,
-            code,
-            PantsCloudCheckOutcome.Passed,
-            PantsCloudCheckSeverity.Information,
-            PantsCloudFailureKind.None,
-            message);
+        item,
+        code,
+        PantsCloudCheckOutcome.Passed,
+        PantsCloudCheckSeverity.Information,
+        PantsCloudFailureKind.None,
+        message);
 
     static PantsCloudValidationFinding Failure(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
         PantsCloudFailureKind failureKind,
         string message) => Finding(
-            item,
-            code,
-            PantsCloudCheckOutcome.Failed,
-            PantsCloudCheckSeverity.Error,
-            failureKind,
-            message);
+        item,
+        code,
+        PantsCloudCheckOutcome.Failed,
+        PantsCloudCheckSeverity.Error,
+        failureKind,
+        message);
 
     static PantsCloudValidationFinding Unverified(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
         string message) => Finding(
-            item,
-            code,
-            PantsCloudCheckOutcome.Unverified,
-            PantsCloudCheckSeverity.Warning,
-            PantsCloudFailureKind.Unsupported,
-            message);
+        item,
+        code,
+        PantsCloudCheckOutcome.Unverified,
+        PantsCloudCheckSeverity.Warning,
+        PantsCloudFailureKind.Unsupported,
+        message);
 
     static PantsCloudValidationFinding NotApplicable(
         CloudStorageLocations.Item item,
         PantsCloudCheckCode code,
         string message) => Finding(
-            item,
-            code,
-            PantsCloudCheckOutcome.Warning,
-            PantsCloudCheckSeverity.Warning,
-            PantsCloudFailureKind.NotApplicable,
-            message);
+        item,
+        code,
+        PantsCloudCheckOutcome.Warning,
+        PantsCloudCheckSeverity.Warning,
+        PantsCloudFailureKind.NotApplicable,
+        message);
 
     static PantsCloudValidationFinding Finding(
         CloudStorageLocations.Item item,
@@ -319,14 +317,14 @@ static class CloudConfigurationPreflight
         PantsCloudCheckSeverity severity,
         PantsCloudFailureKind failureKind,
         string message) => new(
-            CloudConfigurationValidator.Kind(item.Location.Provider),
-            item.Roles,
-            PantsCloudValidationMode.LivePreflight,
-            code,
-            outcome,
-            severity,
-            failureKind,
-            message);
+        item.Location.Provider.Id,
+        item.Roles,
+        PantsCloudValidationMode.LivePreflight,
+        code,
+        outcome,
+        severity,
+        failureKind,
+        message);
 
     static PantsCloudFailureKind Classify(Exception exception, bool deadlineExpired)
     {
@@ -409,4 +407,8 @@ static class CloudConfigurationPreflight
             ? TimeSpan.FromMilliseconds(1)
             : remaining;
     }
+
+    internal delegate ValueTask<ICloudObjectStore> StoreFactory(
+        PantsCloudStorageLocation location,
+        TimeSpan remaining);
 }

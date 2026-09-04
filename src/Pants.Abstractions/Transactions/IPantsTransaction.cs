@@ -9,7 +9,7 @@ public interface IPantsTransaction : IAsyncDisposable
     PantsConflictPolicy ConflictPolicy { get; }
 
     /// <summary>
-    /// Selects write-set conflict handling. This does not turn ordinary reads or scans into assertions.
+    ///     Selects write-set conflict handling. This does not turn ordinary reads or scans into assertions.
     /// </summary>
     void SetConflictPolicy(PantsConflictPolicy conflictPolicy);
 
@@ -30,8 +30,8 @@ public interface IPantsTransaction : IAsyncDisposable
         ReadOnlyMemory<byte> endExclusive);
 
     /// <summary>
-    /// Requires the key to match <paramref name="expectedValue"/> at the transaction snapshot and
-    /// remain unchanged through commit. A null value asserts that the key is absent.
+    ///     Requires the key to match <paramref name="expectedValue" /> at the transaction snapshot and
+    ///     remain unchanged through commit. A null value asserts that the key is absent.
     /// </summary>
     void AssertValue(
         ReadOnlyMemory<byte> key,

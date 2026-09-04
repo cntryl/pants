@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsCoreCorrectnessContractTests
 {
@@ -14,7 +16,7 @@ public sealed class PantsCoreCorrectnessContractTests
                 throw new FileNotFoundException("Required SST is missing.")));
 
         var failure = await Assert.ThrowsAsync<PantsNotFoundException>(() =>
-            database.VerifyStorageAsync(AssertionTimeout).AsTask());
+            database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask());
 
         Assert.Equal(PantsErrorCode.NotFound, failure.Code);
         Assert.IsType<FileNotFoundException>(failure.InnerException);
@@ -38,20 +40,20 @@ public sealed class PantsCoreCorrectnessContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (var write = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var write = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             write.Put("key"u8.ToArray(), "value"u8.ToArray());
             await write.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using var snapshot = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using var snapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.True(metrics.SstCount > 0);
         Assert.Equal(0, metrics.PinnedSsts);
@@ -63,18 +65,18 @@ public sealed class PantsCoreCorrectnessContractTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        await using (var write = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var write = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             write.Put("key"u8.ToArray(), "value"u8.ToArray());
             await write.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        var before = await database.GetReadPathDiagnosticsAsync();
-        await using (var read = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        var before = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+        await using (var read = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         await using (var scan = await read.ScanAsync(new PantsScanQuery()))
         {
@@ -83,7 +85,7 @@ public sealed class PantsCoreCorrectnessContractTests
             }
         }
 
-        var after = await database.GetReadPathDiagnosticsAsync();
+        var after = await database.Diagnostics.GetReadPathDiagnosticsAsync();
 
         Assert.True(after.CandidateSstFilesChecked > before.CandidateSstFilesChecked);
         Assert.Equal(before.SstReaderCacheMisses, after.SstReaderCacheMisses);

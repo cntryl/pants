@@ -31,7 +31,7 @@ sealed class CloudObjectLeaseStore(
         _objectStore.PutAsync(
             _objectKey,
             Serialize(lease),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             cancellationToken);
 
     public ValueTask<bool> TryReplaceAsync(
@@ -41,7 +41,7 @@ sealed class CloudObjectLeaseStore(
         _objectStore.PutAsync(
             _objectKey,
             Serialize(lease),
-            new CloudObjectWriteCondition.IfVersion(expectedVersion),
+            new PantsCloudObjectWriteCondition.IfVersion(expectedVersion),
             cancellationToken);
 
     static byte[] Serialize(CloudLeaseRecord lease)

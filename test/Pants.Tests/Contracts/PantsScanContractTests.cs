@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsScanContractTests
 {
@@ -6,8 +8,8 @@ public sealed class PantsScanContractTests
     public async Task ShouldScanPrefixIntersectionInBothDirectionsWithLimit()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         foreach (var key in new[] { "aa0", "aa1", "aa2", "ab0", "b00" })
         {
@@ -37,8 +39,8 @@ public sealed class PantsScanContractTests
     public async Task ShouldHonorPrefixEndingInFf()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(new byte[] { 0xff, 0x00 }, TestBytes.FromString("one"));
         transaction.Put(new byte[] { 0xff, 0xff }, TestBytes.FromString("two"));
@@ -62,8 +64,8 @@ public sealed class PantsScanContractTests
     public async Task ShouldMakeScanFailureStickyAfterCancellation()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
@@ -80,8 +82,8 @@ public sealed class PantsScanContractTests
     public async Task ShouldReturnNoRowsForZeroLimit()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
         await using var scan = await transaction.ScanAsync(new PantsScanQuery { Limit = 0 });
@@ -94,8 +96,8 @@ public sealed class PantsScanContractTests
     public async Task ShouldRejectReversedBoundsButAllowEqualBounds()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         var error = await Assert.ThrowsAnyAsync<PantsException>(() => transaction.ScanAsync(
@@ -118,20 +120,20 @@ public sealed class PantsScanContractTests
     public async Task ScanOwnsSnapshotPinAfterTransactionCompletes()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
 
         await transaction.RollbackAsync();
 
-        var pinned = await database.GetRuntimeMetricsAsync();
+        var pinned = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, pinned.ActiveSnapshots);
         var entry = Assert.Single(await CollectAsync(scan));
         Assert.Equal("key", TestBytes.ToText(entry.Key));
         Assert.Equal("value", TestBytes.ToText(entry.Value));
-        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).ActiveSnapshots);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ActiveSnapshots);
     }
 
     static async Task<IReadOnlyList<PantsEntry>> CollectAsync(IPantsScan scan)

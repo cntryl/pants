@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class ApiBenchmarks : Tier1Benchmark
 {
@@ -15,8 +15,8 @@ public class ApiBenchmarks : Tier1Benchmark
     public async Task SetupAsync()
     {
         _database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(_hitKey, _value);
         await transaction.CommitAsync(PantsWriteOptions.BestEffort);
@@ -28,8 +28,8 @@ public class ApiBenchmarks : Tier1Benchmark
     [Benchmark]
     public async ValueTask<ReadOnlyMemory<byte>?> GetHit()
     {
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(_hitKey);
     }
@@ -37,8 +37,8 @@ public class ApiBenchmarks : Tier1Benchmark
     [Benchmark]
     public async ValueTask<ReadOnlyMemory<byte>?> GetMiss()
     {
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(_missKey);
     }
@@ -46,8 +46,8 @@ public class ApiBenchmarks : Tier1Benchmark
     [Benchmark]
     public async ValueTask Put()
     {
-        await using var transaction = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        await using var transaction = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(_putKey, _value);
         await transaction.CommitAsync(PantsWriteOptions.BestEffort);

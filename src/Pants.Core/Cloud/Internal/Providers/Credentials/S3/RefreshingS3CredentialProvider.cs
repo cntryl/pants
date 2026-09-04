@@ -9,6 +9,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly HttpClient _httpClient;
     readonly string _region;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
     CachedS3Credentials? _cached;
     int _disposed;
@@ -16,11 +17,13 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     public RefreshingS3CredentialProvider(
         string region,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         _region = region;
         _httpClient = httpClient;
         _timeout = timeout;
+        _timeProvider = timeProvider;
     }
 
     public void Dispose()
@@ -35,7 +38,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (_cached is { } cached && !cached.RequiresRefresh(DateTimeOffset.UtcNow))
+        if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.Credentials;
         }
@@ -43,7 +46,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_cached is { } current && !current.RequiresRefresh(DateTimeOffset.UtcNow))
+            if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
             {
                 return current.Credentials;
             }
@@ -120,7 +123,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         var sessionName = Environment.GetEnvironmentVariable("AWS_ROLE_SESSION_NAME");
         if (string.IsNullOrWhiteSpace(sessionName))
         {
-            sessionName = $"pants-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            sessionName = $"pants-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}";
         }
 
         var dnsSuffix = _region.StartsWith("cn-", StringComparison.Ordinal)
@@ -333,7 +336,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         return request;
     }
 
-    static async ValueTask<CachedS3Credentials> ParseTemporaryJsonAsync(
+    async ValueTask<CachedS3Credentials> ParseTemporaryJsonAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
@@ -370,7 +373,7 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         }
     }
 
-    static CachedS3Credentials ParseTemporaryXml(string body, string source)
+    CachedS3Credentials ParseTemporaryXml(string body, string source)
     {
         var accessKey = RequiredXmlValue(body, "AccessKeyId", source);
         var secretKey = RequiredXmlValue(body, "SecretAccessKey", source);
@@ -412,14 +415,14 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         throw new PantsIOException($"AWS temporary credential response omitted {name}.");
     }
 
-    static DateTimeOffset ParseExpiration(string value)
+    DateTimeOffset ParseExpiration(string value)
     {
         if (!DateTimeOffset.TryParse(
                 value,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal,
                 out var expiration) ||
-            expiration <= DateTimeOffset.UtcNow)
+            expiration <= _timeProvider.GetUtcNow())
         {
             throw new PantsIOException(
                 "AWS temporary credential expiration is missing, invalid, or not in the future.");

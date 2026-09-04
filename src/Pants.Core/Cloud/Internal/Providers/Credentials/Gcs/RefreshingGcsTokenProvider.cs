@@ -14,6 +14,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly HttpClient _httpClient;
     readonly PantsGcsCredentialSource _source;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
     GcsAccessToken? _cached;
     int _disposed;
@@ -21,11 +22,13 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     public RefreshingGcsTokenProvider(
         HttpClient httpClient,
         PantsGcsCredentialSource source,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         _httpClient = httpClient;
         _source = source;
         _timeout = timeout;
+        _timeProvider = timeProvider;
     }
 
     public void Dispose()
@@ -39,7 +42,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
     public async ValueTask<string> GetTokenAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (_cached is { } cached && !cached.RequiresRefresh(DateTimeOffset.UtcNow))
+        if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.Value;
         }
@@ -47,7 +50,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_cached is { } current && !current.RequiresRefresh(DateTimeOffset.UtcNow))
+            if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
             {
                 return current.Value;
             }
@@ -109,7 +112,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
                 cancellationToken).ConfigureAwait(false),
             "external_account" => await new GcsExternalAccountTokenProvider(
                 _httpClient,
-                _timeout).FetchAsync(root, cancellationToken).ConfigureAwait(false),
+                _timeout,
+                _timeProvider).FetchAsync(root, cancellationToken).ConfigureAwait(false),
             var type => throw new PantsInvalidArgumentException(
                 $"Google application-default credential type '{type}' is unsupported.")
         };
@@ -123,7 +127,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
         var privateKey = GetRequiredString(root, "private_key");
         var tokenUri = GetOptionalString(root, "token_uri") ??
                        "https://oauth2.googleapis.com/token";
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var header = Base64Url(
             Encoding.UTF8.GetBytes("{\"alg\":\"RS256\",\"typ\":\"JWT\"}"));
         var claims = JsonSerializer.Serialize(new Dictionary<string, object>
@@ -196,7 +200,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
         request.Headers.TryAddWithoutValidation("Metadata-Flavor", "Google");
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, "GCS metadata token request");
-        return await ParseTokenResponseAsync(response, cancellationToken).ConfigureAwait(false);
+        return await ParseTokenResponseAsync(response, _timeProvider, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     async ValueTask<GcsAccessToken> RequestTokenAsync(
@@ -212,7 +217,8 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
             "application/x-www-form-urlencoded");
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, "GCS token request");
-        return await ParseTokenResponseAsync(response, cancellationToken).ConfigureAwait(false);
+        return await ParseTokenResponseAsync(response, _timeProvider, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     async ValueTask<HttpResponseMessage> SendAsync(
@@ -244,6 +250,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
 
     internal static async ValueTask<GcsAccessToken> ParseTokenResponseAsync(
         HttpResponseMessage response,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         JsonDocument document;
@@ -284,7 +291,7 @@ sealed class RefreshingGcsTokenProvider : IGcsTokenProvider, IDisposable
                     "GCS token response must include a positive expires_in.");
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = timeProvider.GetUtcNow();
             DateTimeOffset expiresAt;
             try
             {

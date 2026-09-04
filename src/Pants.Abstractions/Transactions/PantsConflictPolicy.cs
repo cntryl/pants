@@ -6,9 +6,9 @@ public enum PantsConflictPolicy
     LastWriteWins,
 
     /// <summary>
-    /// Rejects writes whose write-set keys or ranges changed after the transaction began.
-    /// Ordinary point reads and scans are snapshot-stable but are not implicitly protected at commit;
-    /// use <see cref="IPantsTransaction.AssertValue"/> for a read that must remain unchanged.
+    ///     Rejects writes whose write-set keys or ranges changed after the transaction began.
+    ///     Ordinary point reads and scans are snapshot-stable but are not implicitly protected at commit;
+    ///     use <see cref="IPantsTransaction.AssertValue" /> for a read that must remain unchanged.
     /// </summary>
     AbortOnWriteConflict
 }

@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class S3CredentialSourceTests
@@ -58,7 +59,7 @@ public sealed class S3CredentialSourceTests
         using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
         using var client = new HttpClient(handler);
         var store = new S3ObjectStore(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "bucket",
                 "cn-north-1",
                 new PantsS3CredentialSource.StaticCredentials("access", "secret")),
@@ -322,7 +323,7 @@ public sealed class S3CredentialSourceTests
     }
 
     static S3ObjectStore CreateAwsStore(PantsS3CredentialSource source, HttpClient client) => new(
-        new PantsCloudProviderConfiguration.AwsS3("bucket", "us-east-1", source),
+        new PantsAwsS3Provider("bucket", "us-east-1", source),
         string.Empty,
         client,
         TimeSpan.FromSeconds(5));
@@ -330,7 +331,7 @@ public sealed class S3CredentialSourceTests
     static S3ObjectStore CreateS3CompatibleStore(
         PantsS3CredentialSource source,
         HttpClient client) => new(
-        new PantsCloudProviderConfiguration.S3Compatible(
+        new PantsS3CompatibleProvider(
             "bucket",
             "us-east-1",
             new Uri("https://objects.example.test"),

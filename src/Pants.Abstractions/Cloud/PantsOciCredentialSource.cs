@@ -23,7 +23,7 @@ public abstract record PantsOciCredentialSource
         string? ConfigFile = null) : PantsOciCredentialSource;
 
     /// <summary>
-    /// Represents the AWS-only default chain so validation can reject it deterministically.
+    ///     Represents the AWS-only default chain so validation can reject it deterministically.
     /// </summary>
     public sealed record AwsDefaultChain : PantsOciCredentialSource;
 }

@@ -3,13 +3,14 @@ using System.Collections.Immutable;
 namespace Cntryl.Pants.Cloud;
 
 /// <summary>
-/// An immutable cloud validation report. Structural validity does not prove credentials,
-/// reachability, authorization, durability, or write access.
+///     An immutable cloud validation report. Structural validity does not prove credentials,
+///     reachability, authorization, durability, or write access.
 /// </summary>
 public sealed record PantsCloudValidationReport
 {
-    internal PantsCloudValidationReport(IEnumerable<PantsCloudValidationFinding> findings)
+    public PantsCloudValidationReport(IEnumerable<PantsCloudValidationFinding> findings)
     {
+        ArgumentNullException.ThrowIfNull(findings);
         Findings = findings.ToImmutableArray();
         IsValid = !Findings.Any(static finding =>
             finding.Mode == PantsCloudValidationMode.Structural &&

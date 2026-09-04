@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Runtime.Flush;
+namespace Cntryl.Pants.Runtime.Flush;
 
 public sealed class ImmutableFlushPipelineTests
 {

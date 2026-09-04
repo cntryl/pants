@@ -35,6 +35,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
     readonly ulong _writerEpoch;
+    int _disposed;
     int _persistenceAnomaly;
 
     public ProviderCloudPersistence(
@@ -60,6 +61,27 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     }
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        var stores = new HashSet<ICloudObjectStore>(ReferenceEqualityComparer.Instance)
+        {
+            _walStore,
+            _sstStore,
+            _controlStore
+        };
+        foreach (var store in stores)
+        {
+            await store.DisposeAsync().ConfigureAwait(false);
+        }
+
+        GC.SuppressFinalize(this);
+    }
 
     public async ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
@@ -93,7 +115,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             var created = await _walStore.PutAsync(
                 objectKey,
                 segment.Bytes,
-                new CloudObjectWriteCondition.IfAbsent(),
+                new PantsCloudObjectWriteCondition.IfAbsent(),
                 cancellationToken).ConfigureAwait(false);
             var remoteSegment = await _walStore.GetAsync(objectKey, cancellationToken)
                 .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
@@ -165,8 +187,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
                 current is null
-                    ? new CloudObjectWriteCondition.IfAbsent()
-                    : new CloudObjectWriteCondition.IfVersion(current.Version),
+                    ? new PantsCloudObjectWriteCondition.IfAbsent()
+                    : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
                 cancellationToken).ConfigureAwait(false);
             if (published)
             {
@@ -263,8 +285,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 PantsCloudObjectLayout.DdlRegistryObjectKey,
                 fencedBytes,
                 current is null
-                    ? new CloudObjectWriteCondition.IfAbsent()
-                    : new CloudObjectWriteCondition.IfVersion(current.Version),
+                    ? new PantsCloudObjectWriteCondition.IfAbsent()
+                    : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
                 cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
             if (!published)
@@ -302,8 +324,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             PantsCloudObjectLayout.DdlRegistryObjectKey,
             data,
             expectedVersion is null
-                ? new CloudObjectWriteCondition.IfAbsent()
-                : new CloudObjectWriteCondition.IfVersion(expectedVersion),
+                ? new PantsCloudObjectWriteCondition.IfAbsent()
+                : new PantsCloudObjectWriteCondition.IfVersion(expectedVersion),
             cancellationToken).ConfigureAwait(false);
         _lease.EnsureValid();
         if (!published)
@@ -474,8 +496,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
                 current is null
-                    ? new CloudObjectWriteCondition.IfAbsent()
-                    : new CloudObjectWriteCondition.IfVersion(current.Version),
+                    ? new PantsCloudObjectWriteCondition.IfAbsent()
+                    : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
                 cancellationToken).ConfigureAwait(false);
             if (fenced)
             {
@@ -558,7 +580,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             created = await _sstStore.PutAsync(
                 objectKey,
                 localBytes,
-                new CloudObjectWriteCondition.IfAbsent(),
+                new PantsCloudObjectWriteCondition.IfAbsent(),
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -694,8 +716,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             objectKey,
             data,
             current is null
-                ? new CloudObjectWriteCondition.IfAbsent()
-                : new CloudObjectWriteCondition.IfVersion(current.Version),
+                ? new PantsCloudObjectWriteCondition.IfAbsent()
+                : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
             cancellationToken).ConfigureAwait(false);
         if (!published)
         {
@@ -849,7 +871,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             var published = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
-                new CloudObjectWriteCondition.IfVersion(current.Version),
+                new PantsCloudObjectWriteCondition.IfVersion(current.Version),
                 cancellationToken).ConfigureAwait(false);
             if (!published)
             {
@@ -891,7 +913,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             _lease.EnsureValid();
             var outcome = await _walStore.DeleteAsync(
                 segment.ObjectKey,
-                new CloudObjectDeleteCondition.IfVersion(expectedVersion),
+                new PantsCloudObjectDeleteCondition.IfVersion(expectedVersion),
                 cancellationToken).ConfigureAwait(false);
             if (outcome != CloudObjectDeleteOutcome.Deleted)
             {

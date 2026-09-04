@@ -1,7 +1,7 @@
 namespace Cntryl.Pants.Observability.Internal;
 
 sealed class RuntimeMetricsSnapshotFactory(
-    PantsOpenOptions options,
+    RuntimePlan options,
     RuntimeTelemetry telemetry,
     LocalDiskStore? diskStore,
     CompactionRuntimeService compactionWorker,

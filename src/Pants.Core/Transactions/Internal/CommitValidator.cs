@@ -7,14 +7,14 @@ static class CommitValidator
     public static void Validate(
         RuntimeState state,
         CommitPayload payload,
-        LocalDiskStore? diskStore = null) =>
+        IStorageReadStore? diskStore = null) =>
         ValidateAsync(state, payload, diskStore, null, CancellationToken.None)
             .AsTask().GetAwaiter().GetResult();
 
     public static async ValueTask ValidateAsync(
         RuntimeState state,
         CommitPayload payload,
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {
@@ -96,7 +96,7 @@ static class CommitValidator
         RuntimeState state,
         CommitPayload payload,
         TransactionIntentOperation operation,
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {
@@ -116,10 +116,10 @@ static class CommitValidator
                 // began but before it committed); the durable SST is the only remaining witness.
                 if (current is null &&
                     await ResolveDiskWriteSequenceAsync(
-                        diskStore,
-                        operation.Family,
-                        operation.Key,
-                        cancellationToken).ConfigureAwait(false) is
+                            diskStore,
+                            operation.Family,
+                            operation.Key,
+                            cancellationToken).ConfigureAwait(false) is
                     { } diskSequence &&
                     diskSequence > payload.StartSnapshot.Sequence)
                 {
@@ -181,7 +181,7 @@ static class CommitValidator
         CommitPayload payload,
         TransactionIntentOperation operation,
         DateTimeOffset now,
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         CancellationToken cancellationToken)
     {
         var prior = payload.Operations.LatestBefore(operation.Ordinal, operation.Key);
@@ -209,7 +209,7 @@ static class CommitValidator
         ColumnFamilyIdentity family,
         byte[] key,
         DateTimeOffset now,
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         CancellationToken cancellationToken)
     {
         if (GetFamily(state, family).TryGetValue(key, out var current))
@@ -237,14 +237,14 @@ static class CommitValidator
     }
 
     /// <summary>
-    /// Falls through to the current manifest once the in-memory tier no longer has the key — it
-    /// may have been written before this process started, or released from
-    /// <see cref="RuntimeState.FamilyData"/> after a flush durably published it (see
-    /// <see cref="RuntimeState.ReleaseFlushedGeneration"/>). Returns the durable sequence at
-    /// which the key last changed (put or delete), or <c>null</c> if it has no durable record.
+    ///     Falls through to the current manifest once the in-memory tier no longer has the key — it
+    ///     may have been written before this process started, or released from
+    ///     <see cref="RuntimeState.FamilyData" /> after a flush durably published it (see
+    ///     <see cref="RuntimeState.ReleaseFlushedGeneration" />). Returns the durable sequence at
+    ///     which the key last changed (put or delete), or <c>null</c> if it has no durable record.
     /// </summary>
     static async ValueTask<long?> ResolveDiskWriteSequenceAsync(
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] key,
         CancellationToken cancellationToken)
@@ -263,7 +263,7 @@ static class CommitValidator
     }
 
     static async ValueTask<SstEntry?> ResolveDiskEntryAsync(
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] key,
         CancellationToken cancellationToken)
@@ -281,7 +281,7 @@ static class CommitValidator
     }
 
     static async ValueTask<SstEntry?> ResolveDiskCellEntryAsync(
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         IReadOnlyList<FileMeta> visibleFiles,
         byte[] key,
         CancellationToken cancellationToken)
@@ -294,7 +294,7 @@ static class CommitValidator
         var candidates = visibleFiles
             .Where(file =>
                 diskStore.IsSstAvailable(file) &&
-                LocalDiskStore.IsWithinFileRange(file, key))
+                diskStore.IsWithinFileRange(file, key))
             .OrderByDescending(static file => file.SstSequence)
             .ToArray();
         return candidates.Length == 0
@@ -304,7 +304,7 @@ static class CommitValidator
     }
 
     static async ValueTask<CellState?> ResolveDiskCellAsync(
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         IReadOnlyList<FileMeta> visibleFiles,
         byte[] key,
         CancellationToken cancellationToken)
@@ -327,7 +327,7 @@ static class CommitValidator
         ColumnFamilyIdentity family,
         ImmutableSortedDictionary<byte[], CellState> startFamily,
         byte[] key,
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         CancellationToken cancellationToken)
     {
         if (startFamily.TryGetValue(key, out var startCell))
@@ -351,18 +351,18 @@ static class CommitValidator
     }
 
     static FileMeta[] GetDiskCandidates(
-        LocalDiskStore diskStore,
+        IStorageReadStore diskStore,
         ColumnFamilyIdentity family,
         byte[] key) => diskStore.GetVisibleFilesSnapshot()
         .GetValueOrDefault(family.Id, [])
         .Where(file =>
             diskStore.IsSstAvailable(file) &&
-            LocalDiskStore.IsWithinFileRange(file, key))
+            diskStore.IsWithinFileRange(file, key))
         .OrderByDescending(static file => file.SstSequence)
         .ToArray();
 
     static async ValueTask<bool> HasDiskMutationInRangeAsync(
-        LocalDiskStore? diskStore,
+        IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] start,
         byte[] end,

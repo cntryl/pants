@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudWalSealControllerTests
 {

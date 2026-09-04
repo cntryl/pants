@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class RuntimeDiagnosticsTestGroup

@@ -4,10 +4,6 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 static class CloudStorageLocations
 {
-    internal readonly record struct Item(
-        PantsCloudStorageLocation Location,
-        ImmutableArray<PantsCloudStorageRole> Roles);
-
     public static IReadOnlyList<Item> Unique(PantsCloudStorageTopology topology)
     {
         var unique = new List<(PantsCloudStorageLocation Location, List<PantsCloudStorageRole> Roles)>();
@@ -31,4 +27,8 @@ static class CloudStorageLocations
             }
         }
     }
+
+    internal readonly record struct Item(
+        PantsCloudStorageLocation Location,
+        ImmutableArray<PantsCloudStorageRole> Roles);
 }

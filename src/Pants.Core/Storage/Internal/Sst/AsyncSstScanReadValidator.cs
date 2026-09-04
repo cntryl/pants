@@ -1,9 +1,9 @@
 namespace Cntryl.Pants.Storage.Internal.Sst;
 
 /// <summary>
-/// Records the blocks consumed by the asynchronous scan pipeline. Block integrity is checked by
-/// <see cref="AsyncSstReader"/> as each source advances, so this validator observes that work
-/// instead of issuing a duplicate synchronous read over cloud-backed sources.
+///     Records the blocks consumed by the asynchronous scan pipeline. Block integrity is checked by
+///     <see cref="AsyncSstReader" /> as each source advances, so this validator observes that work
+///     instead of issuing a duplicate synchronous read over cloud-backed sources.
 /// </summary>
 sealed class AsyncSstScanReadValidator(
     RuntimeTelemetry telemetry,

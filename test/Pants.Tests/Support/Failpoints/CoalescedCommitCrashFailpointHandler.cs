@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Tests.Support.Failpoints;
+namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class CoalescedCommitCrashFailpointHandler(
     string sentinelPath,

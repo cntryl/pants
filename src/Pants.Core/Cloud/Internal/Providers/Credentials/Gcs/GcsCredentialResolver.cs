@@ -5,9 +5,11 @@ static class GcsCredentialResolver
     public static GcsCredential Resolve(
         PantsGcsCredentialSource source,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         return source switch
         {
             PantsGcsCredentialSource.BearerToken bearer => new GcsCredential(
@@ -24,7 +26,7 @@ static class GcsCredentialResolver
                 PantsGcsCredentialSource.MetadataServer => new GcsCredential(
                     null,
                     null,
-                    new RefreshingGcsTokenProvider(httpClient, source, timeout)),
+                    new RefreshingGcsTokenProvider(httpClient, source, timeout, timeProvider)),
             _ => throw new PantsNotSupportedException("The GCS credential source is unsupported.")
         };
     }

@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class MidgeBenchmarkReader
 {
@@ -96,7 +96,8 @@ static class MidgeBenchmarkReader
     }
 
     static JsonElement Required(JsonElement parent, string propertyName) =>
-        parent.TryGetProperty(propertyName, out var value) && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+        parent.TryGetProperty(propertyName, out var value) &&
+        value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
             ? value
             : throw new InvalidDataException($"Midge benchmark is missing required '{propertyName}'.");
 

@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime.Transactions;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime.Transactions;
 
 public sealed class CommitCoalescerTests
 {

@@ -44,7 +44,7 @@ service collection.
 Programmatic configuration uses the same model:
 
 ```csharp
-using Cntryl.Pants.DependencyInjection.Options;
+using Cntryl.Pants.Options;
 
 services.AddPants().Configure(options =>
 {

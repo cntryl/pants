@@ -1,28 +1,26 @@
-using Cntryl.Pants.Scan;
-
 namespace Cntryl.Pants.Storage.Internal.Sst;
 
 /// <summary>
-/// Lazily walks the data blocks of an open <see cref="SstReader"/> one block at a time,
-/// forward or reverse, decoding at most one block's entries at any moment. Used by scans
-/// (<see cref="PantsScanDirection"/>) and compaction so neither has to fully decode an SST
-/// up front the way <see cref="SstCodec.Decode"/> does. When supplied, a shared
-/// <see cref="ResourceBudget"/> accounts for the current decoded block and releases it as the
-/// cursor advances or is disposed.
+///     Lazily walks the data blocks of an open <see cref="SstReader" /> one block at a time,
+///     forward or reverse, decoding at most one block's entries at any moment. Used by scans
+///     (<see cref="PantsScanDirection" />) and compaction so neither has to fully decode an SST
+///     up front the way <see cref="SstCodec.Decode" /> does. When supplied, a shared
+///     <see cref="ResourceBudget" /> accounts for the current decoded block and releases it as the
+///     cursor advances or is disposed.
 /// </summary>
 sealed class SstBlockIterator : IDisposable
 {
-    readonly SstReader _reader;
     readonly PantsScanDirection _direction;
+    readonly byte[]? _endExclusive;
+    readonly SstReader _reader;
     readonly ResourceBudget? _resourceBudget;
     readonly byte[]? _startInclusive;
-    readonly byte[]? _endExclusive;
-    int _blockIndex;
     IReadOnlyList<SstEntry>? _blockEntries;
+    int _blockIndex;
     IDisposable? _blockReservation;
+    bool _finished;
     int _positionInBlock;
     bool _started;
-    bool _finished;
 
     SstBlockIterator(
         SstReader reader,
@@ -38,11 +36,13 @@ sealed class SstBlockIterator : IDisposable
         _resourceBudget = resourceBudget;
     }
 
-    /// <summary>Current entry. Valid only after <see cref="MoveNext"/> returns <c>true</c>.</summary>
+    /// <summary>Current entry. Valid only after <see cref="MoveNext" /> returns <c>true</c>.</summary>
     public SstEntry Current { get; private set; } = null!;
 
-    /// <summary>Byte size of the data block <see cref="Current"/> was decoded from.</summary>
+    /// <summary>Byte size of the data block <see cref="Current" /> was decoded from.</summary>
     public int CurrentBlockBytes { get; private set; }
+
+    public void Dispose() => _ = Finish();
 
     public static SstBlockIterator Create(
         SstReader reader,
@@ -227,10 +227,5 @@ sealed class SstBlockIterator : IDisposable
         }
 
         return result;
-    }
-
-    public void Dispose()
-    {
-        _ = Finish();
     }
 }

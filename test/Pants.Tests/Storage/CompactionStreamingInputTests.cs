@@ -1,15 +1,17 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 /// <summary>
-/// Slice 5 (issue #219), input side: compaction's input-reading step
-/// (<c>LocalDiskStore.CompactAsync</c>) used to <c>PositionalFile.ReadAllBytes</c> then
-/// <c>SstCodec.Decode</c> each input SST in full before merging — holding the whole file's bytes
-/// and its fully-decoded contents in memory at once, per input. It now walks each input via
-/// <see cref="SstBlockIterator"/> (one block resident at a time) into the same
-/// <see cref="SstContents"/> shape <c>CompactionMerger.Merge</c> already consumes, so the merge
-/// logic itself — version retention, tombstone-covers-entry, GC eligibility — is unchanged and
-/// unrisked; only how the entries are assembled changes. (The merge/partition steps
-/// downstream still materialize the full merged result — see the plan file for what remains.)
+///     Slice 5 (issue #219), input side: compaction's input-reading step
+///     (<c>LocalDiskStore.CompactAsync</c>) used to <c>PositionalFile.ReadAllBytes</c> then
+///     <c>SstCodec.Decode</c> each input SST in full before merging — holding the whole file's bytes
+///     and its fully-decoded contents in memory at once, per input. It now walks each input via
+///     <see cref="SstBlockIterator" /> (one block resident at a time) into the same
+///     <see cref="SstContents" /> shape <c>CompactionMerger.Merge</c> already consumes, so the merge
+///     logic itself — version retention, tombstone-covers-entry, GC eligibility — is unchanged and
+///     unrisked; only how the entries are assembled changes. (The merge/partition steps
+///     downstream still materialize the full merged result — see the plan file for what remains.)
 /// </summary>
 public sealed class CompactionStreamingInputTests
 {
@@ -27,8 +29,10 @@ public sealed class CompactionStreamingInputTests
         Assert.Equal(baseline.Entries.Select(e => e.Sequence), streamed.Entries.Select(e => e.Sequence));
         Assert.Equal(baseline.Entries.Select(e => e.Value), streamed.Entries.Select(e => e.Value));
         Assert.Equal(
-            baseline.RangeTombstones.Select(t => (Start: TestBytes.ToText(t.Start), End: TestBytes.ToText(t.End), t.Sequence)),
-            streamed.RangeTombstones.Select(t => (Start: TestBytes.ToText(t.Start), End: TestBytes.ToText(t.End), t.Sequence)));
+            baseline.RangeTombstones.Select(t =>
+                (Start: TestBytes.ToText(t.Start), End: TestBytes.ToText(t.End), t.Sequence)),
+            streamed.RangeTombstones.Select(t =>
+                (Start: TestBytes.ToText(t.Start), End: TestBytes.ToText(t.End), t.Sequence)));
         Assert.Equal(baseline.DataBlockCount, streamed.DataBlockCount);
         Assert.NotEmpty(tombstones);
         Assert.Equal(entries.Length, streamed.Entries.Count);
@@ -48,7 +52,7 @@ public sealed class CompactionStreamingInputTests
             .ToArray();
         RangeTombstone[] tombstones =
         [
-            new RangeTombstone(TestBytes.FromString("key-000010"), TestBytes.FromString("key-000020"), 500)
+            new(TestBytes.FromString("key-000010"), TestBytes.FromString("key-000020"), 500)
         ];
         File.WriteAllBytes(path, SstCodec.Encode(entries, tombstones, PantsPerformanceGoal.Latency));
         return (path, entries, tombstones);

@@ -8,7 +8,13 @@ using System.Text.RegularExpressions;
 
 namespace Cntryl.Pants.Storage.Internal;
 
-sealed class LocalDiskStore : IDisposable
+sealed class LocalDiskStore :
+    IDisposable,
+    ILocalWalStore,
+    ILocalFlushStore,
+    ILocalCompactionStore,
+    IStorageReadStore,
+    IHybridCacheStore
 {
     static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -16,6 +22,12 @@ sealed class LocalDiskStore : IDisposable
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
+    // Midge's current writer names sealed segments "{segmentId:00000000000000000000}.wal".
+    // Older writers instead used "wal_{segmentId:000000}.log". A reader must still recognize
+    // that legacy shape on decode, though the current writer never emits it.
+    static readonly Regex LegacyWalSegmentFileNameRegex =
+        new(@"^wal_(\d{6})\.log$", RegexOptions.Compiled);
 
     readonly SstBlockCache _blockCache;
     readonly PantsCompactionConfiguration _compaction;
@@ -43,7 +55,6 @@ sealed class LocalDiskStore : IDisposable
     readonly string _walDirectory;
     readonly string _walPath;
     readonly object _walStateGate = new();
-    bool _disposed;
     ManifestReadSnapshot _manifestReadSnapshot;
     long _nextFrozenFlushId;
     ulong _nextSequence;
@@ -161,7 +172,7 @@ sealed class LocalDiskStore : IDisposable
 
     public string RootPath { get; }
 
-    internal bool IsDisposed => _disposed;
+    internal bool IsDisposed { get; private set; }
 
     public bool IsLeaseHealthy
     {
@@ -218,30 +229,182 @@ sealed class LocalDiskStore : IDisposable
     }
 
     public long LocalSstBytes => GetLocalFileBytes(_sstDirectory, "*.sst");
-    public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
     public ulong WriterEpoch => _lease.Epoch;
 
     public void Dispose()
     {
-        if (_disposed)
+        if (IsDisposed)
         {
             return;
         }
 
-        _disposed = true;
+        IsDisposed = true;
         _readerCache.Dispose();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
     }
 
-    static ulong GetManifestVisibleSequenceFloor(ManifestState manifest) =>
-        Math.Max(
-            manifest.LastPersistedSequence,
-            manifest.Files
-                .Select(static file => file.LargestSequence ?? file.SmallestSequence ?? 0)
-                .DefaultIfEmpty()
-                .Max());
+    public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
+
+    public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
+        GetManifestFilesSnapshot()
+            .OrderBy(static file => file.SstSequence)
+            .ThenBy(static file => file.Name, StringComparer.Ordinal)
+            .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
+            .Select(file => new HybridLocalSst(
+                file.Name,
+                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
+            .ToArray();
+
+    public async ValueTask VerifyRemoteSstMatchesLocalAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var metadata = GetManifestSst(name);
+        var path = Path.Combine(_sstDirectory, name);
+        if (!File.Exists(path))
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' disappeared before cloud durability could be verified.");
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Hybrid SST verification requires a remote source factory.");
+        await using var local = LocalAsyncSstSource.Open(path);
+        await using var remote = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Hybrid SST '{name}' is not confirmed durable in cloud storage.");
+        if (local.Length != remote.Length)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Hybrid SST '{name}' differs from its cloud copy.");
+        }
+
+        const int verificationChunkBytes = 64 * 1024;
+        for (long offset = 0; offset < local.Length;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = checked((int)Math.Min(verificationChunkBytes, local.Length - offset));
+            var localBytes = await local.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            var remoteBytes = await remote.ReadExactlyAsync(offset, length, cancellationToken)
+                .ConfigureAwait(false);
+            if (!localBytes.AsSpan().SequenceEqual(remoteBytes))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Hybrid SST '{name}' differs from its cloud copy.");
+            }
+
+            offset = checked(offset + length);
+        }
+    }
+
+    public bool IsSstLocal(string name)
+    {
+        _ = GetManifestSst(name);
+        return File.Exists(Path.Combine(_sstDirectory, name));
+    }
+
+    public async ValueTask HydrateLocalSstAsync(
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        var metadata = GetManifestSst(name);
+        var path = Path.Combine(_sstDirectory, name);
+        if (File.Exists(path))
+        {
+            return;
+        }
+
+        var factory = _remoteSstSourceFactory ??
+                      throw new PantsInternalException(
+                          "Remote SST hydration requires a remote source factory.");
+        await using var source = await factory.OpenAsync(metadata, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
+        if (checked((ulong)source.Length) != metadata.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Cloud SST '{name}' length differs from its manifest.");
+        }
+
+        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
+        var stagingPath = Path.Combine(
+            stagingDirectory,
+            $"{_lease.Epoch}.hydration.{name}.{Guid.NewGuid():N}.tmp");
+        var checksum = 0U;
+        long offset = 0;
+        try
+        {
+            await using (var output = new FileStream(
+                             stagingPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                while (offset < source.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
+                    var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
+                        .ConfigureAwait(false);
+                    checksum = DiskFormat.Crc32CAppend(checksum, bytes);
+                    await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                    offset = checked(offset + bytes.Length);
+                }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                output.Flush(true);
+            }
+
+            if (metadata.ContentCrc32C.HasValue && checksum != metadata.ContentCrc32C.Value)
+            {
+                throw new PantsCorruptionException(
+                    $"Cloud SST '{name}' content checksum differs from its manifest.");
+            }
+
+            var stagedSource = LocalAsyncSstSource.Open(stagingPath);
+            await using var stagedReader = await AsyncSstReader.OpenAsync(
+                    stagedSource,
+                    metadata,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            _lease.EnsureValid();
+            AtomicStagedFile.WithPathLock(path, () =>
+            {
+                if (!File.Exists(path))
+                {
+                    File.Move(stagingPath, path);
+                    AtomicStagedFile.FlushDirectory(_sstDirectory);
+                }
+
+                return true;
+            });
+        }
+        finally
+        {
+            File.Delete(stagingPath);
+        }
+    }
+
+    public void EvictLocalSst(string name)
+    {
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        _lease.EnsureValid();
+        _ = GetManifestSst(name);
+        RemoveSstFromCaches(name);
+        File.Delete(Path.Combine(_sstDirectory, name));
+    }
 
     public int CountCompactionInputs(RuntimeState state, bool force)
     {
@@ -258,6 +421,519 @@ sealed class LocalDiskStore : IDisposable
                 snapshotHorizon,
                 force)?.Inputs.Count ?? 0);
     }
+
+    public ValueTask<CompactionResult> CompactAsync(
+        RuntimeState state,
+        bool force,
+        CloudCompactionOutputPublisher? outputPublisher,
+        bool flushMutableOperations,
+        Action<long>? publicationCompleted = null,
+        ResourceBudget? compactionBudget = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CancellationToken cancellationToken = default) =>
+        CompactAsync(
+            state,
+            force,
+            outputPublisher,
+            flushMutableOperations,
+            false,
+            publicationCompleted,
+            compactionBudget,
+            prepareInputs,
+            cancellationToken);
+
+    public void Flush(RuntimeState state)
+    {
+        lock (_walStateGate)
+        {
+            FlushCore();
+        }
+    }
+
+    public void Flush(RuntimeState state, ColumnFamilyIdentity identity)
+    {
+        lock (_walStateGate)
+        {
+            FlushCore(identity);
+        }
+    }
+
+    public FlushPublicationPlan BuildFrozenFlushPlan(FrozenMemtableFlush frozen)
+    {
+        ArgumentNullException.ThrowIfNull(frozen);
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        _lease.EnsureValid();
+        _failpoints.Hit(Failpoint.BeforeFlushBuild);
+        _lease.EnsureValid();
+        return BuildFlushPlan(
+            frozen.Operations,
+            frozen.ColumnFamilyId,
+            frozen.SstSequence,
+            frozen.FrontierSequence,
+            $"{_lease.Epoch}.{frozen.Id}");
+    }
+
+    public FlushPublicationResult PublishFrozenFlushPlan(
+        FrozenMemtableFlush frozen,
+        FlushPublicationPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(frozen);
+        ArgumentNullException.ThrowIfNull(plan);
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        _lease.EnsureValid();
+        var published = Volatile.Read(ref _manifestReadSnapshot).Files.SingleOrDefault(file =>
+            file.Name == frozen.SstName);
+        if (published is not null)
+        {
+            _failpoints.Hit(Failpoint.BeforePublishedFlushRetryValidation);
+            ValidatePublishedFlushOutput(frozen, published, plan);
+            _lease.EnsureValid();
+            CompleteFrozenFlush(frozen);
+            RemoveFlushIntents([frozen.SstName]);
+            return new FlushPublicationResult(false);
+        }
+
+        _failpoints.Hit(Failpoint.BeforeFlushPublication);
+        _lease.EnsureValid();
+        var persistenceAnomaly = PublishFlushPlan(
+            plan,
+            frozen.FrontierSequence,
+            true);
+        CompleteFrozenFlush(frozen);
+        return new FlushPublicationResult(persistenceAnomaly);
+    }
+
+    public WalCommitResult AppendCommit(
+        CommitPayload payload,
+        RuntimeState state,
+        PantsDurability durability,
+        WalMetricsRecorder? metrics = null)
+    {
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalWriteFailed();
+            var walLength = _walStream.Length;
+            var reservedSequence = checked((long)_nextSequence);
+            var unflushedCommitSequence = _unflushedCommitSequence;
+            var walRecords = _walRecords;
+            var mutableOperationSequence = _mutableOperations.LastSequence;
+            var durabilityState = CaptureWalDurabilityState();
+            try
+            {
+                return AppendCommitCore(
+                    payload,
+                    state,
+                    durability,
+                    out reservedSequence,
+                    metrics);
+            }
+            catch (Exception appendFailure)
+            {
+                try
+                {
+                    _failpoints.Hit(Failpoint.BeforeWalRollback);
+                    RollBackWalAppend(
+                        state,
+                        walLength,
+                        reservedSequence,
+                        unflushedCommitSequence,
+                        walRecords,
+                        mutableOperationSequence,
+                        durabilityState);
+                }
+                catch (Exception rollbackFailure)
+                {
+                    var uncertainty = new WalCommitRollbackException(
+                        appendFailure,
+                        rollbackFailure);
+                    Volatile.Write(ref _walWriteFailure, uncertainty);
+                    state.Health = PantsEngineHealth.Degraded;
+                    throw uncertainty;
+                }
+
+                throw;
+            }
+        }
+    }
+
+    public WalCommitGroupResult AppendCommitGroup(
+        IReadOnlyList<WalCommitGroupEntry> commits,
+        RuntimeState state,
+        PantsDurability durability,
+        Action beforeSync,
+        WalMetricsRecorder? metrics = null)
+    {
+        ArgumentNullException.ThrowIfNull(commits);
+        ArgumentNullException.ThrowIfNull(beforeSync);
+        if (commits.Count == 0)
+        {
+            throw new PantsInternalException("A WAL commit group must not be empty.");
+        }
+
+        if (durability is not (PantsDurability.Sync or
+            PantsDurability.Buffered or
+            PantsDurability.BestEffort))
+        {
+            throw new PantsInternalException(
+                "A WAL commit group must use Sync, Buffered, or BestEffort durability.");
+        }
+
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalWriteFailed();
+            _lease.EnsureValid();
+            var walLength = _walStream.Length;
+            var reservedSequence = commits[^1].ExpectedSequence;
+            if (reservedSequence < state.Sequence)
+            {
+                throw new PantsInternalException(
+                    "The coalesced WAL sequence reservation moved backwards.");
+            }
+
+            var unflushedCommitSequence = _unflushedCommitSequence;
+            var walRecords = _walRecords;
+            var mutableOperationSequence = _mutableOperations.LastSequence;
+            var durabilityState = CaptureWalDurabilityState();
+            try
+            {
+                var prepared = new List<PreparedWalCommit>(commits.Count);
+                foreach (var commit in commits)
+                {
+                    prepared.Add(durability == PantsDurability.BestEffort
+                        ? PrepareBestEffortResidentCommit(commit.Payload, state)
+                        : PrepareResidentWalCommit(commit.Payload, state));
+                    if (state.Sequence != commit.ExpectedSequence)
+                    {
+                        throw new PantsInternalException(
+                            "The coalesced WAL sequence did not match its preflight plan.");
+                    }
+                }
+
+                if (durability != PantsDurability.BestEffort)
+                {
+                    var appendStarted = Stopwatch.GetTimestamp();
+                    var payloads = prepared.Select(static commit => commit.Payload).ToArray();
+                    WalCodec.AppendFrames(
+                        _walStream.SafeFileHandle,
+                        walLength,
+                        payloads,
+                        () => _failpoints.Hit(Failpoint.MidWalAppend));
+                    Interlocked.Add(
+                        ref _walBytesWrittenTotal,
+                        payloads.Sum(static payload => checked((long)payload.Length + 2 * sizeof(uint))));
+                    var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
+                    metrics?.RecordAppend(appendElapsed);
+                    _walRecords = checked(_walRecords + prepared.Count);
+                    RecordWalAppend(state.Sequence, prepared.Count);
+                }
+
+                foreach (var commit in prepared)
+                {
+                    if (durability != PantsDurability.BestEffort)
+                    {
+                        _failpoints.Hit(Failpoint.AfterWalAppend);
+                    }
+
+                    _mutableOperations.AddRange(commit.Mutations);
+                    _unflushedCommitSequence = checked((ulong)commit.Sequence);
+                }
+
+                if (durability == PantsDurability.Sync)
+                {
+                    _failpoints.Hit(Failpoint.BeforeWalFlush);
+                    _walStream.Flush(false);
+                    _failpoints.Hit(Failpoint.AfterWalFlush);
+                    beforeSync();
+                    _lease.EnsureValid();
+                    var syncStarted = Stopwatch.GetTimestamp();
+                    _walStream.Flush(true);
+                    var syncElapsed = Stopwatch.GetElapsedTime(syncStarted);
+                    RecordWalSync(state.Sequence);
+                    metrics?.RecordFsync(syncElapsed, state.Sequence);
+                }
+
+                return new WalCommitGroupResult(commits.Count);
+            }
+            catch (Exception groupFailure)
+            {
+                try
+                {
+                    RollBackWalCommitGroup(
+                        state,
+                        walLength,
+                        reservedSequence,
+                        unflushedCommitSequence,
+                        walRecords,
+                        mutableOperationSequence,
+                        durabilityState);
+                }
+                catch (Exception rollbackFailure)
+                {
+                    var uncertainty = new WalCommitGroupRollbackException(
+                        groupFailure,
+                        rollbackFailure);
+                    Volatile.Write(ref _walWriteFailure, uncertainty);
+                    state.Health = PantsEngineHealth.Degraded;
+                    throw uncertainty;
+                }
+
+                throw;
+            }
+        }
+    }
+
+    public TimeSpan FlushDurabilityBoundary(WalMetricsRecorder? metrics = null)
+    {
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalWriteFailed();
+            var started = Stopwatch.GetTimestamp();
+            _walStream.Flush(true);
+            var elapsed = Stopwatch.GetElapsedTime(started);
+            RecordWalSync(_walLastAppendedSequence);
+            metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
+            return elapsed;
+        }
+    }
+
+    public SealedWalSegment? SealActiveWalForCloud(
+        WalMetricsRecorder? metrics = null,
+        Action? validateCloudWriteAuthority = null)
+    {
+        lock (_walStateGate)
+        {
+            return SealActiveWalCore(
+                true,
+                metrics,
+                validateCloudWriteAuthority);
+        }
+    }
+
+    public void CompleteCloudWalSeal(SealedWalSegment segment)
+    {
+        ArgumentNullException.ThrowIfNull(segment);
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalWriteFailed();
+            if (_walStream.Length != 0 ||
+                _walLastAppendedSequence > checked((long)segment.MaximumSequence))
+            {
+                throw new PantsInternalException(
+                    "Cloud WAL pending writes cannot be cleared after the active segment changed.");
+            }
+
+            _walPendingWrites = 0;
+        }
+    }
+
+    public ulong? RotateActiveLocalWal(
+        WalMetricsRecorder? metrics = null)
+    {
+        lock (_walStateGate)
+        {
+            return SealActiveWalCore(
+                    false,
+                    metrics,
+                    null)
+                ?.MaximumSequence;
+        }
+    }
+
+    public IReadOnlyList<SealedWalSegment> GetSealedWalSegmentsForCloudPublication()
+    {
+        ThrowIfDisposed();
+        _lease.EnsureValid();
+        return EnumerateSealedWalSegmentPaths(_walDirectory)
+            .OrderBy(static path =>
+                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
+                    ? segmentId
+                    : ulong.MaxValue)
+            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(static path => ReadSealedWalSegment(path))
+            .ToArray();
+    }
+
+    public void DeleteCloudDurableWalSegment(SealedWalSegment segment)
+    {
+        ThrowIfDisposed();
+        ThrowIfWalWriteFailed();
+        _lease.EnsureValid();
+        var path = Path.Combine(_walDirectory, segment.FileName);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    ///     Manifest-published SST files grouped by column-family id, for pinning onto a
+    ///     database-version snapshot at snapshot-creation time so a concurrent flush/compaction
+    ///     publication cannot change what an already-open snapshot sees.
+    /// </summary>
+    public IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> GetVisibleFilesSnapshot() =>
+        GetManifestFilesSnapshot()
+            .GroupBy(static file => file.ColumnFamilyId)
+            .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
+
+    public async ValueTask<SstEntry?> TryReadPointValueAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        var tombstonesSeen = new List<RangeTombstone>();
+        SstEntry? best = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            tombstonesSeen.AddRange(reader.RangeTombstones);
+            var decision = reader.GetPointReadDecision(keyCopy);
+            if (decision.Rejected || decision.CandidateBlockIndex < 0)
+            {
+                continue;
+            }
+
+            var firstCandidateBlock = decision.CandidateBlockIndex;
+            while (firstCandidateBlock > 0 &&
+                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
+            {
+                firstCandidateBlock--;
+            }
+
+            for (var blockIndex = firstCandidateBlock;
+                 blockIndex <= decision.CandidateBlockIndex;
+                 blockIndex++)
+            {
+                var blockContent = await ReadPointBlockAsync(
+                        candidate.Name,
+                        reader,
+                        blockIndex,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
+                {
+                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
+                    {
+                        continue;
+                    }
+
+                    if (best is null || entry.Sequence > best.Sequence)
+                    {
+                        best = entry;
+                    }
+                }
+            }
+        }
+
+        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
+            ? null
+            : best;
+    }
+
+    public bool IsSstAvailable(FileMeta file) =>
+        File.Exists(Path.Combine(_sstDirectory, file.Name)) || _remoteSstSourceFactory is not null;
+
+    public async ValueTask<ulong?> GetLatestMutationSequenceAsync(
+        IReadOnlyList<FileMeta> candidatesNewestFirst,
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var keyCopy = key.ToArray();
+        ulong? latest = null;
+        foreach (var candidate in candidatesNewestFirst)
+        {
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var tombstone in reader.RangeTombstones)
+            {
+                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
+                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
+                    (latest is null || tombstone.Sequence > latest.Value))
+                {
+                    latest = tombstone.Sequence;
+                }
+            }
+        }
+
+        var entry = await TryReadPointValueAsync(
+                candidatesNewestFirst,
+                keyCopy,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return entry is not null && (latest is null || entry.Sequence > latest.Value)
+            ? entry.Sequence
+            : latest;
+    }
+
+    public async ValueTask<bool> HasMutationInRangeAsync(
+        IReadOnlyList<FileMeta> candidates,
+        ReadOnlyMemory<byte> startInclusive,
+        ReadOnlyMemory<byte> endExclusive,
+        ulong afterSequence,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var start = startInclusive.ToArray();
+        var end = endExclusive.ToArray();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
+            {
+                continue;
+            }
+
+            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
+            {
+                continue;
+            }
+
+            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
+                .ConfigureAwait(false);
+            if (reader.RangeTombstones.Any(tombstone =>
+                    tombstone.Sequence > afterSequence &&
+                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
+            {
+                return true;
+            }
+
+            await using var iterator = new AsyncSstBlockIterator(
+                reader,
+                PantsScanDirection.Forward,
+                start,
+                end,
+                resourceBudget);
+            while (await iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (iterator.Current.Sequence > afterSequence)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool IStorageReadStore.IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key) =>
+        IsWithinFileRange(file, key);
+
+    static ulong GetManifestVisibleSequenceFloor(ManifestState manifest) =>
+        Math.Max(
+            manifest.LastPersistedSequence,
+            manifest.Files
+                .Select(static file => file.LargestSequence ?? file.SmallestSequence ?? 0)
+                .DefaultIfEmpty()
+                .Max());
 
     public IReadOnlyList<string> GetCompactionInputNames(RuntimeState state, bool force)
     {
@@ -366,61 +1042,6 @@ sealed class LocalDiskStore : IDisposable
     public IReadOnlyList<ColumnFamilyMeta> GetColumnFamilyMetadataSnapshot() =>
         GetColumnFamiliesSnapshot();
 
-    public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
-        GetManifestFilesSnapshot()
-            .OrderBy(static file => file.SstSequence)
-            .ThenBy(static file => file.Name, StringComparer.Ordinal)
-            .Where(file => File.Exists(Path.Combine(_sstDirectory, file.Name)))
-            .Select(file => new HybridLocalSst(
-                file.Name,
-                new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
-            .ToArray();
-
-    public async ValueTask VerifyRemoteSstMatchesLocalAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
-        var metadata = GetManifestSst(name);
-        var path = Path.Combine(_sstDirectory, name);
-        if (!File.Exists(path))
-        {
-            throw new PantsRecoveryFailedException(
-                $"Hybrid SST '{name}' disappeared before cloud durability could be verified.");
-        }
-
-        var factory = _remoteSstSourceFactory ??
-                      throw new PantsInternalException(
-                          "Hybrid SST verification requires a remote source factory.");
-        await using var local = LocalAsyncSstSource.Open(path);
-        await using var remote = await factory.OpenAsync(metadata, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-            $"Hybrid SST '{name}' is not confirmed durable in cloud storage.");
-        if (local.Length != remote.Length)
-        {
-            throw new PantsRecoveryFailedException(
-                $"Hybrid SST '{name}' differs from its cloud copy.");
-        }
-
-        const int verificationChunkBytes = 64 * 1024;
-        for (long offset = 0; offset < local.Length;)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var length = checked((int)Math.Min(verificationChunkBytes, local.Length - offset));
-            var localBytes = await local.ReadExactlyAsync(offset, length, cancellationToken)
-                .ConfigureAwait(false);
-            var remoteBytes = await remote.ReadExactlyAsync(offset, length, cancellationToken)
-                .ConfigureAwait(false);
-            if (!localBytes.AsSpan().SequenceEqual(remoteBytes))
-            {
-                throw new PantsRecoveryFailedException(
-                    $"Hybrid SST '{name}' differs from its cloud copy.");
-            }
-
-            offset = checked(offset + length);
-        }
-    }
-
     public IReadOnlyList<string> GetPointReadSstNames(
         ColumnFamilyIdentity columnFamily,
         ReadOnlySpan<byte> key)
@@ -450,22 +1071,6 @@ sealed class LocalDiskStore : IDisposable
 
     public IReadOnlyList<string> GetManifestSstNames() =>
         GetManifestFilesSnapshot().Select(static file => file.Name).ToArray();
-
-    /// <summary>
-    /// Manifest-published SST files grouped by column-family id, for pinning onto a
-    /// database-version snapshot at snapshot-creation time so a concurrent flush/compaction
-    /// publication cannot change what an already-open snapshot sees.
-    /// </summary>
-    public IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> GetVisibleFilesSnapshot() =>
-        GetManifestFilesSnapshot()
-            .GroupBy(static file => file.ColumnFamilyId)
-            .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
-
-    public bool IsSstLocal(string name)
-    {
-        _ = GetManifestSst(name);
-        return File.Exists(Path.Combine(_sstDirectory, name));
-    }
 
     public void HydrateLocalSst(string name, ReadOnlySpan<byte> bytes)
     {
@@ -498,118 +1103,20 @@ sealed class LocalDiskStore : IDisposable
         AtomicStagedFile.Write(path, bytesCopy);
     }
 
-    public async ValueTask HydrateLocalSstAsync(
-        string name,
-        CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
-        var metadata = GetManifestSst(name);
-        var path = Path.Combine(_sstDirectory, name);
-        if (File.Exists(path))
-        {
-            return;
-        }
-
-        var factory = _remoteSstSourceFactory ??
-                      throw new PantsInternalException(
-                          "Remote SST hydration requires a remote source factory.");
-        await using var source = await factory.OpenAsync(metadata, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-            $"Manifest-owned cloud SST '{name}' is missing during cache hydration.");
-        if (checked((ulong)source.Length) != metadata.SizeBytes)
-        {
-            throw new PantsCorruptionException(
-                $"Cloud SST '{name}' length differs from its manifest.");
-        }
-
-        var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
-        var stagingPath = Path.Combine(
-            stagingDirectory,
-            $"{_lease.Epoch}.hydration.{name}.{Guid.NewGuid():N}.tmp");
-        var checksum = 0U;
-        long offset = 0;
-        try
-        {
-            await using (var output = new FileStream(
-                             stagingPath,
-                             FileMode.CreateNew,
-                             FileAccess.Write,
-                             FileShare.None,
-                             64 * 1024,
-                             FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                while (offset < source.Length)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
-                    var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
-                        .ConfigureAwait(false);
-                    checksum = DiskFormat.Crc32CAppend(checksum, bytes);
-                    await output.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-                    offset = checked(offset + bytes.Length);
-                }
-
-                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-                output.Flush(true);
-            }
-
-            if (metadata.ContentCrc32C.HasValue && checksum != metadata.ContentCrc32C.Value)
-            {
-                throw new PantsCorruptionException(
-                    $"Cloud SST '{name}' content checksum differs from its manifest.");
-            }
-
-            var stagedSource = LocalAsyncSstSource.Open(stagingPath);
-            await using var stagedReader = await AsyncSstReader.OpenAsync(
-                    stagedSource,
-                    metadata,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            cancellationToken.ThrowIfCancellationRequested();
-            _lease.EnsureValid();
-            AtomicStagedFile.WithPathLock(path, () =>
-            {
-                if (!File.Exists(path))
-                {
-                    File.Move(stagingPath, path);
-                    AtomicStagedFile.FlushDirectory(_sstDirectory);
-                }
-
-                return true;
-            });
-        }
-        finally
-        {
-            File.Delete(stagingPath);
-        }
-    }
-
-    public void EvictLocalSst(string name)
-    {
-        ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
-        _lease.EnsureValid();
-        _ = GetManifestSst(name);
-        RemoveSstFromCaches(name);
-        File.Delete(Path.Combine(_sstDirectory, name));
-    }
-
     /// <summary>
-    /// Resolves a key's newest visible SST entry by comparing write sequences across
-    /// <paramref name="candidatesNewestFirst"/> — file publication order alone is insufficient
-    /// because a newer compaction output can contain an older value than an untouched L0 file.
-    /// This is the real value-supplying counterpart to
-    /// <see cref="RecordPointReadCore"/>'s telemetry-only bloom/block-read simulation. Safe to
-    /// call concurrently with the actor's mailbox: it only reads the (lock-free,
-    /// snapshot-pinned) reader/block caches. Deliberately records no telemetry of its own — the
-    /// existing exhaustive <see cref="RecordPointReadCore"/> pass remains the sole source of
-    /// read-amplification telemetry/compaction-trigger signal and of <see cref="PantsPointReadTrace"/>
-    /// diagnostics, run unconditionally alongside this resolution (see
-    /// <c>TransactionInstance.GetAsync</c>/<c>GetWithDiagnosticsAsync</c>) so those observability
-    /// paths and the read-amplification-triggered compaction trigger are unaffected by whether a
-    /// value happened to already be resolved from disk.
+    ///     Resolves a key's newest visible SST entry by comparing write sequences across
+    ///     <paramref name="candidatesNewestFirst" /> — file publication order alone is insufficient
+    ///     because a newer compaction output can contain an older value than an untouched L0 file.
+    ///     This is the real value-supplying counterpart to
+    ///     <see cref="RecordPointReadCore" />'s telemetry-only bloom/block-read simulation. Safe to
+    ///     call concurrently with the actor's mailbox: it only reads the (lock-free,
+    ///     snapshot-pinned) reader/block caches. Deliberately records no telemetry of its own — the
+    ///     existing exhaustive <see cref="RecordPointReadCore" /> pass remains the sole source of
+    ///     read-amplification telemetry/compaction-trigger signal and of <see cref="PantsPointReadTrace" />
+    ///     diagnostics, run unconditionally alongside this resolution (see
+    ///     <c>TransactionInstance.GetAsync</c>/<c>GetWithDiagnosticsAsync</c>) so those observability
+    ///     paths and the read-amplification-triggered compaction trigger are unaffected by whether a
+    ///     value happened to already be resolved from disk.
     /// </summary>
     public SstEntry? TryReadPointValue(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
@@ -666,99 +1173,6 @@ sealed class LocalDiskStore : IDisposable
         return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
             ? null
             : best;
-    }
-
-    public async ValueTask<SstEntry?> TryReadPointValueAsync(
-        IReadOnlyList<FileMeta> candidatesNewestFirst,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
-        var keyCopy = key.ToArray();
-        var tombstonesSeen = new List<RangeTombstone>();
-        SstEntry? best = null;
-        foreach (var candidate in candidatesNewestFirst)
-        {
-            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
-                .ConfigureAwait(false);
-            tombstonesSeen.AddRange(reader.RangeTombstones);
-            var decision = reader.GetPointReadDecision(keyCopy);
-            if (decision.Rejected || decision.CandidateBlockIndex < 0)
-            {
-                continue;
-            }
-
-            var firstCandidateBlock = decision.CandidateBlockIndex;
-            while (firstCandidateBlock > 0 &&
-                   reader.GetFirstKey(firstCandidateBlock).AsSpan().SequenceEqual(keyCopy))
-            {
-                firstCandidateBlock--;
-            }
-
-            for (var blockIndex = firstCandidateBlock;
-                 blockIndex <= decision.CandidateBlockIndex;
-                 blockIndex++)
-            {
-                var blockContent = await ReadPointBlockAsync(
-                        candidate.Name,
-                        reader,
-                        blockIndex,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
-                {
-                    if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
-                    {
-                        continue;
-                    }
-
-                    if (best is null || entry.Sequence > best.Sequence)
-                    {
-                        best = entry;
-                    }
-                }
-            }
-        }
-
-        return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
-            ? null
-            : best;
-    }
-
-    public bool IsSstAvailable(FileMeta file) =>
-        File.Exists(Path.Combine(_sstDirectory, file.Name)) || _remoteSstSourceFactory is not null;
-
-    public async ValueTask<ulong?> GetLatestMutationSequenceAsync(
-        IReadOnlyList<FileMeta> candidatesNewestFirst,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
-        var keyCopy = key.ToArray();
-        ulong? latest = null;
-        foreach (var candidate in candidatesNewestFirst)
-        {
-            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
-                .ConfigureAwait(false);
-            foreach (var tombstone in reader.RangeTombstones)
-            {
-                if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
-                    keyCopy.AsSpan().SequenceCompareTo(tombstone.End) < 0 &&
-                    (latest is null || tombstone.Sequence > latest.Value))
-                {
-                    latest = tombstone.Sequence;
-                }
-            }
-        }
-
-        var entry = await TryReadPointValueAsync(
-                candidatesNewestFirst,
-                keyCopy,
-                cancellationToken)
-            .ConfigureAwait(false);
-        return entry is not null && (latest is null || entry.Sequence > latest.Value)
-            ? entry.Sequence
-            : latest;
     }
 
     public ulong? GetLatestMutationSequence(
@@ -838,56 +1252,6 @@ sealed class LocalDiskStore : IDisposable
         return false;
     }
 
-    public async ValueTask<bool> HasMutationInRangeAsync(
-        IReadOnlyList<FileMeta> candidates,
-        ReadOnlyMemory<byte> startInclusive,
-        ReadOnlyMemory<byte> endExclusive,
-        ulong afterSequence,
-        ResourceBudget? resourceBudget,
-        CancellationToken cancellationToken)
-    {
-        ThrowIfDisposed();
-        var start = startInclusive.ToArray();
-        var end = endExclusive.ToArray();
-        foreach (var candidate in candidates)
-        {
-            if (candidate.LargestSequence is { } largestSequence && largestSequence <= afterSequence)
-            {
-                continue;
-            }
-
-            if (!IsSstAvailable(candidate) || !OverlapsFileRange(candidate, start, end))
-            {
-                continue;
-            }
-
-            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
-                .ConfigureAwait(false);
-            if (reader.RangeTombstones.Any(tombstone =>
-                    tombstone.Sequence > afterSequence &&
-                    RangesOverlap(start, end, tombstone.Start, tombstone.End)))
-            {
-                return true;
-            }
-
-            await using var iterator = new AsyncSstBlockIterator(
-                reader,
-                PantsScanDirection.Forward,
-                start,
-                end,
-                resourceBudget);
-            while (await iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
-            {
-                if (iterator.Current.Sequence > afterSequence)
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
     byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
     {
         var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
@@ -924,9 +1288,9 @@ sealed class LocalDiskStore : IDisposable
     }
 
     /// <summary>
-    /// Leases a reader and opens a bound-clamped <see cref="SstBlockIterator"/> for each
-    /// candidate file, for a scan's k-way merge (see <c>TransactionScanEnumerator</c>). The
-    /// caller owns disposing each returned source once the scan completes.
+    ///     Leases a reader and opens a bound-clamped <see cref="SstBlockIterator" /> for each
+    ///     candidate file, for a scan's k-way merge (see <c>TransactionScanEnumerator</c>). The
+    ///     caller owns disposing each returned source once the scan completes.
     /// </summary>
     public IReadOnlyList<SstScanSource> CreateScanSources(
         IReadOnlyList<FileMeta> candidates,
@@ -1416,11 +1780,13 @@ sealed class LocalDiskStore : IDisposable
                     leaseClock,
                     leaseTimeToLive);
             }
+
             lease.EnsureValid();
             using (startupPhases.Measure(StartupPhase.Format))
             {
                 EnsureFormat(root);
             }
+
             lease.EnsureValid();
             Directory.CreateDirectory(Path.Combine(root, "wal"));
             Directory.CreateDirectory(Path.Combine(root, "sst"));
@@ -1447,6 +1813,7 @@ sealed class LocalDiskStore : IDisposable
             {
                 manifestLoad = LoadManifest(root, recoveryPolicy, state);
             }
+
             var manifest = manifestLoad.Manifest;
             lease.EnsureValid();
             var recoveryMetadata = ValidateRecoveryMetadata(
@@ -1891,187 +2258,6 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    public WalCommitResult AppendCommit(
-        CommitPayload payload,
-        RuntimeState state,
-        PantsDurability durability,
-        WalMetricsRecorder? metrics = null)
-    {
-        lock (_walStateGate)
-        {
-            ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
-            var walLength = _walStream.Length;
-            var reservedSequence = checked((long)_nextSequence);
-            var unflushedCommitSequence = _unflushedCommitSequence;
-            var walRecords = _walRecords;
-            var mutableOperationSequence = _mutableOperations.LastSequence;
-            var durabilityState = CaptureWalDurabilityState();
-            try
-            {
-                return AppendCommitCore(
-                    payload,
-                    state,
-                    durability,
-                    out reservedSequence,
-                    metrics);
-            }
-            catch (Exception appendFailure)
-            {
-                try
-                {
-                    _failpoints.Hit(Failpoint.BeforeWalRollback);
-                    RollBackWalAppend(
-                        state,
-                        walLength,
-                        reservedSequence,
-                        unflushedCommitSequence,
-                        walRecords,
-                        mutableOperationSequence,
-                        durabilityState);
-                }
-                catch (Exception rollbackFailure)
-                {
-                    var uncertainty = new WalCommitRollbackException(
-                        appendFailure,
-                        rollbackFailure);
-                    Volatile.Write(ref _walWriteFailure, uncertainty);
-                    state.Health = PantsEngineHealth.Degraded;
-                    throw uncertainty;
-                }
-
-                throw;
-            }
-        }
-    }
-
-    public WalCommitGroupResult AppendCommitGroup(
-        IReadOnlyList<WalCommitGroupEntry> commits,
-        RuntimeState state,
-        PantsDurability durability,
-        Action beforeSync,
-        WalMetricsRecorder? metrics = null)
-    {
-        ArgumentNullException.ThrowIfNull(commits);
-        ArgumentNullException.ThrowIfNull(beforeSync);
-        if (commits.Count == 0)
-        {
-            throw new PantsInternalException("A WAL commit group must not be empty.");
-        }
-
-        if (durability is not (PantsDurability.Sync or
-            PantsDurability.Buffered or
-            PantsDurability.BestEffort))
-        {
-            throw new PantsInternalException(
-                "A WAL commit group must use Sync, Buffered, or BestEffort durability.");
-        }
-
-        lock (_walStateGate)
-        {
-            ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
-            _lease.EnsureValid();
-            var walLength = _walStream.Length;
-            var reservedSequence = commits[^1].ExpectedSequence;
-            if (reservedSequence < state.Sequence)
-            {
-                throw new PantsInternalException(
-                    "The coalesced WAL sequence reservation moved backwards.");
-            }
-
-            var unflushedCommitSequence = _unflushedCommitSequence;
-            var walRecords = _walRecords;
-            var mutableOperationSequence = _mutableOperations.LastSequence;
-            var durabilityState = CaptureWalDurabilityState();
-            try
-            {
-                var prepared = new List<PreparedWalCommit>(commits.Count);
-                foreach (var commit in commits)
-                {
-                    prepared.Add(durability == PantsDurability.BestEffort
-                        ? PrepareBestEffortResidentCommit(commit.Payload, state)
-                        : PrepareResidentWalCommit(commit.Payload, state));
-                    if (state.Sequence != commit.ExpectedSequence)
-                    {
-                        throw new PantsInternalException(
-                            "The coalesced WAL sequence did not match its preflight plan.");
-                    }
-                }
-
-                if (durability != PantsDurability.BestEffort)
-                {
-                    var appendStarted = Stopwatch.GetTimestamp();
-                    var payloads = prepared.Select(static commit => commit.Payload).ToArray();
-                    WalCodec.AppendFrames(
-                        _walStream.SafeFileHandle,
-                        walLength,
-                        payloads,
-                        () => _failpoints.Hit(Failpoint.MidWalAppend));
-                    Interlocked.Add(
-                        ref _walBytesWrittenTotal,
-                        payloads.Sum(static payload => checked((long)payload.Length + 2 * sizeof(uint))));
-                    var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
-                    metrics?.RecordAppend(appendElapsed);
-                    _walRecords = checked(_walRecords + prepared.Count);
-                    RecordWalAppend(state.Sequence, prepared.Count);
-                }
-
-                foreach (var commit in prepared)
-                {
-                    if (durability != PantsDurability.BestEffort)
-                    {
-                        _failpoints.Hit(Failpoint.AfterWalAppend);
-                    }
-
-                    _mutableOperations.AddRange(commit.Mutations);
-                    _unflushedCommitSequence = checked((ulong)commit.Sequence);
-                }
-
-                if (durability == PantsDurability.Sync)
-                {
-                    _failpoints.Hit(Failpoint.BeforeWalFlush);
-                    _walStream.Flush(false);
-                    _failpoints.Hit(Failpoint.AfterWalFlush);
-                    beforeSync();
-                    _lease.EnsureValid();
-                    var syncStarted = Stopwatch.GetTimestamp();
-                    _walStream.Flush(true);
-                    var syncElapsed = Stopwatch.GetElapsedTime(syncStarted);
-                    RecordWalSync(state.Sequence);
-                    metrics?.RecordFsync(syncElapsed, state.Sequence);
-                }
-
-                return new WalCommitGroupResult(commits.Count);
-            }
-            catch (Exception groupFailure)
-            {
-                try
-                {
-                    RollBackWalCommitGroup(
-                        state,
-                        walLength,
-                        reservedSequence,
-                        unflushedCommitSequence,
-                        walRecords,
-                        mutableOperationSequence,
-                        durabilityState);
-                }
-                catch (Exception rollbackFailure)
-                {
-                    var uncertainty = new WalCommitGroupRollbackException(
-                        groupFailure,
-                        rollbackFailure);
-                    Volatile.Write(ref _walWriteFailure, uncertainty);
-                    state.Health = PantsEngineHealth.Degraded;
-                    throw uncertainty;
-                }
-
-                throw;
-            }
-        }
-    }
-
     PreparedWalCommit PrepareResidentWalCommit(
         CommitPayload payload,
         RuntimeState state)
@@ -2452,22 +2638,6 @@ sealed class LocalDiskStore : IDisposable
         _walRecords = checked(_walRecords + 1);
     }
 
-    public void Flush(RuntimeState state)
-    {
-        lock (_walStateGate)
-        {
-            FlushCore();
-        }
-    }
-
-    public void Flush(RuntimeState state, ColumnFamilyIdentity identity)
-    {
-        lock (_walStateGate)
-        {
-            FlushCore(identity);
-        }
-    }
-
     public FrozenMemtableFlush? FreezeMemtable(
         ColumnFamilyIdentity identity,
         long sizeBytes,
@@ -2510,53 +2680,6 @@ sealed class LocalDiskStore : IDisposable
                 frontierSequence,
                 sizeBytes);
         }
-    }
-
-    public FlushPublicationPlan BuildFrozenFlushPlan(FrozenMemtableFlush frozen)
-    {
-        ArgumentNullException.ThrowIfNull(frozen);
-        ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
-        _lease.EnsureValid();
-        _failpoints.Hit(Failpoint.BeforeFlushBuild);
-        _lease.EnsureValid();
-        return BuildFlushPlan(
-            frozen.Operations,
-            frozen.ColumnFamilyId,
-            frozen.SstSequence,
-            frozen.FrontierSequence,
-            $"{_lease.Epoch}.{frozen.Id}");
-    }
-
-    public FlushPublicationResult PublishFrozenFlushPlan(
-        FrozenMemtableFlush frozen,
-        FlushPublicationPlan plan)
-    {
-        ArgumentNullException.ThrowIfNull(frozen);
-        ArgumentNullException.ThrowIfNull(plan);
-        ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
-        _lease.EnsureValid();
-        var published = Volatile.Read(ref _manifestReadSnapshot).Files.SingleOrDefault(file =>
-            file.Name == frozen.SstName);
-        if (published is not null)
-        {
-            _failpoints.Hit(Failpoint.BeforePublishedFlushRetryValidation);
-            ValidatePublishedFlushOutput(frozen, published, plan);
-            _lease.EnsureValid();
-            CompleteFrozenFlush(frozen);
-            RemoveFlushIntents([frozen.SstName]);
-            return new FlushPublicationResult(false);
-        }
-
-        _failpoints.Hit(Failpoint.BeforeFlushPublication);
-        _lease.EnsureValid();
-        var persistenceAnomaly = PublishFlushPlan(
-            plan,
-            frozen.FrontierSequence,
-            true);
-        CompleteFrozenFlush(frozen);
-        return new FlushPublicationResult(persistenceAnomaly);
     }
 
     void FlushCore()
@@ -2792,65 +2915,6 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    public TimeSpan FlushDurabilityBoundary(WalMetricsRecorder? metrics = null)
-    {
-        lock (_walStateGate)
-        {
-            ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
-            var started = Stopwatch.GetTimestamp();
-            _walStream.Flush(true);
-            var elapsed = Stopwatch.GetElapsedTime(started);
-            RecordWalSync(_walLastAppendedSequence);
-            metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
-            return elapsed;
-        }
-    }
-
-    public SealedWalSegment? SealActiveWalForCloud(
-        WalMetricsRecorder? metrics = null,
-        Action? validateCloudWriteAuthority = null)
-    {
-        lock (_walStateGate)
-        {
-            return SealActiveWalCore(
-                true,
-                metrics,
-                validateCloudWriteAuthority);
-        }
-    }
-
-    public void CompleteCloudWalSeal(SealedWalSegment segment)
-    {
-        ArgumentNullException.ThrowIfNull(segment);
-        lock (_walStateGate)
-        {
-            ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
-            if (_walStream.Length != 0 ||
-                _walLastAppendedSequence > checked((long)segment.MaximumSequence))
-            {
-                throw new PantsInternalException(
-                    "Cloud WAL pending writes cannot be cleared after the active segment changed.");
-            }
-
-            _walPendingWrites = 0;
-        }
-    }
-
-    public ulong? RotateActiveLocalWal(
-        WalMetricsRecorder? metrics = null)
-    {
-        lock (_walStateGate)
-        {
-            return SealActiveWalCore(
-                    false,
-                    metrics,
-                    null)
-                ?.MaximumSequence;
-        }
-    }
-
     SealedWalSegment? SealActiveWalCore(
         bool forCloudUpload,
         WalMetricsRecorder? metrics,
@@ -2985,38 +3049,6 @@ sealed class LocalDiskStore : IDisposable
         RecordWalSync(_walLastAppendedSequence);
         metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
     }
-
-    public IReadOnlyList<SealedWalSegment> GetSealedWalSegmentsForCloudPublication()
-    {
-        ThrowIfDisposed();
-        _lease.EnsureValid();
-        return EnumerateSealedWalSegmentPaths(_walDirectory)
-            .OrderBy(static path =>
-                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
-                    ? segmentId
-                    : ulong.MaxValue)
-            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => ReadSealedWalSegment(path))
-            .ToArray();
-    }
-
-    public void DeleteCloudDurableWalSegment(SealedWalSegment segment)
-    {
-        ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
-        _lease.EnsureValid();
-        var path = Path.Combine(_walDirectory, segment.FileName);
-        if (File.Exists(path))
-        {
-            File.Delete(path);
-        }
-    }
-
-    // Midge's current writer names sealed segments "{segmentId:00000000000000000000}.wal".
-    // Older writers instead used "wal_{segmentId:000000}.log". A reader must still recognize
-    // that legacy shape on decode, though the current writer never emits it.
-    static readonly Regex LegacyWalSegmentFileNameRegex =
-        new(@"^wal_(\d{6})\.log$", RegexOptions.Compiled);
 
     static IEnumerable<string> EnumerateSealedWalSegmentPaths(string walDirectory) =>
         Directory.EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
@@ -3183,26 +3215,6 @@ sealed class LocalDiskStore : IDisposable
             null,
             null,
             null,
-            cancellationToken);
-
-    public ValueTask<CompactionResult> CompactAsync(
-        RuntimeState state,
-        bool force,
-        CloudCompactionOutputPublisher? outputPublisher,
-        bool flushMutableOperations,
-        Action<long>? publicationCompleted = null,
-        ResourceBudget? compactionBudget = null,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
-        CancellationToken cancellationToken = default) =>
-        CompactAsync(
-            state,
-            force,
-            outputPublisher,
-            flushMutableOperations,
-            false,
-            publicationCompleted,
-            compactionBudget,
-            prepareInputs,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -3953,9 +3965,9 @@ sealed class LocalDiskStore : IDisposable
                 case WalOperation.DeleteRange when mutation.RangeEnd is not null:
                     state.RangeTombstones[identity] = state.RangeTombstones[identity].Add(
                         new CommittedRangeTombstone(
-                        mutation.Key.ToArray(),
-                        mutation.RangeEnd.ToArray(),
-                        checked((long)mutation.Sequence)));
+                            mutation.Key.ToArray(),
+                            mutation.RangeEnd.ToArray(),
+                            checked((long)mutation.Sequence)));
                     foreach (var key in family.Keys.Where(key =>
                                  ByteArrayComparer.Instance.Compare(key, mutation.Key) >= 0 &&
                                  ByteArrayComparer.Instance.Compare(key, mutation.RangeEnd) < 0).ToList())
@@ -5492,9 +5504,10 @@ sealed class LocalDiskStore : IDisposable
                     _ = GetValidatedSstNameArray(value, "covering_ssts");
                     var incomingSequence = GetRequiredUInt64(value, "checkpoint_sequence");
                     var currentSequence = manifest.CloudCheckpoint is JsonElement currentCheckpoint &&
-                                           currentCheckpoint.ValueKind == JsonValueKind.Object &&
-                                           currentCheckpoint.TryGetProperty("checkpoint_sequence", out var currentSequenceElement) &&
-                                           currentSequenceElement.TryGetUInt64(out var currentSequenceValue)
+                                          currentCheckpoint.ValueKind == JsonValueKind.Object &&
+                                          currentCheckpoint.TryGetProperty("checkpoint_sequence",
+                                              out var currentSequenceElement) &&
+                                          currentSequenceElement.TryGetUInt64(out var currentSequenceValue)
                         ? currentSequenceValue
                         : (ulong?)null;
                     if (currentSequence is null || incomingSequence >= currentSequence.Value)
@@ -5710,7 +5723,7 @@ sealed class LocalDiskStore : IDisposable
         }
     }
 
-    void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+    void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposed, this);
 
     void ThrowIfWalWriteFailed()
     {

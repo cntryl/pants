@@ -2,8 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class GcsCredentialSourceTests
@@ -133,7 +134,7 @@ public sealed class GcsCredentialSourceTests
         using var storageClient = new HttpClient(storageHandler);
         using var credentialClient = new HttpClient(credentialHandler);
         var store = new GcsObjectStore(
-            new PantsCloudProviderConfiguration.Gcs(
+            new PantsGcsProvider(
                 "bucket",
                 "project",
                 new Uri("https://gcs.example.test"),
@@ -270,7 +271,7 @@ public sealed class GcsCredentialSourceTests
     static GcsObjectStore CreateStore(
         PantsGcsCredentialSource source,
         HttpClient client) => new(
-        new PantsCloudProviderConfiguration.Gcs(
+        new PantsGcsProvider(
             "bucket",
             "project",
             new Uri("https://gcs.example.test"),

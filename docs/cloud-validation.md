@@ -7,6 +7,11 @@ resolve credentials, read environment variables or files, issue network requests
 provider state. `PantsOpenOptions` consumes the same validator and preserves exception-based invalid
 configuration behavior.
 
+Built-in providers implement the same `IPantsCloudProvider` SPI available to third-party
+providers. Custom validation findings use a stable `PantsCloudProviderId`; live preflight and
+runtime open obtain the provider's `IPantsCloudObjectStore` asynchronously and dispose it on both
+success and failed-startup paths.
+
 ```csharp
 var report = topology.Validate();
 if (!report.IsValid)
@@ -38,7 +43,7 @@ None of these values proves write authorization, conditional-write semantics, du
 performance, or future availability. Use the Sqrzl provider qualification suite and storage
 verification for those separate properties.
 
-OCI is represented by `PantsCloudProviderConfiguration.OciObjectStorage` and
+OCI is represented by `PantsOciObjectStorageProvider` and
 `PantsOciCredentialSource`. When no endpoint override is supplied, Pants derives
 `https://{namespace}.compat.objectstorage.{region}.oraclecloud.com` and uses path-style S3 signing.
 This is first-class configuration and transport support, not a claim of live OCI qualification;

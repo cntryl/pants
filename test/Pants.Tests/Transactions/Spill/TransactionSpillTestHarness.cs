@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 static class TransactionSpillTestHarness
 {
@@ -46,8 +46,8 @@ static class TransactionSpillTestHarness
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(key);
     }

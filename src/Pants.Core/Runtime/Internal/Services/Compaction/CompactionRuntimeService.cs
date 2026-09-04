@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Compaction;
 
 sealed class CompactionRuntimeService(
     int capacity,
-    LocalDiskStore? diskStore,
+    ILocalCompactionStore? compactionStore,
     RuntimeTelemetry telemetry,
     long memoryBudgetBytes)
     : ChannelRuntimeService<CompactionRuntimeRequest, CompactionResult>(capacity)
@@ -33,7 +33,7 @@ sealed class CompactionRuntimeService(
         CompactionRuntimeRequest request,
         CancellationToken cancellationToken)
     {
-        var store = diskStore ??
+        var store = compactionStore ??
                     throw new PantsInternalException("A compaction runtime request requires local storage.");
         try
         {

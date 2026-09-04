@@ -1,10 +1,10 @@
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 /// <summary>
-/// Slice 6a (issue #219): <see cref="PantsOpenOptions"/> already derives a transaction pool and
-/// a memtable-for-two-generations limit from a single memory budget (mirroring Midge's
-/// <c>derive_memory_pools</c>); this covers the addition of an explicit, bounded compaction
-/// memory pool alongside them.
+///     Slice 6a (issue #219): <see cref="PantsOpenOptions" /> already derives a transaction pool and
+///     a memtable-for-two-generations limit from a single memory budget (mirroring Midge's
+///     <c>derive_memory_pools</c>); this covers the addition of an explicit, bounded compaction
+///     memory pool alongside them.
 /// </summary>
 public sealed class PantsMemoryBudgetSplitTests
 {
@@ -16,9 +16,10 @@ public sealed class PantsMemoryBudgetSplitTests
     {
         var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+        var plan = RuntimePlan.Resolve(options);
 
         var expected = Math.Min(budget / 10, 256L * 1024 * 1024);
-        Assert.Equal(Math.Max(1, expected), options.CompactionMemoryPoolBytes);
+        Assert.Equal(Math.Max(1, expected), plan.CompactionMemoryPoolBytes);
     }
 
     [Fact]
@@ -27,13 +28,14 @@ public sealed class PantsMemoryBudgetSplitTests
         const long budget = 96L * 1024 * 1024;
         var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+        var plan = RuntimePlan.Resolve(options);
 
         Assert.True(
-            options.TransactionMemoryPoolBytes +
-            options.CompactionMemoryPoolBytes +
-            options.ScanMemoryPoolBytes +
-            2 * options.MemtableSizeLimitBytes +
-            options.BlockCacheBytes <= budget);
+            plan.TransactionMemoryPoolBytes +
+            plan.CompactionMemoryPoolBytes +
+            plan.ScanMemoryPoolBytes +
+            2 * plan.MemtableSizeLimitBytes +
+            plan.BlockCacheBytes <= budget);
     }
 
     [Fact]
@@ -42,14 +44,15 @@ public sealed class PantsMemoryBudgetSplitTests
         const long budget = 64L * 1024;
         var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
+        var plan = RuntimePlan.Resolve(options);
 
-        Assert.True(options.CompactionMemoryPoolBytes > budget / 2);
+        Assert.True(plan.CompactionMemoryPoolBytes > budget / 2);
         Assert.True(
-            options.TransactionMemoryPoolBytes +
-            options.CompactionMemoryPoolBytes +
-            options.ScanMemoryPoolBytes +
-            2 * options.MemtableSizeLimitBytes +
-            options.BlockCacheBytes <= budget);
+            plan.TransactionMemoryPoolBytes +
+            plan.CompactionMemoryPoolBytes +
+            plan.ScanMemoryPoolBytes +
+            2 * plan.MemtableSizeLimitBytes +
+            plan.BlockCacheBytes <= budget);
     }
 
     [Fact]
@@ -60,24 +63,26 @@ public sealed class PantsMemoryBudgetSplitTests
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget))
             .WithMemtableLimits(512 * 1024)
             .WithTransactionMemoryPool(512 * 1024);
+        var plan = RuntimePlan.Resolve(options);
 
-        Assert.True(options.CompactionMemoryPoolBytes > 300 * 1024);
+        Assert.True(plan.CompactionMemoryPoolBytes > 300 * 1024);
         Assert.True(
-            options.TransactionMemoryPoolBytes +
-            options.CompactionMemoryPoolBytes +
-            options.ScanMemoryPoolBytes +
-            2 * options.MemtableSizeLimitBytes +
-            options.BlockCacheBytes <= budget);
+            plan.TransactionMemoryPoolBytes +
+            plan.CompactionMemoryPoolBytes +
+            plan.ScanMemoryPoolBytes +
+            2 * plan.MemtableSizeLimitBytes +
+            plan.BlockCacheBytes <= budget);
     }
 
     [Fact]
     public void ShouldDeriveASaneCompactionPoolUnderAutoBudget()
     {
         var options = PantsOpenOptions.InMemory();
+        var plan = RuntimePlan.Resolve(options);
 
-        Assert.True(options.CompactionMemoryPoolBytes > 0);
-        Assert.True(options.CompactionMemoryPoolBytes <= 256L * 1024 * 1024);
-        Assert.True(options.ScanMemoryPoolBytes > 0);
-        Assert.True(options.ScanMemoryPoolBytes <= 128L * 1024 * 1024);
+        Assert.True(plan.CompactionMemoryPoolBytes > 0);
+        Assert.True(plan.CompactionMemoryPoolBytes <= 256L * 1024 * 1024);
+        Assert.True(plan.ScanMemoryPoolBytes > 0);
+        Assert.True(plan.ScanMemoryPoolBytes <= 128L * 1024 * 1024);
     }
 }

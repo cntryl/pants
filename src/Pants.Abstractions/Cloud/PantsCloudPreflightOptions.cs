@@ -3,8 +3,6 @@ namespace Cntryl.Pants.Cloud;
 /// <summary>Controls a bounded, read-only cloud readiness preflight.</summary>
 public sealed record PantsCloudPreflightOptions
 {
-    public static PantsCloudPreflightOptions Default { get; } = new(TimeSpan.FromSeconds(30));
-
     public PantsCloudPreflightOptions(TimeSpan deadline)
     {
         if (deadline < TimeSpan.FromMilliseconds(1))
@@ -16,8 +14,10 @@ public sealed record PantsCloudPreflightOptions
         Deadline = deadline;
     }
 
+    public static PantsCloudPreflightOptions Default { get; } = new(TimeSpan.FromSeconds(30));
+
     /// <summary>
-    /// Gets the one absolute wall-clock budget shared by credential resolution and every read.
+    ///     Gets the one absolute wall-clock budget shared by credential resolution and every read.
     /// </summary>
     public TimeSpan Deadline { get; }
 }

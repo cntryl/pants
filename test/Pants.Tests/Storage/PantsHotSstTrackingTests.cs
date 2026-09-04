@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsHotSstTrackingTests
 {
@@ -12,13 +14,13 @@ public sealed class PantsHotSstTrackingTests
             await PutAsync(database, $"batch1_key{index:000}", "value1");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         for (var index = 0; index < 10; index++)
         {
             await PutAsync(database, $"batch2_key{index:000}", "value2");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         for (var read = 0; read < 5; read++)
         {
@@ -40,7 +42,7 @@ public sealed class PantsHotSstTrackingTests
                 await PutAsync(database, $"key{index:000}", $"value_batch{batch}");
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         Assert.Equal("value_batch2", await ReadAsync(database, "key000"));
@@ -64,7 +66,7 @@ public sealed class PantsHotSstTrackingTests
                 await PutAsync(database, $"{prefix}{index:000}", value);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         Assert.Equal("value_b", await ReadAsync(database, "b005"));
@@ -82,7 +84,7 @@ public sealed class PantsHotSstTrackingTests
             await PutAsync(database, $"key{index:000}", "test_value");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         for (var read = 0; read < 10; read++)
         {
@@ -104,8 +106,8 @@ public sealed class PantsHotSstTrackingTests
 
     static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -113,8 +115,8 @@ public sealed class PantsHotSstTrackingTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;

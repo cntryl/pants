@@ -2,9 +2,10 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsTransactionSpillCrashRecoveryTests
@@ -42,8 +43,8 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
             databasePath,
             handler);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         TransactionSpillHardeningTestHarness.Fill(transaction, "crash", 12);
         var spillCount = TransactionSpillHardeningTestHarness.FindArtifacts(databasePath).Length;

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 public sealed class RuntimeStateFlushReleaseTests
 {
@@ -127,9 +128,9 @@ public sealed class RuntimeStateFlushReleaseTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     static void CollectGarbage()
     {
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.Collect(2, GCCollectionMode.Forced, true);
         GC.WaitForPendingFinalizers();
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.Collect(2, GCCollectionMode.Forced, true);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

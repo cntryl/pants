@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class AzureCredentialSourceTests
@@ -300,7 +301,7 @@ public sealed class AzureCredentialSourceTests
         Uri? endpoint,
         PantsAzureCredentialSource source,
         HttpClient client) => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             account,
             "container",
             endpoint,

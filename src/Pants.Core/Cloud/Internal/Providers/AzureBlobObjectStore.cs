@@ -6,7 +6,7 @@ using System.Text;
 
 namespace Cntryl.Pants.Cloud.Internal.Providers;
 
-sealed class AzureBlobObjectStore : ICloudObjectStore
+sealed class AzureBlobObjectStore : CloudObjectStore
 {
     const int MaximumAttempts = 3;
     const string ServiceVersion = "2024-11-04";
@@ -15,14 +15,17 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
     readonly AzureResolvedCredential _credential;
     readonly HttpClient _httpClient;
     readonly string _prefix;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
+    int _disposed;
 
     public AzureBlobObjectStore(
-        PantsCloudProviderConfiguration.AzureBlob configuration,
+        PantsAzureBlobProvider configuration,
         string prefix,
         HttpClient httpClient,
         TimeSpan timeout,
-        HttpClient? credentialHttpClient = null)
+        HttpClient? credentialHttpClient = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -36,15 +39,27 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         var resolution = AzureCredentialResolver.Resolve(
             configuration,
             credentialHttpClient ?? httpClient,
-            timeout);
+            timeout,
+            timeProvider ?? TimeProvider.System);
         _account = resolution.Account;
         _credential = resolution.Credential;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _containerEndpoint = new Uri(
             $"{resolution.Endpoint.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(configuration.Container)}/",
             UriKind.Absolute);
     }
 
-    public async ValueTask<CloudObject?> GetAsync(
+    public override ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            (_credential.TokenProvider as IDisposable)?.Dispose();
+        }
+
+        return base.DisposeAsync();
+    }
+
+    public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -65,7 +80,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public async ValueTask<CloudObject?> GetRangeAsync(
+    public override async ValueTask<CloudObject?> GetRangeAsync(
         string objectKey,
         ulong offset,
         int length,
@@ -95,7 +110,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public async ValueTask<CloudObjectMetadata?> HeadAsync(
+    public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken)
     {
@@ -122,7 +137,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
             response.Content.Headers.LastModified);
     }
 
-    public async ValueTask<bool> PutAsync(
+    public override async ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
@@ -142,7 +157,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         return true;
     }
 
-    public async ValueTask<CloudObjectListPage> ListPageAsync(
+    public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
         CancellationToken cancellationToken)
@@ -168,7 +183,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
             string.IsNullOrEmpty(nextMarker) ? null : nextMarker);
     }
 
-    public async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+    public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
         CancellationToken cancellationToken)
@@ -184,7 +199,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         }
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
-            condition is CloudObjectDeleteCondition.IfVersion &&
+            condition is PantsCloudObjectDeleteCondition.IfVersion &&
             await HasAzurePredicateFailureAsync(response, cancellationToken).ConfigureAwait(false))
         {
             return CloudObjectDeleteOutcome.ConditionNotMet;
@@ -239,12 +254,12 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         request.Headers.TryAddWithoutValidation("x-ms-blob-type", "BlockBlob");
         switch (condition)
         {
-            case CloudObjectWriteCondition.Unconditional:
+            case PantsCloudObjectWriteCondition.Unconditional:
                 break;
-            case CloudObjectWriteCondition.IfAbsent:
+            case PantsCloudObjectWriteCondition.IfAbsent:
                 request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
                 break;
-            case CloudObjectWriteCondition.IfVersion expected:
+            case PantsCloudObjectWriteCondition.IfVersion expected:
                 request.Headers.IfMatch.Add(new EntityTagHeaderValue(expected.Version));
                 break;
             default:
@@ -289,9 +304,9 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         var request = new HttpRequestMessage(HttpMethod.Delete, BuildObjectUri(objectKey));
         switch (condition)
         {
-            case CloudObjectDeleteCondition.Unconditional:
+            case PantsCloudObjectDeleteCondition.Unconditional:
                 break;
-            case CloudObjectDeleteCondition.IfVersion expected:
+            case PantsCloudObjectDeleteCondition.IfVersion expected:
                 request.Headers.IfMatch.Add(new EntityTagHeaderValue(
                     RequireVersion(expected.Version)));
                 break;
@@ -391,7 +406,7 @@ sealed class AzureBlobObjectStore : ICloudObjectStore
         request.Headers.TryAddWithoutValidation("x-ms-version", ServiceVersion);
         request.Headers.TryAddWithoutValidation(
             "x-ms-date",
-            DateTimeOffset.UtcNow.ToString("R", CultureInfo.InvariantCulture));
+            _timeProvider.GetUtcNow().ToString("R", CultureInfo.InvariantCulture));
         switch (_credential.Kind)
         {
             case AzureResolvedCredentialKind.Sas:

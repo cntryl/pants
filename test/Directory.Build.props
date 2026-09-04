@@ -3,7 +3,6 @@
 
   <PropertyGroup>
     <AssemblyName>Cntryl.$(MSBuildProjectName)</AssemblyName>
-    <RootNamespace>$(AssemblyName)</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>

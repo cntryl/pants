@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class OperationDeadlineTests
 {
@@ -51,7 +53,7 @@ public sealed class OperationDeadlineTests
         var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() => store.PutAsync(
             "private/object-key",
             "private-value"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             deadline,
             CancellationToken.None).AsTask());
 
@@ -102,7 +104,7 @@ public sealed class OperationDeadlineTests
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
             "object-key",
             "value"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             deadline,
             CancellationToken.None).AsTask());
 

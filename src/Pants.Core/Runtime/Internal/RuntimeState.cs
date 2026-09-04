@@ -1,15 +1,18 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using Cntryl.Pants.Storage.Internal;
 
 namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class RuntimeState
 {
     public const int DefaultFamilyVersion = 0;
-    public static ImmutableSortedDictionary<byte[], CellState> EmptyFamily { get; } =
-        ImmutableSortedDictionary.Create<byte[], CellState>(ByteArrayComparer.Instance);
+
+    static readonly ImmutableDictionary<uint, ImmutableArray<FileMeta>> EmptyVisibleFiles =
+        ImmutableDictionary<uint, ImmutableArray<FileMeta>>.Empty;
+
     readonly RuntimeTelemetry _telemetry;
+
+    public long DirectReadOnlyTransactionCounter;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
     public RuntimeState(IPantsClock clock, RuntimeTelemetry telemetry)
@@ -36,13 +39,14 @@ sealed class RuntimeState
         ActiveMemtableBytes[defaultFamily] = 0;
     }
 
+    public static ImmutableSortedDictionary<byte[], CellState> EmptyFamily { get; } =
+        ImmutableSortedDictionary.Create<byte[], CellState>(ByteArrayComparer.Instance);
+
     public IPantsClock Clock { get; }
 
     public long Sequence { get; set; }
 
     public long TransactionCounter { get; set; }
-
-    public long DirectReadOnlyTransactionCounter;
 
     public uint NextColumnFamilyId { get; set; } = 1;
 
@@ -107,15 +111,15 @@ sealed class RuntimeState
         _telemetry.RecordIntentLogReplay(entryCount);
 
     /// <summary>
-    /// Removes exactly the keys a successfully-published flush covered from <see cref="FamilyData"/>,
-    /// once that flush's SST is durable. Point reads for those keys fall through to the SST instead
-    /// (see <c>SnapshotReadPath</c>). Safe to call even while other snapshots are active: because
-    /// <see cref="FamilyData"/>'s roots are structurally-shared immutable trees, an already-open
-    /// snapshot's own <see cref="DatabaseVersion.Families"/> copy was captured before this call and
-    /// is untouched by it — only <em>new</em> snapshots stop seeing these keys in memory, and their
-    /// pinned <see cref="DatabaseVersion.VisibleFiles"/> already includes the newly-published SST.
-    /// A key whose <see cref="CellState.WriteSequence"/> no longer matches what the flush covered
-    /// (i.e. it was overwritten after the flush was taken) is left in place.
+    ///     Removes exactly the keys a successfully-published flush covered from <see cref="FamilyData" />,
+    ///     once that flush's SST is durable. Point reads for those keys fall through to the SST instead
+    ///     (see <c>SnapshotReadPath</c>). Safe to call even while other snapshots are active: because
+    ///     <see cref="FamilyData" />'s roots are structurally-shared immutable trees, an already-open
+    ///     snapshot's own <see cref="DatabaseVersion.Families" /> copy was captured before this call and
+    ///     is untouched by it — only <em>new</em> snapshots stop seeing these keys in memory, and their
+    ///     pinned <see cref="DatabaseVersion.VisibleFiles" /> already includes the newly-published SST.
+    ///     A key whose <see cref="CellState.WriteSequence" /> no longer matches what the flush covered
+    ///     (i.e. it was overwritten after the flush was taken) is left in place.
     /// </summary>
     public void ReleaseFlushedGeneration(FrozenMemtableFlush flush)
     {
@@ -167,9 +171,9 @@ sealed class RuntimeState
     }
 
     /// <summary>
-    /// Releases the current generation for a column family after the serialized cloud flush
-    /// path has published all of that family's mutable operations. Existing snapshots retain
-    /// their immutable roots; snapshots created after publication fall through to the SST.
+    ///     Releases the current generation for a column family after the serialized cloud flush
+    ///     path has published all of that family's mutable operations. Existing snapshots retain
+    ///     their immutable roots; snapshots created after publication fall through to the SST.
     /// </summary>
     public void ReleasePersistedFamily(ColumnFamilyIdentity identity)
     {
@@ -184,17 +188,14 @@ sealed class RuntimeState
         }
     }
 
-    static readonly ImmutableDictionary<uint, ImmutableArray<FileMeta>> EmptyVisibleFiles =
-        ImmutableDictionary<uint, ImmutableArray<FileMeta>>.Empty;
-
     public DatabaseVersion CreateVersion() => CreateVersion(EmptyVisibleFiles);
 
     /// <summary>
-    /// Builds an immutable read snapshot. <paramref name="visibleFiles"/> is the manifest's
-    /// published SST files at this moment, grouped by column-family id (see
-    /// <see cref="Storage.Internal.LocalDiskStore.GetVisibleFilesSnapshot"/>) — pinning this
-    /// list on the snapshot, rather than reading the live manifest later, is what lets a
-    /// concurrent compaction/flush publish without changing what an already-open snapshot sees.
+    ///     Builds an immutable read snapshot. <paramref name="visibleFiles" /> is the manifest's
+    ///     published SST files at this moment, grouped by column-family id (see
+    ///     <see cref="Storage.Internal.LocalDiskStore.GetVisibleFilesSnapshot" />) — pinning this
+    ///     list on the snapshot, rather than reading the live manifest later, is what lets a
+    ///     concurrent compaction/flush publish without changing what an already-open snapshot sees.
     /// </summary>
     public DatabaseVersion CreateVersion(
         IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles) => new(

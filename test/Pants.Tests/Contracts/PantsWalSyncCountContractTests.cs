@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsWalSyncCountContractTests
 {
@@ -7,15 +9,15 @@ public sealed class PantsWalSyncCountContractTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        var before = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
-        var after = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
+        var after = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
         Assert.Equal(1, after - before);
     }
 
@@ -28,9 +30,9 @@ public sealed class PantsWalSyncCountContractTests
             .WithMemtableLimits(1024)
             .WithTransactionMemoryPool(1024);
         await using var database = await PantsDatabase.OpenAsync(options);
-        var before = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = new byte[900];
         for (var index = 0; index < 6; index++)
@@ -41,7 +43,7 @@ public sealed class PantsWalSyncCountContractTests
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
-        var after = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
+        var after = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
         Assert.Equal(1, after - before);
     }
 
@@ -50,14 +52,14 @@ public sealed class PantsWalSyncCountContractTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        var before = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
-        var after = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
+        var after = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
         Assert.Equal(1, after - before);
     }
 
@@ -66,23 +68,23 @@ public sealed class PantsWalSyncCountContractTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        await using (var seed = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var seed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             seed.Put("guard"u8.ToArray(), "value"u8.ToArray());
             await seed.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        var before = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.AssertValue("guard"u8.ToArray(), "value"u8.ToArray());
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
-        var after = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
+        var after = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
         Assert.Equal(1, after - before);
     }
 
@@ -91,15 +93,15 @@ public sealed class PantsWalSyncCountContractTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        var before = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
 
-        var after = (await database.GetRuntimeMetricsAsync()).WalFsyncCount;
+        var after = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalFsyncCount;
         Assert.Equal(0, after - before);
     }
 }

@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants;
 
 public sealed class PantsExternalAdopterSmokeTests
 {
@@ -10,8 +12,8 @@ public sealed class PantsExternalAdopterSmokeTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         for (var batch = 0; batch < 2; batch++)
         {
-            await using var writer = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             for (var index = 0; index < 20; index++)
             {
@@ -22,11 +24,11 @@ public sealed class PantsExternalAdopterSmokeTests
             }
 
             await writer.CommitAsync(PantsWriteOptions.Buffered);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.Delete("key-010"u8.ToArray());
@@ -35,9 +37,9 @@ public sealed class PantsExternalAdopterSmokeTests
             await deleting.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var keys = new List<string>();

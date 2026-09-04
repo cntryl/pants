@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Observability;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsTelemetryIntegrationBehaviorTests
 {
@@ -10,7 +12,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var records = CreateRecords("metrics_read_key_", 0, 50, _ => "metric_value"u8.ToArray());
         await WriteBatchAsync(database, family, mode, records, true);
 
@@ -24,7 +26,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var records = CreateRecords(
             "metrics_write_key_",
             0,
@@ -43,13 +45,13 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var first = CreateRecords("compact_metric_key_", 0, 100, _ => "gen1"u8.ToArray());
         var second = CreateRecords("compact_metric_key_", 100, 100, _ => "gen2"u8.ToArray());
         await WriteBatchAsync(database, family, mode, first, true);
         await WriteBatchAsync(database, family, mode, second, true);
 
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         await AssertRecordsAsync(database, family, first.Concat(second));
     }
@@ -62,16 +64,16 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var records = CreateRecords("cache_metric_key_", 0, 100, _ => "cached_value"u8.ToArray());
         await WriteBatchAsync(database, family, mode, records, true);
         var warmupRecords = records[..50];
         await AssertRecordsAsync(database, family, warmupRecords);
-        var afterWarmup = await database.GetReadPathDiagnosticsAsync();
+        var afterWarmup = await database.Diagnostics.GetReadPathDiagnosticsAsync();
 
         await AssertRecordsAsync(database, family, warmupRecords);
 
-        var afterSecondPass = await database.GetReadPathDiagnosticsAsync();
+        var afterSecondPass = await database.Diagnostics.GetReadPathDiagnosticsAsync();
         Assert.True(afterSecondPass.SstBlockCacheHits > afterWarmup.SstBlockCacheHits);
     }
 
@@ -82,7 +84,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var records = CreateRecords(
             "wal_metric_key_",
             0,
@@ -101,7 +103,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(mode, directory.Path);
-        var family = await database.CreateColumnFamilyAsync("test");
+        var family = await database.ColumnFamilies.CreateAsync("test");
         var initial = CreateRecords("reset_metric_key_", 0, 50, _ => "value"u8.ToArray());
         await WriteBatchAsync(database, family, mode, initial, false);
         var followUp = new KeyValuePair<byte[], byte[]>(
@@ -146,7 +148,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         IEnumerable<KeyValuePair<byte[], byte[]>> records,
         bool flush)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         foreach (var record in records)
@@ -157,7 +159,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         await transaction.CommitAsync(WriteOptions(mode));
         if (flush)
         {
-            await database.FlushAsync(family);
+            await database.Maintenance.FlushAsync(family);
         }
     }
 
@@ -166,7 +168,7 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         IPantsColumnFamily family,
         IEnumerable<KeyValuePair<byte[], byte[]>> records)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
         foreach (var record in records)

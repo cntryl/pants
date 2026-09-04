@@ -6,19 +6,19 @@ sealed class TransactionInstance : IPantsTransaction
     const int AssertionAccountingOverhead = 48;
     readonly List<TransactionAssertion> _assertions = [];
     readonly ColumnFamilyHandle _columnFamily;
+    readonly bool _coordinatorRegistered;
 
     readonly DatabaseInstance _database;
     readonly object _gate = new();
     readonly List<TransactionIntentOperation> _intentLog = [];
     readonly DateTimeOffset _snapshotTime;
-    TransactionSpillStore? _spillStore;
     readonly DatabaseVersion _startSnapshot;
     readonly long _transactionId;
-    readonly bool _coordinatorRegistered;
     long _assertionBytes;
     PantsConflictPolicy _conflictPolicy = PantsConflictPolicy.LastWriteWins;
     ulong _nextOrdinal;
     long _residentIntentBytes;
+    TransactionSpillStore? _spillStore;
     int _state;
 
     internal TransactionInstance(
@@ -358,6 +358,7 @@ sealed class TransactionInstance : IPantsTransaction
                 await _database.RecordReadOnlyTransactionRollbackAsync(_transactionId)
                     .ConfigureAwait(false);
             }
+
             throw;
         }
         finally
@@ -412,6 +413,7 @@ sealed class TransactionInstance : IPantsTransaction
                 await _database.RecordReadOnlyTransactionRollbackAsync(_transactionId)
                     .ConfigureAwait(false);
             }
+
             throw;
         }
         finally
@@ -445,7 +447,7 @@ sealed class TransactionInstance : IPantsTransaction
                 _intentLog,
                 _nextOrdinal,
                 _database.Clock.UtcNow,
-                ownsSpillStore: true);
+                true);
             operations.Validate();
             var assertions = new Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>>(
                 ColumnFamilyIdentityComparer.Instance)

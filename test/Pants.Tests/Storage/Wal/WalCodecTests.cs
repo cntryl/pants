@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Cntryl.Pants.Tests.Storage.Wal;
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class WalCodecTests
 {
@@ -46,8 +46,7 @@ public sealed class WalCodecTests
             null,
             9);
 
-        var exception = Assert.Throws<StorageException>(
-            () => WalCodec.DecodeMutation(record));
+        var exception = Assert.Throws<StorageException>(() => WalCodec.DecodeMutation(record));
 
         Assert.Contains("Delete", exception.Message, StringComparison.Ordinal);
     }
@@ -79,10 +78,9 @@ public sealed class WalCodecTests
             WalOperation.Put,
             "key"u8.ToArray(),
             "value"u8.ToArray(),
-            compressionAlgorithm: 99);
+            99);
 
-        var exception = Assert.Throws<PantsCorruptionException>(
-            () => WalCodec.DecodeRecord(payload));
+        var exception = Assert.Throws<PantsCorruptionException>(() => WalCodec.DecodeRecord(payload));
 
         Assert.Contains("compression", exception.Message, StringComparison.OrdinalIgnoreCase);
     }

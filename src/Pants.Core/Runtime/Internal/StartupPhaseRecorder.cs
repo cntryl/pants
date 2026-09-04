@@ -6,7 +6,10 @@ sealed class StartupPhaseRecorder
 {
     readonly Action<StartupPhaseMeasurement>? _record;
 
-    public StartupPhaseRecorder(Action<StartupPhaseMeasurement>? record) => _record = record;
+    public StartupPhaseRecorder(Action<StartupPhaseMeasurement>? record)
+    {
+        _record = record;
+    }
 
     public Scope Measure(StartupPhase phase) => _record is null
         ? default
@@ -24,7 +27,7 @@ sealed class StartupPhaseRecorder
             _recorder = recorder;
             _phase = phase;
             _timestamp = Stopwatch.GetTimestamp();
-            _allocatedBytes = GC.GetTotalAllocatedBytes(false);
+            _allocatedBytes = GC.GetTotalAllocatedBytes();
         }
 
         public void Dispose()
@@ -37,7 +40,7 @@ sealed class StartupPhaseRecorder
             record(new StartupPhaseMeasurement(
                 _phase,
                 Stopwatch.GetElapsedTime(_timestamp),
-                GC.GetTotalAllocatedBytes(false) - _allocatedBytes));
+                GC.GetTotalAllocatedBytes() - _allocatedBytes));
         }
     }
 }

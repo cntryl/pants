@@ -15,26 +15,6 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
 
     public long Length { get; }
 
-    public static LocalAsyncSstSource Open(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var handle = File.OpenHandle(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
-        try
-        {
-            return new LocalAsyncSstSource(handle, RandomAccess.GetLength(handle));
-        }
-        catch
-        {
-            handle.Dispose();
-            throw;
-        }
-    }
-
     public async ValueTask<byte[]> ReadExactlyAsync(
         long offset,
         int length,
@@ -77,5 +57,25 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    public static LocalAsyncSstSource Open(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var handle = File.OpenHandle(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        try
+        {
+            return new LocalAsyncSstSource(handle, RandomAccess.GetLength(handle));
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 }

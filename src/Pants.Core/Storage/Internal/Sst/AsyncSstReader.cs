@@ -29,6 +29,14 @@ sealed class AsyncSstReader : IAsyncDisposable
 
     public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
 
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            await _source.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     public int CountOverlappingDataBlocks(byte[]? startInclusive, byte[]? endExclusive)
     {
         ThrowIfDisposed();
@@ -48,14 +56,6 @@ sealed class AsyncSstReader : IAsyncDisposable
         }
 
         return count;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            await _source.DisposeAsync().ConfigureAwait(false);
-        }
     }
 
     public byte[] GetFirstKey(int blockIndex)

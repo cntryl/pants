@@ -1,6 +1,7 @@
+using System.ComponentModel;
 using System.Diagnostics;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 sealed class PeakWorkingSetMonitor : IAsyncDisposable
 {
@@ -20,6 +21,8 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
 
     public long PeakBytes => Interlocked.Read(ref _peakBytes);
 
+    public ValueTask DisposeAsync() => StopAsync();
+
     public async ValueTask StopAsync()
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
@@ -32,8 +35,6 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
         Sample();
         _cancellation.Dispose();
     }
-
-    public ValueTask DisposeAsync() => StopAsync();
 
     async Task SampleAsync(CancellationToken cancellationToken)
     {
@@ -76,7 +77,7 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
             {
                 // Fall back to the current-working-set sample on platforms without a peak counter.
             }
-            catch (System.ComponentModel.Win32Exception)
+            catch (Win32Exception)
             {
                 // Fall back when only the peak counter is unavailable for this process.
             }
@@ -95,7 +96,7 @@ sealed class PeakWorkingSetMonitor : IAsyncDisposable
         {
             // The process exited between the liveness check and the sample.
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
             // The OS no longer exposes counters for the exited process.
         }

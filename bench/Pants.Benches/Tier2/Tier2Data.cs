@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 static class Tier2Data
 {

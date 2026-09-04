@@ -1,14 +1,14 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public class LocalThroughputSystemBenchmarks : Tier4Benchmark
 {
     const int BatchSize = 100;
     const int BatchCount = 1_000;
-    string _path = null!;
-    IPantsDatabase _database = null!;
     (byte[] Key, byte[] Value)[][] _batches = null!;
+    IPantsDatabase _database = null!;
+    string _path = null!;
 
     [Params(Tier4StorageMode.Memory, Tier4StorageMode.Local)]
     public Tier4StorageMode StorageMode { get; set; }

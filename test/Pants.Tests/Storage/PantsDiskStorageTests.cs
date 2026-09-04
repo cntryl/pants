@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.Text.Json;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsDiskStorageTests
 {
@@ -11,8 +13,8 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString("a"), TestBytes.FromString("one"));
             transaction.Put(TestBytes.FromString("b"), TestBytes.FromString("two"));
@@ -20,8 +22,8 @@ public sealed class PantsDiskStorageTests
         }
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal("one", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("a")))!.Value));
         Assert.Equal("two", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("b")))!.Value));
@@ -32,8 +34,8 @@ public sealed class PantsDiskStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
@@ -48,7 +50,7 @@ public sealed class PantsDiskStorageTests
             "midge-format-version=3\n",
             await File.ReadAllTextAsync(Path.Combine(directory.Path, "FORMAT")));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         var sst = await File.ReadAllBytesAsync(sstPath);
         Assert.Equal(4u, BitConverter.ToUInt32(sst, sst.Length - 20));
@@ -82,12 +84,12 @@ public sealed class PantsDiskStorageTests
         await using (var database = await PantsDatabase.OpenAsync(
                          PantsOpenOptions.Local(directory.Path).WithPerformanceGoal(performanceGoal)))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("compressed"u8.ToArray(), value);
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
@@ -95,8 +97,8 @@ public sealed class PantsDiskStorageTests
         Assert.Equal(expectedAlgorithm, ReadFirstBlockAlgorithm(sst));
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(value, (await reader.GetAsync("compressed"u8.ToArray()))!.Value.ToArray());
     }
@@ -107,15 +109,15 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithPerformanceGoal(PantsPerformanceGoal.Economy));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("small"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
 
         Assert.Equal(0, ReadFirstBlockAlgorithm(await File.ReadAllBytesAsync(sstPath)));
@@ -128,17 +130,17 @@ public sealed class PantsDiskStorageTests
         var key = Enumerable.Repeat((byte)'k', 70_000).ToArray();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(key, "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText((await reader.GetAsync(key))!.Value));
@@ -151,12 +153,12 @@ public sealed class PantsDiskStorageTests
         string sstPath;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         }
 
@@ -175,11 +177,10 @@ public sealed class PantsDiskStorageTests
         Assert.IsType<PantsCorruptionException>(verification);
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        await Assert.ThrowsAnyAsync<PantsException>(
-            () => reader.GetAsync("key"u8.ToArray()).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => reader.GetAsync("key"u8.ToArray()).AsTask());
     }
 
     [Fact]
@@ -187,8 +188,8 @@ public sealed class PantsDiskStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        var family = await database.CreateColumnFamilyAsync("records");
-        await using (var transaction = await database.BeginTransactionAsync(
+        var family = await database.ColumnFamilies.CreateAsync("records");
+        await using (var transaction = await database.Transactions.BeginAsync(
                          family,
                          PantsTransactionMode.ReadWrite))
         {
@@ -196,12 +197,13 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        var busy = await Assert.ThrowsAnyAsync<PantsException>(() => database.DropColumnFamilyAsync(family).AsTask());
+        var busy = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            database.ColumnFamilies.DropAsync(family).AsTask());
         Assert.Equal(PantsErrorCode.Busy, busy.Code);
 
-        await database.FlushAsync(family);
-        await database.DropColumnFamilyAsync(family);
-        Assert.Null(await database.GetColumnFamilyAsync("records"));
+        await database.Maintenance.FlushAsync(family);
+        await database.ColumnFamilies.DropAsync(family);
+        Assert.Null(await database.ColumnFamilies.GetAsync("records"));
     }
 
     [Fact]
@@ -210,8 +212,8 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString("ephemeral"), TestBytes.FromString("value"));
             await transaction.CommitAsync(PantsWriteOptions.BestEffort);
@@ -219,8 +221,8 @@ public sealed class PantsDiskStorageTests
         }
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync(TestBytes.FromString("ephemeral")));
     }
@@ -232,16 +234,16 @@ public sealed class PantsDiskStorageTests
         PantsStorageVerificationReport online;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
                 await transaction.CommitAsync(PantsWriteOptions.Sync);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
-            online = await database.VerifyStorageAsync(TimeSpan.FromSeconds(5));
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            online = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
         }
 
         var offline = await PantsDatabase.VerifyPathAsync(directory.Path);
@@ -287,7 +289,7 @@ public sealed class PantsDiskStorageTests
         await using var takenOver = await PantsDatabase.OpenAsync(PantsOpenOptions
             .Local(directory.Path)
             .WithLeaseClockSkewTolerance(TimeSpan.Zero));
-        Assert.True(takenOver.IsPrimaryLeaseHealthy);
+        Assert.True(takenOver.PersistentStorage!.IsPrimaryLeaseHealthy);
     }
 
     [Fact]
@@ -314,20 +316,20 @@ public sealed class PantsDiskStorageTests
         {
             for (var index = 0; index < 3; index++)
             {
-                await using var transaction = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(TestBytes.FromString("key"), TestBytes.FromString($"value-{index}"));
                 await transaction.CommitAsync(PantsWriteOptions.Buffered);
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
-            await database.CompactAllAsync();
+            await database.Maintenance.CompactAllAsync();
         }
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "value-2",
@@ -341,8 +343,8 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using (var writer = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var writer = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 writer.Put("a"u8.ToArray(), "point-delete"u8.ToArray());
@@ -351,10 +353,10 @@ public sealed class PantsDiskStorageTests
                 await writer.CommitAsync(PantsWriteOptions.Buffered);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-            await using (var deleting = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var deleting = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 deleting.Delete("a"u8.ToArray());
@@ -362,13 +364,13 @@ public sealed class PantsDiskStorageTests
                 await deleting.CommitAsync(PantsWriteOptions.Buffered);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
-            await database.CompactAllAsync();
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await database.Maintenance.CompactAllAsync();
         }
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Null(await reader.GetAsync("a"u8.ToArray()));
@@ -389,8 +391,8 @@ public sealed class PantsDiskStorageTests
                 L0FileCountTrigger: 100,
                 TargetSstSizeBytes: 16 * 1024));
         await using var database = await PantsDatabase.OpenAsync(options);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 100; index++)
@@ -403,21 +405,21 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("z-oversized"u8.ToArray(), new byte[32 * 1024]);
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var originals = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
         Assert.Equal(2, originals.Length);
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
-            database.CompactAllAsync().AsTask());
+            database.Maintenance.CompactAllAsync().AsTask());
 
         Assert.Equal(
             originals.Order(StringComparer.Ordinal),
@@ -426,7 +428,7 @@ public sealed class PantsDiskStorageTests
         Assert.Empty(Directory.GetFiles(
             Path.Combine(directory.Path, "sst", ".flush-staging"),
             "*.tmp"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -434,32 +436,32 @@ public sealed class PantsDiskStorageTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
-        await using (var seed = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var seed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             seed.Put("key"u8.ToArray(), "old"u8.ToArray());
             await seed.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var pinnedInput = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-        await using var snapshot = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var snapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         for (var generation = 1; generation <= 2; generation++)
         {
-            await using var overwrite = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var overwrite = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             overwrite.Put("key"u8.ToArray(), TestBytes.FromString($"new-{generation}"));
             await overwrite.CommitAsync(PantsWriteOptions.Buffered);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
-        await database.CompactAllAsync();
-        var pinnedMetrics = await database.GetRuntimeMetricsAsync();
+        await database.Maintenance.CompactAllAsync();
+        var pinnedMetrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.True(File.Exists(pinnedInput));
         Assert.Equal("old", TestBytes.ToText((await snapshot.GetAsync("key"u8.ToArray()))!.Value));
@@ -469,7 +471,7 @@ public sealed class PantsDiskStorageTests
         await snapshot.DisposeAsync();
 
         Assert.False(File.Exists(pinnedInput));
-        Assert.Equal(0, (await database.GetRuntimeMetricsAsync()).PinnedSsts);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts);
     }
 
     [Fact]
@@ -486,12 +488,12 @@ public sealed class PantsDiskStorageTests
             new RuntimeDependencies(failpoint));
         for (var generation = 0; generation < 2; generation++)
         {
-            await using var write = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var write = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             write.Put("key"u8.ToArray(), TestBytes.FromString($"value-{generation}"));
             await write.CommitAsync(PantsWriteOptions.Buffered);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         var inputPaths = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
@@ -499,10 +501,10 @@ public sealed class PantsDiskStorageTests
 
         try
         {
-            var compaction = database.CompactAllAsync().AsTask();
+            var compaction = database.Maintenance.CompactAllAsync().AsTask();
             await failpoint.WaitUntilEnteredAsync(TimeSpan.FromSeconds(10));
-            var pinned = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            var pinned = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
 
             failpoint.Release();
@@ -529,8 +531,8 @@ public sealed class PantsDiskStorageTests
         {
             for (var index = 0; index < 2; index++)
             {
-                await using var transaction = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString($"value-{index}"));
                 await transaction.CommitAsync(PantsWriteOptions.Sync);
@@ -551,9 +553,9 @@ public sealed class PantsDiskStorageTests
         await using var salvaged = await OpenWithRecoveryAsync(
             directory.Path,
             PantsRecoveryPolicy.Salvage);
-        var metrics = await salvaged.GetRuntimeMetricsAsync();
-        await using var reader = await salvaged.BeginTransactionAsync(
-            salvaged.DefaultColumnFamily,
+        var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
+        await using var reader = await salvaged.Transactions.BeginAsync(
+            salvaged.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
@@ -569,8 +571,8 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("preallocated"u8.ToArray(), "recovered"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
@@ -584,8 +586,8 @@ public sealed class PantsDiskStorageTests
         }
 
         await using var recovered = await OpenAsync(directory.Path);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal(validLength, new FileInfo(walPath).Length);
@@ -615,7 +617,7 @@ public sealed class PantsDiskStorageTests
         await using var salvaged = await OpenWithRecoveryAsync(
             directory.Path,
             PantsRecoveryPolicy.Salvage);
-        var metrics = await salvaged.GetRuntimeMetricsAsync();
+        var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
         Assert.Equal(1, metrics.SalvageModeOpens);
@@ -675,8 +677,8 @@ public sealed class PantsDiskStorageTests
 
         await using var reopened = await OpenAsync(directory.Path);
 
-        Assert.NotNull(await reopened.GetColumnFamilyAsync("durable"));
-        Assert.Null(await reopened.GetColumnFamilyAsync("not-durable"));
+        Assert.NotNull(await reopened.ColumnFamilies.GetAsync("durable"));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("not-durable"));
         Assert.Equal(0, new FileInfo(Path.Combine(directory.Path, "manifest.journal")).Length);
     }
 
@@ -686,12 +688,12 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         var fileMetadata = ReadSingleManifestFile(directory.Path);
@@ -700,11 +702,11 @@ public sealed class PantsDiskStorageTests
             CreateIntentFileMetadata(fileMetadata, fileMetadata.GetProperty("name").GetString()!));
 
         await using var reopened = await OpenAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        var recovery = await reopened.GetRecoveryMetricsAsync();
-        var runtime = await reopened.GetRuntimeMetricsAsync();
+        var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
+        var runtime = await reopened.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal("value", TestBytes.ToText((await reader.GetAsync("key"u8.ToArray()))!.Value));
         Assert.Equal(1, recovery.IntentLogReplayRuns);
@@ -723,12 +725,12 @@ public sealed class PantsDiskStorageTests
         string originalPath;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             originalPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         }
 
@@ -743,7 +745,7 @@ public sealed class PantsDiskStorageTests
         await using var reopened = await OpenAsync(directory.Path);
 
         Assert.False(File.Exists(orphanPath));
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -753,12 +755,12 @@ public sealed class PantsDiskStorageTests
         string originalPath;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             originalPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         }
 
@@ -781,7 +783,7 @@ public sealed class PantsDiskStorageTests
 
         Assert.True(File.Exists(orphanPath));
         Assert.NotEmpty(intentLog.RootElement.EnumerateArray());
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -791,12 +793,12 @@ public sealed class PantsDiskStorageTests
         string orphanPath;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             var ownedPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
             orphanPath = Path.Combine(directory.Path, "sst", "000000_00_00000000000000000999.sst");
             File.Copy(ownedPath, orphanPath);
@@ -807,7 +809,7 @@ public sealed class PantsDiskStorageTests
         await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
 
         Assert.True(File.Exists(orphanPath));
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -817,12 +819,12 @@ public sealed class PantsDiskStorageTests
         string sstPath;
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("durable-key"u8.ToArray(), "durable-value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         }
 
@@ -830,15 +832,15 @@ public sealed class PantsDiskStorageTests
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.json"), "{corrupt");
 
         await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
-        await using var reader = await salvaged.BeginTransactionAsync(
-            salvaged.DefaultColumnFamily,
+        await using var reader = await salvaged.Transactions.BeginAsync(
+            salvaged.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.True(File.Exists(sstPath));
         Assert.Equal(
             "durable-value",
             TestBytes.ToText((await reader.GetAsync("durable-key"u8.ToArray()))!.Value));
-        var metrics = await salvaged.GetRuntimeMetricsAsync();
+        var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
         Assert.Equal(1, metrics.SstCount);
     }
@@ -849,8 +851,8 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("recoverable"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
@@ -863,13 +865,13 @@ public sealed class PantsDiskStorageTests
 
         await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
         {
-            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
+            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
         }
 
         var retainedBefore = Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*");
         await using var strict = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict);
 
-        Assert.Equal(PantsEngineHealth.Healthy, (await strict.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await strict.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.Equal(
             retainedBefore,
             Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*"));
@@ -882,9 +884,9 @@ public sealed class PantsDiskStorageTests
         await using var database = await OpenAsync(directory.Path);
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "sst", "orphan.sst"), "orphan");
 
-        var metrics = await database.GetRuntimeMetricsAsync();
-        var layout = await database.GetStorageLayoutAsync();
-        var report = await database.VerifyStorageAsync(TimeSpan.FromSeconds(5));
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        var report = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
         Assert.Equal(1, metrics.ObsoleteFileBacklog);

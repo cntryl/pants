@@ -235,13 +235,13 @@ static class SstCodec
     }
 
     /// <summary>
-    /// Builds the same <see cref="SstContents"/> shape as <see cref="Decode"/> (used by
-    /// compaction's input-reading step), but walks <paramref name="reader"/> one block at a time
-    /// via <see cref="SstBlockIterator"/> instead of requiring the caller to have already read
-    /// and decoded the whole file — the caller never holds more than one input SST's worth of
-    /// decoded blocks (plus the entries accumulated so far) at once. Range tombstones come
-    /// straight from <see cref="SstReader.RangeTombstones"/>, already loaded (small/bounded) by
-    /// <see cref="SstReader.Open"/>.
+    ///     Builds the same <see cref="SstContents" /> shape as <see cref="Decode" /> (used by
+    ///     compaction's input-reading step), but walks <paramref name="reader" /> one block at a time
+    ///     via <see cref="SstBlockIterator" /> instead of requiring the caller to have already read
+    ///     and decoded the whole file — the caller never holds more than one input SST's worth of
+    ///     decoded blocks (plus the entries accumulated so far) at once. Range tombstones come
+    ///     straight from <see cref="SstReader.RangeTombstones" />, already loaded (small/bounded) by
+    ///     <see cref="SstReader.Open" />.
     /// </summary>
     internal static SstContents DecodeViaBlockIterator(SstReader reader)
     {
@@ -464,7 +464,7 @@ static class SstCodec
         }
 
         var rawRangeHandle = ReadHandle(metadata, 8);
-        if ((rawRangeHandle.Offset == 0) != (rawRangeHandle.Size == 0))
+        if (rawRangeHandle.Offset == 0 != (rawRangeHandle.Size == 0))
         {
             throw new PantsCorruptionException("SST range-tombstone handle is only partially present.");
         }

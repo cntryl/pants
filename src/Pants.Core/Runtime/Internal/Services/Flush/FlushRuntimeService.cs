@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Flush;
 
 sealed class FlushRuntimeService(
     int capacity,
-    LocalDiskStore? diskStore,
+    ILocalFlushStore? flushStore,
     RuntimeTelemetry telemetry)
     : ChannelRuntimeService<FlushRuntimeRequest, FlushRuntimeResult>(capacity)
 {
@@ -40,7 +40,7 @@ sealed class FlushRuntimeService(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var store = diskStore ??
+        var store = flushStore ??
                     throw new PantsInternalException("A flush runtime request requires local storage.");
         return request switch
         {
@@ -54,7 +54,7 @@ sealed class FlushRuntimeService(
     }
 
     static ValueTask<FlushRuntimeResult> FlushAll(
-        LocalDiskStore store,
+        ILocalFlushStore store,
         FlushAllRuntimeRequest request)
     {
         store.Flush(request.State);
@@ -62,7 +62,7 @@ sealed class FlushRuntimeService(
     }
 
     static ValueTask<FlushRuntimeResult> FlushColumnFamily(
-        LocalDiskStore store,
+        ILocalFlushStore store,
         FlushColumnFamilyRuntimeRequest request)
     {
         store.Flush(request.State, request.ColumnFamily);
@@ -70,7 +70,7 @@ sealed class FlushRuntimeService(
     }
 
     FlushRuntimeResult PublishFrozenMemtable(
-        LocalDiskStore store,
+        ILocalFlushStore store,
         PublishFrozenMemtableRuntimeRequest request)
     {
         var publicationPlan = request.PublicationPlan;

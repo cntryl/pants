@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstReadIntegrationTests
 {
@@ -12,7 +14,7 @@ public sealed class PantsSstReadIntegrationTests
             await PutAsync(database, $"key_{index:000}", "value_from_sst");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal("value_from_sst", await ReadAsync(database, "key_000"));
         Assert.Equal("value_from_sst", await ReadAsync(database, "key_005"));
@@ -31,7 +33,7 @@ public sealed class PantsSstReadIntegrationTests
                 await PutAsync(database, $"batch{batch}_key{index}", "value");
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         for (var batch = 0; batch < 3; batch++)
@@ -39,7 +41,7 @@ public sealed class PantsSstReadIntegrationTests
             Assert.Equal("value", await ReadAsync(database, $"batch{batch}_key0"));
         }
 
-        var metrics = await database.GetReadAmplificationMetricsAsync();
+        var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.True(metrics.L0SstsTouchedTotal >= 3);
     }
 
@@ -53,13 +55,13 @@ public sealed class PantsSstReadIntegrationTests
             await PutAsync(database, $"key_{index:000}", "test_value");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal("test_value", await ReadAsync(database, "key_000"));
         Assert.Equal("test_value", await ReadAsync(database, "key_010"));
         Assert.Equal("test_value", await ReadAsync(database, "key_019"));
         Assert.Null(await ReadAsync(database, "key_999"));
-        Assert.True((await database.GetReadAmplificationMetricsAsync()).KeyRangeRejectsTotal > 0);
+        Assert.True((await database.Diagnostics.GetReadAmplificationMetricsAsync()).KeyRangeRejectsTotal > 0);
     }
 
     [Fact]
@@ -68,7 +70,7 @@ public sealed class PantsSstReadIntegrationTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "sst_key", "sst_value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await PutAsync(database, "mem_key", "mem_value");
 
         Assert.Equal("sst_value", await ReadAsync(database, "sst_key"));
@@ -85,10 +87,10 @@ public sealed class PantsSstReadIntegrationTests
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "corrupt-key", "corrupt-value");
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         CorruptFirstSstDataByte(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         await Assert.ThrowsAsync<StorageException>(() =>
@@ -105,10 +107,10 @@ public sealed class PantsSstReadIntegrationTests
             await PutAsync(database, $"corrupt-range-{index}", "corrupt-value");
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         CorruptFirstSstDataByte(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
 
@@ -126,8 +128,8 @@ public sealed class PantsSstReadIntegrationTests
 
     static async Task PutAsync(IPantsDatabase database, string key, string value)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -135,8 +137,8 @@ public sealed class PantsSstReadIntegrationTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is { } present ? TestBytes.ToText(present) : null;

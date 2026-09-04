@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class CompactionMergerTests
 {
@@ -58,10 +60,12 @@ public sealed class CompactionMergerTests
     public void ShouldRetainDeleteVisibleAtSnapshotHorizon()
     {
         var result = CompactionMerger.Merge(
-            [Contents(
-                Entry("key", "old", 1),
-                Entry("key", null, 5, true),
-                Entry("key", "new", 10))],
+            [
+                Contents(
+                    Entry("key", "old", 1),
+                    Entry("key", null, 5, true),
+                    Entry("key", "new", 10))
+            ],
             Plan(true, true, 7));
 
         Assert.Equal([10UL, 5UL], result.Entries.Select(static entry => entry.Sequence));
@@ -74,8 +78,10 @@ public sealed class CompactionMergerTests
         var result = CompactionMerger.Merge(
             [
                 Contents(Entry("key", "old", 2)),
-                new SstContents([], [new RangeTombstone(
-                    TestBytes.FromString("a"), TestBytes.FromString("z"), 5)], 1),
+                new SstContents([], [
+                    new RangeTombstone(
+                        TestBytes.FromString("a"), TestBytes.FromString("z"), 5)
+                ], 1),
                 Contents(Entry("key", "new", 10))
             ],
             Plan(true, true, null));

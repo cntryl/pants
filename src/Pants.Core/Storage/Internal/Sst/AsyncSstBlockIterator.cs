@@ -7,8 +7,8 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
     readonly AsyncSstReader _reader;
     readonly ResourceBudget? _resourceBudget;
     readonly byte[]? _startInclusive;
-    int _blockIndex;
     IReadOnlyList<SstEntry>? _blockEntries;
+    int _blockIndex;
     IDisposable? _blockReservation;
     bool _finished;
     int _positionInBlock;
@@ -32,6 +32,12 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
 
     public int DataBlocksRead { get; private set; }
 
+    public async ValueTask DisposeAsync()
+    {
+        _ = Finish();
+        await _reader.DisposeAsync().ConfigureAwait(false);
+    }
+
     public async ValueTask<bool> MoveNextAsync(CancellationToken cancellationToken)
     {
         if (_finished)
@@ -53,12 +59,6 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         return _direction == PantsScanDirection.Forward
             ? await AdvanceForwardAsync(cancellationToken).ConfigureAwait(false)
             : await AdvanceReverseAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _ = Finish();
-        await _reader.DisposeAsync().ConfigureAwait(false);
     }
 
     async ValueTask<bool> AdvanceForwardAsync(CancellationToken cancellationToken)

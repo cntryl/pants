@@ -1,6 +1,7 @@
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions;
+namespace Cntryl.Pants.Transactions;
 
 public sealed class PantsTransactionSpillTests
 {
@@ -10,8 +11,8 @@ public sealed class PantsTransactionSpillTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = GC.AllocateUninitializedArray<byte>(900);
         Array.Fill(value, (byte)'v');
@@ -32,8 +33,8 @@ public sealed class PantsTransactionSpillTests
         await transaction.CommitAsync(PantsWriteOptions.Sync);
 
         Assert.False(Directory.Exists(transactionDirectory));
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal("after", TestBytes.ToText((await reader.GetAsync("point"u8.ToArray()))!.Value));
         Assert.Equal(value, (await reader.GetAsync("key-5"u8.ToArray()))!.Value.ToArray());
@@ -45,8 +46,8 @@ public sealed class PantsTransactionSpillTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = new byte[900];
         transaction.Insert("duplicate"u8.ToArray(), value);
@@ -57,8 +58,8 @@ public sealed class PantsTransactionSpillTests
             transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
         Assert.Equal(PantsErrorCode.InvalidArgument, error.Code);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("duplicate"u8.ToArray()));
     }
@@ -69,8 +70,8 @@ public sealed class PantsTransactionSpillTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var instance = Assert.IsType<DatabaseInstance>(database);
         var baselineBytes = instance.TransactionMemoryPool.Used;
@@ -85,8 +86,8 @@ public sealed class PantsTransactionSpillTests
 
         Assert.Equal(PantsErrorCode.Io, error.Code);
         Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("first"u8.ToArray()));
         Assert.Null(await reader.GetAsync("second"u8.ToArray()));
@@ -98,8 +99,8 @@ public sealed class PantsTransactionSpillTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), new byte[900]);
 
@@ -133,8 +134,8 @@ public sealed class PantsTransactionSpillTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             CreateConstrainedOptions(PantsOpenOptions.InMemory()));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = new byte[900];
         transaction.Put("first"u8.ToArray(), value);

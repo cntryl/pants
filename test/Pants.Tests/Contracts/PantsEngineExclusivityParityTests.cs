@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Contracts;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsEngineExclusivityParityTests
 {
@@ -7,7 +9,7 @@ public sealed class PantsEngineExclusivityParityTests
     {
         using var directory = new TemporaryDirectory();
         var first = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        Assert.True(first.IsPrimaryLeaseHealthy);
+        Assert.True(first.PersistentStorage!.IsPrimaryLeaseHealthy);
 
         var held = await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
             PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
@@ -17,7 +19,7 @@ public sealed class PantsEngineExclusivityParityTests
         await first.ShutdownAsync(TimeSpan.FromSeconds(5));
         await using var second = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
-        Assert.True(second.IsPrimaryLeaseHealthy);
+        Assert.True(second.PersistentStorage!.IsPrimaryLeaseHealthy);
     }
 
     [Fact]
@@ -47,7 +49,7 @@ public sealed class PantsEngineExclusivityParityTests
         {
             await using var database = await PantsDatabase.OpenAsync(
                 PantsOpenOptions.Local(directory.Path));
-            Assert.True(database.IsPrimaryLeaseHealthy);
+            Assert.True(database.PersistentStorage!.IsPrimaryLeaseHealthy);
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
     }
@@ -68,9 +70,9 @@ public sealed class PantsEngineExclusivityParityTests
             await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
 
-        Assert.False(database.IsPrimaryLeaseHealthy);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("fenced"u8.ToArray(), "value"u8.ToArray());
         var error = await Assert.ThrowsAsync<PantsFencedException>(() =>
@@ -92,11 +94,11 @@ public sealed class PantsEngineExclusivityParityTests
         var original = await File.ReadAllTextAsync(leasePath);
         await File.WriteAllTextAsync(leasePath, original + "epoch: 999\n");
 
-        Assert.False(database.IsPrimaryLeaseHealthy);
-        Assert.False(database.IsPrimaryLeaseHealthy);
+        Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
+        Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
         Assert.Equal(1, Volatile.Read(ref leaseLossCount));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("fenced"u8.ToArray(), "value"u8.ToArray());
         var fenced = await Assert.ThrowsAsync<PantsFencedException>(() =>

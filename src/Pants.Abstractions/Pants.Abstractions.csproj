@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Cntryl.Pants.Core"/>
-    <InternalsVisibleTo Include="Cntryl.Pants.DependencyInjection"/>
     <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
   </ItemGroup>
 

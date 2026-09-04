@@ -1,4 +1,8 @@
-namespace Cntryl.Pants.Tests.Observability;
+using Cntryl.Pants.Runtime;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Observability;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeMeterTests
@@ -30,18 +34,18 @@ public sealed class PantsRuntimeMeterTests
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        Assert.True((await reopened.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed > 0);
-        await reopened.FlushAsync(reopened.DefaultColumnFamily);
+        Assert.True((await reopened.Diagnostics.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed > 0);
+        await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
         await CommitAsync(reopened, "second", PantsWriteOptions.Buffered);
-        await reopened.FlushAsync(reopened.DefaultColumnFamily);
-        await using (var read = await reopened.BeginTransactionAsync(
-                         reopened.DefaultColumnFamily,
+        await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
+        await using (var read = await reopened.Transactions.BeginAsync(
+                         reopened.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         {
             Assert.NotNull(await read.GetAsync("first"u8.ToArray()));
         }
 
-        await reopened.CompactAllAsync();
+        await reopened.Maintenance.CompactAllAsync();
 
         await measurements.WaitForAsync(names, AssertionTimeout);
         Assert.All(names, name => Assert.True(measurements[name] > 0, name));
@@ -67,8 +71,8 @@ public sealed class PantsRuntimeMeterTests
         await CommitAsync(second, "second-a", PantsWriteOptions.Sync);
         await CommitAsync(second, "second-b", PantsWriteOptions.Sync);
 
-        var firstMetrics = await first.GetRuntimeMetricsAsync();
-        var secondMetrics = await second.GetRuntimeMetricsAsync();
+        var firstMetrics = await first.Diagnostics.GetRuntimeMetricsAsync();
+        var secondMetrics = await second.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(1, firstMetrics.WalAppendCount);
         Assert.Equal(2, secondMetrics.WalAppendCount);
@@ -88,8 +92,8 @@ public sealed class PantsRuntimeMeterTests
         await measurements.WaitForAsync(names, AssertionTimeout);
         Assert.True(measurements["pants.cloud.wal_uploads.completed"] > 0);
         Assert.False(measurements.HasTags);
-        Assert.Equal(1, (await first.GetRuntimeMetricsAsync()).WalAppendCount);
-        Assert.Equal(2, (await second.GetRuntimeMetricsAsync()).WalAppendCount);
+        Assert.Equal(1, (await first.Diagnostics.GetRuntimeMetricsAsync()).WalAppendCount);
+        Assert.Equal(2, (await second.Diagnostics.GetRuntimeMetricsAsync()).WalAppendCount);
     }
 
     [Fact]
@@ -111,14 +115,14 @@ public sealed class PantsRuntimeMeterTests
                          new RuntimeDependencies(compactionFailure)))
         {
             await CommitAsync(local, "first", PantsWriteOptions.Buffered);
-            await local.FlushAsync(local.DefaultColumnFamily);
+            await local.Maintenance.FlushAsync(local.ColumnFamilies.DefaultFamily);
             await CommitAsync(local, "second", PantsWriteOptions.Buffered);
-            await local.FlushAsync(local.DefaultColumnFamily);
+            await local.Maintenance.FlushAsync(local.ColumnFamilies.DefaultFamily);
             compactionFailure.Arm(Failpoint.BeforeCompactionManifestPublish);
 
-            await Assert.ThrowsAsync<PantsIOException>(() => local.CompactAllAsync().AsTask());
+            await Assert.ThrowsAsync<PantsIOException>(() => local.Maintenance.CompactAllAsync().AsTask());
 
-            Assert.Equal(1, (await local.GetRuntimeMetricsAsync()).CompactionFailures);
+            Assert.Equal(1, (await local.Diagnostics.GetRuntimeMetricsAsync()).CompactionFailures);
         }
 
         using var cloudDirectory = new TemporaryDirectory();
@@ -132,13 +136,14 @@ public sealed class PantsRuntimeMeterTests
         await CommitAsync(cloud, "retry", PantsWriteOptions.CloudAsync);
         cloudFailure.Arm(Failpoint.BeforeCloudUpload);
 
-        await Assert.ThrowsAsync<PantsIOException>(() => cloud.FlushAsync(cloud.DefaultColumnFamily).AsTask());
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            cloud.Maintenance.FlushAsync(cloud.ColumnFamilies.DefaultFamily).AsTask());
 
         await measurements.WaitForAsync(names, AssertionTimeout);
         Assert.True(measurements["pants.compactions.failed"] > 0);
         Assert.True(measurements["pants.cloud.flush_retries"] > 0);
         Assert.False(measurements.HasTags);
-        Assert.True((await cloud.GetRuntimeMetricsAsync()).FlushRetriesTotal > 0);
+        Assert.True((await cloud.Diagnostics.GetRuntimeMetricsAsync()).FlushRetriesTotal > 0);
     }
 
     static RuntimeMeterMeasurements Listen(IReadOnlySet<string> names) => new(names);
@@ -148,8 +153,8 @@ public sealed class PantsRuntimeMeterTests
         string key,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
         await transaction.CommitAsync(writeOptions);

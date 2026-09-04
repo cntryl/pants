@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 [MemoryDiagnoser]
 public abstract class Tier3Benchmark;

@@ -1,8 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsDiskResidentDifferentialTests
@@ -108,20 +109,20 @@ public sealed class PantsDiskResidentDifferentialTests
                     clock.UtcNow);
                 if ((step + 1) % 8 == 0)
                 {
-                    await database.FlushAsync(database.DefaultColumnFamily);
+                    await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                     await AssertMatchesAsync(database, model);
                 }
 
                 if ((step + 1) % 24 == 0)
                 {
-                    await database.CompactAllAsync();
+                    await database.Maintenance.CompactAllAsync();
                     await AssertMatchesAsync(database, model);
                 }
             }
 
             RemoveExpired(model, clock.UtcNow);
-            await using (var snapshot = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var snapshot = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadOnly))
             {
                 var snapshotModel = model.ToDictionary(
@@ -135,8 +136,8 @@ public sealed class PantsDiskResidentDifferentialTests
             }
 
             await AssertMatchesAsync(database, model);
-            await database.FlushAsync(database.DefaultColumnFamily);
-            await database.CompactAllAsync();
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await database.Maintenance.CompactAllAsync();
         }
 
         if (simulatedCloud)
@@ -149,7 +150,7 @@ public sealed class PantsDiskResidentDifferentialTests
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         await AssertMatchesAsync(reopened, model);
-        var metrics = await reopened.GetRuntimeMetricsAsync();
+        var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.TotalMemtableBytes);
         Assert.Equal(0, metrics.ScanBufferUsedBytes);
         Assert.True(metrics.ScanBufferPeakBytes <= metrics.ScanBufferCapacityBytes);
@@ -167,8 +168,8 @@ public sealed class PantsDiskResidentDifferentialTests
         var keyIndex = random.Next(KeyCount);
         var key = Key(keyIndex);
         var value = $"value:{step:D3}:{random.Next():X8}";
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         switch (random.Next(6))
         {
@@ -223,8 +224,8 @@ public sealed class PantsDiskResidentDifferentialTests
         string value,
         bool simulatedCloud)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(Bytes(key), Bytes(value));
         await transaction.CommitAsync(
@@ -236,8 +237,8 @@ public sealed class PantsDiskResidentDifferentialTests
         bool simulatedCloud)
     {
         var durability = simulatedCloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync;
-        await using (var first = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var first = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             first.Insert(Bytes(Key(0)), Bytes("alpha"));
@@ -246,8 +247,8 @@ public sealed class PantsDiskResidentDifferentialTests
             await first.CommitAsync(durability);
         }
 
-        await using (var second = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var second = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             second.Delete(Bytes(Key(2)));
@@ -255,8 +256,8 @@ public sealed class PantsDiskResidentDifferentialTests
             await second.CommitAsync(durability);
         }
 
-        await using (var third = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var third = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             third.Put(Bytes(Key(4)), Bytes("delta"));
@@ -264,8 +265,8 @@ public sealed class PantsDiskResidentDifferentialTests
             await third.CommitAsync(durability);
         }
 
-        await using var fourth = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var fourth = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         fourth.DeleteRange(Bytes(Key(0)), Bytes(Key(1)));
         fourth.Insert(Bytes(Key(2)), Bytes("zeta"));
@@ -275,10 +276,10 @@ public sealed class PantsDiskResidentDifferentialTests
     static SortedDictionary<string, ModelValue> CrashModel(DateTimeOffset now) =>
         new(StringComparer.Ordinal)
         {
-            [Key(1)] = new("beta", now + TimeSpan.FromMinutes(10)),
-            [Key(2)] = new("zeta", null),
-            [Key(4)] = new("delta", null),
-            [Key(7)] = new("epsilon", null)
+            [Key(1)] = new ModelValue("beta", now + TimeSpan.FromMinutes(10)),
+            [Key(2)] = new ModelValue("zeta", null),
+            [Key(4)] = new ModelValue("delta", null),
+            [Key(7)] = new ModelValue("epsilon", null)
         };
 
     static Process StartCrashChild(string path, bool simulatedCloud)
@@ -361,8 +362,8 @@ public sealed class PantsDiskResidentDifferentialTests
         IPantsDatabase database,
         IReadOnlyDictionary<string, ModelValue> model)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await AssertMatchesAsync(transaction, model);
     }

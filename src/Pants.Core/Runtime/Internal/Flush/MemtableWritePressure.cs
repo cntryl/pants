@@ -8,13 +8,13 @@ static class MemtableWritePressure
         state.ActiveMemtableBytes.Values.Sum() +
         state.ImmutableMemtableFlushes.Values.Sum(static flush => flush.Frozen.SizeBytes));
 
-    public static bool IsStalled(PantsOpenOptions options, RuntimeState state) =>
+    public static bool IsStalled(RuntimePlan options, RuntimeState state) =>
         options.Storage is not PantsStorageConfiguration.InMemory &&
         (GetTotalBytes(state) >= GetHardLimitBytes(options) ||
          state.ActiveMemtableBytes.Keys.Any(identity => IsQueueFull(state, identity)));
 
     public static bool IsStalled(
-        PantsOpenOptions options,
+        RuntimePlan options,
         RuntimeState state,
         IEnumerable<ColumnFamilyIdentity> identities) =>
         options.Storage is not PantsStorageConfiguration.InMemory &&
@@ -27,7 +27,7 @@ static class MemtableWritePressure
         state.ImmutableMemtableFlushes.Values.Count(flush =>
             flush.Frozen.ColumnFamily == identity) >= MaximumImmutableMemtablesPerColumnFamily;
 
-    static long GetHardLimitBytes(PantsOpenOptions options) =>
+    static long GetHardLimitBytes(RuntimePlan options) =>
         options.MemtableFlushThresholdBytes > long.MaxValue / 2
             ? long.MaxValue
             : options.MemtableFlushThresholdBytes * 2;

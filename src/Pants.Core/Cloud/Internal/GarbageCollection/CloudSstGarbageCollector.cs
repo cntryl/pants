@@ -84,7 +84,7 @@ sealed class CloudSstGarbageCollector
                 _failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
                 var outcome = await _sstStore.DeleteAsync(
                     objectKey,
-                    new CloudObjectDeleteCondition.IfVersion(objectIdentity.Version),
+                    new PantsCloudObjectDeleteCondition.IfVersion(objectIdentity.Version),
                     cancellationToken).ConfigureAwait(false);
                 if (outcome == CloudObjectDeleteOutcome.ConditionNotMet)
                 {

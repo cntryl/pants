@@ -1,14 +1,14 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Sst;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class BloomBenchmarks : Tier1Benchmark
 {
-    string _path = null!;
-    SstReader _reader = null!;
     byte[] _hit = null!;
     byte[] _miss = null!;
+    string _path = null!;
+    SstReader _reader = null!;
 
     [GlobalSetup]
     public void Setup()

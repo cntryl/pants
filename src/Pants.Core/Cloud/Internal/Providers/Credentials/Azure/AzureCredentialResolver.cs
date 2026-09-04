@@ -3,11 +3,13 @@ namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 static class AzureCredentialResolver
 {
     public static AzureCredentialResolution Resolve(
-        PantsCloudProviderConfiguration.AzureBlob configuration,
+        PantsAzureBlobProvider configuration,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         return configuration.Credential switch
         {
             PantsAzureCredentialSource.SharedKey sharedKey => Static(
@@ -24,21 +26,23 @@ static class AzureCredentialResolver
             PantsAzureCredentialSource.StorageEnvironment => FromStorageEnvironment(
                 configuration,
                 httpClient,
-                timeout),
+                timeout,
+                timeProvider),
             PantsAzureCredentialSource.EnvironmentClientSecret or
                 PantsAzureCredentialSource.WorkloadIdentity or
                 PantsAzureCredentialSource.ManagedIdentity or
                 PantsAzureCredentialSource.LightweightDefaultChain => Identity(
                     configuration,
                     httpClient,
-                    timeout),
+                    timeout,
+                    timeProvider),
             _ => throw new PantsNotSupportedException(
                 "The Azure credential source is unsupported.")
         };
     }
 
     static AzureCredentialResolution FromConnectionString(
-        PantsCloudProviderConfiguration.AzureBlob configuration,
+        PantsAzureBlobProvider configuration,
         string value)
     {
         var parsed = AzureConnectionString.Parse(value);
@@ -74,9 +78,10 @@ static class AzureCredentialResolver
     }
 
     static AzureCredentialResolution FromStorageEnvironment(
-        PantsCloudProviderConfiguration.AzureBlob configuration,
+        PantsAzureBlobProvider configuration,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         var connection = Environment.GetEnvironmentVariable(
             "AZURE_STORAGE_CONNECTION_STRING");
@@ -112,13 +117,15 @@ static class AzureCredentialResolver
                 new PantsAzureCredentialSource.ManagedIdentity(),
                 endpoint,
                 httpClient,
-                timeout)));
+                timeout,
+                timeProvider)));
     }
 
     static AzureCredentialResolution Identity(
-        PantsCloudProviderConfiguration.AzureBlob configuration,
+        PantsAzureBlobProvider configuration,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         var account = RequireAccount(configuration.Account);
         var endpoint = ValidateIdentityEndpoint(
@@ -130,7 +137,8 @@ static class AzureCredentialResolver
                 configuration.Credential,
                 endpoint,
                 httpClient,
-                timeout)));
+                timeout,
+                timeProvider)));
     }
 
     static AzureCredentialResolution Static(

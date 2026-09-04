@@ -18,18 +18,16 @@ WAL, flush, compaction, immutable-flush, and commit-coalescing responsibilities
 are separate internal types, but the public contracts and persisted Midge wire
 formats remain unchanged. See [`runtime.md`](../architecture/runtime.md).
 
-The release-only compatibility harness refreshes this inventory and the golden
-fixtures together from a clean checkout at the pinned commit. It also runs the
-alternate-process, bidirectional qualification. Normal restore, build, and test
-commands remain self-contained and consume only committed artifacts. See
-[`MidgeQualification.md`](MidgeQualification.md) for the exact commands and
-fixture policy.
+The removed compatibility harness originally generated this inventory and the
+golden fixtures from a clean checkout at the pinned commit. Normal restore,
+build, and test commands remain self-contained and consume only committed
+artifacts. See [`MidgeQualification.md`](MidgeQualification.md) for the current
+baseline-maintenance and fixture policy.
 
 The delta from the preceding baseline is reviewed in
 [`MidgeCurrentBaselineReview.md`](MidgeCurrentBaselineReview.md). In addition to
-the static inventory, the release-only qualification hands live databases
-between current Midge and Pants in both directions for local and simulated-cloud
-storage.
+the static inventory, the committed fixtures preserve the verified local and
+simulated-cloud interchange formats from that qualification.
 
 Midge CLI-only verification behaviors are explicitly not applicable because
 Pants exposes verification through its async database interfaces and does not

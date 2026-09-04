@@ -1,13 +1,13 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class DurabilityCommitLatencySubsystemBenchmarks : Tier2Benchmark
 {
     const int TransactionCount = 512;
-    string _path = null!;
     IPantsDatabase _database = null!;
     byte[][] _keys = null!;
+    string _path = null!;
     byte[] _value = null!;
 
     [GlobalSetup]

@@ -1,6 +1,6 @@
 namespace Cntryl.Pants.Cloud.Internal;
 
-interface ICloudPersistence : ICloudDdlAuthority
+interface ICloudPersistence : ICloudDdlAuthority, IAsyncDisposable
 {
     bool HasPersistenceAnomaly { get; }
 

@@ -1,12 +1,12 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Sst;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class SstBenchmarks : Tier1Benchmark
 {
-    IReadOnlyList<SstEntry> _entries = null!;
     byte[] _encoded = null!;
+    IReadOnlyList<SstEntry> _entries = null!;
 
     [GlobalSetup]
     public void Setup()

@@ -1,8 +1,9 @@
+using System.Globalization;
 using BenchmarkDotNet.Running;
-using Cntryl.Pants.Benches.Reporting;
-using Cntryl.Pants.Benches.Tier4;
+using Cntryl.Pants.Reporting;
+using Cntryl.Pants.Tier4;
 
-namespace Cntryl.Pants.Benches;
+namespace Cntryl.Pants;
 
 static class Program
 {
@@ -27,22 +28,24 @@ static class Program
         {
             await ScaleLadderCrashCheck.RunChildAsync(
                 databasePath,
-                int.Parse(recordCountArg, System.Globalization.CultureInfo.InvariantCulture),
+                int.Parse(recordCountArg, CultureInfo.InvariantCulture),
                 readyMarkerPath);
             return 0;
         }
 
-        if (args is [
+        if (args is
+            [
                 "scaleladder-reopen-probe-child",
                 var probeDatabasePath,
                 var probeRecordCountArg,
                 var probeBudgetBytesArg,
-                var probeResultsPath])
+                var probeResultsPath
+            ])
         {
             await ScaleLadderReopenProbe.RunChildAsync(
                 probeDatabasePath,
-                long.Parse(probeRecordCountArg, System.Globalization.CultureInfo.InvariantCulture),
-                long.Parse(probeBudgetBytesArg, System.Globalization.CultureInfo.InvariantCulture),
+                long.Parse(probeRecordCountArg, CultureInfo.InvariantCulture),
+                long.Parse(probeBudgetBytesArg, CultureInfo.InvariantCulture),
                 probeResultsPath);
             return 0;
         }

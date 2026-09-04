@@ -2,7 +2,7 @@ using System.Reflection;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class BenchmarkInventory
 {
@@ -10,10 +10,12 @@ static class BenchmarkInventory
     {
         var assembly = typeof(Program).Assembly;
         return assembly.GetTypes()
-            .Where(type => !type.IsAbstract && type.GetMethods().Any(method => method.GetCustomAttribute<BenchmarkAttribute>() is not null))
+            .Where(type =>
+                !type.IsAbstract && type.GetMethods()
+                    .Any(method => method.GetCustomAttribute<BenchmarkAttribute>() is not null))
             .SelectMany(type => BenchmarkConverter.TypeToBenchmarks(type).BenchmarksCases)
             .Select(benchmark => benchmark.Descriptor.Type.FullName + "." + benchmark.Descriptor.WorkloadMethod.Name +
-                ":" + benchmark.Parameters.DisplayInfo)
+                                 ":" + benchmark.Parameters.DisplayInfo)
             .Order(StringComparer.Ordinal)
             .ToArray();
     }

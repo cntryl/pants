@@ -7,9 +7,9 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
     static readonly TimeSpan DefaultDisposalTimeout = TimeSpan.FromSeconds(30);
 
     readonly Channel<RuntimeWorkerCommand> _commands;
+    readonly TimeSpan _disposalTimeout;
     readonly CancellationTokenSource _lifetimeCancellation = new();
     readonly Task _loopTask;
-    readonly TimeSpan _disposalTimeout;
     long _completed;
     int _disposed;
     long _enqueued;
@@ -35,6 +35,8 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
         });
         _loopTask = Task.Run(RunAsync);
     }
+
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     public async ValueTask DisposeAsync()
     {
@@ -65,8 +67,6 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
     }
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
-
-    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     public int InFlight => Volatile.Read(ref _inFlight);
 

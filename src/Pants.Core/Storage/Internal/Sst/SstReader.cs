@@ -31,8 +31,8 @@ sealed class SstReader : IDisposable
     public int DataBlockCount => _index.Length;
 
     /// <summary>
-    /// The SST's range tombstones. Loaded eagerly by <see cref="Open"/> since a file's
-    /// tombstone set is small and bounded, unlike its data blocks.
+    ///     The SST's range tombstones. Loaded eagerly by <see cref="Open" /> since a file's
+    ///     tombstone set is small and bounded, unlike its data blocks.
     /// </summary>
     public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
 

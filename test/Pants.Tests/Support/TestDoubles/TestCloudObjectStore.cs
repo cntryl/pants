@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class TestCloudObjectStore : ICloudObjectStore
 {
@@ -13,13 +13,6 @@ sealed class TestCloudObjectStore : ICloudObjectStore
     public int PutCount => Volatile.Read(ref _putCount);
 
     public Func<CancellationToken, ValueTask>? BeforeNextPutAsync { get; set; }
-
-    public void Seed(string objectKey, ReadOnlyMemory<byte> data)
-    {
-        _objectKey = objectKey;
-        Data = data.ToArray();
-        _version = Guid.NewGuid().ToString("N");
-    }
 
     public ValueTask<CloudObject?> GetAsync(
         string objectKey,
@@ -67,9 +60,9 @@ sealed class TestCloudObjectStore : ICloudObjectStore
         LastCondition = condition;
         var accepted = condition switch
         {
-            CloudObjectWriteCondition.Unconditional => true,
-            CloudObjectWriteCondition.IfAbsent => _version is null,
-            CloudObjectWriteCondition.IfVersion expected =>
+            PantsCloudObjectWriteCondition.Unconditional => true,
+            PantsCloudObjectWriteCondition.IfAbsent => _version is null,
+            PantsCloudObjectWriteCondition.IfVersion expected =>
                 StringComparer.Ordinal.Equals(expected.Version, _version),
             _ => false
         };
@@ -111,7 +104,7 @@ sealed class TestCloudObjectStore : ICloudObjectStore
             return ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
         }
 
-        if (condition is CloudObjectDeleteCondition.IfVersion expected &&
+        if (condition is PantsCloudObjectDeleteCondition.IfVersion expected &&
             !StringComparer.Ordinal.Equals(expected.Version, _version))
         {
             return ValueTask.FromResult(CloudObjectDeleteOutcome.ConditionNotMet);
@@ -121,5 +114,12 @@ sealed class TestCloudObjectStore : ICloudObjectStore
         _objectKey = null;
         _version = null;
         return ValueTask.FromResult(CloudObjectDeleteOutcome.Deleted);
+    }
+
+    public void Seed(string objectKey, ReadOnlyMemory<byte> data)
+    {
+        _objectKey = objectKey;
+        Data = data.ToArray();
+        _version = Guid.NewGuid().ToString("N");
     }
 }

@@ -1,12 +1,12 @@
 namespace Cntryl.Pants.Storage.Internal;
 
 /// <summary>
-/// Shared bounded-resource accounting for internal streaming pipelines (compaction's merge
-/// buffers, a scan's k-way merge buffers) — mirrors Midge's <c>ResourceBudget</c>/
-/// <c>ResourceReservation</c>. <see cref="Reserve"/> is RAII-style: it throws immediately if the
-/// reservation would exceed <see cref="Limit"/>, and the returned <see cref="IDisposable"/>
-/// releases it. This bounds a single streaming operation's transient memory independent of how
-/// much data it is processing in total, rather than merely observing it after the fact.
+///     Shared bounded-resource accounting for internal streaming pipelines (compaction's merge
+///     buffers, a scan's k-way merge buffers) — mirrors Midge's <c>ResourceBudget</c>/
+///     <c>ResourceReservation</c>. <see cref="Reserve" /> is RAII-style: it throws immediately if the
+///     reservation would exceed <see cref="Limit" />, and the returned <see cref="IDisposable" />
+///     releases it. This bounds a single streaming operation's transient memory independent of how
+///     much data it is processing in total, rather than merely observing it after the fact.
 /// </summary>
 sealed class ResourceBudget(long limit)
 {

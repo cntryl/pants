@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudDiskResidentFailureTests
 {
@@ -67,8 +69,8 @@ public sealed class PantsCloudDiskResidentFailureTests
         }
 
         await using var database = await OpenAsync(directory.Path);
-        await using var readerTransaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var readerTransaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         await Assert.ThrowsAnyAsync<PantsException>(() =>
@@ -84,7 +86,7 @@ public sealed class PantsCloudDiskResidentFailureTests
             });
         }
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.BlockCacheUsedBytes);
         Assert.True(metrics.ScanBufferPeakBytes <= metrics.ScanBufferCapacityBytes);
         Assert.Equal(0, metrics.ScanBufferUsedBytes);
@@ -95,8 +97,8 @@ public sealed class PantsCloudDiskResidentFailureTests
     {
         await using (var database = await OpenAsync(path))
         {
-            await using var writer = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             for (var index = 0; index < 32; index++)
             {
@@ -104,7 +106,7 @@ public sealed class PantsCloudDiskResidentFailureTests
             }
 
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         foreach (var local in LocalSsts(path))

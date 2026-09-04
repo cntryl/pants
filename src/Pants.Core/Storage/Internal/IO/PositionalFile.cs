@@ -72,7 +72,7 @@ static class PositionalFile
     }
 
     /// <summary>
-    /// Appends and durably flushes buffers. Callers must externally serialize all appends to a path.
+    ///     Appends and durably flushes buffers. Callers must externally serialize all appends to a path.
     /// </summary>
     public static void AppendAndFlush(
         string path,

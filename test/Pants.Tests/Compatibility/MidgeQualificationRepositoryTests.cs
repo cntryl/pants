@@ -1,53 +1,33 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests.Compatibility;
+namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeQualificationRepositoryTests
 {
     const string PinnedMidgeSha = "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71";
+
     const string PinnedMidgeLockSha256 =
         "1fe29024e1789245b1ca8b20274aea17573380d5e33cf8f1811b59a65f85f937";
 
     [Fact]
-    public void ShouldKeepDocumentedQualificationEntrypointsExecutableAndPinned()
+    public void ShouldKeepCommittedCompatibilityBaselineDocumentedAndPinned()
     {
         var repository = FindRepositoryRoot();
-        var harness = Path.Combine(
+        var manifest = Path.Combine(
             repository,
-            "eng",
-            "compat",
-            "Pants.CompatibilityHarness",
-            "Pants.CompatibilityHarness.csproj");
-        var driver = Path.Combine(repository, "eng", "compat", "MidgeDriver", "pants_compat.rs");
-        var builder = Path.Combine(
-            repository,
-            "eng",
-            "compat",
-            "Pants.CompatibilityHarness",
-            "Internal",
-            "MidgeCheckoutBuilder.cs");
-        var workflow = Path.Combine(
-            repository,
-            ".github",
-            "workflows",
-            "compatibility-qualification.yml");
+            "test",
+            "Pants.Tests",
+            "MidgeContractManifest.json");
         var documentation = File.ReadAllText(Path.Combine(
             repository,
             "docs",
             "compatibility",
             "MidgeQualification.md"));
 
-        Assert.True(File.Exists(harness), $"Missing compatibility harness: {harness}");
-        Assert.True(File.Exists(driver), $"Missing Midge compatibility driver: {driver}");
-        Assert.True(File.Exists(workflow), $"Missing compatibility workflow: {workflow}");
-        Assert.Contains("Pants.CompatibilityHarness.csproj", documentation, StringComparison.Ordinal);
+        Assert.True(File.Exists(manifest), $"Missing compatibility manifest: {manifest}");
         Assert.Contains(PinnedMidgeSha, documentation, StringComparison.Ordinal);
-        var workflowText = File.ReadAllText(workflow);
-        Assert.Contains($"ref: {PinnedMidgeSha}", workflowText, StringComparison.Ordinal);
-        var builderText = File.ReadAllText(builder);
-        Assert.Contains("\"--locked\"", builderText, StringComparison.Ordinal);
-        Assert.Contains(PinnedMidgeLockSha256, builderText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pants.CompatibilityHarness", documentation, StringComparison.Ordinal);
     }
 
     [Fact]

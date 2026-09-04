@@ -1,18 +1,18 @@
 using System.Diagnostics;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 /// <summary>
-/// Builds a <see cref="ProcessStartInfo"/> that re-invokes this same tool with a different mode
-/// — shared by <see cref="ScaleLadderCrashCheck"/> and <see cref="ScaleLadderReopenProbe"/>.
-/// This tool builds an apphost (a native executable, not just a DLL): when the current process
-/// was itself launched as that apphost, <see cref="Environment.ProcessPath"/> already points at
-/// it and does **not** want the assembly path as an argument (the apphost already knows which
-/// DLL to run) — passing it anyway silently shifts every subsequent argument by one, so the mode
-/// name never matches. Conversely, a framework-dependent launch such as
-/// <c>dotnet Cntryl.Pants.Benches.dll</c> leaves <see cref="Environment.ProcessPath"/> pointing at
-/// the dotnet muxer even when <c>DOTNET_HOST_PATH</c> is absent; that mode must prepend the
-/// assembly path.
+///     Builds a <see cref="ProcessStartInfo" /> that re-invokes this same tool with a different mode
+///     — shared by <see cref="ScaleLadderCrashCheck" /> and <see cref="ScaleLadderReopenProbe" />.
+///     This tool builds an apphost (a native executable, not just a DLL): when the current process
+///     was itself launched as that apphost, <see cref="Environment.ProcessPath" /> already points at
+///     it and does **not** want the assembly path as an argument (the apphost already knows which
+///     DLL to run) — passing it anyway silently shifts every subsequent argument by one, so the mode
+///     name never matches. Conversely, a framework-dependent launch such as
+///     <c>dotnet Cntryl.Pants.Benches.dll</c> leaves <see cref="Environment.ProcessPath" /> pointing at
+///     the dotnet muxer even when <c>DOTNET_HOST_PATH</c> is absent; that mode must prepend the
+///     assembly path.
 /// </summary>
 static class ScaleLadderChildProcess
 {

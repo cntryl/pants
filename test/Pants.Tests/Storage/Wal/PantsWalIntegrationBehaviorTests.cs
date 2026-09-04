@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage.Wal;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalIntegrationBehaviorTests
 {
@@ -8,7 +10,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            var family = await database.CreateColumnFamilyAsync("test");
+            var family = await database.ColumnFamilies.CreateAsync("test");
             for (var index = 0; index < 50; index++)
             {
                 await CommitAsync(
@@ -19,12 +21,12 @@ public sealed class PantsWalIntegrationBehaviorTests
                         "wal_value"u8.ToArray()));
             }
 
-            await database.FlushAsync(family);
+            await database.Maintenance.FlushAsync(family);
         }
 
         await using var reopened = await OpenAsync(directory.Path);
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("test"));
+            await reopened.ColumnFamilies.GetAsync("test"));
 
         Assert.Equal(50, (await ScanAsync(reopened, reopenedFamily)).Count);
     }
@@ -36,17 +38,17 @@ public sealed class PantsWalIntegrationBehaviorTests
         var expected = Enumerable.Repeat(byte.MaxValue, 1_000_000).ToArray();
         await using (var database = await OpenAsync(directory.Path))
         {
-            var family = await database.CreateColumnFamilyAsync("test");
+            var family = await database.ColumnFamilies.CreateAsync("test");
             await CommitAsync(
                 database,
                 family,
                 transaction => transaction.Put("large_wal_key"u8.ToArray(), expected));
-            await database.FlushAsync(family);
+            await database.Maintenance.FlushAsync(family);
         }
 
         await using var reopened = await OpenAsync(directory.Path);
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("test"));
+            await reopened.ColumnFamilies.GetAsync("test"));
 
         Assert.Equal(expected, (await GetAsync(reopened, reopenedFamily, "large_wal_key"))?.ToArray());
     }
@@ -57,7 +59,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            var family = await database.CreateColumnFamilyAsync("test");
+            var family = await database.ColumnFamilies.CreateAsync("test");
             await CommitAsync(
                 database,
                 family,
@@ -86,12 +88,12 @@ public sealed class PantsWalIntegrationBehaviorTests
                 transaction => transaction.DeleteRange(
                     "dr_05"u8.ToArray(),
                     "dr_15"u8.ToArray()));
-            await database.FlushAsync(family);
+            await database.Maintenance.FlushAsync(family);
         }
 
         await using var reopened = await OpenAsync(directory.Path);
         var reopenedFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(
-            await reopened.GetColumnFamilyAsync("test"));
+            await reopened.ColumnFamilies.GetAsync("test"));
         var rows = await ScanAsync(reopened, reopenedFamily);
 
         Assert.Equal(
@@ -117,7 +119,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         IPantsColumnFamily family,
         Action<IPantsTransaction> stage)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         stage(transaction);
@@ -129,7 +131,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         IPantsColumnFamily family,
         string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
         return await transaction.GetAsync(TestBytes.FromString(key));
@@ -139,7 +141,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         IPantsDatabase database,
         IPantsColumnFamily family)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());

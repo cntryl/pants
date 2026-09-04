@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Cloud;
 
 /// <summary>An immutable, redacted result for one structural or live cloud check.</summary>
 public sealed record PantsCloudValidationFinding(
-    PantsCloudValidationProviderKind Provider,
+    PantsCloudProviderId Provider,
     ImmutableArray<PantsCloudStorageRole> Roles,
     PantsCloudValidationMode Mode,
     PantsCloudCheckCode Code,

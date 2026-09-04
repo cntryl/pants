@@ -3,8 +3,9 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Compatibility;
+namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeStorageGoldenTests
 {
@@ -89,7 +90,7 @@ public sealed class MidgeStorageGoldenTests
         _ = await objects.PutAsync(
             PantsCloudObjectLayout.LeaseObjectKey,
             cloudBytes,
-            new CloudObjectWriteCondition.Unconditional(),
+            new PantsCloudObjectWriteCondition.Unconditional(),
             CancellationToken.None);
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
         var snapshot = await store.ReadAsync(CancellationToken.None);

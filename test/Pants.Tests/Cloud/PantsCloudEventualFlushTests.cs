@@ -1,7 +1,9 @@
 using System.Text;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudEventualFlushTests
 {
@@ -18,22 +20,22 @@ public sealed class PantsCloudEventualFlushTests
         {
             await CommitAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 $"batched-{index}",
                 PantsWriteOptions.CloudAsync);
         }
 
-        var beforeThreshold = await database.GetRuntimeMetricsAsync();
+        var beforeThreshold = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, beforeThreshold.WalCurrentSegmentId);
         Assert.Equal(3, beforeThreshold.WalPendingWrites);
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "batched-3",
             PantsWriteOptions.CloudAsync);
 
-        var sealedMetrics = await database.GetRuntimeMetricsAsync();
+        var sealedMetrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(sealedMetrics.WalCurrentSegmentId > beforeThreshold.WalCurrentSegmentId);
         Assert.Equal(0, sealedMetrics.WalPendingWrites);
     }
@@ -47,7 +49,7 @@ public sealed class PantsCloudEventualFlushTests
         await using var database = await PantsDatabase.OpenAsync(options);
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "shutdown",
             PantsWriteOptions.CloudAsync);
         Assert.Empty(Directory.EnumerateFiles(
@@ -75,7 +77,7 @@ public sealed class PantsCloudEventualFlushTests
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "deadline",
             PantsWriteOptions.CloudAsync);
 
@@ -97,11 +99,11 @@ public sealed class PantsCloudEventualFlushTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new RuntimeDependencies(failpoints));
-        var before = await database.GetRuntimeMetricsAsync();
+        var before = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "deadline-retry",
             PantsWriteOptions.CloudAsync);
 
@@ -133,11 +135,11 @@ public sealed class PantsCloudEventualFlushTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new RuntimeDependencies(failpoints));
-        var before = await database.GetRuntimeMetricsAsync();
+        var before = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "immediate-retry",
             PantsWriteOptions.CloudAsync);
         await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
@@ -170,11 +172,11 @@ public sealed class PantsCloudEventualFlushTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, policy),
             new RuntimeDependencies(failpoints));
-        var before = await database.GetRuntimeMetricsAsync();
+        var before = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "post-rotation-retry",
             PantsWriteOptions.CloudAsync);
         await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
@@ -215,15 +217,15 @@ public sealed class PantsCloudEventualFlushTests
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "fenced-after-append",
             PantsWriteOptions.CloudAsync);
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("fenced-after-append"u8.ToArray());
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(
             "value",
             TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
@@ -247,12 +249,12 @@ public sealed class PantsCloudEventualFlushTests
 
         await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "strict-post-rotation",
             PantsWriteOptions.CloudStrict).AsTask());
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("strict-post-rotation"u8.ToArray());
         var published = await WaitForMetricsAsync(
@@ -290,14 +292,14 @@ public sealed class PantsCloudEventualFlushTests
         {
             await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 "strict-upload-failure",
                 PantsWriteOptions.CloudStrict).AsTask());
             using var failureTimeout = new CancellationTokenSource(AssertionTimeout);
             await failpoints.WaitForFailureAsync(failureTimeout.Token);
 
-            await using var reader = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var reader = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             var value = await reader.GetAsync("strict-upload-failure"u8.ToArray());
             Assert.Equal(
@@ -313,8 +315,8 @@ public sealed class PantsCloudEventualFlushTests
                 Path.Combine(replacement.Path, "cloud_store"));
             await using var replacementDatabase = await PantsDatabase.OpenAsync(
                 CreateOptions(replacement.Path, policy));
-            await using var replacementReader = await replacementDatabase.BeginTransactionAsync(
-                replacementDatabase.DefaultColumnFamily,
+            await using var replacementReader = await replacementDatabase.Transactions.BeginAsync(
+                replacementDatabase.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             Assert.Null(await replacementReader.GetAsync("strict-upload-failure"u8.ToArray()));
         }
@@ -341,22 +343,22 @@ public sealed class PantsCloudEventualFlushTests
         {
             await CommitAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 $"buffered-{index}",
                 PantsWriteOptions.CloudAsync);
         }
 
-        var beforeGap = await database.GetRuntimeMetricsAsync();
+        var beforeGap = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(3, beforeGap.MaximumMemtableWalSegmentGap);
         Assert.Equal(0, beforeGap.SstCount);
 
         await CommitAsync(
             database,
-            database.DefaultColumnFamily,
+            database.ColumnFamilies.DefaultFamily,
             "buffered-3",
             PantsWriteOptions.CloudAsync);
 
-        var flushed = await database.GetRuntimeMetricsAsync();
+        var flushed = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(flushed.SstCount >= 1);
         Assert.True(flushed.MaximumMemtableWalSegmentGap < 4);
     }
@@ -372,12 +374,12 @@ public sealed class PantsCloudEventualFlushTests
         {
             await CommitAsync(
                 database,
-                database.DefaultColumnFamily,
+                database.ColumnFamilies.DefaultFamily,
                 $"strict-{index}",
                 PantsWriteOptions.CloudStrict);
         }
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.SstCount >= 1);
         Assert.True(metrics.MaximumMemtableWalSegmentGap < 4);
     }
@@ -388,8 +390,8 @@ public sealed class PantsCloudEventualFlushTests
         using var directory = new TemporaryDirectory();
         var policy = CreatePolicy(4, 1);
         await using var database = await OpenAsync(directory.Path, policy);
-        var light = await database.CreateColumnFamilyAsync("light");
-        var busy = await database.CreateColumnFamilyAsync("busy");
+        var light = await database.ColumnFamilies.CreateAsync("light");
+        var busy = await database.ColumnFamilies.CreateAsync("busy");
         await CommitAsync(database, light, "light", PantsWriteOptions.CloudAsync);
 
         for (var index = 0; index < 3; index++)
@@ -401,7 +403,7 @@ public sealed class PantsCloudEventualFlushTests
                 PantsWriteOptions.CloudAsync);
         }
 
-        var layout = await database.GetStorageLayoutAsync();
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
         Assert.Contains(
             layout.Levels.SelectMany(static level => level.Files),
             file => file.ColumnFamilyId == light.Id);
@@ -419,17 +421,17 @@ public sealed class PantsCloudEventualFlushTests
             {
                 await CommitAsync(
                     database,
-                    database.DefaultColumnFamily,
+                    database.ColumnFamilies.DefaultFamily,
                     $"reopen-{index}",
                     PantsWriteOptions.CloudAsync);
             }
 
-            Assert.True((await database.GetRuntimeMetricsAsync()).WalCurrentSegmentId > 4);
+            Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId > 4);
             await database.ShutdownAsync(TimeSpan.FromSeconds(5));
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        var metrics = await reopened.GetRuntimeMetricsAsync();
+        var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.MaximumMemtableWalSegmentGap);
         Assert.Equal(0, metrics.SstCount);
     }
@@ -440,7 +442,7 @@ public sealed class PantsCloudEventualFlushTests
         string key,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
@@ -458,7 +460,7 @@ public sealed class PantsCloudEventualFlushTests
             while (true)
             {
                 timeout.Token.ThrowIfCancellationRequested();
-                var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
+                var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
                 last = metrics;
                 if (predicate(metrics))
                 {

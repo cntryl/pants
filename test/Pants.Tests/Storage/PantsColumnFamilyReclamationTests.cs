@@ -1,4 +1,8 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Runtime;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsColumnFamilyReclamationTests
@@ -17,11 +21,11 @@ public sealed class PantsColumnFamilyReclamationTests
         var family = await CreateFlushedFamilyAsync(database, "reclaim-now");
         Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
 
-        await database.DropColumnFamilyAsync(family);
+        await database.ColumnFamilies.DropAsync(family);
 
         Assert.Empty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
         Assert.DoesNotContain(
-            (await database.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
+            (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
             file => file.ColumnFamilyId == family.Id);
     }
 
@@ -35,11 +39,11 @@ public sealed class PantsColumnFamilyReclamationTests
             directory.Path,
             simulatedCloud));
         var family = await CreateFlushedFamilyAsync(database, "reclaim-later");
-        await using var snapshot = await database.BeginTransactionAsync(
+        await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
 
-        await database.DropColumnFamilyAsync(family);
+        await database.ColumnFamilies.DropAsync(family);
 
         Assert.Equal(
             "value",
@@ -81,11 +85,11 @@ public sealed class PantsColumnFamilyReclamationTests
             CreateOptions(directory.Path, simulatedCloud),
             new RuntimeDependencies(storageVerifier: verifier));
         var family = await CreateFlushedFamilyAsync(database, "verification-reclamation");
-        await using var snapshot = await database.BeginTransactionAsync(
+        await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
-        await database.DropColumnFamilyAsync(family);
-        var verification = database.VerifyStorageAsync(TimeSpan.FromSeconds(2)).AsTask();
+        await database.ColumnFamilies.DropAsync(family);
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask();
 
         try
         {
@@ -136,11 +140,11 @@ public sealed class PantsColumnFamilyReclamationTests
             CreateOptions(directory.Path, true),
             new RuntimeDependencies(failpoint, verifier));
         var family = await CreateFlushedFamilyAsync(database, "failed-reclamation");
-        await using var snapshot = await database.BeginTransactionAsync(
+        await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
-        await database.DropColumnFamilyAsync(family);
-        var verification = database.VerifyStorageAsync(TimeSpan.FromSeconds(2)).AsTask();
+        await database.ColumnFamilies.DropAsync(family);
+        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask();
 
         try
         {
@@ -155,7 +159,7 @@ public sealed class PantsColumnFamilyReclamationTests
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
         using var timeout = new CancellationTokenSource(AssertionTimeout);
-        while ((await database.GetRuntimeMetricsAsync(timeout.Token)).Health ==
+        while ((await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token)).Health ==
                PantsEngineHealth.Healthy)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
@@ -206,18 +210,18 @@ public sealed class PantsColumnFamilyReclamationTests
             new RuntimeDependencies(storageVerifier: verifier));
         var family = await CreateFlushedFamilyAsync(database, "ordered-reclamation");
         familyId = family.Id;
-        await using var snapshot = await database.BeginTransactionAsync(
+        await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
-        await database.DropColumnFamilyAsync(family);
-        var firstVerification = database.VerifyStorageAsync(TimeSpan.FromSeconds(5)).AsTask();
+        await database.ColumnFamilies.DropAsync(family);
+        var firstVerification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5)).AsTask();
 
         try
         {
             await firstStarted.Task.WaitAsync(AssertionTimeout);
             await snapshot.RollbackAsync();
-            var secondVerification = database
-                .VerifyStorageAsync(TimeSpan.FromSeconds(5))
+            var secondVerification = database.PersistentStorage!
+                .VerifyAsync(TimeSpan.FromSeconds(5))
                 .AsTask();
             releaseFirst.TrySetResult();
             _ = await firstVerification;
@@ -236,8 +240,8 @@ public sealed class PantsColumnFamilyReclamationTests
         IPantsDatabase database,
         string name)
     {
-        var family = await database.CreateColumnFamilyAsync(name);
-        await using var transaction = await database.BeginTransactionAsync(
+        var family = await database.ColumnFamilies.CreateAsync(name);
+        await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
@@ -245,7 +249,7 @@ public sealed class PantsColumnFamilyReclamationTests
             database.Options.Storage is PantsStorageConfiguration.SimulatedCloud
                 ? PantsWriteOptions.CloudStrict
                 : PantsWriteOptions.Buffered);
-        await database.FlushAsync(family);
+        await database.Maintenance.FlushAsync(family);
         return family;
     }
 

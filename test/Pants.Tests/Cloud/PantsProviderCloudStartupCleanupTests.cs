@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsProviderCloudStartupCleanupTests
 {
@@ -34,7 +36,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
             dependencies);
         Assert.Equal(
             PantsEngineHealth.SalvageMode,
-            (await salvaged.GetRuntimeMetricsAsync()).Health);
+            (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -58,7 +60,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
         await using var corrected = await PantsDatabase.OpenForTestingAsync(
             options,
             dependencies);
-        Assert.True(corrected.IsPrimaryLeaseHealthy);
+        Assert.True(corrected.Cloud!.IsPrimaryLeaseHealthy);
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(
@@ -71,7 +73,7 @@ public sealed class PantsProviderCloudStartupCleanupTests
             dependencies);
 
     static PantsCloudStorageLocation CreateLocation() => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "account",
             "container",
             new Uri("https://storage.example.test"),
@@ -80,8 +82,8 @@ public sealed class PantsProviderCloudStartupCleanupTests
 
     static async ValueTask CommitCloudStrictAsync(IPantsDatabase database)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);

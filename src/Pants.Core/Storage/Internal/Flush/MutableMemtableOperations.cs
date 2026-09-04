@@ -3,9 +3,8 @@ namespace Cntryl.Pants.Storage.Internal.Flush;
 sealed class MutableMemtableOperations
 {
     readonly Dictionary<uint, List<WalMutation>> _families = [];
-    int _count;
 
-    public int Count => _count;
+    public int Count { get; private set; }
 
     public ulong LastSequence => _families.Count == 0
         ? 0
@@ -20,7 +19,7 @@ sealed class MutableMemtableOperations
         }
 
         family.Add(operation);
-        _count = checked(_count + 1);
+        Count = checked(Count + 1);
     }
 
     public void AddRange(IEnumerable<WalMutation> operations)
@@ -38,7 +37,7 @@ sealed class MutableMemtableOperations
             return [];
         }
 
-        _count -= family.Count;
+        Count -= family.Count;
         return family;
     }
 
@@ -58,7 +57,7 @@ sealed class MutableMemtableOperations
                 continue;
             }
 
-            _count -= family.Count - retainedCount;
+            Count -= family.Count - retainedCount;
             family.RemoveRange(retainedCount, family.Count - retainedCount);
             if (retainedCount == 0)
             {
@@ -70,6 +69,6 @@ sealed class MutableMemtableOperations
     public void Clear()
     {
         _families.Clear();
-        _count = 0;
+        Count = 0;
     }
 }

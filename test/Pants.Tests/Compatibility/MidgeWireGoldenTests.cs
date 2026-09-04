@@ -1,6 +1,7 @@
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Compatibility;
+namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeWireGoldenTests
 {

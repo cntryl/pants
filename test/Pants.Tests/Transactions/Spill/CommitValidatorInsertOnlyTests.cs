@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class CommitValidatorInsertOnlyTests
 {

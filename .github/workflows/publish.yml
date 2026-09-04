@@ -54,8 +54,8 @@ jobs:
 
       - name: Validate package version
         run: |
-          if [[ ! "$PACKAGE_VERSION" =~ ^1\.0\.[0-9]+$ ]]; then
-            echo "::error title=Invalid package version::Expected 1.0.x, got $PACKAGE_VERSION"
+          if [[ ! "$PACKAGE_VERSION" =~ ^2\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid package version::Expected 2.x, got $PACKAGE_VERSION"
             exit 1
           fi
 
@@ -80,19 +80,11 @@ jobs:
       - name: Publish to GitHub Packages
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          dotnet nuget push "artifacts/packages/Cntryl.Pants.Abstractions.${PACKAGE_VERSION}.nupkg" \
-            --api-key "$NUGET_AUTH_TOKEN" \
-            --source "$PACKAGE_SOURCE" \
-            --skip-duplicate
-          dotnet nuget push "artifacts/packages/Cntryl.Pants.Core.${PACKAGE_VERSION}.nupkg" \
-            --api-key "$NUGET_AUTH_TOKEN" \
-            --source "$PACKAGE_SOURCE" \
-            --skip-duplicate
-          dotnet nuget push "artifacts/packages/Cntryl.Pants.DependencyInjection.${PACKAGE_VERSION}.nupkg" \
-            --api-key "$NUGET_AUTH_TOKEN" \
-            --source "$PACKAGE_SOURCE" \
-            --skip-duplicate
+        run: >
+          dotnet nuget push "artifacts/packages/*.nupkg"
+          --api-key "$NUGET_AUTH_TOKEN"
+          --source "$PACKAGE_SOURCE"
+          --skip-duplicate
 
       - name: Create tag if missing
         id: tag

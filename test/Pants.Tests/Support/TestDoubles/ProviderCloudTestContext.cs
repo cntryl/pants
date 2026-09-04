@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class ProviderCloudTestContext : IAsyncDisposable
 {
@@ -36,7 +36,7 @@ sealed class ProviderCloudTestContext : IAsyncDisposable
         try
         {
             var location = new PantsCloudStorageLocation(
-                new PantsCloudProviderConfiguration.AzureBlob(
+                new PantsAzureBlobProvider(
                     "account",
                     "container",
                     new Uri("https://storage.example.test"),

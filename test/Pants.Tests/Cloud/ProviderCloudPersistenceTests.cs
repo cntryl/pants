@@ -1,7 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class ProviderCloudPersistenceTests
 {
@@ -100,7 +101,7 @@ public sealed class ProviderCloudPersistenceTests
             FencingEpoch = 1,
             Segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>
             {
-                [0] = new ProviderPublishedWalSegment
+                [0] = new()
                 {
                     SegmentId = 0,
                     WriterEpoch = 1,
@@ -354,7 +355,7 @@ public sealed class ProviderCloudPersistenceTests
         Assert.True(await controlStore.PutAsync(
             PantsCloudObjectLayout.DdlRegistryObjectKey,
             CloudDdlJson.SerializeRegistry(initial),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
         var concurrent = RegistryWithCreate("concurrent-operation", 2, "concurrent");
         concurrent.Epoch = 1;
@@ -363,7 +364,7 @@ public sealed class ProviderCloudPersistenceTests
             Assert.True(await controlStore.PutAsync(
                 PantsCloudObjectLayout.DdlRegistryObjectKey,
                 CloudDdlJson.SerializeRegistry(concurrent),
-                new CloudObjectWriteCondition.Unconditional(),
+                new PantsCloudObjectWriteCondition.Unconditional(),
                 cancellationToken));
         };
         var persistence = new ProviderCloudPersistence(
@@ -396,14 +397,14 @@ public sealed class ProviderCloudPersistenceTests
                          PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation()),
                          dependencies))
         {
-            Assert.True(first.IsPrimaryLeaseHealthy);
+            Assert.True(first.Cloud!.IsPrimaryLeaseHealthy);
         }
 
         await using (var second = await PantsDatabase.OpenForTestingAsync(
                          PantsOpenOptions.Cloud(secondCache.Path, CreateAzureLocation()),
                          dependencies))
         {
-            Assert.True(second.IsPrimaryLeaseHealthy);
+            Assert.True(second.Cloud!.IsPrimaryLeaseHealthy);
         }
 
         using var catalog = JsonDocument.Parse(
@@ -453,18 +454,18 @@ public sealed class ProviderCloudPersistenceTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
-        var initialSequence = (await database.GetRuntimeMetricsAsync()).CurrentSequence;
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var initialSequence = (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         clock.UtcNow += TimeSpan.FromMinutes(1);
 
         await transaction.CommitAsync(PantsWriteOptions.BestEffort);
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.CurrentSequence > initialSequence);
-        Assert.True(database.IsPrimaryLeaseHealthy);
+        Assert.True(database.Cloud!.IsPrimaryLeaseHealthy);
     }
 
     [Fact]
@@ -485,13 +486,13 @@ public sealed class ProviderCloudPersistenceTests
             options,
             new RuntimeDependencies(cloudHttpClient: client));
         ttlClock.UtcNow += TimeSpan.FromHours(2);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
 
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(1, metrics.WalPendingWrites);
         Assert.Empty(handler.GetObjectPaths("/wal/epochs/"));
@@ -510,8 +511,8 @@ public sealed class ProviderCloudPersistenceTests
                          PantsOpenOptions.Cloud(cache.Path, location),
                          dependencies))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             handler.FailWalWrites = true;
@@ -525,8 +526,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(replacementCache.Path, location),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("key"u8.ToArray()));
     }
@@ -540,8 +541,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         handler.AcknowledgeWalWritesWithoutPersisting = true;
@@ -565,8 +566,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
             new RuntimeDependencies(cloudHttpClient: client));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
@@ -591,8 +592,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation()),
             dependencies);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
@@ -603,8 +604,8 @@ public sealed class ProviderCloudPersistenceTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await handler.WaitForFailedWalWriteAsync(timeout.Token);
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
             await reader.GetAsync("key"u8.ToArray()))));
@@ -651,8 +652,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(replacementCache.Path, location),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -672,8 +673,8 @@ public sealed class ProviderCloudPersistenceTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation());
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             handler.FailWalWrites = true;
@@ -683,7 +684,7 @@ public sealed class ProviderCloudPersistenceTests
         handler.FailWalWrites = false;
         await using (var resumed = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
-            var metrics = await resumed.GetRuntimeMetricsAsync();
+            var metrics = await resumed.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
             Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
             await resumed.ShutdownAsync(TimeSpan.FromSeconds(5));
@@ -692,8 +693,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(replacementCache.Path, CreateAzureLocation()),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -714,8 +715,8 @@ public sealed class ProviderCloudPersistenceTests
                          PantsOpenOptions.Cloud(firstCache.Path, location),
                          dependencies))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -725,8 +726,8 @@ public sealed class ProviderCloudPersistenceTests
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(secondCache.Path, location),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -745,23 +746,23 @@ public sealed class ProviderCloudPersistenceTests
                          PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation()),
                          dependencies))
         {
-            await using (var transaction = await database.BeginTransactionAsync(
-                             database.DefaultColumnFamily,
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadWrite))
             {
                 transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
                 await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         Assert.True(handler.ContainsObjectPath("/sst/"));
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(secondCache.Path, CreateAzureLocation()),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -785,15 +786,15 @@ public sealed class ProviderCloudPersistenceTests
             handler.FailMetadataWrites = true;
 
             await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.FlushAsync(database.DefaultColumnFamily).AsTask());
+                database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
         }
 
         handler.FailMetadataWrites = false;
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, location).WithBackgroundCompaction(false),
             dependencies);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -815,19 +816,19 @@ public sealed class ProviderCloudPersistenceTests
             dependencies);
         var firstValue = new byte[128 * 1024];
         new Random(71).NextBytes(firstValue);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("provider-hybrid-first"u8.ToArray(), firstValue);
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var secondValue = new byte[512 * 1024];
         new Random(73).NextBytes(secondValue);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("provider-hybrid-second"u8.ToArray(), secondValue);
@@ -836,14 +837,14 @@ public sealed class ProviderCloudPersistenceTests
 
         handler.AcknowledgeNextMissingSstWriteWithoutPersisting();
         await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
-            database.FlushAsync(database.DefaultColumnFamily).AsTask());
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
         Assert.Equal(2, Directory.EnumerateFiles(
             Path.Combine(cache.Path, "sst"),
             "*.sst",
             SearchOption.TopDirectoryOnly).Count());
         Assert.Single(handler.GetObjectPaths("/sst/"));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Empty(Directory.EnumerateFiles(
             Path.Combine(cache.Path, "sst"),
@@ -864,7 +865,7 @@ public sealed class ProviderCloudPersistenceTests
                 .WithBackgroundCompaction(false),
             dependencies);
         await CommitCloudStrictAsync(database, "first"u8.ToArray());
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var remoteManifest = JsonNode.Parse(
             handler.GetObjectText("/metadata/manifest.snapshot.json"))!.AsObject();
         remoteManifest["last_persisted_sequence"] = 1_000_000UL;
@@ -883,7 +884,7 @@ public sealed class ProviderCloudPersistenceTests
 
     static PantsCloudStorageLocation CreateAzureLocation() =>
         new(
-            new PantsCloudProviderConfiguration.AzureBlob(
+            new PantsAzureBlobProvider(
                 "account",
                 "container",
                 new Uri("https://storage.example.test"),
@@ -894,8 +895,8 @@ public sealed class ProviderCloudPersistenceTests
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
@@ -905,8 +906,8 @@ public sealed class ProviderCloudPersistenceTests
         IPantsDatabase database,
         ReadOnlyMemory<byte> key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, "value"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -918,7 +919,7 @@ public sealed class ProviderCloudPersistenceTests
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
-            var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
             if (metrics.WalCloudDurableSequence >= metrics.CurrentSequence)
             {
                 return;
@@ -935,7 +936,7 @@ public sealed class ProviderCloudPersistenceTests
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
-            var metrics = await database.GetRuntimeMetricsAsync(timeout.Token);
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
             if (metrics.Health == PantsEngineHealth.Degraded)
             {
                 return metrics;

@@ -1,6 +1,7 @@
 using System.Text.Json;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class PantsTransactionSpillHardeningBehaviorTests
 {
@@ -16,11 +17,11 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(
             directory.Path,
             1_500);
-        await using var first = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var first = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
-        await using var second = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var second = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var firstValue = Enumerable.Repeat((byte)'a', 900).ToArray();
         var secondValue = Enumerable.Repeat((byte)'b', 900).ToArray();
@@ -40,8 +41,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
 
         TransactionSpillHardeningTestHarness.Fill(transaction, "durable", 4);
@@ -63,8 +64,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("point"u8.ToArray(), "before-spill"u8.ToArray());
 
@@ -84,16 +85,16 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using (var seed = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var seed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             seed.Put("scan:base"u8.ToArray(), "snapshot"u8.ToArray());
             await seed.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("scan:a"u8.ToArray(), "resident-or-spilled-a"u8.ToArray());
         TransactionSpillHardeningTestHarness.Fill(transaction, "outside-prefix", 4);
@@ -122,8 +123,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("scan:a"u8.ToArray(), "a"u8.ToArray());
         transaction.Put("scan:b"u8.ToArray(), "b"u8.ToArray());
@@ -157,8 +158,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         TransactionSpillHardeningTestHarness.Fill(transaction, "atomic", 6);
         var dataRun = Assert.Single(
@@ -184,8 +185,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("ordered"u8.ToArray(), "first"u8.ToArray());
         TransactionSpillHardeningTestHarness.Fill(transaction, "ordinal-a", 2);
@@ -208,8 +209,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Insert("duplicate"u8.ToArray(), "first"u8.ToArray());
         TransactionSpillHardeningTestHarness.Fill(transaction, "duplicate-fill", 3);
@@ -228,8 +229,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         TransactionSpillHardeningTestHarness.Fill(transaction, "rollback", 4);
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
@@ -244,8 +245,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         TransactionSpillHardeningTestHarness.Fill(transaction, "drop", 4);
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
@@ -260,8 +261,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             TransactionSpillHardeningTestHarness.CreateMemoryOptions());
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         var value = Enumerable.Repeat((byte)'m', 8 * 1_024).ToArray();
         PantsException? resourceError = null;
@@ -309,8 +310,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         const int logicalValueBytes = 12 * 900;
         await using (var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             TransactionSpillHardeningTestHarness.Fill(transaction, "chunked", 12);
 
@@ -336,8 +337,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             static frame => Assert.Equal((byte)1, frame.Compression));
 
         await using var reopened = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var visible = await reader.GetAsync("chunked-000"u8.ToArray());
 
@@ -356,16 +357,16 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
             directory.Path,
             failpoints);
-        await using (var spilled = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var spilled = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             TransactionSpillHardeningTestHarness.Fill(spilled, "failed", 12);
             await Assert.ThrowsAsync<PantsIOException>(() => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await using (var direct = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var direct = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             direct.Put("survivor"u8.ToArray(), "visible"u8.ToArray());
@@ -404,8 +405,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                          options,
                          new RuntimeDependencies(failpoints)))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             TransactionSpillHardeningTestHarness.Fill(transaction, "failed-cloud", 12);
 
@@ -441,11 +442,11 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
             directory.Path,
             handler);
-        await using var direct = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var direct = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
-        await using var spilled = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var spilled = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         direct.Put("direct"u8.ToArray(), "value"u8.ToArray());
         TransactionSpillHardeningTestHarness.Fill(spilled, "isolation", 12);

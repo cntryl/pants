@@ -3,11 +3,13 @@ namespace Cntryl.Pants.Runtime.Internal;
 sealed class RuntimeResponseSlot<T>
 {
     readonly Action<T>? _abandonedResponse;
+
     readonly TaskCompletionSource<T> _completion = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     readonly object _gate = new();
-    readonly long _requestId;
     readonly RuntimeResponseRegistry _registry;
+    readonly long _requestId;
     int _state;
 
     public RuntimeResponseSlot(

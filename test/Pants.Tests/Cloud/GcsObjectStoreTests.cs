@@ -1,7 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class GcsObjectStoreTests
 {
@@ -30,7 +31,7 @@ public sealed class GcsObjectStoreTests
             : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
         using var client = new HttpClient(handler);
         var store = new GcsObjectStore(
-            new PantsCloudProviderConfiguration.Gcs(
+            new PantsGcsProvider(
                 "bucket",
                 "project",
                 new Uri("https://gcs.example.test"),
@@ -44,7 +45,7 @@ public sealed class GcsObjectStoreTests
         var replaced = await store.PutAsync(
             "metadata/manifest.json",
             "next"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("7"),
+            new PantsCloudObjectWriteCondition.IfVersion("7"),
             CancellationToken.None);
 
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<CloudObject>(value).Data));
@@ -81,7 +82,7 @@ public sealed class GcsObjectStoreTests
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
             "metadata/manifest.json",
             "replacement"u8.ToArray(),
-            new CloudObjectWriteCondition.IfVersion("1"),
+            new PantsCloudObjectWriteCondition.IfVersion("1"),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -108,7 +109,7 @@ public sealed class GcsObjectStoreTests
 
         var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
             "metadata/manifest.json",
-            new CloudObjectDeleteCondition.IfVersion("1"),
+            new PantsCloudObjectDeleteCondition.IfVersion("1"),
             CancellationToken.None).AsTask());
 
         Assert.Contains("indeterminate", exception.Message, StringComparison.Ordinal);
@@ -123,7 +124,7 @@ public sealed class GcsObjectStoreTests
         using var client = new HttpClient(handler);
         const string secret = "never-render-this-secret";
         var store = new GcsObjectStore(
-            new PantsCloudProviderConfiguration.Gcs(
+            new PantsGcsProvider(
                 "bucket",
                 "project",
                 new Uri("https://gcs.example.test"),
@@ -136,7 +137,7 @@ public sealed class GcsObjectStoreTests
         Assert.True(await store.PutAsync(
             "metadata/manifest.json",
             "{}"u8.ToArray(),
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             CancellationToken.None));
 
         var request = Assert.Single(handler.Requests);
@@ -194,7 +195,7 @@ public sealed class GcsObjectStoreTests
             : Response(HttpStatusCode.OK, "value", "1"));
         using var client = new HttpClient(handler);
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.Gcs(
+            new PantsGcsProvider(
                 "bucket",
                 "project",
                 new Uri("https://gcs.example.test"),
@@ -202,7 +203,7 @@ public sealed class GcsObjectStoreTests
                 new PantsGcsCredentialSource.AuthorizedUserJsonFile(credentialPath)),
             "database");
 
-        var store = CloudObjectStoreFactory.Create(
+        await using var store = await CloudObjectStoreFactory.CreateAsync(
             location,
             TimeSpan.FromSeconds(5),
             client);
@@ -247,11 +248,11 @@ public sealed class GcsObjectStoreTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("""
-                { "items": [
-                  { "name": "database/sst/inside.sst" },
-                  { "name": "foreign/sst/outside.sst" }
-                ] }
-                """)
+                                        { "items": [
+                                          { "name": "database/sst/inside.sst" },
+                                          { "name": "foreign/sst/outside.sst" }
+                                        ] }
+                                        """)
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, PantsGcsApiStyle.Json, "database");
@@ -346,7 +347,7 @@ public sealed class GcsObjectStoreTests
         var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
         var outcome = await store.DeleteAsync(
             "sst/object.sst",
-            new CloudObjectDeleteCondition.IfVersion("17"),
+            new PantsCloudObjectDeleteCondition.IfVersion("17"),
             CancellationToken.None);
 
         Assert.Equal(17UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
@@ -365,7 +366,7 @@ public sealed class GcsObjectStoreTests
 
         await Assert.ThrowsAsync<PantsIOException>(() => store.DeleteAsync(
             "sst/object.sst",
-            new CloudObjectDeleteCondition.IfVersion("17"),
+            new PantsCloudObjectDeleteCondition.IfVersion("17"),
             CancellationToken.None).AsTask());
     }
 
@@ -385,7 +386,7 @@ public sealed class GcsObjectStoreTests
         var metadata = await store.HeadAsync("sst/object.sst", CancellationToken.None);
         var outcome = await store.DeleteAsync(
             "sst/object.sst",
-            new CloudObjectDeleteCondition.IfVersion("19"),
+            new PantsCloudObjectDeleteCondition.IfVersion("19"),
             CancellationToken.None);
 
         Assert.Equal(19UL, Assert.IsType<CloudObjectMetadata>(metadata).SizeBytes);
@@ -401,7 +402,7 @@ public sealed class GcsObjectStoreTests
         HttpClient client,
         PantsGcsApiStyle apiStyle,
         string prefix) => new(
-        new PantsCloudProviderConfiguration.Gcs(
+        new PantsGcsProvider(
             "bucket",
             "project",
             new Uri("https://gcs.example.test"),

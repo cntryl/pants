@@ -1,12 +1,11 @@
 namespace Cntryl.Pants.Runtime.Internal;
 
 /// <summary>
-/// One monotonic budget shared across a sequence of nested runtime and storage operations.
+///     One monotonic budget shared across a sequence of nested runtime and storage operations.
 /// </summary>
 readonly struct OperationDeadline
 {
     readonly TimeSpan _budget;
-    readonly bool _bounded;
     readonly long _started;
     readonly TimeProvider _timeProvider;
 
@@ -19,7 +18,7 @@ readonly struct OperationDeadline
         _started = started;
         _budget = budget;
         _timeProvider = timeProvider;
-        _bounded = bounded;
+        IsBounded = bounded;
     }
 
     public static OperationDeadline Unbounded { get; } = new(
@@ -52,15 +51,15 @@ readonly struct OperationDeadline
             true);
     }
 
-    public bool IsBounded => _bounded;
+    public bool IsBounded { get; }
 
-    public bool IsExpired => _bounded && Remaining == TimeSpan.Zero;
+    public bool IsExpired => IsBounded && Remaining == TimeSpan.Zero;
 
     public TimeSpan Remaining
     {
         get
         {
-            if (!_bounded)
+            if (!IsBounded)
             {
                 return TimeSpan.MaxValue;
             }
@@ -74,8 +73,9 @@ readonly struct OperationDeadline
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(perOperationTimeout, TimeSpan.Zero);
 
-        return IsBounded ? TimeSpan.FromTicks(Math.Min(perOperationTimeout.Ticks, Remaining.Ticks)) :
-            perOperationTimeout;
+        return IsBounded
+            ? TimeSpan.FromTicks(Math.Min(perOperationTimeout.Ticks, Remaining.Ticks))
+            : perOperationTimeout;
     }
 
     public ValueTask RunAsync(
@@ -105,7 +105,7 @@ readonly struct OperationDeadline
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_bounded)
+        if (!IsBounded)
         {
             await operation(cancellationToken).ConfigureAwait(false);
             return;
@@ -135,7 +135,7 @@ readonly struct OperationDeadline
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_bounded)
+        if (!IsBounded)
         {
             return await operation(cancellationToken).ConfigureAwait(false);
         }

@@ -1,15 +1,15 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Wal;
 
-namespace Cntryl.Pants.Benches.Tier1;
+namespace Cntryl.Pants.Tier1;
 
 public class WalBenchmarks : Tier1Benchmark
 {
     WalRecord _delete = null!;
-    WalRecord _mediumPut = null!;
-    WalRecord _smallPut = null!;
     byte[] _encodedMediumPut = null!;
     byte[] _encodedSmallPut = null!;
+    WalRecord _mediumPut = null!;
+    WalRecord _smallPut = null!;
 
     [GlobalSetup]
     public void Setup()

@@ -1,9 +1,10 @@
-namespace Cntryl.Pants.Tests.Support.Failpoints;
+namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class RunLoopFaultFailpointHandler : IFailpointHandler
 {
     readonly TaskCompletionSource _faulted = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _armed;
 
     public void Hit(Failpoint failpoint)

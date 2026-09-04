@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage.Wal;
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalCorruptionCoverageTests
 {
@@ -45,7 +46,7 @@ public sealed class PantsWalCorruptionCoverageTests
     {
         var record = BuildBatchRecord(
             BuildBatchValue([((WalOperation)operation, 12UL)]),
-            commitSequence: 13);
+            13);
 
         var exception = Assert.Throws<StorageException>(() =>
             WalCodec.DecodeTransactionBatch(record, out _, out _));
@@ -62,7 +63,7 @@ public sealed class PantsWalCorruptionCoverageTests
                 (WalOperation.Put, 12UL),
                 (WalOperation.Put, 14UL)
             ]),
-            commitSequence: 14);
+            14);
 
         var exception = Assert.Throws<StorageException>(() =>
             WalCodec.DecodeTransactionBatch(record, out _, out _));
@@ -74,7 +75,7 @@ public sealed class PantsWalCorruptionCoverageTests
     public void ShouldRejectTransactionBatchGivenTrailingBytes()
     {
         var value = BuildBatchValue([(WalOperation.Put, 12UL)]).Append((byte)0xFF).ToArray();
-        var record = BuildBatchRecord(value, commitSequence: 13);
+        var record = BuildBatchRecord(value, 13);
 
         var exception = Assert.Throws<StorageException>(() =>
             WalCodec.DecodeTransactionBatch(record, out _, out _));
@@ -89,7 +90,7 @@ public sealed class PantsWalCorruptionCoverageTests
     {
         var record = BuildBatchRecord(
             BuildBatchValue([(WalOperation.Put, 12UL)]),
-            commitSequence: 13);
+            13);
         record = mismatchTransactionId
             ? record with { TransactionId = 8 }
             : record with { Sequence = 14 };

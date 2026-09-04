@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsOwnedResourceScalingTests
 {
@@ -17,8 +19,8 @@ public sealed class PantsOwnedResourceScalingTests
             {
                 for (var start = 0; start < count; start += 16)
                 {
-                    await using var writer = await database.BeginTransactionAsync(
-                        database.DefaultColumnFamily,
+                    await using var writer = await database.Transactions.BeginAsync(
+                        database.ColumnFamilies.DefaultFamily,
                         PantsTransactionMode.ReadWrite);
                     for (var index = start; index < start + 16; index++)
                     {
@@ -27,7 +29,7 @@ public sealed class PantsOwnedResourceScalingTests
 
                     await writer.CommitAsync(
                         simulatedCloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
-                    await database.FlushAsync(database.DefaultColumnFamily);
+                    await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                 }
             }
 
@@ -40,8 +42,8 @@ public sealed class PantsOwnedResourceScalingTests
             }
 
             await using var reopened = await PantsDatabase.OpenAsync(options);
-            await using (var reader = await reopened.BeginTransactionAsync(
-                             reopened.DefaultColumnFamily,
+            await using (var reader = await reopened.Transactions.BeginAsync(
+                             reopened.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadOnly))
             await using (var scan = await reader.ScanAsync(new PantsScanQuery()))
             {
@@ -56,7 +58,7 @@ public sealed class PantsOwnedResourceScalingTests
                 Assert.Equal(count, seen);
             }
 
-            var metrics = await reopened.GetRuntimeMetricsAsync();
+            var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, metrics.TotalMemtableBytes);
             Assert.Equal(0, metrics.ActiveMemtableBytes);
             Assert.Equal(0, metrics.ImmutableMemtableBytes);

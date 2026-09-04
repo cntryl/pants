@@ -4,6 +4,7 @@ namespace Cntryl.Pants.Transactions.Internal.Spill;
 
 sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
 {
+    readonly CancellationToken _cancellationToken;
     readonly PantsScanDirection _direction;
     readonly IEnumerator<byte[]> _intentKeys;
     readonly TransactionIntentReadView _intents;
@@ -11,11 +12,10 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly IReadOnlyList<CommittedRangeTombstone> _snapshotRangeTombstones;
     readonly DateTimeOffset _snapshotTime;
-    readonly CancellationToken _cancellationToken;
     readonly bool[] _sstActivated;
-    readonly AsyncSstScanSource?[] _sstSources;
-    readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
     readonly SstEntry?[] _sstHeads;
+    readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
+    readonly AsyncSstScanSource?[] _sstSources;
     bool _advanceIntent;
     bool _advanceSnapshot;
     int _disposed;
@@ -257,8 +257,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 }
 
                 head = _sstHeads[index];
-            }
-            while (head is not null && head.Key.AsSpan().SequenceEqual(key));
+            } while (head is not null && head.Key.AsSpan().SequenceEqual(key));
         }
 
         if (best is null ||
@@ -289,7 +288,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
 
     byte[]? SelectKey()
     {
-        byte[]? candidate = _snapshotHead;
+        var candidate = _snapshotHead;
         candidate = Combine(candidate, _intentHead);
         foreach (var head in _sstHeads)
         {

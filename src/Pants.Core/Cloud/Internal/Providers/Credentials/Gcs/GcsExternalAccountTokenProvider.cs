@@ -7,7 +7,8 @@ namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 
 sealed class GcsExternalAccountTokenProvider(
     HttpClient httpClient,
-    TimeSpan timeout)
+    TimeSpan timeout,
+    TimeProvider timeProvider)
 {
     static readonly string[] ImpersonationScopes =
     [
@@ -15,6 +16,7 @@ sealed class GcsExternalAccountTokenProvider(
     ];
 
     readonly HttpClient _httpClient = httpClient;
+    readonly TimeProvider _timeProvider = timeProvider;
     readonly TimeSpan _timeout = timeout;
 
     public async ValueTask<GcsAccessToken> FetchAsync(
@@ -192,6 +194,7 @@ sealed class GcsExternalAccountTokenProvider(
         EnsureSuccess(response, "GCS external-account token exchange");
         return await RefreshingGcsTokenProvider.ParseTokenResponseAsync(
             response,
+            _timeProvider,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -217,7 +220,7 @@ sealed class GcsExternalAccountTokenProvider(
             sourceToken);
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, "GCS service-account impersonation request");
-        return await ParseImpersonationResponseAsync(response, cancellationToken)
+        return await ParseImpersonationResponseAsync(response, _timeProvider, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -320,6 +323,7 @@ sealed class GcsExternalAccountTokenProvider(
 
     static async ValueTask<GcsAccessToken> ParseImpersonationResponseAsync(
         HttpResponseMessage response,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         JsonDocument document;
@@ -348,7 +352,7 @@ sealed class GcsExternalAccountTokenProvider(
                     CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal,
                     out var expiresAt) ||
-                expiresAt <= DateTimeOffset.UtcNow)
+                expiresAt <= timeProvider.GetUtcNow())
             {
                 throw new PantsIOException(
                     "GCS service-account impersonation response must contain a non-empty token and future RFC3339 expiry.");

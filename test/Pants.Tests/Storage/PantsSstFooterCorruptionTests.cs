@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsSstFooterCorruptionTests
 {
@@ -13,8 +14,7 @@ public sealed class PantsSstFooterCorruptionTests
         // covers it, and does not happen to land on the legacy magic value.
         footer[72] ^= 0xFF;
 
-        var exception = Assert.Throws<PantsCorruptionException>(
-            () => SstCodec.ValidateFooter(footer));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.ValidateFooter(footer));
         Assert.DoesNotContain("compat", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -25,8 +25,7 @@ public sealed class PantsSstFooterCorruptionTests
         BinaryPrimitives.WriteUInt32LittleEndian(footer.AsSpan(64), 999);
         RecomputeCrc(footer);
 
-        Assert.Throws<PantsCompatibilityException>(
-            () => SstCodec.ValidateFooter(footer));
+        Assert.Throws<PantsCompatibilityException>(() => SstCodec.ValidateFooter(footer));
     }
 
     [Fact]

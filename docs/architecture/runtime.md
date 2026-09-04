@@ -1,9 +1,15 @@
 # Runtime Architecture
 
-`PantsActor` is the single state-transition coordinator. It owns the current
+`Actor` is the single state-transition coordinator. It owns the current
 immutable `DatabaseSnapshot` publication and admits commands through a bounded
 channel. Reads use frozen snapshots; mutations are serialized by the
 coordinator.
+
+`RuntimeBootstrapper` is the asynchronous composition root. It resolves immutable
+`PantsOpenOptions` into a Core-owned `RuntimePlan`, opens provider and local resources without
+sync-over-async bridges, and constructs the coordinator. `RuntimeComposition` owns the resulting
+runtime lifetime. Failed startup and normal shutdown both release leases, stores, workers, and
+provider object-store clients in bounded order.
 
 Every command that expects a synchronous runtime response receives a monotonic request ID at
 admission and shares one `RuntimeResponseTimeout` budget for its response and nested cloud work.
@@ -36,6 +42,11 @@ garbage collection, and cloud operations use the same bounded-worker model.
 `CommitValidator` owns assertion, insert-only, point/range conflict, and stale
 column-family validation.
 
+Those services depend on narrow storage ports (`ILocalWalStore`, `ILocalFlushStore`,
+`ILocalCompactionStore`, `IStorageReadStore`, and `IHybridCacheStore`) instead of the concrete local
+store. `LocalDiskStore` remains the format authority and supplies those capabilities without
+leaking its full surface into each runtime subsystem.
+
 Concurrent local `Sync` or `Buffered` commits with the same durability may be
 admitted as one coordinator batch. Each transaction remains a distinct atomic
 Midge WAL frame and is validated in commit order. Logical visibility and
@@ -64,6 +75,11 @@ implements expiry, conditional takeover, renewal, and fencing over
 `ICloudLeaseStore`. `CloudObjectLeaseStore` persists the Midge lease document
 through conditional object operations, allowing provider clients to supply
 ETag or generation semantics without entering the runtime layer.
+
+Provider selection is also outside the runtime. Public `IPantsCloudProvider` and
+`IPantsCloudObjectStore` contracts live in `Cntryl.Pants.Abstractions`; built-in providers live in
+`Cntryl.Pants.Core`. A third-party provider opens its object-store primitive through the same async
+SPI, while Pants retains ownership of object layout, WAL/SST formats, leases, fencing, and recovery.
 
 Local, simulated-cloud, and provider-cloud writers use the same `LeaseTimeToLive` and
 `LeaseClockSkewTolerance` profile. The 30-second default TTL retains the provider-cloud default

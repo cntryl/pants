@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 
 sealed class WalRuntimeService(
     int capacity,
-    LocalDiskStore? diskStore,
+    ILocalWalStore? walStore,
     IFailpointHandler failpoints,
     WalMetricsRecorder metrics,
     Action? validateCloudWriteAuthority = null)
@@ -106,7 +106,7 @@ sealed class WalRuntimeService(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var store = diskStore ??
+        var store = walStore ??
                     throw new PantsInternalException("A WAL runtime request requires local storage.");
         return request switch
         {
@@ -130,7 +130,7 @@ sealed class WalRuntimeService(
     }
 
     ValueTask<WalRuntimeResult> AppendCommit(
-        LocalDiskStore store,
+        ILocalWalStore store,
         AppendWalCommitRuntimeRequest request)
     {
         var result = store.AppendCommit(
@@ -142,7 +142,7 @@ sealed class WalRuntimeService(
     }
 
     ValueTask<WalRuntimeResult> AppendCommitGroup(
-        LocalDiskStore store,
+        ILocalWalStore store,
         AppendWalCommitGroupRuntimeRequest request)
     {
         var result = store.AppendCommitGroup(
@@ -155,7 +155,7 @@ sealed class WalRuntimeService(
     }
 
     ValueTask<WalRuntimeResult> FlushDurabilityBoundary(
-        LocalDiskStore store,
+        ILocalWalStore store,
         FlushWalDurabilityRuntimeRequest request)
     {
         if (request.BeforeBoundary.HasValue)
@@ -168,7 +168,7 @@ sealed class WalRuntimeService(
     }
 
     static ValueTask<WalRuntimeResult> DeleteCloudDurableSegment(
-        LocalDiskStore store,
+        ILocalWalStore store,
         DeleteCloudDurableWalRuntimeRequest request)
     {
         store.DeleteCloudDurableWalSegment(request.Segment);
@@ -176,7 +176,7 @@ sealed class WalRuntimeService(
     }
 
     static ValueTask<WalRuntimeResult> CompleteCloudWalSeal(
-        LocalDiskStore store,
+        ILocalWalStore store,
         CompleteCloudWalSealRuntimeRequest request)
     {
         store.CompleteCloudWalSeal(request.Segment);

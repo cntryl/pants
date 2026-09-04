@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudRuntimeDeadlineTests
 {
@@ -21,8 +23,8 @@ public sealed class PantsCloudRuntimeDeadlineTests
             options,
             new RuntimeDependencies(failpoint));
 
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
@@ -48,8 +50,8 @@ public sealed class PantsCloudRuntimeDeadlineTests
         await database.DisposeAsync();
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var read = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Equal(
             "accepted-value"u8.ToArray(),
@@ -61,7 +63,7 @@ public sealed class PantsCloudRuntimeDeadlineTests
         var started = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(started) < AssertionTimeout)
         {
-            var metrics = await database.GetRuntimeMetricsAsync();
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             if (metrics.RuntimeLateResponsesTotal >= 1)
             {
                 return;
@@ -72,5 +74,4 @@ public sealed class PantsCloudRuntimeDeadlineTests
 
         throw new TimeoutException("The accepted cloud obligation did not finish.");
     }
-
 }

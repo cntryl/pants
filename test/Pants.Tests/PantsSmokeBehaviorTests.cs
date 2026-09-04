@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants;
 
 public sealed class PantsSmokeBehaviorTests
 {
@@ -6,16 +8,16 @@ public sealed class PantsSmokeBehaviorTests
     public async Task ShouldAllowReadOnlySnapshotGivenCommittedValue()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("key"u8.ToArray(), "value"u8.ToArray());
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using var snapshot = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var snapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal("value", TestBytes.ToText((await snapshot.GetAsync("key"u8.ToArray()))!.Value));
@@ -25,8 +27,8 @@ public sealed class PantsSmokeBehaviorTests
     public async Task ShouldRespectVisibilityRulesGivenDeletedKeyWhenScanning()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("a"u8.ToArray(), "1"u8.ToArray());
@@ -35,16 +37,16 @@ public sealed class PantsSmokeBehaviorTests
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.Delete("b"u8.ToArray());
             await deleting.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery
         {

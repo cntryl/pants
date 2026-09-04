@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions.Spill;
+namespace Cntryl.Pants.Transactions.Spill;
 
 public sealed class TransactionOperationSourceTests
 {

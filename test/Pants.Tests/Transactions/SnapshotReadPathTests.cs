@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Transactions;
+namespace Cntryl.Pants.Transactions;
 
 public sealed class SnapshotReadPathTests
 {
@@ -34,8 +35,8 @@ public sealed class SnapshotReadPathTests
     [Fact]
     public void ShouldOrderPointReadCandidatesNewestSstSequenceFirst()
     {
-        var older = File("older.sst", Family, Bytes(0), Bytes(255), sstSequence: 1);
-        var newer = File("newer.sst", Family, Bytes(0), Bytes(255), sstSequence: 2);
+        var older = File("older.sst", Family, Bytes(0), Bytes(255));
+        var newer = File("newer.sst", Family, Bytes(0), Bytes(255), 2);
         var snapshot = Snapshot(older, newer);
 
         var candidates = SnapshotReadPath.ResolveCandidateFilesForPoint(snapshot, Family, [15]);
@@ -63,8 +64,8 @@ public sealed class SnapshotReadPathTests
         var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
             snapshot,
             Family,
-            startInclusive: [10],
-            endExclusive: [20]);
+            [10],
+            [20]);
 
         Assert.Equal(["overlapping.sst"], candidates.Select(file => file.Name));
     }
@@ -78,8 +79,8 @@ public sealed class SnapshotReadPathTests
         var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
             snapshot,
             Family,
-            startInclusive: null,
-            endExclusive: null);
+            null,
+            null);
 
         Assert.Equal(["only.sst"], candidates.Select(candidate => candidate.Name));
     }

@@ -23,6 +23,7 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
                 exception,
                 cancellationToken);
         }
+
         if (metadata is null)
         {
             return null;
@@ -89,6 +90,7 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
                 throw new PantsRecoveryFailedException(
                     $"Manifest-owned cloud SST '{objectKey}' is missing during a ranged read.");
             }
+
             if (!StringComparer.Ordinal.Equals(value.Version, version))
             {
                 throw new PantsCorruptionException(

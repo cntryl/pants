@@ -19,10 +19,10 @@ sealed class HybridCacheManager : IDisposable
 
     public void Dispose() => _evictionGate.Dispose();
 
-    public bool RequiresEviction(LocalDiskStore store) =>
+    public bool RequiresEviction(IHybridCacheStore store) =>
         _policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Normal;
 
-    public void EnsureWriteAdmitted(LocalDiskStore store, RuntimeState state)
+    public void EnsureWriteAdmitted(IHybridCacheStore store, RuntimeState state)
     {
         if (_policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Emergency)
         {
@@ -34,7 +34,7 @@ sealed class HybridCacheManager : IDisposable
     }
 
     public async ValueTask EvictIfNeededAsync(
-        LocalDiskStore store,
+        IHybridCacheStore store,
         CancellationToken cancellationToken)
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -99,7 +99,7 @@ sealed class HybridCacheManager : IDisposable
     }
 
     public static async ValueTask EnsureLocalSstsAsync(
-        LocalDiskStore store,
+        IHybridCacheStore store,
         IEnumerable<string> names,
         CancellationToken cancellationToken)
     {
@@ -115,7 +115,7 @@ sealed class HybridCacheManager : IDisposable
         }
     }
 
-    public HybridCacheMetrics GetMetrics(LocalDiskStore store)
+    public HybridCacheMetrics GetMetrics(IHybridCacheStore store)
     {
         var total = store.LocalCommittedBytes;
         return new HybridCacheMetrics(

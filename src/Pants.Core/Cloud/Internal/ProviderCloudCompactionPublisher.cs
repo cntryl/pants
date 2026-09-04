@@ -53,8 +53,8 @@ sealed class ProviderCloudCompactionPublisher
             objectKey,
             data,
             current is null
-                ? new CloudObjectWriteCondition.IfAbsent()
-                : new CloudObjectWriteCondition.IfVersion(current.Version),
+                ? new PantsCloudObjectWriteCondition.IfAbsent()
+                : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
             cancellationToken).ConfigureAwait(false);
         if (!published)
         {
@@ -90,7 +90,7 @@ sealed class ProviderCloudCompactionPublisher
         var created = await _sstStore.PutAsync(
             objectKey,
             data,
-            new CloudObjectWriteCondition.IfAbsent(),
+            new PantsCloudObjectWriteCondition.IfAbsent(),
             cancellationToken).ConfigureAwait(false);
         var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(

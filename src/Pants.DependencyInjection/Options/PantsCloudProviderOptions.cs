@@ -1,6 +1,6 @@
 using Cntryl.Pants.Cloud;
 
-namespace Cntryl.Pants.DependencyInjection.Options;
+namespace Cntryl.Pants.Options;
 
 public sealed class PantsCloudProviderOptions
 {

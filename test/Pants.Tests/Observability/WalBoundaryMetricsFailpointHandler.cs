@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Observability;
+namespace Cntryl.Pants.Observability;
 
 sealed class WalBoundaryMetricsFailpointHandler(
     Failpoint failure,

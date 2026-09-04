@@ -1,14 +1,14 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Exceptions;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
 {
     const int BatchSize = 64;
     const int BatchCount = 256;
-    string _path = null!;
     IPantsDatabase _database = null!;
+    string _path = null!;
 
     [GlobalSetup]
     public async Task SetupAsync()
@@ -27,7 +27,7 @@ public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
     [Benchmark(OperationsPerInvoke = BatchSize * BatchCount)]
     public async Task WriteWhileCompactingAsync()
     {
-        var compaction = _database.CompactAllAsync().AsTask();
+        var compaction = _database.Maintenance.CompactAllAsync().AsTask();
         for (var batch = 0; batch < BatchCount; batch++)
         {
             var entries = Enumerable.Range(0, BatchSize).Select(offset =>
@@ -44,14 +44,15 @@ public class CompactionBackpressureSystemBenchmarks : Tier4Benchmark
                 }
                 catch (PantsWriteStallException)
                 {
-                    await _database.WaitForWriteStallClearAsync(
-                        _database.DefaultColumnFamily,
+                    await _database.Maintenance.WaitForWriteStallClearAsync(
+                        _database.ColumnFamilies.DefaultFamily,
                         TimeSpan.FromSeconds(10));
                 }
             }
         }
 
         await compaction;
-        await _database.WaitForWriteStallClearAsync(_database.DefaultColumnFamily, TimeSpan.FromSeconds(10));
+        await _database.Maintenance.WaitForWriteStallClearAsync(_database.ColumnFamilies.DefaultFamily,
+            TimeSpan.FromSeconds(10));
     }
 }

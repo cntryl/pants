@@ -4,13 +4,13 @@ namespace Cntryl.Pants.Storage.Internal;
 
 sealed class FileLease : IDisposable
 {
+    readonly IPantsClock _clock;
     readonly object _gate = new();
     readonly Timer _heartbeat;
     readonly string _holderId;
     readonly string _leaderPath;
     readonly Action? _leaseLossCallback;
     readonly string _lockPath;
-    readonly IPantsClock _clock;
     bool _disposed;
     int _leaseLossNotified;
     volatile bool _valid = true;
@@ -35,16 +35,16 @@ sealed class FileLease : IDisposable
     public ulong Epoch { get; }
 
     /// <summary>
-    /// Test-only hook invoked immediately after <see cref="Renew"/> writes the refreshed leader
-    /// record, before the write is re-verified. Lets tests simulate another writer racing in
-    /// during that window.
+    ///     Test-only hook invoked immediately after <see cref="Renew" /> writes the refreshed leader
+    ///     record, before the write is re-verified. Lets tests simulate another writer racing in
+    ///     during that window.
     /// </summary>
     internal Action? RenewWriteInterferenceHookForTesting { get; set; }
 
     /// <summary>
-    /// Test-only hook invoked when a <see cref="LeaseMutationLock"/> is disposed, after the
-    /// exclusive file handle is released but before the owner-token verification runs. Lets
-    /// tests simulate another writer replacing the lock file during that window.
+    ///     Test-only hook invoked when a <see cref="LeaseMutationLock" /> is disposed, after the
+    ///     exclusive file handle is released but before the owner-token verification runs. Lets
+    ///     tests simulate another writer replacing the lock file during that window.
     /// </summary>
     internal Action? MutationLockDisposalInterferenceHookForTesting { get; set; }
 
@@ -344,10 +344,10 @@ sealed class FileLease : IDisposable
 
     sealed class LeaseMutationLock : IDisposable
     {
+        readonly Action? _disposalInterferenceHook;
         readonly string _ownerToken;
         readonly string _path;
         readonly FileStream _stream;
-        readonly Action? _disposalInterferenceHook;
 
         public LeaseMutationLock(
             FileStream stream,

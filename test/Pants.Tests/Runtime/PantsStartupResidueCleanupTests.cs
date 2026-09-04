@@ -1,4 +1,7 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsStartupResidueCleanupTests
 {
@@ -19,7 +22,7 @@ public sealed class PantsStartupResidueCleanupTests
 
         Assert.True(File.Exists(residue));
         Assert.Equal(1, failpoint.FailureCount);
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -36,7 +39,7 @@ public sealed class PantsStartupResidueCleanupTests
 
         Assert.True(File.Exists(residue));
         Assert.Equal(1, failpoint.FailureCount);
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -53,7 +56,7 @@ public sealed class PantsStartupResidueCleanupTests
 
         Assert.True(File.Exists(residue));
         Assert.Equal(1, failpoint.FailureCount);
-        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -76,12 +79,12 @@ public sealed class PantsStartupResidueCleanupTests
         {
             Assert.True(File.Exists(residue));
             Assert.Equal(1, failpoint.FailureCount);
-            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
         }
 
         await using var healed = await PantsDatabase.OpenAsync(options);
         Assert.False(File.Exists(residue));
-        Assert.Equal(PantsEngineHealth.Healthy, (await healed.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await healed.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
@@ -98,12 +101,12 @@ public sealed class PantsStartupResidueCleanupTests
         {
             Assert.True(File.Exists(residue));
             Assert.Equal(1, failpoint.FailureCount);
-            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.GetRuntimeMetricsAsync()).Health);
+            Assert.Equal(PantsEngineHealth.Degraded, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
         }
 
         await using var healed = await PantsDatabase.OpenAsync(options);
         Assert.False(File.Exists(residue));
-        Assert.Equal(PantsEngineHealth.Healthy, (await healed.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.Healthy, (await healed.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     static PantsOpenOptions CreateOptions(string path) =>

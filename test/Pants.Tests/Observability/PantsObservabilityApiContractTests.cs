@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Observability;
+namespace Cntryl.Pants.Observability;
 
 public sealed class PantsObservabilityApiContractTests
 {
@@ -7,10 +7,8 @@ public sealed class PantsObservabilityApiContractTests
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
 
-        var error = await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
-            database.VerifyStorageAsync(TimeSpan.FromSeconds(5)).AsTask());
-
-        Assert.Contains("no persistent path", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(database.PersistentStorage);
+        Assert.False(database.Capabilities.IsPersistent);
     }
 
     [Fact]
@@ -20,7 +18,7 @@ public sealed class PantsObservabilityApiContractTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithMemtableLimits(sizeLimit));
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(sizeLimit, metrics.MemtableSizeLimitBytes);
         Assert.Equal(sizeLimit, metrics.MemtableFlushThresholdBytes);
@@ -35,7 +33,7 @@ public sealed class PantsObservabilityApiContractTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.InMemory().WithMemtableLimits(sizeLimit, flushThreshold));
 
-        var metrics = await database.GetRuntimeMetricsAsync();
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(sizeLimit, metrics.MemtableSizeLimitBytes);
         Assert.Equal(flushThreshold, metrics.MemtableFlushThresholdBytes);

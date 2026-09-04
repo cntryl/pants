@@ -28,6 +28,8 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
         _loopTask = Task.Run(RunAsync);
     }
 
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -41,8 +43,6 @@ abstract class ChannelRuntimeService<TRequest, TResult> : IAsyncDisposable, IRun
     }
 
     public int QueueDepth => Volatile.Read(ref _queueDepth);
-
-    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     public int InFlight => Volatile.Read(ref _inFlight);
 

@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCloudCrashRecoveryTests
@@ -108,8 +110,8 @@ public sealed class PantsCloudCrashRecoveryTests
             static candidate =>
                 candidate.CurrentSequence >= 1 &&
                 candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal(
@@ -223,8 +225,8 @@ public sealed class PantsCloudCrashRecoveryTests
         RemoveLocalCache(directory.Path);
 
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal(
@@ -253,8 +255,8 @@ public sealed class PantsCloudCrashRecoveryTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             CreateOptions(directory.Path, true));
-        var metrics = await reopened.GetRuntimeMetricsAsync();
-        var layout = await reopened.GetStorageLayoutAsync();
+        var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        var layout = await reopened.Diagnostics.GetStorageLayoutAsync();
 
         Assert.True(metrics.SstCount >= 1);
         Assert.True(metrics.ManifestLastPersistedSequence > 0);
@@ -295,7 +297,7 @@ public sealed class PantsCloudCrashRecoveryTests
 
         await using var salvaged = await PantsDatabase.OpenAsync(
             options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
-        var metrics = await salvaged.GetRuntimeMetricsAsync();
+        var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
         await AssertValueAsync(salvaged, "prefix-key", "prefix-value");
@@ -470,7 +472,7 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             while (true)
             {
-                last = await database.GetRuntimeMetricsAsync(timeout.Token);
+                last = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
                 if (predicate((PantsRuntimeMetrics)last))
                 {
                     return last;
@@ -525,8 +527,8 @@ public sealed class PantsCloudCrashRecoveryTests
         string value,
         PantsWriteOptions writeOptions)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         await transaction.CommitAsync(writeOptions);
@@ -537,8 +539,8 @@ public sealed class PantsCloudCrashRecoveryTests
         string key,
         string expected)
     {
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = Assert.IsType<ReadOnlyMemory<byte>>(
             await reader.GetAsync(TestBytes.FromString(key)));
@@ -547,8 +549,8 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task AssertMissingAsync(IPantsDatabase database, string key)
     {
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync(TestBytes.FromString(key)));
     }

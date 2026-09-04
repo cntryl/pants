@@ -1,9 +1,9 @@
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 /// <summary>
-/// Slice 6b (issue #219): a shared bounded-resource accounting guard for streaming pipelines
-/// (compaction merge buffers, scan k-way merge buffers), mirroring Midge's
-/// <c>ResourceBudget</c>/<c>ResourceReservation</c>.
+///     Slice 6b (issue #219): a shared bounded-resource accounting guard for streaming pipelines
+///     (compaction merge buffers, scan k-way merge buffers), mirroring Midge's
+///     <c>ResourceBudget</c>/<c>ResourceReservation</c>.
 /// </summary>
 public sealed class ResourceBudgetTests
 {

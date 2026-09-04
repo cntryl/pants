@@ -1,21 +1,19 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public class CompressionPolicySystemBenchmarks : Tier4Benchmark
 {
     const int Flushes = 4;
     const int RecordsPerFlush = 128;
     const int ValueSize = 16 * 1024;
-    string _path = null!;
     IPantsDatabase _database = null!;
     (byte[] Key, byte[] Value)[][] _flushes = null!;
+    string _path = null!;
 
-    [ParamsAllValues]
-    public CompressionGoal Goal { get; set; }
+    [ParamsAllValues] public CompressionGoal Goal { get; set; }
 
-    [ParamsAllValues]
-    public CompressionShape Shape { get; set; }
+    [ParamsAllValues] public CompressionShape Shape { get; set; }
 
     [GlobalSetup]
     public async Task SetupAsync()
@@ -50,10 +48,10 @@ public class CompressionPolicySystemBenchmarks : Tier4Benchmark
         foreach (var flush in _flushes)
         {
             await Tier4Database.PutBatchAsync(_database, flush, PantsWriteOptions.Buffered);
-            await _database.FlushAsync(_database.DefaultColumnFamily);
+            await _database.Maintenance.FlushAsync(_database.ColumnFamilies.DefaultFamily);
         }
 
-        await _database.CompactAllAsync();
+        await _database.Maintenance.CompactAllAsync();
     }
 
     byte[] Value(int index)

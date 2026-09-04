@@ -4,67 +4,19 @@ public interface IPantsDatabase : IAsyncDisposable
 {
     PantsOpenOptions Options { get; }
 
-    IPantsColumnFamily DefaultColumnFamily { get; }
+    PantsDatabaseCapabilities Capabilities { get; }
 
-    bool IsPrimaryLeaseHealthy { get; }
+    IPantsColumnFamilyCatalog ColumnFamilies { get; }
 
-    ValueTask<IPantsColumnFamily> CreateColumnFamilyAsync(
-        string name,
-        CancellationToken cancellationToken = default);
+    IPantsTransactionFactory Transactions { get; }
 
-    ValueTask<IPantsColumnFamily?> GetColumnFamilyAsync(
-        string name,
-        CancellationToken cancellationToken = default);
+    IPantsDatabaseMaintenance Maintenance { get; }
 
-    ValueTask<IReadOnlyList<IPantsColumnFamily>> ListColumnFamiliesAsync(
-        CancellationToken cancellationToken = default);
+    IPantsDatabaseDiagnostics Diagnostics { get; }
 
-    ValueTask DropColumnFamilyAsync(
-        IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default);
+    IPantsPersistentStorage? PersistentStorage { get; }
 
-    ValueTask DropColumnFamilyDiscardingUnflushedAsync(
-        IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default);
-
-    ValueTask<IPantsTransaction> BeginTransactionAsync(
-        IPantsColumnFamily columnFamily,
-        PantsTransactionMode mode,
-        CancellationToken cancellationToken = default);
-
-    ValueTask FlushAsync(
-        IPantsColumnFamily columnFamily,
-        CancellationToken cancellationToken = default);
-
-    ValueTask CompactAllAsync(CancellationToken cancellationToken = default);
-
-    ValueTask SetBackgroundCompactionAsync(
-        bool enabled,
-        CancellationToken cancellationToken = default);
-
-    ValueTask<bool> WaitForWriteStallClearAsync(
-        IPantsColumnFamily columnFamily,
-        TimeSpan timeout,
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsRuntimeMetrics> GetRuntimeMetricsAsync(
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsReadAmplificationMetrics> GetReadAmplificationMetricsAsync(
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsReadPathDiagnostics> GetReadPathDiagnosticsAsync(
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsRecoveryMetrics> GetRecoveryMetricsAsync(
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsStorageLayout> GetStorageLayoutAsync(
-        CancellationToken cancellationToken = default);
-
-    ValueTask<PantsStorageVerificationReport> VerifyStorageAsync(
-        TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+    IPantsCloudDatabase? Cloud { get; }
 
     ValueTask ShutdownAsync(
         TimeSpan timeout,

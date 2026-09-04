@@ -24,12 +24,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    WalPublicationCatalog _catalog;
     readonly string _cloudRoot;
     readonly IFailpointHandler _failpoints;
 
     readonly string _localRoot;
     readonly ulong _writerEpoch;
+
+    WalPublicationCatalog _catalog;
     int _persistenceAnomaly;
 
     public SimulatedCloudPersistence(
@@ -53,6 +54,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _catalog.FencingEpoch = writerEpoch;
         SaveCatalog();
         MirrorMetadataAndSsts();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        return ValueTask.CompletedTask;
     }
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;

@@ -3,9 +3,11 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using Cntryl.Pants.Support.Failpoints;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Transactions;
+namespace Cntryl.Pants.Transactions;
 
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCommitCoalescingCrashRecoveryTests
@@ -42,14 +44,14 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var transactions = new IPantsTransaction[CommitCount];
         for (var index = 0; index < transactions.Length; index++)
         {
-            var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(GetKey(index), GetValue(index));
             transactions[index] = transaction;
         }
 
-        var blockedMetrics = database.GetRuntimeMetricsAsync().AsTask();
+        var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await handler.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
 
         var commits = new Task[transactions.Length];
@@ -96,8 +98,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         for (var index = 0; index < CommitCount; index++)
         {
@@ -124,8 +126,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             PantsOpenOptions.Local(databasePath)
                 .WithBackgroundCompaction(false),
             new RuntimeDependencies(handler));
-        await using (var pendingFlush = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var pendingFlush = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             pendingFlush.Put("pending-flush"u8.ToArray(), "value"u8.ToArray());
@@ -135,8 +137,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var transactions = new IPantsTransaction[3];
         for (var index = 0; index < transactions.Length; index++)
         {
-            var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(
                 TestBytes.FromString($"uncertain-key-{index}"),
@@ -144,7 +146,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             transactions[index] = transaction;
         }
 
-        var blockedMetrics = database.GetRuntimeMetricsAsync().AsTask();
+        var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await handler.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
@@ -160,8 +162,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             await Assert.ThrowsAsync<PantsAbortedException>(() => commit.WaitAsync(TimeSpan.FromSeconds(10)));
         }
 
-        await using (var suffix = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var suffix = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
@@ -169,10 +171,10 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
 
         await Assert.ThrowsAsync<PantsAbortedException>(() =>
-            database.FlushAsync(database.DefaultColumnFamily).AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.CompactAllAsync().AsTask());
+            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
+        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Maintenance.CompactAllAsync().AsTask());
         await Assert.ThrowsAsync<PantsAbortedException>(() =>
-            database.CreateColumnFamilyAsync("fenced-family").AsTask());
+            database.ColumnFamilies.CreateAsync("fenced-family").AsTask());
         await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
 
         WriteDurableSignal(
@@ -196,8 +198,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             PantsOpenOptions.Local(databasePath)
                 .WithBackgroundCompaction(false),
             new RuntimeDependencies(new WalRollbackFailureFailpointHandler()));
-        await using (var rejected = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var rejected = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             rejected.Put("uncertain-single"u8.ToArray(), "uncertain"u8.ToArray());
@@ -205,8 +207,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                 rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await using (var suffix = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var suffix = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-single-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
@@ -214,7 +216,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
 
         await Assert.ThrowsAsync<PantsAbortedException>(() =>
-            database.CreateColumnFamilyAsync("fenced-single-family").AsTask());
+            database.ColumnFamilies.CreateAsync("fenced-single-family").AsTask());
         await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
 
         WriteDurableSignal(
@@ -256,8 +258,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("fenced-suffix"u8.ToArray()));
     }
@@ -294,8 +296,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false));
-        await using var reader = await reopened.BeginTransactionAsync(
-            reopened.DefaultColumnFamily,
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("fenced-single-suffix"u8.ToArray()));
     }

@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Cloud;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudProviderEngineQualificationTests
 {
@@ -24,7 +26,7 @@ public sealed class CloudProviderEngineQualificationTests
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.AwsS3(
+            new PantsAwsS3Provider(
                 "bucket",
                 "us-east-1",
                 new PantsS3CredentialSource.StaticCredentials("access", "secret")),
@@ -64,7 +66,7 @@ public sealed class CloudProviderEngineQualificationTests
         using var handler = new InMemoryCloudProviderHandler();
         using var client = new HttpClient(handler);
         var location = new PantsCloudStorageLocation(
-            new PantsCloudProviderConfiguration.Gcs(
+            new PantsGcsProvider(
                 "bucket",
                 "project",
                 new Uri("https://gcs-xml.example.test"),
@@ -126,20 +128,20 @@ public sealed class CloudProviderEngineQualificationTests
             .WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
-            await using var transaction = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.CloudMulti(replacementCache.Path, topology)
                 .WithBackgroundCompaction(false),
             dependencies);
-        await using var reader = await recovered.BeginTransactionAsync(
-            recovered.DefaultColumnFamily,
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         Assert.Equal(
@@ -149,7 +151,7 @@ public sealed class CloudProviderEngineQualificationTests
     }
 
     static PantsCloudStorageLocation CreateS3Location(string host, string prefix) => new(
-        new PantsCloudProviderConfiguration.S3Compatible(
+        new PantsS3CompatibleProvider(
             "bucket",
             "us-test-1",
             new Uri($"https://{host}"),
@@ -158,7 +160,7 @@ public sealed class CloudProviderEngineQualificationTests
         prefix);
 
     static PantsCloudStorageLocation CreateGcsLocation(string host, string prefix) => new(
-        new PantsCloudProviderConfiguration.Gcs(
+        new PantsGcsProvider(
             "bucket",
             "project",
             new Uri($"https://{host}"),
@@ -167,7 +169,7 @@ public sealed class CloudProviderEngineQualificationTests
         prefix);
 
     static PantsCloudStorageLocation CreateAzureLocation(string host, string prefix) => new(
-        new PantsCloudProviderConfiguration.AzureBlob(
+        new PantsAzureBlobProvider(
             "account",
             "container",
             new Uri($"https://{host}"),

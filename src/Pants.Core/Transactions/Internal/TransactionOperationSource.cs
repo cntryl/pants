@@ -3,9 +3,9 @@ namespace Cntryl.Pants.Transactions.Internal;
 sealed class TransactionOperationSource : ITransactionOperationSource, IDisposable
 {
     readonly DateTimeOffset _commitTime;
+    readonly bool _ownsSpillStore;
     readonly TransactionIntentOperation[] _residentOperations;
     readonly TransactionSpillStore? _spillStore;
-    readonly bool _ownsSpillStore;
     int _disposed;
 
     public TransactionOperationSource(
@@ -27,10 +27,6 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
         Count = count;
     }
 
-    public ulong Count { get; }
-
-    public bool IsSpilled => _spillStore?.HasRuns == true;
-
     public void Dispose()
     {
         if (_ownsSpillStore && Interlocked.Exchange(ref _disposed, 1) == 0)
@@ -38,6 +34,10 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
             _spillStore?.Dispose();
         }
     }
+
+    public ulong Count { get; }
+
+    public bool IsSpilled => _spillStore?.HasRuns == true;
 
     public void Validate() => ForEach(static _ => { });
 

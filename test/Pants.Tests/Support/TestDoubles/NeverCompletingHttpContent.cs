@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace Cntryl.Pants.Tests.Support.TestDoubles;
+namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class NeverCompletingHttpContent : HttpContent
 {

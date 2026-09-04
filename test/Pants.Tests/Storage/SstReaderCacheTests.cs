@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 public sealed class SstReaderCacheTests
 {

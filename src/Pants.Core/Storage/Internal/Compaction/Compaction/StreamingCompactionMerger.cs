@@ -1,19 +1,19 @@
 namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
 /// <summary>
-/// Incremental counterpart to <c>CompactionMerger.Merge</c> + <c>CompactionOutputPartitioner.Partition</c>:
-/// does the same k-way merge across inputs, the same version-retention/tombstone-covers-entry/
-/// GC-eligibility filtering, and the same size-based output partitioning with per-partition
-/// range-tombstone clamping — but drives it entry-by-entry over one <see cref="SstBlockIterator"/>
-/// per input and yields each completed partition before building the next instead of
-/// materializing every input, merged result, and output partition concurrently. Range
-/// tombstones remain a small, resident-per-file list (loaded eagerly by
-/// <see cref="SstReader.Open"/>, same as elsewhere in this codebase) — only the entry stream is
-/// genuinely lazy. The retention/masking rules themselves are intentionally copied verbatim from
-/// <c>CompactionMerger</c>/<c>CompactionOutputPartitioner</c> rather than shared, so a change to
-/// one is a visible diff against the other, not a silent behavioral drift; keep them in sync
-/// (and keep <see cref="Storage.Internal.Compaction.Compaction.StreamingCompactionMergerTests"/>
-/// — or wherever the equivalence suite lives — green) if either changes.
+///     Incremental counterpart to <c>CompactionMerger.Merge</c> + <c>CompactionOutputPartitioner.Partition</c>:
+///     does the same k-way merge across inputs, the same version-retention/tombstone-covers-entry/
+///     GC-eligibility filtering, and the same size-based output partitioning with per-partition
+///     range-tombstone clamping — but drives it entry-by-entry over one <see cref="SstBlockIterator" />
+///     per input and yields each completed partition before building the next instead of
+///     materializing every input, merged result, and output partition concurrently. Range
+///     tombstones remain a small, resident-per-file list (loaded eagerly by
+///     <see cref="SstReader.Open" />, same as elsewhere in this codebase) — only the entry stream is
+///     genuinely lazy. The retention/masking rules themselves are intentionally copied verbatim from
+///     <c>CompactionMerger</c>/<c>CompactionOutputPartitioner</c> rather than shared, so a change to
+///     one is a visible diff against the other, not a silent behavioral drift; keep them in sync
+///     (and keep <see cref="Storage.Internal.Compaction.Compaction.StreamingCompactionMergerTests" />
+///     — or wherever the equivalence suite lives — green) if either changes.
 /// </summary>
 static class StreamingCompactionMerger
 {
@@ -192,11 +192,11 @@ static class StreamingCompactionMerger
     }
 
     /// <summary>
-    /// K-way merges every reader's sorted entry stream, grouping same-key entries both across
-    /// inputs and within one input. Flush SSTs may contain multiple versions of a key, so every
-    /// matching head must be drained into one retention group before applying the same
-    /// range-tombstone-covers / version-retention rules <c>CompactionMerger</c> applies, in the
-    /// same order (ascending key, descending sequence within a key).
+    ///     K-way merges every reader's sorted entry stream, grouping same-key entries both across
+    ///     inputs and within one input. Flush SSTs may contain multiple versions of a key, so every
+    ///     matching head must be drained into one retention group before applying the same
+    ///     range-tombstone-covers / version-retention rules <c>CompactionMerger</c> applies, in the
+    ///     same order (ascending key, descending sequence within a key).
     /// </summary>
     static IEnumerable<SstEntry> MergeEntries(
         IReadOnlyList<SstReader> readers,

@@ -2,13 +2,13 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Scan;
 using Cntryl.Pants.Transactions;
 
-namespace Cntryl.Pants.Benches.Tier3;
+namespace Cntryl.Pants.Tier3;
 
 public class ScanSystemBenchmarks : Tier3Benchmark
 {
     const int KeysPerFlush = 256;
-    string _path = null!;
     IPantsDatabase _database = null!;
+    string _path = null!;
     IPantsTransaction _snapshot = null!;
 
     [Params(Tier3StorageMode.Local, Tier3StorageMode.SimulatedCloud)]
@@ -26,7 +26,7 @@ public class ScanSystemBenchmarks : Tier3Benchmark
         await WriteFlushAsync(0);
         if (Layout is Tier3ScanLayout.L0PlusL1 or Tier3ScanLayout.FullyCompacted)
         {
-            await _database.CompactAllAsync();
+            await _database.Maintenance.CompactAllAsync();
         }
 
         var flushes = Layout switch
@@ -43,11 +43,11 @@ public class ScanSystemBenchmarks : Tier3Benchmark
 
         if (Layout == Tier3ScanLayout.FullyCompacted)
         {
-            await _database.CompactAllAsync();
+            await _database.Maintenance.CompactAllAsync();
         }
 
-        _snapshot = await _database.BeginTransactionAsync(
-            _database.DefaultColumnFamily,
+        _snapshot = await _database.Transactions.BeginAsync(
+            _database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
     }
 
@@ -79,10 +79,10 @@ public class ScanSystemBenchmarks : Tier3Benchmark
     {
         var entries = Enumerable.Range(0, KeysPerFlush).Select(offset =>
         {
-            var ordinal = (batch * KeysPerFlush) + offset;
+            var ordinal = batch * KeysPerFlush + offset;
             return (Tier3Data.Key(ordinal), Tier3Data.Value(64, ordinal));
         });
         await Tier3Database.PutBatchAsync(_database, entries, Tier3Database.WriteOptions(StorageMode));
-        await _database.FlushAsync(_database.DefaultColumnFamily);
+        await _database.Maintenance.FlushAsync(_database.ColumnFamilies.DefaultFamily);
     }
 }

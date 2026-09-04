@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants;
 
 public sealed class PantsTtlBehaviorTests
 {
@@ -35,8 +37,8 @@ public sealed class PantsTtlBehaviorTests
             TtlStorageMode.Memory,
             directory.Path,
             clock);
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("a"u8.ToArray(), "a"u8.ToArray(), TimeSpan.FromSeconds(1));
@@ -59,8 +61,8 @@ public sealed class PantsTtlBehaviorTests
             TtlStorageMode.Memory,
             directory.Path,
             clock);
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("key"u8.ToArray(), "value"u8.ToArray(), TimeSpan.FromSeconds(1));
 
@@ -79,8 +81,8 @@ public sealed class PantsTtlBehaviorTests
             TtlStorageMode.Memory,
             directory.Path,
             clock);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("short"u8.ToArray(), "value"u8.ToArray(), TimeSpan.FromSeconds(1));
@@ -89,8 +91,8 @@ public sealed class PantsTtlBehaviorTests
         }
 
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddMilliseconds(50_999);
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddMilliseconds(51_001);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
@@ -124,8 +126,8 @@ public sealed class PantsTtlBehaviorTests
             "key-000",
             new string('x', 1024),
             TimeSpan.FromSeconds(1));
-        await using (var transaction = await spilled.BeginTransactionAsync(
-                         spilled.DefaultColumnFamily,
+        await using (var transaction = await spilled.Transactions.BeginAsync(
+                         spilled.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             var value = Enumerable.Repeat((byte)'x', 1024).ToArray();
@@ -162,8 +164,8 @@ public sealed class PantsTtlBehaviorTests
             .WithMemtableLimits(1024)
             .WithTransactionMemoryPool(1024);
         await using var spilled = await PantsDatabase.OpenAsync(spilledOptions);
-        await using (var writer = await resident.BeginTransactionAsync(
-                         resident.DefaultColumnFamily,
+        await using (var writer = await resident.Transactions.BeginAsync(
+                         resident.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("max-ttl"u8.ToArray(), "resident"u8.ToArray(), TimeSpan.FromSeconds(1));
@@ -171,8 +173,8 @@ public sealed class PantsTtlBehaviorTests
             await writer.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await using (var writer = await spilled.BeginTransactionAsync(
-                         spilled.DefaultColumnFamily,
+        await using (var writer = await spilled.Transactions.BeginAsync(
+                         spilled.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put(
@@ -211,8 +213,8 @@ public sealed class PantsTtlBehaviorTests
         {
             for (var index = 0; index < 4; index++)
             {
-                await using var writer = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var writer = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 writer.Put(
                     index == 0 ? "max-ttl"u8.ToArray() : TestBytes.FromString($"padding-{index}"),
@@ -224,10 +226,10 @@ public sealed class PantsTtlBehaviorTests
                 }
 
                 await writer.CommitAsync(PantsWriteOptions.Sync);
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
-            await database.CompactAllAsync();
+            await database.Maintenance.CompactAllAsync();
             var persistedTtl = Directory
                 .GetFiles(Path.Combine(directory.Path, "sst"), "*.sst")
                 .Select(File.ReadAllBytes)
@@ -262,19 +264,19 @@ public sealed class PantsTtlBehaviorTests
         {
             for (var index = 0; index < 4; index++)
             {
-                await using var writer = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var writer = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 writer.Put(
                     index == 0 ? "ttl-key"u8.ToArray() : TestBytes.FromString($"padding-{index}"),
                     "value"u8.ToArray(),
                     index == 0 ? TimeSpan.FromSeconds(100) : null);
                 await writer.CommitAsync(PantsWriteOptions.Buffered);
-                await database.FlushAsync(database.DefaultColumnFamily);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 
             clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(200);
-            await database.CompactAllAsync();
+            await database.Maintenance.CompactAllAsync();
         }
 
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(50);
@@ -403,7 +405,7 @@ public sealed class PantsTtlBehaviorTests
                 "key1",
                 "value1",
                 TimeSpan.FromHours(1));
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddMinutes(30);
@@ -465,7 +467,7 @@ public sealed class PantsTtlBehaviorTests
             TimeSpan.FromSeconds(1));
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(1);
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Null(await TtlStorageModeTestHarness.GetTextAsync(database, "key1"));
     }
@@ -490,7 +492,7 @@ public sealed class PantsTtlBehaviorTests
             "value1",
             TimeSpan.FromHours(1));
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Equal("value1", await TtlStorageModeTestHarness.GetTextAsync(database, "key1"));
     }
@@ -576,8 +578,8 @@ public sealed class PantsTtlBehaviorTests
             mode,
             directory.Path,
             clock);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 1; index <= 10; index++)
@@ -591,18 +593,18 @@ public sealed class PantsTtlBehaviorTests
             await writer.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.DeleteRange("k3"u8.ToArray(), "k8"u8.ToArray());
             await deleting.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(1);
-        await database.CompactAllAsync();
+        await database.Maintenance.CompactAllAsync();
 
         foreach (var key in new[] { "k1", "k2", "k3", "k5", "k7", "k8", "k10" })
         {
@@ -622,8 +624,8 @@ public sealed class PantsTtlBehaviorTests
             mode,
             directory.Path,
             clock);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 50; index++)
@@ -637,9 +639,9 @@ public sealed class PantsTtlBehaviorTests
             await writer.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 50; index < 100; index++)
@@ -653,11 +655,11 @@ public sealed class PantsTtlBehaviorTests
             await writer.CommitAsync(TtlStorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(1);
-        await database.CompactAllAsync();
-        await using var reader = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await database.Maintenance.CompactAllAsync();
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var expiredCount = 0;
         var retainedCount = 0;
@@ -699,8 +701,8 @@ public sealed class PantsTtlBehaviorTests
             "k5",
             "ttl-tombstone-value",
             TimeSpan.FromSeconds(1));
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             deleting.DeleteRange("k1"u8.ToArray(), "k9"u8.ToArray());

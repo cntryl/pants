@@ -1,21 +1,23 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
-namespace Cntryl.Pants.Tests.Storage;
+namespace Cntryl.Pants.Storage;
 
 /// <summary>
-/// A small subprocess smoke test for gross RSS/instrumentation regressions, built on the same
-/// child-process convention as the crash-recovery tests (e.g.
-/// <c>PantsCommitCoalescingCrashRecoveryTests</c>): the same test assembly is re-invoked via
-/// <c>dotnet vstest</c> targeting <see cref="MeasureRssChild"/>, coordinated by environment
-/// variables, except the child here runs to completion and reports results via a file instead of
-/// being crashed mid-flight.
-///
-/// Owned-resource bounds and N/2N/4N scaling are proved deterministically by
-/// <see cref="PantsOwnedResourceScalingTests"/>. RSS includes the CLR, JIT, GC segments, native
-/// libraries, and the OS page cache, so it is retained only as a broad secondary signal.
+///     A small subprocess smoke test for gross RSS/instrumentation regressions, built on the same
+///     child-process convention as the crash-recovery tests (e.g.
+///     <c>PantsCommitCoalescingCrashRecoveryTests</c>): the same test assembly is re-invoked via
+///     <c>dotnet vstest</c> targeting <see cref="MeasureRssChild" />, coordinated by environment
+///     variables, except the child here runs to completion and reports results via a file instead of
+///     being crashed mid-flight.
+///     Owned-resource bounds and N/2N/4N scaling are proved deterministically by
+///     <see cref="PantsOwnedResourceScalingTests" />. RSS includes the CLR, JIT, GC segments, native
+///     libraries, and the OS page cache, so it is retained only as a broad secondary signal.
 /// </summary>
 [Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsMemoryBoundedCorpusTests
@@ -131,8 +133,8 @@ public sealed class PantsMemoryBoundedCorpusTests
             start.Environment[ResultsPathEnvironmentVariable] = resultsPath;
 
             using var child = Process.Start(start) ??
-                               throw new InvalidOperationException(
-                                   "Could not start the RSS-measurement child.");
+                              throw new InvalidOperationException(
+                                  "Could not start the RSS-measurement child.");
             var standardOutput = child.StandardOutput.ReadToEndAsync();
             var standardError = child.StandardError.ReadToEndAsync();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(240));
@@ -185,12 +187,12 @@ public sealed class PantsMemoryBoundedCorpusTests
             var index = 0;
             while (written < targetBytes)
             {
-                await using (var transaction = await database.BeginTransactionAsync(
-                                 database.DefaultColumnFamily,
+                await using (var transaction = await database.Transactions.BeginAsync(
+                                 database.ColumnFamilies.DefaultFamily,
                                  PantsTransactionMode.ReadWrite))
                 {
                     transaction.Put(
-                        System.Text.Encoding.UTF8.GetBytes($"key-{index:D8}"),
+                        Encoding.UTF8.GetBytes($"key-{index:D8}"),
                         value);
                     await transaction.CommitAsync(PantsWriteOptions.Buffered);
                 }
@@ -199,23 +201,23 @@ public sealed class PantsMemoryBoundedCorpusTests
                 index++;
                 if (index % 50 == 0)
                 {
-                    await database.FlushAsync(database.DefaultColumnFamily);
+                    await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                 }
             }
 
-            await database.FlushAsync(database.DefaultColumnFamily);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
             // Prove the corpus is actually correctly readable, not merely written — a handful of
             // spot checks across the key range, not exhaustive (this is a resource test, not a
             // correctness one; correctness of disk-resident reads is covered extensively
             // elsewhere, e.g. PantsPointReadDiskResidentTests).
-            await using var reader = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var reader = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             foreach (var spotCheckIndex in new[] { 0, index / 2, index - 1 })
             {
                 var read = await reader.GetAsync(
-                    System.Text.Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
+                    Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
                 if (read is null)
                 {
                     throw new InvalidOperationException(
@@ -234,14 +236,14 @@ public sealed class PantsMemoryBoundedCorpusTests
             // The RSS numbers above are meaningless if the disk-resident recovery path merely
             // opens without actually being able to serve the corpus back — verify the same spot
             // checks survive a full close-and-reopen, not only measure memory around it.
-            await using var reopenedReader = await reopened.BeginTransactionAsync(
-                reopened.DefaultColumnFamily,
+            await using var reopenedReader = await reopened.Transactions.BeginAsync(
+                reopened.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             var recordCount = checked((int)(budgetBytes * multiplier / 4096));
             foreach (var spotCheckIndex in new[] { 0, recordCount / 2, recordCount - 1 })
             {
                 var read = await reopenedReader.GetAsync(
-                    System.Text.Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
+                    Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
                 if (read is null || read.Value.Length != 4096)
                 {
                     throw new InvalidOperationException(
@@ -268,7 +270,7 @@ public sealed class PantsMemoryBoundedCorpusTests
         {
             // The process exited after HasExited was observed.
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Win32Exception)
         {
             // Best effort — nothing more to do if the OS refuses the kill.
         }
@@ -280,7 +282,7 @@ public sealed class PantsMemoryBoundedCorpusTests
 
     static long MeasureRssBytes()
     {
-        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.Collect(2, GCCollectionMode.Forced, true);
         GC.WaitForPendingFinalizers();
         GC.Collect();
         using var process = Process.GetCurrentProcess();

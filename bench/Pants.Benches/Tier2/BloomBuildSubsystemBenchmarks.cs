@@ -1,12 +1,12 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Storage.Internal.Sst;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class BloomBuildSubsystemBenchmarks : Tier2Benchmark
 {
-    SstEntry[] _tenThousand = null!;
     SstEntry[] _hundredThousand = null!;
+    SstEntry[] _tenThousand = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -22,6 +22,7 @@ public class BloomBuildSubsystemBenchmarks : Tier2Benchmark
     public byte[] Build100K() => SstCodec.Encode(_hundredThousand, [], PantsPerformanceGoal.Latency);
 
     static SstEntry[] Entries(int count) => Enumerable.Range(0, count)
-        .Select(index => new SstEntry(Tier2Data.Key(index), Tier2Data.Value(64), checked((ulong)index + 1), null, false))
+        .Select(index =>
+            new SstEntry(Tier2Data.Key(index), Tier2Data.Value(64), checked((ulong)index + 1), null, false))
         .ToArray();
 }

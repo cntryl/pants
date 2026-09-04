@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage.Wal;
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalWriterEpochRecoveryTests
 {
@@ -25,8 +26,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         Assert.Equal(2, report.WalRecoveryRecordsReplayed);
         Assert.Equal("preserved", await ReadAsync(database, "legacy"));
         Assert.Equal("fresh", await ReadAsync(database, "target"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.GetRuntimeMetricsAsync()).Health);
-        Assert.Equal(2, (await database.GetRecoveryMetricsAsync()).WalRecordsReplayed);
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(2, (await database.Diagnostics.GetRecoveryMetricsAsync()).WalRecordsReplayed);
     }
 
     [Fact]
@@ -186,8 +187,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
         Assert.Equal("preserved", await ReadAsync(salvaged, "legacy"));
         Assert.Equal("fresh", await ReadAsync(salvaged, "target"));
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.GetRuntimeMetricsAsync()).Health);
-        Assert.Equal(2, (await salvaged.GetRecoveryMetricsAsync()).WalRecordsReplayed);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(2, (await salvaged.Diagnostics.GetRecoveryMetricsAsync()).WalRecordsReplayed);
         Assert.NotEmpty(Directory.GetFiles(
             Path.Combine(directory.Path, "wal"),
             "*.salvage-retained*"));
@@ -218,7 +219,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         Assert.Equal("preserved", await ReadAsync(database, "prefix"));
         Assert.Null(await ReadAsync(database, "corrupt-length"));
         Assert.Null(await ReadAsync(database, "hidden-suffix"));
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.NotEmpty(Directory.GetFiles(
             Path.Combine(directory.Path, "wal"),
             "*.salvage-retained*"));
@@ -253,7 +254,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Salvage);
 
         Assert.Equal("original", await ReadAsync(database, "duplicate"));
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.NotEmpty(Directory.GetFiles(
             Path.Combine(directory.Path, "wal"),
             "*.salvage-retained*"));
@@ -305,7 +306,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
         var exception =
             await Assert.ThrowsAsync<PantsCorruptionException>(() =>
-                database.VerifyStorageAsync(TimeSpan.FromSeconds(2)).AsTask());
+                database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
@@ -375,7 +376,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         Assert.Equal(2, report.WalRecoveryRecordsReplayed);
         Assert.Equal("one", await ReadAsync(database, "first"));
         Assert.Equal("two", await ReadAsync(database, "second"));
-        Assert.Equal(expectedBoundary, (await database.GetRuntimeMetricsAsync()).CurrentSequence);
+        Assert.Equal(expectedBoundary, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
     }
 
     static async Task InitializeDatabaseAsync(string path)
@@ -387,8 +388,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path).WithBackgroundCompaction(false));
-        var family = await database.CreateColumnFamilyAsync("dropped");
-        await database.DropColumnFamilyAsync(family);
+        var family = await database.ColumnFamilies.CreateAsync("dropped");
+        await database.ColumnFamilies.DropAsync(family);
         return family.Id;
     }
 
@@ -396,8 +397,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
     {
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path).WithBackgroundCompaction(false));
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         for (var index = 0; index < 8; index++)
         {
@@ -407,7 +408,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         }
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
-        await database.FlushAsync(database.DefaultColumnFamily);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(
@@ -420,8 +421,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
-        await using var transaction = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(TestBytes.FromString(key));
         return value is null ? null : TestBytes.ToText(value.Value);
@@ -560,7 +561,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         }
 
         await using var database = await OpenAsync(path, recoveryPolicy);
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.NotEmpty(Directory.GetFiles(
             Path.Combine(path, "wal"),
             "*.salvage-retained*"));

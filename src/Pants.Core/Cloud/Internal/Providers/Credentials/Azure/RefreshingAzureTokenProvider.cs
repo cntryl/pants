@@ -10,6 +10,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly HttpClient _httpClient;
     readonly PantsAzureCredentialSource _source;
+    readonly TimeProvider _timeProvider;
     readonly TimeSpan _timeout;
     CachedAzureToken? _cached;
     int _disposed;
@@ -18,7 +19,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
         PantsAzureCredentialSource source,
         Uri blobEndpoint,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         _source = source is PantsAzureCredentialSource.LightweightDefaultChain
             ? SelectDefaultChainSource()
@@ -26,12 +28,13 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
         _blobEndpoint = blobEndpoint;
         _httpClient = httpClient;
         _timeout = timeout;
+        _timeProvider = timeProvider;
     }
 
     public async ValueTask<string> GetTokenAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (_cached is { } cached && !cached.RequiresRefresh(DateTimeOffset.UtcNow))
+        if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.AccessToken;
         }
@@ -39,7 +42,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_cached is { } current && !current.RequiresRefresh(DateTimeOffset.UtcNow))
+            if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
             {
                 return current.AccessToken;
             }
@@ -284,7 +287,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
         return uri;
     }
 
-    static async ValueTask<CachedAzureToken> ParseTokenResponseAsync(
+    async ValueTask<CachedAzureToken> ParseTokenResponseAsync(
         HttpResponseMessage response,
         bool requireAbsoluteExpiry,
         CancellationToken cancellationToken)
@@ -320,7 +323,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
                     "Azure token response omitted a non-empty access_token.");
             }
 
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             DateTimeOffset expiresAt;
             if (root.TryGetProperty("expires_on", out var absolute) &&
                 TryReadPositiveInt64(absolute, out var seconds))

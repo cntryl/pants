@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Runtime;
+namespace Cntryl.Pants.Runtime;
 
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeCommandCancellationContractTests
@@ -15,12 +16,12 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path).WithCoordinatorQueueCapacityForTesting(1),
             new RuntimeDependencies(failpoint));
-        var blockedMetrics = database.GetRuntimeMetricsAsync().AsTask();
+        var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
         await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
         using var cancellation = new CancellationTokenSource();
-        var begin = database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        var begin = database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly,
             cancellation.Token).AsTask();
         cancellation.Cancel();
@@ -41,7 +42,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
             await transaction.DisposeAsync();
         }
 
-        var metrics = await database.GetRuntimeMetricsAsync()
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
             .AsTask().WaitAsync(AssertionTimeout);
         Assert.Equal(0, metrics.ActiveSnapshots);
 
@@ -71,8 +72,8 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(new EngineCancellationFailpointHandler()));
-        await using (var transaction = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("engine-canceled"u8.ToArray(), "value"u8.ToArray());
@@ -84,8 +85,8 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         }
 
         Assert.Equal(0, Volatile.Read(ref rejectedCommands));
-        await using var accepted = await database.BeginTransactionAsync(
-            database.DefaultColumnFamily,
+        await using var accepted = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         accepted.Put("accepted-after-engine-cancel"u8.ToArray(), "value"u8.ToArray());
         await accepted.CommitAsync(PantsWriteOptions.Sync);

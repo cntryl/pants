@@ -1,4 +1,4 @@
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudSstValidatorTests
 {

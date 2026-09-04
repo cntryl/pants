@@ -1,11 +1,10 @@
 using System.Globalization;
-using Cntryl.Pants.DependencyInjection;
-using Cntryl.Pants.DependencyInjection.Options;
+using Cntryl.Pants.Support.TestDoubles;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace Cntryl.Pants.Tests.DependencyInjection;
+namespace Cntryl.Pants.Options;
 
 public sealed class PantsOptionsPatternTests
 {
@@ -49,17 +48,17 @@ public sealed class PantsOptionsPatternTests
         Assert.Equal(PantsStorageKind.Local, settings.Storage.Kind);
         var storage = Assert.IsType<PantsStorageConfiguration.Local>(database.Options.Storage);
         Assert.Equal(directory.Path, storage.Path);
-        Assert.Equal(PantsPerformanceGoal.Throughput, database.Options.PerformanceGoal);
-        Assert.Equal(PantsWorkloadProfile.RangeScan, database.Options.WorkloadProfile);
-        Assert.Equal(512L * 1024 * 1024, database.Options.MemoryBudgetBytes);
-        Assert.Equal(TimeSpan.FromSeconds(12), database.Options.StorageTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(45), database.Options.RuntimeResponseTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(20), database.Options.ShutdownTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(45), database.Options.LeaseTimeToLive);
-        Assert.Equal(TimeSpan.FromSeconds(5), database.Options.LeaseClockSkewTolerance);
-        Assert.False(database.Options.BackgroundCompaction);
-        Assert.Equal(2 * 1024 * 1024, database.Options.WalBufferSizeBytes);
-        Assert.Equal((ulong)7, database.Options.MinimumEpoch);
+        Assert.Equal(PantsPerformanceGoal.Throughput, database.Options.Runtime.PerformanceGoal);
+        Assert.Equal(PantsWorkloadProfile.RangeScan, database.Options.Runtime.WorkloadProfile);
+        Assert.Equal(512L * 1024 * 1024, database.Options.Memory.Budget.Bytes);
+        Assert.Equal(TimeSpan.FromSeconds(12), database.Options.Runtime.StorageTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(45), database.Options.Runtime.RuntimeResponseTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(20), database.Options.Runtime.ShutdownTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(45), database.Options.Lease.TimeToLive);
+        Assert.Equal(TimeSpan.FromSeconds(5), database.Options.Lease.ClockSkewTolerance);
+        Assert.False(database.Options.Compaction.BackgroundEnabled);
+        Assert.Equal(2 * 1024 * 1024, database.Options.Memory.WalBufferSizeBytes);
+        Assert.Equal((ulong)7, database.Options.Lease.MinimumEpoch);
         Assert.Equal(9, database.Options.Compaction.L0FileCountTrigger);
     }
 
@@ -168,7 +167,7 @@ public sealed class PantsOptionsPatternTests
         Assert.Same(storage.Topology.Wal, storage.Topology.Sst);
         Assert.Same(storage.Topology.Wal, storage.Topology.Control);
         Assert.Equal("catalog/", storage.Topology.Wal.Prefix);
-        var provider = Assert.IsType<PantsCloudProviderConfiguration.AwsS3>(
+        var provider = Assert.IsType<PantsAwsS3Provider>(
             storage.Topology.Wal.Provider);
         Assert.Equal("catalog-production", provider.Bucket);
         Assert.Equal("us-east-1", provider.Region);
@@ -219,25 +218,25 @@ public sealed class PantsOptionsPatternTests
         switch (providerKind)
         {
             case PantsCloudProviderKind.AwsS3:
-                var aws = Assert.IsType<PantsCloudProviderConfiguration.AwsS3>(location.Provider);
+                var aws = Assert.IsType<PantsAwsS3Provider>(location.Provider);
                 Assert.IsType<PantsS3CredentialSource.AwsDefaultChain>(aws.Credentials);
                 break;
             case PantsCloudProviderKind.S3Compatible:
-                var s3 = Assert.IsType<PantsCloudProviderConfiguration.S3Compatible>(
+                var s3 = Assert.IsType<PantsS3CompatibleProvider>(
                     location.Provider);
                 Assert.IsType<PantsS3CredentialSource.Environment>(s3.Credentials);
                 break;
             case PantsCloudProviderKind.AzureBlob:
-                var azure = Assert.IsType<PantsCloudProviderConfiguration.AzureBlob>(
+                var azure = Assert.IsType<PantsAzureBlobProvider>(
                     location.Provider);
                 Assert.IsType<PantsAzureCredentialSource.LightweightDefaultChain>(azure.Credential);
                 break;
             case PantsCloudProviderKind.Gcs:
-                var gcs = Assert.IsType<PantsCloudProviderConfiguration.Gcs>(location.Provider);
+                var gcs = Assert.IsType<PantsGcsProvider>(location.Provider);
                 Assert.IsType<PantsGcsCredentialSource.ApplicationDefault>(gcs.Credential);
                 break;
             case PantsCloudProviderKind.OciObjectStorage:
-                var oci = Assert.IsType<PantsCloudProviderConfiguration.OciObjectStorage>(
+                var oci = Assert.IsType<PantsOciObjectStorageProvider>(
                     location.Provider);
                 Assert.IsType<PantsOciCredentialSource.Environment>(oci.Credentials);
                 break;
@@ -343,6 +342,7 @@ public sealed class PantsOptionsPatternTests
         {
             providerOptions.ApiStyle = PantsGcsApiStyle.Xml;
         }
+
         var databaseFactory = new CapturingPantsDatabaseFactory();
         var services = new ServiceCollection();
         services.AddSingleton<IPantsDatabaseFactory>(databaseFactory);
@@ -373,10 +373,10 @@ public sealed class PantsOptionsPatternTests
             databaseFactory.Options!.Storage).Topology.Control.Provider;
         object credential = provider switch
         {
-            PantsCloudProviderConfiguration.AwsS3 aws => aws.Credentials,
-            PantsCloudProviderConfiguration.AzureBlob azure => azure.Credential,
-            PantsCloudProviderConfiguration.Gcs gcs => gcs.Credential,
-            PantsCloudProviderConfiguration.OciObjectStorage oci => oci.Credentials,
+            PantsAwsS3Provider aws => aws.Credentials,
+            PantsAzureBlobProvider azure => azure.Credential,
+            PantsGcsProvider gcs => gcs.Credential,
+            PantsOciObjectStorageProvider oci => oci.Credentials,
             _ => throw new InvalidOperationException("Unexpected provider configuration.")
         };
         Assert.Equal(expectedCredentialType, credential.GetType());
@@ -477,7 +477,9 @@ public sealed class PantsOptionsPatternTests
 
         Assert.Same(first, second);
         Assert.Equal(1, databaseFactory.OpenCount);
-        Assert.Equal(PantsPerformanceGoal.Latency, databaseFactory.Options!.PerformanceGoal);
+        Assert.Equal(
+            PantsPerformanceGoal.Latency,
+            databaseFactory.Options!.Runtime.PerformanceGoal);
         Assert.Equal(
             PantsPerformanceGoal.Economy,
             serviceProvider

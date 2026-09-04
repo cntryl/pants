@@ -1,8 +1,8 @@
-namespace Cntryl.Pants.Cloud.Internal.Objects;
+namespace Cntryl.Pants.Cloud;
 
-sealed record CloudObjectListPage
+public sealed record PantsCloudObjectListPage
 {
-    public CloudObjectListPage(
+    public PantsCloudObjectListPage(
         IEnumerable<string> objectKeys,
         string? continuationToken)
     {

@@ -1,13 +1,13 @@
 using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Runtime.Internal;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 public class MemtableRotateSubsystemBenchmarks : Tier2Benchmark
 {
     const int EntryCount = 4_096;
-    (byte[] Key, byte[] Value)[] _oneKilobyteEntries = null!;
     (byte[] Key, byte[] Value)[] _fourKilobyteEntries = null!;
+    (byte[] Key, byte[] Value)[] _oneKilobyteEntries = null!;
 
     [GlobalSetup]
     public void Setup()

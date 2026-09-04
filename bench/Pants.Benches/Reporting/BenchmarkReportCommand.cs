@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Reporting;
+namespace Cntryl.Pants.Reporting;
 
 static class BenchmarkReportCommand
 {
@@ -12,7 +12,8 @@ static class BenchmarkReportCommand
     {
         if (args.Length != 3)
         {
-            Console.Error.WriteLine("Usage: aggregate <pants-artifact-directory> <midge-artifact-directory> <output.md>");
+            Console.Error.WriteLine(
+                "Usage: aggregate <pants-artifact-directory> <midge-artifact-directory> <output.md>");
             return 2;
         }
 
@@ -34,7 +35,7 @@ static class BenchmarkReportCommand
     {
         var metadataPath = Path.Combine(directory, "pants-metadata.json");
         var metadata = JsonSerializer.Deserialize<BenchmarkRunMetadata>(File.ReadAllText(metadataPath)) ??
-            throw new InvalidDataException("Pants benchmark metadata is invalid.");
+                       throw new InvalidDataException("Pants benchmark metadata is invalid.");
         var results = Directory.GetFiles(directory, "*-report.csv", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
             .SelectMany(path =>
@@ -80,10 +81,12 @@ static class BenchmarkReportCommand
             throw new InvalidDataException($"Duplicate Midge benchmark scenario '{duplicate.Key}'.");
         }
 
-        if (results.Select(result => (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.ToolVersion))
-            .Distinct().Count() != 1)
+        if (results.Select(result =>
+                    (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.ToolVersion))
+                .Distinct().Count() != 1)
         {
-            throw new InvalidDataException("Midge benchmark artifacts contain inconsistent source or machine metadata.");
+            throw new InvalidDataException(
+                "Midge benchmark artifacts contain inconsistent source or machine metadata.");
         }
 
         return results;
@@ -99,11 +102,14 @@ static class BenchmarkReportCommand
         output.AppendLine();
         output.AppendLine(CultureInfo.InvariantCulture, $"Pants SHA: `{metadata.SourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture, $"Midge SHA: `{MidgeBenchmarkReader.PinnedSourceSha}`  ");
-        output.AppendLine(CultureInfo.InvariantCulture, $"Pants machine: {metadata.Cpu}; {metadata.OperatingSystem}; {metadata.Architecture}; {metadata.Runtime}  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Pants machine: {metadata.Cpu}; {metadata.OperatingSystem}; {metadata.Architecture}; {metadata.Runtime}  ");
         var midgeEnvironment = midge[0];
-        output.AppendLine(CultureInfo.InvariantCulture, $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}; cntryl-stress {midgeEnvironment.ToolVersion}");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}; cntryl-stress {midgeEnvironment.ToolVersion}");
         output.AppendLine();
-        output.AppendLine("> Rows are grouped for investigation, not treated as equivalent. A ratio is intentionally omitted unless workload mechanics, logical units, storage mode, client count, and measurement class are explicitly matched.");
+        output.AppendLine(
+            "> Rows are grouped for investigation, not treated as equivalent. A ratio is intentionally omitted unless workload mechanics, logical units, storage mode, client count, and measurement class are explicitly matched.");
 
         foreach (var tier in pants.Select(result => result.Tier).Concat(midge.Select(result => result.Tier))
                      .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
@@ -115,9 +121,11 @@ static class BenchmarkReportCommand
             output.AppendLine();
             output.AppendLine("| Workload | Parameters | Mean ns/op | Allocated B/op | Class |");
             output.AppendLine("|---|---|---:|---:|---|");
-            foreach (var result in pants.Where(result => result.Tier == tier).OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
+            foreach (var result in pants.Where(result => result.Tier == tier)
+                         .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
-                output.AppendLine(CultureInfo.InvariantCulture, $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
+                output.AppendLine(CultureInfo.InvariantCulture,
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
             }
 
             output.AppendLine();
@@ -125,9 +133,11 @@ static class BenchmarkReportCommand
             output.AppendLine();
             output.AppendLine("| Workload | Parameters | Metric | Mean | Quality | Trust |");
             output.AppendLine("|---|---|---|---:|---|---|");
-            foreach (var result in midge.Where(result => result.Tier == tier).OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
+            foreach (var result in midge.Where(result => result.Tier == tier)
+                         .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
-                output.AppendLine(CultureInfo.InvariantCulture, $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
+                output.AppendLine(CultureInfo.InvariantCulture,
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
             }
         }
 
@@ -137,11 +147,12 @@ static class BenchmarkReportCommand
     static Dictionary<string, int> OperationsPerMethod(string benchmarkType)
     {
         var type = typeof(Program).Assembly.GetType(benchmarkType) ??
-            throw new InvalidDataException($"Unknown Pants benchmark type '{benchmarkType}'.");
+                   throw new InvalidDataException($"Unknown Pants benchmark type '{benchmarkType}'.");
         return type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Select(method => (Method: method, Attribute: method.GetCustomAttribute<BenchmarkAttribute>()))
             .Where(item => item.Attribute is not null)
-            .ToDictionary(item => item.Method.Name, item => item.Attribute!.OperationsPerInvoke, StringComparer.Ordinal);
+            .ToDictionary(item => item.Method.Name, item => item.Attribute!.OperationsPerInvoke,
+                StringComparer.Ordinal);
     }
 
     static string Escape(string value) => value.Replace("|", "\\|", StringComparison.Ordinal);

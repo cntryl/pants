@@ -1,20 +1,20 @@
-namespace Cntryl.Pants.Tests.Cloud;
+namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudArchitectureTests
 {
     [Fact]
     public void ShouldExposeProviderConfigurationWithoutImplementationFeatures()
     {
-        var configurationTypes = typeof(PantsCloudProviderConfiguration).Assembly
-            .GetExportedTypes()
-            .Where(static type => type == typeof(PantsCloudProviderConfiguration) ||
-                                  (type.IsNested && type.DeclaringType == typeof(PantsCloudProviderConfiguration)))
-            .ToArray();
+        var contracts = typeof(IPantsCloudProvider).Assembly.GetExportedTypes();
+        var builtIns = typeof(PantsAwsS3Provider).Assembly.GetExportedTypes();
 
-        Assert.Contains(typeof(PantsCloudProviderConfiguration.AwsS3), configurationTypes);
-        Assert.Contains(typeof(PantsCloudProviderConfiguration.S3Compatible), configurationTypes);
-        Assert.Contains(typeof(PantsCloudProviderConfiguration.AzureBlob), configurationTypes);
-        Assert.Contains(typeof(PantsCloudProviderConfiguration.Gcs), configurationTypes);
+        Assert.Contains(typeof(IPantsCloudProvider), contracts);
+        Assert.Contains(typeof(IPantsCloudObjectStore), contracts);
+        Assert.Contains(typeof(PantsAwsS3Provider), builtIns);
+        Assert.Contains(typeof(PantsS3CompatibleProvider), builtIns);
+        Assert.Contains(typeof(PantsAzureBlobProvider), builtIns);
+        Assert.Contains(typeof(PantsGcsProvider), builtIns);
+        Assert.Contains(typeof(PantsOciObjectStorageProvider), builtIns);
         Assert.All(
             [typeof(S3ObjectStore), typeof(AzureBlobObjectStore), typeof(GcsObjectStore)],
             static type => Assert.False(type.IsPublic));
@@ -25,10 +25,10 @@ public sealed class CloudArchitectureTests
     {
         var providerTypes = new HashSet<Type>
         {
-            typeof(PantsCloudProviderConfiguration.AwsS3),
-            typeof(PantsCloudProviderConfiguration.S3Compatible),
-            typeof(PantsCloudProviderConfiguration.AzureBlob),
-            typeof(PantsCloudProviderConfiguration.Gcs)
+            typeof(PantsAwsS3Provider),
+            typeof(PantsS3CompatibleProvider),
+            typeof(PantsAzureBlobProvider),
+            typeof(PantsGcsProvider)
         };
         var exposedTypes = typeof(ICloudObjectStore).GetMethods()
             .SelectMany(static method => method.GetParameters()
@@ -42,13 +42,14 @@ public sealed class CloudArchitectureTests
     [Fact]
     public void ShouldKeepProviderDtosInConfigurationLayer()
     {
-        var publicSurface = typeof(PantsCloudProviderConfiguration).Assembly.GetExportedTypes();
+        var contracts = typeof(IPantsCloudProvider).Assembly.GetExportedTypes();
 
-        Assert.Contains(typeof(PantsCloudProviderConfiguration), publicSurface);
-        Assert.Contains(typeof(PantsCloudStorageLocation), publicSurface);
-        Assert.Contains(typeof(PantsCloudStorageTopology), publicSurface);
-        Assert.DoesNotContain(publicSurface, static type =>
-            type.Namespace == typeof(ICloudObjectStore).Namespace &&
-            type.Name.EndsWith("ObjectStore", StringComparison.Ordinal));
+        Assert.Same(typeof(IPantsDatabase).Assembly, typeof(IPantsCloudProvider).Assembly);
+        Assert.NotSame(typeof(IPantsCloudProvider).Assembly, typeof(PantsAwsS3Provider).Assembly);
+        Assert.Contains(typeof(PantsCloudStorageLocation), contracts);
+        Assert.Contains(typeof(PantsCloudStorageTopology), contracts);
+        Assert.DoesNotContain(
+            contracts,
+            static type => type.Name == "PantsCloudProviderConfiguration");
     }
 }

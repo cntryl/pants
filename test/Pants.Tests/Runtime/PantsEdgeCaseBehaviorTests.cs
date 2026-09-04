@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Runtime;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsEdgeCaseBehaviorTests
 {
@@ -43,8 +45,8 @@ public sealed class PantsEdgeCaseBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             writer.Put("tiny"u8.ToArray(), new byte[1]);
@@ -76,8 +78,8 @@ public sealed class PantsEdgeCaseBehaviorTests
             "key\twith\ttabs"u8.ToArray(),
             "key\nwith\nnewlines"u8.ToArray()
         ];
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < keys.Length; index++)
@@ -119,8 +121,8 @@ public sealed class PantsEdgeCaseBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 5; index++)
@@ -146,8 +148,8 @@ public sealed class PantsEdgeCaseBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 1_000; index++)
@@ -176,8 +178,8 @@ public sealed class PantsEdgeCaseBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
-        await using (var writer = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var writer = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 100; index++)
@@ -188,8 +190,8 @@ public sealed class PantsEdgeCaseBehaviorTests
             await writer.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));
         }
 
-        await using (var deleting = await database.BeginTransactionAsync(
-                         database.DefaultColumnFamily,
+        await using (var deleting = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             for (var index = 0; index < 100; index++)
@@ -217,8 +219,8 @@ public sealed class PantsEdgeCaseBehaviorTests
         for (var cycle = 0; cycle < 10; cycle++)
         {
             await StorageModeTestHarness.PutAsync(database, mode, "key", $"cycle-{cycle}");
-            await using var deleting = await database.BeginTransactionAsync(
-                database.DefaultColumnFamily,
+            await using var deleting = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             deleting.Delete("key"u8.ToArray());
             await deleting.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));

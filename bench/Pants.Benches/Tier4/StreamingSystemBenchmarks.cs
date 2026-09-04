@@ -1,13 +1,13 @@
 using BenchmarkDotNet.Attributes;
 
-namespace Cntryl.Pants.Benches.Tier4;
+namespace Cntryl.Pants.Tier4;
 
 public class StreamingSystemBenchmarks : Tier4Benchmark
 {
     const int OperationCount = 20_000;
-    string _path = null!;
     IPantsDatabase _database = null!;
     int _nextOperation;
+    string _path = null!;
 
     [Params(Tier4StorageMode.Local, Tier4StorageMode.SimulatedCloud)]
     public Tier4StorageMode StorageMode { get; set; }

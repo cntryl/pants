@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Support.TestDoubles;
 
-namespace Cntryl.Pants.Tests.Storage.Wal;
+namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalVerificationTailParityTests
 {
@@ -139,8 +140,8 @@ public sealed class PantsWalVerificationTailParityTests
         {
             for (var index = 0; index < commitCount; index++)
             {
-                await using var transaction = await database.BeginTransactionAsync(
-                    database.DefaultColumnFamily,
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(
                     TestBytes.FromString($"wal-tail-key-{index}"),

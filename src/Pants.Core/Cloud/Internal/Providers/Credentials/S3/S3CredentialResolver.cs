@@ -7,9 +7,11 @@ static class S3CredentialResolver
         string region,
         bool allowAwsDefaultChain,
         HttpClient httpClient,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         return source switch
         {
             PantsS3CredentialSource.StaticCredentials value => new StaticS3CredentialProvider(
@@ -21,7 +23,7 @@ static class S3CredentialResolver
                 FromProfile(profile) ?? throw new PantsInvalidArgumentException(
                     "AWS-style shared profile credentials are unavailable.")),
             PantsS3CredentialSource.AwsDefaultChain when allowAwsDefaultChain =>
-                new RefreshingS3CredentialProvider(region, httpClient, timeout),
+                new RefreshingS3CredentialProvider(region, httpClient, timeout, timeProvider),
             PantsS3CredentialSource.AwsDefaultChain => throw new PantsInvalidArgumentException(
                 "AwsDefaultChain is valid only for AWS S3; use static, environment, or shared-profile credentials for S3-compatible providers."),
             _ => throw new PantsNotSupportedException("The S3 credential source is unsupported.")

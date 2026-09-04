@@ -4,11 +4,11 @@ sealed class SstReaderCache : IDisposable
 {
     readonly object _gate = new();
     readonly Func<string, SstReader> _openReader;
-    readonly Dictionary<string, ReaderSlot> _slots = new(StringComparer.Ordinal);
     readonly HashSet<ReaderEntry> _retiredReaders = [];
+    readonly Dictionary<string, ReaderSlot> _slots = new(StringComparer.Ordinal);
+    bool _disposeCompleted;
 
     int _disposed;
-    bool _disposeCompleted;
     int _openingReaders;
 
     public SstReaderCache()

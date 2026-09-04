@@ -23,9 +23,9 @@ sealed class CommitCoalescer(
     {
         var durability = command.WriteOptions.Durability;
         if (durability is not (PantsDurability.Sync or
-            PantsDurability.Buffered or
-            PantsDurability.BestEffort or
-            PantsDurability.CloudAsync) ||
+                PantsDurability.Buffered or
+                PantsDurability.BestEffort or
+                PantsDurability.CloudAsync) ||
             (groupDurability is { } expectedDurability && durability != expectedDurability) ||
             command.Payload.Operations.Count == 0 ||
             command.Payload.IsSpilled ||

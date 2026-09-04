@@ -1,4 +1,6 @@
-namespace Cntryl.Pants.Tests.Storage;
+using Cntryl.Pants.Support.TestDoubles;
+
+namespace Cntryl.Pants.Storage;
 
 public sealed class PantsStorageIoTests
 {
@@ -117,7 +119,7 @@ public sealed class PantsStorageIoTests
         var path = Path.Combine(directory.Path, "manifest.json");
         File.WriteAllBytes(path, "old"u8);
 
-        Assert.Throws<IOException>(() => AtomicStagedFile.Write(path, "new"u8, overwrite: false));
+        Assert.Throws<IOException>(() => AtomicStagedFile.Write(path, "new"u8, false));
 
         Assert.Equal("old"u8.ToArray(), File.ReadAllBytes(path));
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
@@ -183,7 +185,8 @@ public sealed class PantsStorageIoTests
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "data");
         File.WriteAllBytes(path, "short"u8);
-        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var handle =
+            File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
         Assert.Throws<EndOfStreamException>(() => PositionalFile.ReadExactly(handle, 0, 10));
     }

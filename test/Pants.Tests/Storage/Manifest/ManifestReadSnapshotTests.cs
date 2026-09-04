@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Cntryl.Pants.Tests.Storage.Manifest;
+namespace Cntryl.Pants.Storage.Manifest;
 
 public sealed class ManifestReadSnapshotTests
 {

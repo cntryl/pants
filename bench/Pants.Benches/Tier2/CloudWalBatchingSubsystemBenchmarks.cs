@@ -2,15 +2,25 @@ using BenchmarkDotNet.Attributes;
 using Cntryl.Pants.Cloud.Internal;
 using Cntryl.Pants.Storage.Internal;
 
-namespace Cntryl.Pants.Benches.Tier2;
+namespace Cntryl.Pants.Tier2;
 
 [MemoryDiagnoser]
-public class CloudWalBatchingSubsystemBenchmarks
+public class CloudWalBatchingSubsystemBenchmarks : IAsyncDisposable
 {
     const int SegmentCount = 8;
     string _path = null!;
     SimulatedCloudPersistence _persistence = null!;
     SealedWalSegment[] _segments = null!;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_persistence is not null)
+        {
+            await _persistence.DisposeAsync();
+        }
+
+        GC.SuppressFinalize(this);
+    }
 
     [IterationSetup(Target = nameof(PublishIndividually))]
     public void SetupIndividual() => Setup();
@@ -19,8 +29,9 @@ public class CloudWalBatchingSubsystemBenchmarks
     public void SetupBatch() => Setup();
 
     [IterationCleanup]
-    public void Cleanup()
+    public async Task Cleanup()
     {
+        await _persistence.DisposeAsync();
         if (Directory.Exists(_path))
         {
             Directory.Delete(_path, true);
