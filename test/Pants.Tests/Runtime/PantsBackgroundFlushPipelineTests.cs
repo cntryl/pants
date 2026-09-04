@@ -1790,7 +1790,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             return CreateAuthoritativeVerificationReport();
         };
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint, verifier));
@@ -1937,7 +1937,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new FlushPipelineFailpointHandler(
             Failpoint.BeforeCompactionManifestPublish);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(
@@ -1981,7 +1981,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     {
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
         var family = await database.ColumnFamilies.CreateAsync("compaction-intent-coexistence");
         for (var generation = 0; generation < 2; generation++)
@@ -2028,7 +2028,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var recoveryDirectory = new TemporaryDirectory();
         var failpoint = new CompactionCheckpointFailpointHandler();
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         string? publishedName = null;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
@@ -2114,7 +2114,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Failpoint.AfterCompactionManifestPublish,
             true);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         string[] inputNames;
         string outputName;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
@@ -2177,7 +2177,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             true);
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
                          new RuntimeDependencies(failpoint)))
@@ -2235,7 +2235,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new FlushPipelineFailpointHandler(
             Failpoint.BeforeCompactionDirectorySync);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -2285,7 +2285,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new FlushPipelineFailpointHandler(
             Failpoint.AfterCompactionManifestPublish);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(

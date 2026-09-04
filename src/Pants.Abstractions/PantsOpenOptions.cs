@@ -167,10 +167,8 @@ public sealed class PantsOpenOptions
     public PantsOpenOptions WithCompaction(PantsCompactionConfiguration configuration) =>
         With(_configuration with
         {
-            Compaction = (configuration ?? throw new ArgumentNullException(nameof(configuration))) with
-            {
-                BackgroundEnabled = _configuration.BackgroundCompaction
-            }
+            Compaction = configuration ?? throw new ArgumentNullException(nameof(configuration)),
+            BackgroundCompaction = configuration.BackgroundEnabled
         });
 
     public PantsOpenOptions WithMemtableLimits(

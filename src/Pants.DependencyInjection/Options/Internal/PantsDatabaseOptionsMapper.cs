@@ -38,9 +38,10 @@ static class PantsDatabaseOptionsMapper
                 options.LeaseTimeToLive,
                 options.LeaseClockSkewTolerance,
                 options.MinimumEpoch),
-            CreateCompaction(options.Compaction, options.BackgroundCompaction),
+            CreateCompaction(options.Compaction),
             options.RecoveryPolicy,
-            CreateCloudWritePolicy(options.CloudWritePolicy));
+            CreateCloudWritePolicy(options.CloudWritePolicy))
+            .WithBackgroundCompaction(options.BackgroundCompaction);
         PantsOpenOptionsValidator.Validate(result);
         return result;
     }
@@ -246,11 +247,9 @@ static class PantsDatabaseOptionsMapper
                 options.WalSealMaximumFlushDelay,
                 options.WalSealMaximumPendingWrites);
 
-    static PantsCompactionConfiguration CreateCompaction(
-        PantsCompactionOptions? options,
-        bool backgroundEnabled) =>
+    static PantsCompactionConfiguration? CreateCompaction(PantsCompactionOptions? options) =>
         options is null
-            ? new PantsCompactionConfiguration(BackgroundEnabled: backgroundEnabled)
+            ? null
             : new PantsCompactionConfiguration(
                 options.L0SizeTriggerBytes,
                 options.L0FileCountTrigger,
@@ -258,8 +257,7 @@ static class PantsDatabaseOptionsMapper
                 options.LevelMultiplier,
                 options.L1TargetSizeBytes,
                 options.MaximumLevels,
-                options.TargetSstSizeBytes,
-                backgroundEnabled);
+                options.TargetSstSizeBytes);
 
     static InvalidOperationException InvalidCredential(
         PantsCloudCredentialKind kind,

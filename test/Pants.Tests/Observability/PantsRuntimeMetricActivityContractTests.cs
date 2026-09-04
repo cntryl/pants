@@ -161,7 +161,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             Failpoint.BeforeCompactionManifestPublish);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -353,7 +353,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-compaction-stall/")
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));

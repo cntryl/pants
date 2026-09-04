@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 
 namespace Cntryl.Pants.Cloud.Internal.Objects;
 
@@ -48,7 +49,15 @@ sealed class ProviderObjectStoreSet(
         }
         catch
         {
-            await DisposeDistinctAsync(opened).ConfigureAwait(false);
+            try
+            {
+                await DisposeDistinctAsync(opened).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Cleanup must not replace the original initialization failure or cancellation.
+            }
+
             throw;
         }
 
@@ -69,12 +78,30 @@ sealed class ProviderObjectStoreSet(
     internal static async ValueTask DisposeDistinctAsync(IEnumerable<ICloudObjectStore> stores)
     {
         var distinctStores = new HashSet<ICloudObjectStore>(ReferenceEqualityComparer.Instance);
+        List<Exception>? failures = null;
         foreach (var store in stores)
         {
             if (distinctStores.Add(store))
             {
-                await store.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await store.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    (failures ??= []).Add(exception);
+                }
             }
+        }
+
+        if (failures is { Count: 1 })
+        {
+            ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+
+        if (failures is { Count: > 1 })
+        {
+            throw new AggregateException(failures);
         }
     }
 }

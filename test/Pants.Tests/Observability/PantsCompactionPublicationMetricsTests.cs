@@ -52,7 +52,8 @@ public sealed class PantsCompactionPublicationMetricsTests
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 2,
                 L1TargetSizeBytes: 1,
-                MaximumLevels: 3));
+                MaximumLevels: 3,
+                BackgroundEnabled: false));
 
     static async Task SeedTwoL0FilesAsync(IPantsDatabase database)
     {

@@ -393,11 +393,13 @@ sealed class Actor : IAsyncDisposable
                 var cloudStartupDeadline = OperationDeadline.FromBudget(
                     options.RuntimeResponseTimeout,
                     runtimeTimeProvider);
-                var objectStores = await ProviderObjectStoreSet.OpenAsync(
-                    cloud.Topology,
-                    options.StorageTimeout,
-                    dependencies.CloudHttpClient,
-                    dependencies.RuntimeTimeProvider,
+                var objectStores = await cloudStartupDeadline.RunAsync(
+                    token => ProviderObjectStoreSet.OpenAsync(
+                        cloud.Topology,
+                        options.StorageTimeout,
+                        dependencies.CloudHttpClient,
+                        dependencies.RuntimeTimeProvider,
+                        token),
                     cancellationToken).ConfigureAwait(false);
                 ProviderCloudPersistence? providerPersistence = null;
                 try

@@ -18,7 +18,7 @@ public sealed class PantsCloudPreflightTests
         var report = await CloudConfigurationPreflight.RunAsync(
             topology,
             new PantsCloudPreflightOptions(TimeSpan.FromSeconds(1)),
-            (_, _) => ValueTask.FromResult<ICloudObjectStore>(store),
+            (_, _, _) => ValueTask.FromResult<ICloudObjectStore>(store),
             CancellationToken.None);
 
         Assert.True(report.IsReady);
@@ -43,7 +43,7 @@ public sealed class PantsCloudPreflightTests
         var report = await CloudConfigurationPreflight.RunAsync(
             PantsCloudStorageTopology.Shared(CreateLocation()),
             PantsCloudPreflightOptions.Default,
-            (_, _) => ValueTask.FromResult<ICloudObjectStore>(store),
+            (_, _, _) => ValueTask.FromResult<ICloudObjectStore>(store),
             CancellationToken.None);
 
         Assert.True(report.IsReady);
@@ -65,7 +65,7 @@ public sealed class PantsCloudPreflightTests
         var report = await CloudConfigurationPreflight.RunAsync(
             PantsCloudStorageTopology.Shared(CreateLocation()),
             new PantsCloudPreflightOptions(TimeSpan.FromMilliseconds(30)),
-            (_, _) => ValueTask.FromResult<ICloudObjectStore>(store),
+            (_, _, _) => ValueTask.FromResult<ICloudObjectStore>(store),
             CancellationToken.None);
 
         stopwatch.Stop();
@@ -95,7 +95,7 @@ public sealed class PantsCloudPreflightTests
         var report = await CloudConfigurationPreflight.RunAsync(
             PantsCloudStorageTopology.Shared(CreateLocation()),
             PantsCloudPreflightOptions.Default,
-            (_, _) => ValueTask.FromResult<ICloudObjectStore>(store),
+            (_, _, _) => ValueTask.FromResult<ICloudObjectStore>(store),
             CancellationToken.None);
 
         var failure = Assert.Single(
@@ -117,7 +117,7 @@ public sealed class PantsCloudPreflightTests
             .RunAsync(
                 PantsCloudStorageTopology.Shared(CreateLocation()),
                 PantsCloudPreflightOptions.Default,
-                (_, _) => ValueTask.FromResult<ICloudObjectStore>(store),
+                (_, _, _) => ValueTask.FromResult<ICloudObjectStore>(store),
                 cancellation.Token).AsTask());
 
         Assert.Equal(0, store.MutationCalls);
@@ -143,7 +143,7 @@ public sealed class PantsCloudPreflightTests
         var report = await CloudConfigurationPreflight.RunAsync(
             topology,
             PantsCloudPreflightOptions.Default,
-            (location, _) => ValueTask.FromResult<ICloudObjectStore>(stores[location.Prefix]),
+            (location, _, _) => ValueTask.FromResult<ICloudObjectStore>(stores[location.Prefix]),
             CancellationToken.None);
 
         Assert.False(report.IsReady);

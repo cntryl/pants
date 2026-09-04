@@ -153,7 +153,7 @@ public sealed class PantsCloudDiskResidentReadTests
                 "pants-tests",
                 "disk-resident-compaction-precedence/")
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
 
         await CommitAndFlushAsync(database, "key", "old-value");
@@ -235,7 +235,7 @@ public sealed class PantsCloudDiskResidentReadTests
                 "pants-tests",
                 "compaction-inputs/")
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             for (var batch = 0; batch < 5; batch++)

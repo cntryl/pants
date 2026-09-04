@@ -52,7 +52,7 @@ public sealed class PantsPointReadDiskResidentTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
         await PutAsync(database, "key", "old-value");
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);

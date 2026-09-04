@@ -127,7 +127,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         using var handler = new GatedSstReadHttpHandler(new InMemoryAzureBlobHandler());
         using var client = new HttpClient(handler, false);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
                          new RuntimeDependencies(cloudHttpClient: client)))

@@ -33,7 +33,7 @@ public sealed class PantsLeveledCompactionTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
-                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3, BackgroundEnabled: false)));
         for (var index = 0; index < 8; index++)
         {
             await PutAndFlushAsync(database, index);
@@ -54,7 +54,7 @@ public sealed class PantsLeveledCompactionTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path)
                 .WithBackgroundCompaction(false)
-                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3)));
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3, BackgroundEnabled: false)));
         for (var index = 0; index < 3; index++)
         {
             await PutAndFlushAsync(database, index);
@@ -75,7 +75,7 @@ public sealed class PantsLeveledCompactionTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             await using (var transaction = await database.Transactions.BeginAsync(
@@ -115,7 +115,8 @@ public sealed class PantsLeveledCompactionTests
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 2,
-                TargetSstSizeBytes: 80));
+                TargetSstSizeBytes: 80,
+                BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             for (var batch = 0; batch < 2; batch++)

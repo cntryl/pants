@@ -14,7 +14,8 @@ static class CloudConfigurationPreflight
         return RunLocationsAsync(
             [new CloudStorageLocations.Item(location, [PantsCloudStorageRole.Standalone])],
             options ?? PantsCloudPreflightOptions.Default,
-            static (candidate, remaining) => CloudObjectStoreFactory.CreateAsync(candidate, remaining),
+            static (candidate, remaining, token) => CloudObjectStoreFactory.CreateAsync(
+                candidate, remaining, cancellationToken: token),
             cancellationToken);
     }
 
@@ -27,7 +28,8 @@ static class CloudConfigurationPreflight
         return RunLocationsAsync(
             CloudStorageLocations.Unique(topology),
             options ?? PantsCloudPreflightOptions.Default,
-            static (location, remaining) => CloudObjectStoreFactory.CreateAsync(location, remaining),
+            static (location, remaining, token) => CloudObjectStoreFactory.CreateAsync(
+                location, remaining, cancellationToken: token),
             cancellationToken);
     }
 
@@ -75,6 +77,8 @@ static class CloudConfigurationPreflight
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // The outer wait can observe cancellation before the linked token's callback runs.
+            await deadline.CancelAsync().ConfigureAwait(false);
             throw;
         }
         catch (TimeoutException)
@@ -104,7 +108,7 @@ static class CloudConfigurationPreflight
         ICloudObjectStore store;
         try
         {
-            store = await factory(item.Location, Remaining(totalBudget, started))
+            store = await factory(item.Location, Remaining(totalBudget, started), deadlineToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (!callerToken.IsCancellationRequested)
@@ -410,5 +414,6 @@ static class CloudConfigurationPreflight
 
     internal delegate ValueTask<ICloudObjectStore> StoreFactory(
         PantsCloudStorageLocation location,
-        TimeSpan remaining);
+        TimeSpan remaining,
+        CancellationToken cancellationToken);
 }

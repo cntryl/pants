@@ -389,7 +389,8 @@ public sealed class PantsDiskStorageTests
             .WithTransactionMemoryPool(2L * 1024 * 1024)
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 100,
-                TargetSstSizeBytes: 16 * 1024));
+                TargetSstSizeBytes: 16 * 1024,
+                BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenAsync(options);
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -482,7 +483,7 @@ public sealed class PantsDiskStorageTests
             Failpoint.AfterCompactionObsoleteFilesRetired);
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));

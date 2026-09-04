@@ -27,7 +27,7 @@ public sealed class PantsRuntimeMeterTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             await CommitAsync(database, "first", PantsWriteOptions.Sync);
@@ -109,7 +109,7 @@ public sealed class PantsRuntimeMeterTests
         var compactionFailure = new CloudCompactionFailpointHandler();
         var localOptions = PantsOpenOptions.Local(localDirectory.Path)
             .WithBackgroundCompaction(false)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var local = await PantsDatabase.OpenForTestingAsync(
                          localOptions,
                          new RuntimeDependencies(compactionFailure)))
