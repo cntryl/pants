@@ -203,6 +203,21 @@ sealed class RuntimePlan
             throw PantsException.ResourceLimit("Transaction memory pool exceeds the total memory budget.");
         }
 
+        if (MemtableSizeLimitBytes <= 0 || MemtableFlushThresholdBytes <= 0)
+        {
+            throw PantsException.InvalidArgument("Memtable limits must be greater than zero.");
+        }
+
+        if (WalBufferSizeBytes <= 0)
+        {
+            throw PantsException.InvalidArgument("WAL buffer size must be greater than zero.");
+        }
+
+        if (MemtableFlushThresholdBytes > MemtableSizeLimitBytes)
+        {
+            throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
+        }
+
         long reservedBytes;
         try
         {

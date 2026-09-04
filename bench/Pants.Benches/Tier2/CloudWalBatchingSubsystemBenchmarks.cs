@@ -29,7 +29,7 @@ public class CloudWalBatchingSubsystemBenchmarks : IAsyncDisposable
     public void SetupBatch() => Setup();
 
     [IterationCleanup]
-    public async Task Cleanup()
+    public async Task CleanupAsync()
     {
         await _persistence.DisposeAsync();
         if (Directory.Exists(_path))

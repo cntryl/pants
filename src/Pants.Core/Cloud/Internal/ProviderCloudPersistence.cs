@@ -69,16 +69,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        var stores = new HashSet<ICloudObjectStore>(ReferenceEqualityComparer.Instance)
-        {
-            _walStore,
-            _sstStore,
-            _controlStore
-        };
-        foreach (var store in stores)
-        {
-            await store.DisposeAsync().ConfigureAwait(false);
-        }
+        await ProviderObjectStoreSet.DisposeDistinctAsync(
+                [_walStore, _sstStore, _controlStore])
+            .ConfigureAwait(false);
 
         GC.SuppressFinalize(this);
     }

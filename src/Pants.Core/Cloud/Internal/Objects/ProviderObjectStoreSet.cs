@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Cntryl.Pants.Cloud.Internal.Objects;
 
 sealed class ProviderObjectStoreSet(
@@ -32,13 +34,17 @@ sealed class ProviderObjectStoreSet(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(topology);
-        var opened = new List<ICloudObjectStore>(3);
+        var opened = new ConcurrentBag<ICloudObjectStore>();
         try
         {
-            var wal = await OpenAsync(topology.Wal).ConfigureAwait(false);
-            var sst = await OpenAsync(topology.Sst).ConfigureAwait(false);
-            var control = await OpenAsync(topology.Control).ConfigureAwait(false);
-            return new ProviderObjectStoreSet(wal, sst, control);
+            var walTask = OpenAsync(topology.Wal);
+            var sstTask = OpenAsync(topology.Sst);
+            var controlTask = OpenAsync(topology.Control);
+            await Task.WhenAll(walTask, sstTask, controlTask).ConfigureAwait(false);
+            return new ProviderObjectStoreSet(
+                await walTask.ConfigureAwait(false),
+                await sstTask.ConfigureAwait(false),
+                await controlTask.ConfigureAwait(false));
         }
         catch
         {
@@ -46,7 +52,7 @@ sealed class ProviderObjectStoreSet(
             throw;
         }
 
-        async ValueTask<ICloudObjectStore> OpenAsync(PantsCloudStorageLocation location)
+        async Task<ICloudObjectStore> OpenAsync(PantsCloudStorageLocation location)
         {
             var store = await CloudObjectStoreFactory.CreateAsync(
                     location,
@@ -60,7 +66,7 @@ sealed class ProviderObjectStoreSet(
         }
     }
 
-    static async ValueTask DisposeDistinctAsync(IEnumerable<ICloudObjectStore> stores)
+    internal static async ValueTask DisposeDistinctAsync(IEnumerable<ICloudObjectStore> stores)
     {
         var distinctStores = new HashSet<ICloudObjectStore>(ReferenceEqualityComparer.Instance);
         foreach (var store in stores)

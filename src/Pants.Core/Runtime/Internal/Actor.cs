@@ -23,30 +23,30 @@ sealed class Actor : IAsyncDisposable
     int _activeCompactionRequests;
     bool _backgroundCompactionEnabled;
     bool _backgroundCompactionPending;
-    CloudCompactionOutputPublisher? _cloudCompactionOutputPublisher;
-    CloudDdlCoordinator? _cloudDdlCoordinator;
-    CloudFlushRetryScheduler _cloudFlushRetries = null!;
-    CloudLeaseCoordinator? _cloudLease;
-    CancellationTokenSource? _cloudLeaseCancellation;
-    Task? _cloudLeaseHeartbeat;
+    readonly CloudCompactionOutputPublisher? _cloudCompactionOutputPublisher;
+    readonly CloudDdlCoordinator? _cloudDdlCoordinator;
+    readonly CloudFlushRetryScheduler _cloudFlushRetries;
+    readonly CloudLeaseCoordinator? _cloudLease;
+    readonly CancellationTokenSource? _cloudLeaseCancellation;
+    readonly Task? _cloudLeaseHeartbeat;
     CloudWorkScheduler _cloudMaintenanceScheduler = null!;
     CloudMemtableSegmentTracker? _cloudMemtableSegments;
-    bool _cloudMode;
-    ICloudPersistence? _cloudPersistence;
+    readonly bool _cloudMode;
+    readonly ICloudPersistence? _cloudPersistence;
     CloudWorkScheduler _cloudWalDrainScheduler = null!;
     CloudWalSealController? _cloudWalSealController;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
     bool _cloudWalSealPending;
-    CloudWalUploadTracker _cloudWalUploads = null!;
+    readonly CloudWalUploadTracker _cloudWalUploads;
     RuntimeWorker _cloudWorker = null!;
     Channel<IRuntimeCommand> _commands = null!;
     long _commandsEnqueued;
     CompactionRuntimeService _compactionRuntime = null!;
     DatabaseVersion _currentVersion = null!;
     int _deferredCompactionScheduled;
-    LocalDiskStore? _diskStore;
+    readonly LocalDiskStore? _diskStore;
     int _disposed;
-    IFailpointHandler _failpoints = null!;
+    readonly IFailpointHandler _failpoints;
     FlushRuntimeService _flushRuntime = null!;
     bool _garbageCollectionPending;
     RuntimeWorker _garbageCollectionWorker = null!;
@@ -56,33 +56,85 @@ sealed class Actor : IAsyncDisposable
     RuntimeWorker _manifestWorker = null!;
     long _nextRuntimeRequestId;
     long _nextVerificationBarrierToken;
-    RuntimePlan _options = null!;
+    readonly RuntimePlan _options;
     int _persistenceAnomaly;
     PantsRuntimeMetrics _publishedRuntimeMetrics = new();
     int _queuedCommands;
     bool _readAmplificationCompactionPending;
     bool _recoveredMemtableFlushPending;
     RuntimeMetricsSnapshotFactory _runtimeMetricsSnapshotFactory = null!;
-    RuntimeResponseRegistry _runtimeResponses = null!;
-    TimeProvider _runtimeTimeProvider = null!;
-    ResourceBudget _scanMemoryBudget = null!;
+    readonly RuntimeResponseRegistry _runtimeResponses;
+    readonly TimeProvider _runtimeTimeProvider;
+    readonly ResourceBudget _scanMemoryBudget;
     bool _shutdownPreparationCompleted;
     bool _shutdownRequested;
     int _snapshotReleaseCollectionRequired;
 
-    RuntimeState _state = null!;
-    StorageVerificationDelegate _storageVerifier = null!;
-    RuntimeTelemetry _telemetry = null!;
+    readonly RuntimeState _state;
+    readonly StorageVerificationDelegate _storageVerifier;
+    readonly RuntimeTelemetry _telemetry;
     OnlineVerificationBarrier? _verificationBarrier;
-    VerificationBarrierResponseDelegate _verificationBarrierResponse = null!;
+    readonly VerificationBarrierResponseDelegate _verificationBarrierResponse;
     TaskCompletionSource? _verificationMaintenanceCompletion;
     long _walCloudDurableSequence;
-    WalMetricsRecorder _walMetrics = null!;
+    readonly WalMetricsRecorder _walMetrics;
     WalRuntimeService _walRuntime = null!;
     bool _workersStarted;
 
-    Actor()
+    /// <summary>
+    ///     Assigns every dependency resolved synchronously or asynchronously by
+    ///     <see cref="OpenAsync" /> before any storage backend I/O begins. The remaining fields are
+    ///     populated by <see cref="FinishStartupAsync" />, which runs recovery and worker startup as
+    ///     genuine instance methods (for example <see cref="EnsureCloudWriteAuthorityValid" /> and
+    ///     <see cref="DrainCloudWalBacklogAsync(CancellationToken)" />) against this already-constructed
+    ///     instance.
+    /// </summary>
+    Actor(
+        RuntimePlan options,
+        bool backgroundCompactionEnabled,
+        RuntimeTelemetry telemetry,
+        WalMetricsRecorder walMetrics,
+        CloudWalUploadTracker cloudWalUploads,
+        CloudFlushRetryScheduler cloudFlushRetries,
+        StorageVerificationDelegate storageVerifier,
+        VerificationBarrierResponseDelegate verificationBarrierResponse,
+        IFailpointHandler failpoints,
+        TimeProvider runtimeTimeProvider,
+        RuntimeResponseRegistry runtimeResponses,
+        ResourceBudget scanMemoryBudget,
+        RuntimeState state,
+        bool cloudMode,
+        LocalDiskStore? diskStore,
+        ICloudPersistence? cloudPersistence,
+        CloudCompactionOutputPublisher? cloudCompactionOutputPublisher,
+        CloudDdlCoordinator? cloudDdlCoordinator,
+        CloudLeaseCoordinator? cloudLease,
+        CancellationTokenSource? cloudLeaseCancellation,
+        Task? cloudLeaseHeartbeat,
+        long walCloudDurableSequence)
     {
+        _options = options;
+        _backgroundCompactionEnabled = backgroundCompactionEnabled;
+        _telemetry = telemetry;
+        _walMetrics = walMetrics;
+        _cloudWalUploads = cloudWalUploads;
+        _cloudFlushRetries = cloudFlushRetries;
+        _storageVerifier = storageVerifier;
+        _verificationBarrierResponse = verificationBarrierResponse;
+        _failpoints = failpoints;
+        _runtimeTimeProvider = runtimeTimeProvider;
+        _runtimeResponses = runtimeResponses;
+        _scanMemoryBudget = scanMemoryBudget;
+        _state = state;
+        _cloudMode = cloudMode;
+        _diskStore = diskStore;
+        _cloudPersistence = cloudPersistence;
+        _cloudCompactionOutputPublisher = cloudCompactionOutputPublisher;
+        _cloudDdlCoordinator = cloudDdlCoordinator;
+        _cloudLease = cloudLease;
+        _cloudLeaseCancellation = cloudLeaseCancellation;
+        _cloudLeaseHeartbeat = cloudLeaseHeartbeat;
+        _walCloudDurableSequence = walCloudDurableSequence;
     }
 
     public bool IsPrimaryLeaseHealthy =>
@@ -222,51 +274,42 @@ sealed class Actor : IAsyncDisposable
         RuntimeDependencies dependencies,
         CancellationToken cancellationToken = default)
     {
-        var actor = new Actor();
-        await actor.InitializeAsync(
-                options,
-                ttlClock,
-                telemetry,
-                dependencies,
-                cancellationToken)
-            .ConfigureAwait(false);
-        return actor;
-    }
-
-    async ValueTask InitializeAsync(
-        RuntimePlan options,
-        IPantsClock ttlClock,
-        RuntimeTelemetry telemetry,
-        RuntimeDependencies dependencies,
-        CancellationToken cancellationToken)
-    {
         cancellationToken.ThrowIfCancellationRequested();
-        var startupPhases = dependencies.StartupPhases;
-        _options = options;
-        _backgroundCompactionEnabled = options.BackgroundCompaction;
-        _telemetry = telemetry;
-        _walMetrics = new WalMetricsRecorder(telemetry);
-        _cloudWalUploads = new CloudWalUploadTracker(telemetry);
-        _cloudFlushRetries = new CloudFlushRetryScheduler(telemetry);
-        _storageVerifier = dependencies.StorageVerifier;
-        _verificationBarrierResponse = dependencies.VerificationBarrierResponse;
-        _failpoints = dependencies.Failpoints;
-        _runtimeTimeProvider = dependencies.RuntimeTimeProvider;
-        _runtimeResponses = new RuntimeResponseRegistry(telemetry, _runtimeTimeProvider);
-        _scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
+        var backgroundCompactionEnabled = options.BackgroundCompaction;
+        var walMetrics = new WalMetricsRecorder(telemetry);
+        var cloudWalUploads = new CloudWalUploadTracker(telemetry);
+        var cloudFlushRetries = new CloudFlushRetryScheduler(telemetry);
+        var storageVerifier = dependencies.StorageVerifier;
+        var verificationBarrierResponse = dependencies.VerificationBarrierResponse;
+        var failpoints = dependencies.Failpoints;
+        var runtimeTimeProvider = dependencies.RuntimeTimeProvider;
+        var runtimeResponses = new RuntimeResponseRegistry(telemetry, runtimeTimeProvider);
+        var scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
         var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
-        _state = new RuntimeState(ttlClock, telemetry);
+        var state = new RuntimeState(ttlClock, telemetry);
+        var startupPhases = dependencies.StartupPhases;
+
+        var cloudMode = false;
+        LocalDiskStore? diskStore = null;
+        ICloudPersistence? cloudPersistence = null;
+        CloudCompactionOutputPublisher? cloudCompactionOutputPublisher = null;
+        CloudDdlCoordinator? cloudDdlCoordinator = null;
+        CloudLeaseCoordinator? cloudLease = null;
+        CancellationTokenSource? cloudLeaseCancellation = null;
+        Task? cloudLeaseHeartbeat = null;
+        var walCloudDurableSequence = 0L;
+
         switch (options.Storage)
         {
             case PantsStorageConfiguration.InMemory:
-                _cloudMode = false;
+                cloudMode = false;
                 break;
             case PantsStorageConfiguration.Local local:
-                _diskStore = LocalDiskStore.Open(
+                diskStore = LocalDiskStore.Open(
                     local.Path,
-                    _state,
+                    state,
                     options.MinimumEpoch,
                     options.RecoveryPolicy,
                     options.PerformanceGoal,
@@ -281,7 +324,7 @@ sealed class Actor : IAsyncDisposable
                     startupPhases: startupPhases,
                     leaseClock: leaseClock,
                     leaseTimeToLive: options.LeaseTimeToLive);
-                _cloudMode = false;
+                cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
                 SimulatedCloudHydrationResult simulatedHydration;
@@ -294,14 +337,14 @@ sealed class Actor : IAsyncDisposable
 
                 if (simulatedHydration.RequiresSalvage)
                 {
-                    _state.MarkSalvageMode();
+                    state.MarkSalvageMode();
                 }
 
                 try
                 {
-                    _diskStore = LocalDiskStore.Open(
+                    diskStore = LocalDiskStore.Open(
                         simulated.LocalCachePath,
-                        _state,
+                        state,
                         simulatedHydration.MinimumWriterEpoch,
                         options.RecoveryPolicy,
                         options.PerformanceGoal,
@@ -319,29 +362,29 @@ sealed class Actor : IAsyncDisposable
                         options.LeaseTimeToLive);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
-                        _diskStore.WriterEpoch,
+                        diskStore.WriterEpoch,
                         dependencies.Failpoints);
-                    _cloudPersistence = simulatedPersistence;
-                    _cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
+                    cloudPersistence = simulatedPersistence;
+                    cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
                         simulated.LocalCachePath,
                         dependencies.Failpoints).PublishAsync;
-                    _cloudDdlCoordinator = new CloudDdlCoordinator(
+                    cloudDdlCoordinator = new CloudDdlCoordinator(
                         simulated.LocalCachePath,
                         simulatedPersistence,
-                        _diskStore,
+                        diskStore,
                         dependencies.Failpoints);
                     using (startupPhases.Measure(StartupPhase.IntentReconciliation))
                     {
-                        await _cloudDdlCoordinator
-                            .ReconcileStartupAsync(_state, cancellationToken)
+                        await cloudDdlCoordinator
+                            .ReconcileStartupAsync(state, cancellationToken)
                             .ConfigureAwait(false);
                     }
 
-                    _cloudMode = true;
+                    cloudMode = true;
                 }
                 catch
                 {
-                    CleanupFailedDiskStartup(_diskStore);
+                    CleanupFailedDiskStartup(diskStore);
                     throw;
                 }
 
@@ -349,14 +392,13 @@ sealed class Actor : IAsyncDisposable
             case PantsStorageConfiguration.Cloud cloud:
                 var cloudStartupDeadline = OperationDeadline.FromBudget(
                     options.RuntimeResponseTimeout,
-                    _runtimeTimeProvider);
+                    runtimeTimeProvider);
                 var objectStores = await ProviderObjectStoreSet.OpenAsync(
                     cloud.Topology,
                     options.StorageTimeout,
                     dependencies.CloudHttpClient,
                     dependencies.RuntimeTimeProvider,
                     cancellationToken).ConfigureAwait(false);
-                CloudLeaseCoordinator? cloudLease = null;
                 ProviderCloudPersistence? providerPersistence = null;
                 try
                 {
@@ -369,7 +411,6 @@ sealed class Actor : IAsyncDisposable
                         options.LeaseTimeToLive,
                         options.LeaseClockSkewTolerance,
                         options.LeaseLossCallback);
-                    _cloudLease = cloudLease;
                     ulong cloudEpoch;
                     using (startupPhases.Measure(StartupPhase.Lease))
                     {
@@ -396,12 +437,12 @@ sealed class Actor : IAsyncDisposable
 
                     if (hydration.RequiresSalvage)
                     {
-                        _state.MarkSalvageMode();
+                        state.MarkSalvageMode();
                     }
 
-                    _diskStore = LocalDiskStore.Open(
+                    diskStore = LocalDiskStore.Open(
                         cloud.LocalCachePath,
-                        _state,
+                        state,
                         cloudEpoch - 1,
                         options.RecoveryPolicy,
                         options.PerformanceGoal,
@@ -424,8 +465,8 @@ sealed class Actor : IAsyncDisposable
                         objectStores.Control,
                         cloudLease,
                         dependencies.Failpoints);
-                    _cloudPersistence = providerPersistence;
-                    _cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
+                    cloudPersistence = providerPersistence;
+                    cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
                         objectStores.Sst,
                         objectStores.Control,
@@ -435,28 +476,26 @@ sealed class Actor : IAsyncDisposable
                             providerPersistence.FenceWalCatalogAsync,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    _cloudDdlCoordinator = new CloudDdlCoordinator(
+                    cloudDdlCoordinator = new CloudDdlCoordinator(
                         cloud.LocalCachePath,
                         providerPersistence,
-                        _diskStore,
+                        diskStore,
                         dependencies.Failpoints);
                     using (startupPhases.Measure(StartupPhase.IntentReconciliation))
                     {
                         await cloudStartupDeadline.RunMutationAsync(
-                                token => _cloudDdlCoordinator.ReconcileStartupAsync(_state, token),
+                                token => cloudDdlCoordinator.ReconcileStartupAsync(state, token),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
 
-                    Volatile.Write(
-                        ref _walCloudDurableSequence,
-                        checked((long)hydration.CloudDurableSequence));
-                    _cloudLeaseCancellation = new CancellationTokenSource();
-                    _cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
+                    walCloudDurableSequence = checked((long)hydration.CloudDurableSequence);
+                    cloudLeaseCancellation = new CancellationTokenSource();
+                    cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
                         cloudLease,
                         leaseHeartbeatInterval,
-                        _cloudLeaseCancellation.Token);
-                    _cloudMode = true;
+                        cloudLeaseCancellation.Token);
+                    cloudMode = true;
                 }
                 catch
                 {
@@ -464,19 +503,14 @@ sealed class Actor : IAsyncDisposable
                     {
                         await CleanupFailedProviderStartupAsync(
                             cloudLease,
-                            _diskStore,
-                            _cloudLeaseCancellation,
-                            _cloudLeaseHeartbeat).ConfigureAwait(false);
+                            diskStore,
+                            cloudLeaseCancellation,
+                            cloudLeaseHeartbeat).ConfigureAwait(false);
                     }
 
-                    if (providerPersistence is not null)
-                    {
-                        await providerPersistence.DisposeAsync().ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await objectStores.DisposeAsync().ConfigureAwait(false);
-                    }
+                    await DisposeFailedCloudStartupResourcesAsync(
+                        providerPersistence,
+                        objectStores).ConfigureAwait(false);
 
                     throw;
                 }
@@ -486,6 +520,49 @@ sealed class Actor : IAsyncDisposable
                 throw PantsException.Create(PantsErrorCode.NotSupported, "Unknown storage backend.");
         }
 
+        var actor = new Actor(
+            options,
+            backgroundCompactionEnabled,
+            telemetry,
+            walMetrics,
+            cloudWalUploads,
+            cloudFlushRetries,
+            storageVerifier,
+            verificationBarrierResponse,
+            failpoints,
+            runtimeTimeProvider,
+            runtimeResponses,
+            scanMemoryBudget,
+            state,
+            cloudMode,
+            diskStore,
+            cloudPersistence,
+            cloudCompactionOutputPublisher,
+            cloudDdlCoordinator,
+            cloudLease,
+            cloudLeaseCancellation,
+            cloudLeaseHeartbeat,
+            walCloudDurableSequence);
+        await actor.FinishStartupAsync(options, telemetry, dependencies, startupPhases, cancellationToken)
+            .ConfigureAwait(false);
+        return actor;
+    }
+
+    /// <summary>
+    ///     Completes startup on the already-constructed <see cref="Actor" />: runs cloud-WAL recovery
+    ///     and starts the background workers. This must run as an instance method (rather than folding
+    ///     into the static <see cref="OpenAsync" /> factory) because recovery calls genuine instance
+    ///     members such as <see cref="EnsureCloudWriteAuthorityValid" /> and
+    ///     <see cref="DrainCloudWalBacklogAsync(CancellationToken)" /> that are also used throughout the
+    ///     actor's normal operating lifetime.
+    /// </summary>
+    async ValueTask FinishStartupAsync(
+        RuntimePlan options,
+        RuntimeTelemetry telemetry,
+        RuntimeDependencies dependencies,
+        StartupPhaseRecorder startupPhases,
+        CancellationToken cancellationToken)
+    {
         try
         {
             _hybridCache = options.Storage switch
@@ -645,6 +722,27 @@ sealed class Actor : IAsyncDisposable
             }
 
             throw;
+        }
+    }
+
+    internal static async ValueTask DisposeFailedCloudStartupResourcesAsync(
+        ProviderCloudPersistence? providerPersistence,
+        ProviderObjectStoreSet objectStores)
+    {
+        try
+        {
+            if (providerPersistence is not null)
+            {
+                await providerPersistence.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                await objectStores.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+            // Startup cleanup must not replace the original failure.
         }
     }
 
