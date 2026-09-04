@@ -131,8 +131,9 @@ locations. Explicit locations override the shared location for that object class
 }
 ```
 
-Cloud provider kinds are `AwsS3`, `S3Compatible`, `AzureBlob`, and `Gcs`. Credential kinds are
-provider-specific and validated accordingly:
+Cloud provider kinds are `AwsS3`, `S3Compatible`, `AzureBlob`, `Gcs`, and `OciObjectStorage`.
+OCI uses `Namespace`, `Bucket`, and `Region`; `Endpoint` optionally overrides the derived OCI S3
+Compatibility API origin. Credential kinds are provider-specific and validated accordingly:
 
 - S3: `S3Static`, `S3Environment`, `S3SharedProfile`, `AwsDefaultChain`.
 - Azure Blob: `AzureSharedKey`, `AzureSasToken`, `AzureConnectionString`,
@@ -140,11 +141,13 @@ provider-specific and validated accordingly:
   `AzureManagedIdentity`, `AzureLightweightDefaultChain`.
 - GCS: `GcsBearerToken`, `GcsHmacKey`, `GcsApplicationDefault`,
   `GcsServiceAccountJsonFile`, `GcsAuthorizedUserJsonFile`, `GcsMetadataServer`.
+- OCI: `OciCustomerSecretKey`, `OciEnvironment`, `OciSharedProfile`.
 
-`Default` selects `AwsDefaultChain`, `AzureLightweightDefaultChain`, or `GcsApplicationDefault`
-according to the provider. Prefer default chains, workload identity, or managed identity over
-static secrets. If static credentials are necessary, supply them through a secret-aware
-configuration provider rather than a checked-in JSON file.
+`Default` selects `AwsDefaultChain` for native AWS, `S3Environment` for a generic S3-compatible
+provider, `AzureLightweightDefaultChain`, `GcsApplicationDefault`, or `OciEnvironment` according to
+the provider. Prefer default chains, workload identity, managed identity, or environment/profile
+resolution over static secrets. If static credentials are necessary, supply them through a
+secret-aware configuration provider rather than a checked-in JSON file.
 
 ## Lifetime behavior
 

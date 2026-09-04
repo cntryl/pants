@@ -56,11 +56,40 @@ sealed class S3ObjectStore : ICloudObjectStore
                     false,
                     credentialHttpClient ?? httpClient,
                     timeout)),
+            PantsCloudProviderConfiguration.OciObjectStorage oci => (
+                oci.Bucket,
+                oci.Region,
+                oci.EffectiveEndpoint,
+                true,
+                S3CredentialResolver.Resolve(
+                    ConvertOciCredentials(oci.Credentials),
+                    oci.Region,
+                    false,
+                    credentialHttpClient ?? httpClient,
+                    timeout)),
             _ => throw PantsException.InvalidArgument("An S3 provider configuration is required.")
         };
         _prefix = NormalizePrefix(prefix);
         _timeout = timeout;
     }
+
+    static PantsS3CredentialSource ConvertOciCredentials(PantsOciCredentialSource source) =>
+        source switch
+        {
+            PantsOciCredentialSource.CustomerSecretKey credentials =>
+                new PantsS3CredentialSource.StaticCredentials(
+                    credentials.AccessKey,
+                    credentials.SecretKey),
+            PantsOciCredentialSource.Environment => new PantsS3CredentialSource.Environment(),
+            PantsOciCredentialSource.SharedProfile profile =>
+                new PantsS3CredentialSource.SharedProfile(
+                    profile.Profile,
+                    profile.CredentialsFile,
+                    profile.ConfigFile),
+            PantsOciCredentialSource.AwsDefaultChain =>
+                new PantsS3CredentialSource.AwsDefaultChain(),
+            _ => throw PantsException.InvalidArgument("An OCI credential source is required.")
+        };
 
     public async ValueTask<CloudObject?> GetAsync(
         string objectKey,

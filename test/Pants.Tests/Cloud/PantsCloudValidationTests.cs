@@ -22,12 +22,11 @@ public sealed class PantsCloudValidationTests
         Assert.True(report.IsValid);
         var finding = Assert.Single(report.Findings);
         Assert.Equal(PantsCloudValidationProviderKind.AwsS3, finding.Provider);
-        Assert.Equal(
-            ImmutableArray.Create(
+        Assert.True(
+            finding.Roles.SequenceEqual(ImmutableArray.Create(
                 PantsCloudStorageRole.Wal,
                 PantsCloudStorageRole.Sst,
-                PantsCloudStorageRole.Control),
-            finding.Roles);
+                PantsCloudStorageRole.Control)));
         Assert.Equal(PantsCloudValidationMode.Structural, finding.Mode);
         Assert.Equal(PantsCloudCheckCode.Configuration, finding.Code);
         Assert.Equal(PantsCloudCheckOutcome.Passed, finding.Outcome);
@@ -129,5 +128,46 @@ public sealed class PantsCloudValidationTests
             new PantsOciCredentialSource.AwsDefaultChain());
 
         Assert.False(provider.Validate().IsValid);
+    }
+
+    [Fact]
+    public void ShouldProvideValueEqualityForDeterministicReports()
+    {
+        var provider = new PantsCloudProviderConfiguration.AwsS3(
+            "valid-bucket",
+            "us-east-1",
+            new PantsS3CredentialSource.Environment());
+
+        Assert.Equal(provider.Validate(), provider.Validate());
+        Assert.Equal(provider.Validate().GetHashCode(), provider.Validate().GetHashCode());
+    }
+
+    [Fact]
+    public void ShouldValidateAzureAndGcsProviderShapes()
+    {
+        var azure = new PantsCloudProviderConfiguration.AzureBlob(
+            "account1",
+            "container",
+            null,
+            new PantsAzureCredentialSource.LightweightDefaultChain());
+        var gcs = new PantsCloudProviderConfiguration.Gcs(
+            "gcs-bucket",
+            "project",
+            null,
+            PantsGcsApiStyle.Json,
+            new PantsGcsCredentialSource.ApplicationDefault());
+        var invalidAzure = azure with { Account = "Uppercase" };
+        var invalidGcs = gcs with { Bucket = "goog-reserved" };
+
+        Assert.True(azure.Validate().IsValid);
+        Assert.True(gcs.Validate().IsValid);
+        Assert.False(invalidAzure.Validate().IsValid);
+        Assert.False(invalidGcs.Validate().IsValid);
+        Assert.Equal(
+            PantsCloudValidationProviderKind.AzureBlob,
+            Assert.Single(azure.Validate().Findings).Provider);
+        Assert.Equal(
+            PantsCloudValidationProviderKind.Gcs,
+            Assert.Single(gcs.Validate().Findings).Provider);
     }
 }

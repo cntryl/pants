@@ -20,5 +20,8 @@ public enum PantsCloudCredentialKind
     GcsApplicationDefault,
     GcsServiceAccountJsonFile,
     GcsAuthorizedUserJsonFile,
-    GcsMetadataServer
+    GcsMetadataServer,
+    OciCustomerSecretKey,
+    OciEnvironment,
+    OciSharedProfile
 }

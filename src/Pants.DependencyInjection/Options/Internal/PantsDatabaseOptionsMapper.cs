@@ -110,13 +110,20 @@ static class PantsDatabaseOptionsMapper
                     options.Endpoint ?? throw new InvalidOperationException(
                         "The S3-compatible endpoint is required."),
                     options.PathStyle,
-                    CreateS3Credential(options.Credential)),
+                    CreateS3Credential(options.Credential, false)),
             PantsCloudProviderKind.AzureBlob => new PantsCloudProviderConfiguration.AzureBlob(
                 RequireText(options.Account, "The Azure account must not be empty."),
                 RequireText(options.Container, "The Azure container must not be empty."),
                 options.Endpoint,
                 CreateAzureCredential(options.Credential)),
             PantsCloudProviderKind.Gcs => CreateGcsProvider(options),
+            PantsCloudProviderKind.OciObjectStorage =>
+                new PantsCloudProviderConfiguration.OciObjectStorage(
+                    RequireText(options.Namespace, "The OCI namespace must not be empty."),
+                    RequireText(options.Bucket, "The OCI bucket must not be empty."),
+                    RequireText(options.Region, "The OCI region must not be empty."),
+                    options.Endpoint,
+                    CreateOciCredential(options.Credential)),
             _ => throw new InvalidOperationException("The cloud provider kind is invalid.")
         };
 
@@ -139,9 +146,13 @@ static class PantsDatabaseOptionsMapper
         }
     }
 
-    static PantsS3CredentialSource CreateS3Credential(PantsCloudCredentialOptions options) =>
+    static PantsS3CredentialSource CreateS3Credential(
+        PantsCloudCredentialOptions options,
+        bool defaultToAwsChain = true) =>
         options.Kind switch
         {
+            PantsCloudCredentialKind.Default when !defaultToAwsChain =>
+                new PantsS3CredentialSource.Environment(),
             PantsCloudCredentialKind.Default or PantsCloudCredentialKind.AwsDefaultChain =>
                 new PantsS3CredentialSource.AwsDefaultChain(),
             PantsCloudCredentialKind.S3Environment => new PantsS3CredentialSource.Environment(),
@@ -205,6 +216,22 @@ static class PantsDatabaseOptionsMapper
             PantsCloudCredentialKind.GcsMetadataServer =>
                 new PantsGcsCredentialSource.MetadataServer(),
             _ => throw InvalidCredential(options.Kind, "GCS")
+        };
+
+    static PantsOciCredentialSource CreateOciCredential(PantsCloudCredentialOptions options) =>
+        options.Kind switch
+        {
+            PantsCloudCredentialKind.Default or PantsCloudCredentialKind.OciEnvironment =>
+                new PantsOciCredentialSource.Environment(),
+            PantsCloudCredentialKind.OciCustomerSecretKey =>
+                new PantsOciCredentialSource.CustomerSecretKey(
+                    RequireText(options.AccessKey, "The OCI access key must not be empty."),
+                    RequireText(options.SecretKey, "The OCI secret key must not be empty.")),
+            PantsCloudCredentialKind.OciSharedProfile => new PantsOciCredentialSource.SharedProfile(
+                options.Profile,
+                options.CredentialsFile,
+                options.ConfigFile),
+            _ => throw InvalidCredential(options.Kind, "OCI Object Storage")
         };
 
     static PantsCloudWritePolicy? CreateCloudWritePolicy(PantsCloudWriteOptions? options) =>

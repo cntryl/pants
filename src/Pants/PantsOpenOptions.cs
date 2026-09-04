@@ -548,9 +548,23 @@ public sealed class PantsOpenOptions
                 ValidateEnum(gcs.ApiStyle, nameof(gcs.ApiStyle));
                 ArgumentNullException.ThrowIfNull(gcs.Credential);
                 break;
+            case PantsCloudProviderConfiguration.OciObjectStorage oci:
+                ValidateProviderText(oci.Namespace, "OCI namespace");
+                ValidateProviderText(oci.Bucket, "OCI bucket");
+                ValidateProviderText(oci.Region, "OCI region");
+                ValidateOptionalHttpEndpoint(oci.Endpoint, "OCI endpoint");
+                ArgumentNullException.ThrowIfNull(oci.Credentials);
+                break;
             default:
                 throw PantsException.InvalidArgument(
                     $"The {objectClass} cloud provider is unsupported.");
+        }
+
+        var report = location.Validate();
+        if (!report.IsValid)
+        {
+            throw PantsException.InvalidArgument(
+                $"The {objectClass} cloud location is invalid: {report.Findings[0].Message}");
         }
     }
 

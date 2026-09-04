@@ -11,7 +11,7 @@ public sealed class PantsCloudPreflightTests
         {
             Page = new CloudObjectListPage(["manifest/current"], null),
             Metadata = new CloudObjectMetadata(4, "version", null, null),
-            Range = new CloudObject([42], "version")
+            Range = new CloudObject(new byte[] { 42 }, "version")
         };
         var topology = PantsCloudStorageTopology.Shared(CreateLocation());
 
@@ -19,7 +19,7 @@ public sealed class PantsCloudPreflightTests
             topology,
             new PantsCloudPreflightOptions(TimeSpan.FromSeconds(1)),
             (_, _) => store,
-            TestContext.Current.CancellationToken);
+            CancellationToken.None);
 
         Assert.True(report.IsReady);
         Assert.True(report.IsFullyVerified);
@@ -27,13 +27,12 @@ public sealed class PantsCloudPreflightTests
         Assert.Equal(0, store.MutationCalls);
         Assert.All(
             report.Findings,
-            static finding => Assert.Equal(
+            static finding => Assert.True(finding.Roles.SequenceEqual(
                 [
                     PantsCloudStorageRole.Wal,
                     PantsCloudStorageRole.Sst,
                     PantsCloudStorageRole.Control
-                ],
-                finding.Roles));
+                ])));
     }
 
     [Fact]
@@ -45,7 +44,7 @@ public sealed class PantsCloudPreflightTests
             PantsCloudStorageTopology.Shared(CreateLocation()),
             PantsCloudPreflightOptions.Default,
             (_, _) => store,
-            TestContext.Current.CancellationToken);
+            CancellationToken.None);
 
         Assert.True(report.IsReady);
         Assert.False(report.IsFullyVerified);
@@ -67,7 +66,7 @@ public sealed class PantsCloudPreflightTests
             PantsCloudStorageTopology.Shared(CreateLocation()),
             new PantsCloudPreflightOptions(TimeSpan.FromMilliseconds(30)),
             (_, _) => store,
-            TestContext.Current.CancellationToken);
+            CancellationToken.None);
 
         stopwatch.Stop();
         Assert.False(report.IsReady);
@@ -97,7 +96,7 @@ public sealed class PantsCloudPreflightTests
             PantsCloudStorageTopology.Shared(CreateLocation()),
             PantsCloudPreflightOptions.Default,
             (_, _) => store,
-            TestContext.Current.CancellationToken);
+            CancellationToken.None);
 
         var failure = Assert.Single(
             report.Findings,
@@ -119,7 +118,7 @@ public sealed class PantsCloudPreflightTests
                 PantsCloudStorageTopology.Shared(CreateLocation()),
                 PantsCloudPreflightOptions.Default,
                 (_, _) => store,
-                cancellation.Token));
+                cancellation.Token).AsTask());
 
         Assert.Equal(0, store.MutationCalls);
     }
@@ -145,7 +144,7 @@ public sealed class PantsCloudPreflightTests
             topology,
             PantsCloudPreflightOptions.Default,
             (location, _) => stores[location.Prefix],
-            TestContext.Current.CancellationToken);
+            CancellationToken.None);
 
         Assert.False(report.IsReady);
         Assert.Equal(1, stores["good"].Calls.Count(static call => call == "List"));

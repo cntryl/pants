@@ -194,6 +194,41 @@ public sealed class S3ObjectStoreTests
     }
 
     [Fact]
+    public async Task ShouldRouteAndSignOciAsAFirstClassProvider()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>")
+        });
+        using var client = new HttpClient(handler);
+        const string secret = "oci-sensitive-secret";
+        var store = new S3ObjectStore(
+            new PantsCloudProviderConfiguration.OciObjectStorage(
+                "namespace",
+                "bucket",
+                "us-ashburn-1",
+                null,
+                new PantsOciCredentialSource.CustomerSecretKey("oci-access", secret)),
+            "database",
+            client,
+            TimeSpan.FromSeconds(5));
+
+        _ = await store.ListPageAsync("", null, CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(
+            "namespace.compat.objectstorage.us-ashburn-1.oraclecloud.com",
+            request.Uri.Host);
+        Assert.Equal("/bucket/", request.Uri.AbsolutePath);
+        Assert.Contains("prefix=database%2F", request.Uri.Query, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "AWS4-HMAC-SHA256 Credential=oci-access/",
+            request.Authorization,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, request.Authorization, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ShouldApplyOperationDeadlineWhileReadingResponseBody()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

@@ -225,7 +225,7 @@ public sealed class PantsOptionsPatternTests
             case PantsCloudProviderKind.S3Compatible:
                 var s3 = Assert.IsType<PantsCloudProviderConfiguration.S3Compatible>(
                     location.Provider);
-                Assert.IsType<PantsS3CredentialSource.AwsDefaultChain>(s3.Credentials);
+                Assert.IsType<PantsS3CredentialSource.Environment>(s3.Credentials);
                 break;
             case PantsCloudProviderKind.AzureBlob:
                 var azure = Assert.IsType<PantsCloudProviderConfiguration.AzureBlob>(

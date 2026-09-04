@@ -5,6 +5,17 @@ public sealed record PantsCloudStorageTopology(
     PantsCloudStorageLocation Sst,
     PantsCloudStorageLocation Control)
 {
+    /// <summary>Validates each unique physical location without I/O.</summary>
+    public PantsCloudValidationReport Validate() => CloudConfigurationValidator.Validate(this);
+
+    /// <summary>
+    /// Performs one deadline-bounded read-only preflight per unique physical location.
+    /// </summary>
+    public ValueTask<PantsCloudValidationReport> PreflightAsync(
+        PantsCloudPreflightOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        CloudConfigurationPreflight.RunAsync(this, options, cancellationToken);
+
     public static PantsCloudStorageTopology Shared(PantsCloudStorageLocation location)
     {
         ArgumentNullException.ThrowIfNull(location);

@@ -4,6 +4,10 @@ Sqrzl is the deterministic qualification environment for Pants cloud storage. Th
 uses the same pinned emulator image as Midge and provides S3, Azure Blob, GCS XML, and GCS JSON front
 doors without live-cloud credentials.
 
+OCI configuration and request routing have deterministic structural and provider-shaped coverage,
+but Sqrzl does not expose an OCI identity and no live OCI qualification is claimed. OCI production
+qualification requires a separate credentialed run against OCI Object Storage.
+
 Start the emulator:
 
 ```console

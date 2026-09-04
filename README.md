@@ -237,7 +237,9 @@ The service provider owns the database and closes it during asynchronous disposa
 
 ## Cloud-backed storage
 
-Pants supports Amazon S3, S3-compatible services, Azure Blob Storage, and Google Cloud Storage.
+Pants supports Amazon S3, S3-compatible services, Azure Blob Storage, Google Cloud Storage, and
+first-class Oracle Cloud Infrastructure Object Storage configuration through OCI's S3
+Compatibility API.
 Cloud storage uses a local cache directory and a provider location:
 
 ```csharp
@@ -259,7 +261,8 @@ await using var database = await PantsDatabase.OpenAsync(options, cancellationTo
 
 Prefer environment, workload-identity, managed-identity, or default credential chains over static
 credentials. Use `PantsOpenOptions.CloudMulti` only when WAL, SST, and control data need separate
-locations.
+locations. Validate configuration without I/O and optionally run a read-only provider preflight
+before opening; see [cloud validation and preflight](docs/cloud-validation.md).
 
 ## Health and verification
 

@@ -10,6 +10,8 @@ public sealed class PantsCloudProviderOptions
 
     public string? Region { get; set; }
 
+    public string? Namespace { get; set; }
+
     public string? Account { get; set; }
 
     public string? Container { get; set; }
