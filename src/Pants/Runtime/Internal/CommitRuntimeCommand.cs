@@ -11,17 +11,21 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
         Func<RuntimeState, ValueTask<bool>> operation,
         RuntimeResponseRegistry registry,
         long requestId,
-        string requestKind)
+        string requestKind,
+        OperationDeadline deadline = default)
     {
         WriteOptions = writeOptions;
         Payload = payload;
         _operation = operation;
         _response = new RuntimeResponseSlot<bool>(registry, requestId, requestKind);
+        Deadline = deadline;
     }
 
     public PantsWriteOptions WriteOptions { get; }
 
     public CommitPayload Payload { get; }
+
+    public OperationDeadline Deadline { get; }
 
     public Task<bool> Task => _response.Response;
 

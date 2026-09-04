@@ -43,6 +43,74 @@ public sealed class OperationDeadlineTests
     }
 
     [Fact]
+    public async Task ShouldPerformZeroCloudCallsGivenDeadlineExpiredBeforeSubmission()
+    {
+        var store = new TestCloudObjectStore();
+        var deadline = OperationDeadline.FromBudget(TimeSpan.Zero, new ManualTimeProvider());
+
+        var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() => store.PutAsync(
+            "private/object-key",
+            "private-value"u8.ToArray(),
+            new CloudObjectWriteCondition.IfAbsent(),
+            deadline,
+            CancellationToken.None).AsTask());
+
+        Assert.Equal(0, store.PutCount);
+        Assert.Contains("before submission", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private/object-key", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-value", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShouldConsumeOneBudgetAcrossSequentialCloudCalls()
+    {
+        var time = new ManualTimeProvider();
+        var deadline = OperationDeadline.FromBudget(TimeSpan.FromMilliseconds(100), time);
+        var firstCalls = 0;
+        var secondCalls = 0;
+
+        await deadline.RunAsync(
+            _ =>
+            {
+                firstCalls++;
+                time.Advance(TimeSpan.FromMilliseconds(100));
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+        _ = await Assert.ThrowsAsync<PantsTimeoutException>(() => deadline.RunAsync(
+            _ =>
+            {
+                secondCalls++;
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None).AsTask());
+
+        Assert.Equal(1, firstCalls);
+        Assert.Equal(0, secondCalls);
+    }
+
+    [Fact]
+    public async Task ShouldClassifyMutationTimeoutAsOutcomeIndeterminate()
+    {
+        var store = new TestCloudObjectStore
+        {
+            BeforeNextPutAsync = async cancellationToken =>
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
+        };
+        var deadline = OperationDeadline.FromBudget(TimeSpan.FromMilliseconds(20));
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() => store.PutAsync(
+            "object-key",
+            "value"u8.ToArray(),
+            new CloudObjectWriteCondition.IfAbsent(),
+            deadline,
+            CancellationToken.None).AsTask());
+
+        Assert.Equal(1, store.PutCount);
+        Assert.Contains("indeterminate", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ShouldExposeExplicitUnboundedOwnershipForCallerlessObligations()
     {
         var deadline = OperationDeadline.Unbounded;

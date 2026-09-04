@@ -5,8 +5,12 @@ immutable `DatabaseSnapshot` publication and admits commands through a bounded
 channel. Reads use frozen snapshots; mutations are serialized by the
 coordinator.
 
-Every command that expects a synchronous runtime response receives a monotonic request ID after
-admission and shares one `RuntimeResponseTimeout` budget for that response. If the caller's own
+Every command that expects a synchronous runtime response receives a monotonic request ID at
+admission and shares one `RuntimeResponseTimeout` budget for its response and nested cloud work.
+Queue time and every provider, lease, catalog, manifest, and publication call consume that same
+absolute monotonic budget; an expired budget is rejected before another provider request can be
+submitted. Individual provider calls remain capped by `StorageTimeout`, so neither nesting nor
+retry resets the aggregate deadline. If the caller's own
 cancellation expires first it remains authoritative. If the runtime-response budget expires,
 Pants removes the live waiter, retains only bounded and expiring request-kind/timing metadata, and
 reports `PantsTimeoutException` with an outcome-unknown diagnostic. The accepted command is not
@@ -15,7 +19,10 @@ terminal response is consumed once and counted by `RuntimeLateResponsesTotal`; c
 bounded tombstones, and total abandonments are available in `PantsRuntimeMetrics`.
 
 Open/recovery is not an admitted runtime-response wait: provider/storage calls made while opening
-use `StorageTimeout`. Shutdown preparation is governed by the explicit timeout passed to
+share one startup `RuntimeResponseTimeout` budget while each request remains capped by
+`StorageTimeout`. Callerless durability retries have an explicit unbounded aggregate owner, bounded
+provider calls, backoff, and a runtime/recovery lifecycle; they never inherit an abandoned caller's
+cancellation token. Shutdown preparation is governed by the explicit timeout passed to
 `ShutdownAsync` (or `ShutdownTimeout` during disposal), while work already admitted before caller
 abandonment remains owned until it reaches a terminal runtime state.
 
