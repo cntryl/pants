@@ -57,3 +57,11 @@ implements expiry, conditional takeover, renewal, and fencing over
 `ICloudLeaseStore`. `CloudObjectLeaseStore` persists the Midge lease document
 through conditional object operations, allowing provider clients to supply
 ETag or generation semantics without entering the runtime layer.
+
+Local, simulated-cloud, and provider-cloud writers use the same `LeaseTimeToLive` and
+`LeaseClockSkewTolerance` profile. The 30-second default TTL retains the provider-cloud default
+and aligns local takeover with current Midge; older Pants builds used an independent 60-second
+local takeover delay. The exact boundary remains held, and takeover becomes eligible on the first
+clock tick after `last renewal + TTL + skew`. Heartbeats run at one third of TTL, bounded between
+1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
+release still validates the writer epoch/owner token, so a resumed old owner remains fenced.

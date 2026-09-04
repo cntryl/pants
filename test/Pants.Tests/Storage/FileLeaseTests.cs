@@ -21,20 +21,32 @@ public sealed class FileLeaseTests
             TimeSpan.Zero,
             null,
             LongHeartbeatInterval,
-            clock));
+            clock,
+            leaseTimeToLive: TimeSpan.FromSeconds(60)));
 
         await WriteLeaseRecordAsync(
             directory.Path,
             5,
             "previous-writer",
             clock.UtcNow - TimeSpan.FromSeconds(60));
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            leaseTimeToLive: TimeSpan.FromSeconds(60)));
+
+        clock.UtcNow += TimeSpan.FromTicks(1);
         using var lease = FileLease.Acquire(
             directory.Path,
             0,
             TimeSpan.Zero,
             null,
             LongHeartbeatInterval,
-            clock);
+            clock,
+            leaseTimeToLive: TimeSpan.FromSeconds(60));
 
         Assert.Equal(6UL, lease.Epoch);
     }

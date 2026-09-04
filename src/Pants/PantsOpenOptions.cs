@@ -4,6 +4,7 @@ namespace Cntryl.Pants;
 public sealed class PantsOpenOptions
 {
     const long FallbackMemoryBudgetBytes = 512L * 1024 * 1024;
+    static readonly TimeSpan MinimumLeaseTimeToLive = TimeSpan.FromMilliseconds(3);
     readonly Configuration _configuration;
 
     PantsOpenOptions(Configuration configuration)
@@ -180,6 +181,11 @@ public sealed class PantsOpenOptions
 
     public PantsCompactionConfiguration Compaction { get; }
 
+    /// <summary>
+    /// Primary-writer lease lifetime used consistently by local and cloud storage.
+    /// </summary>
+    public TimeSpan LeaseTimeToLive => _configuration.LeaseTimeToLive;
+
     public TimeSpan LeaseClockSkewTolerance => _configuration.LeaseClockSkewTolerance;
 
     public ulong MinimumEpoch => _configuration.MinimumEpoch;
@@ -191,6 +197,11 @@ public sealed class PantsOpenOptions
     internal int CoordinatorQueueCapacity => _configuration.CoordinatorQueueCapacity;
 
     internal int FlushAfterWalRecords => _configuration.FlushAfterWalRecords;
+
+    internal TimeSpan LeaseHeartbeatInterval => TimeSpan.FromTicks(Math.Clamp(
+        LeaseTimeToLive.Ticks / 3,
+        TimeSpan.TicksPerMillisecond,
+        TimeSpan.FromSeconds(10).Ticks));
 
     public static PantsOpenOptions InMemory() =>
         new(Configuration.Default(new PantsStorageConfiguration.InMemory()));
@@ -235,6 +246,7 @@ public sealed class PantsOpenOptions
         long? memtableFlushThresholdBytes,
         long? transactionMemoryPoolBytes,
         int? walBufferSizeBytes,
+        TimeSpan leaseTimeToLive,
         TimeSpan leaseClockSkewTolerance,
         PantsCompactionConfiguration? compaction,
         ulong minimumEpoch)
@@ -257,6 +269,7 @@ public sealed class PantsOpenOptions
             MemtableFlushThresholdBytes = memtableFlushThresholdBytes,
             TransactionMemoryPoolBytes = transactionMemoryPoolBytes,
             WalBufferSizeBytes = walBufferSizeBytes,
+            LeaseTimeToLive = leaseTimeToLive,
             LeaseClockSkewTolerance = leaseClockSkewTolerance,
             Compaction = compaction,
             MinimumEpoch = minimumEpoch
@@ -322,6 +335,9 @@ public sealed class PantsOpenOptions
         {
             LeaseLossCallback = callback ?? throw new ArgumentNullException(nameof(callback))
         });
+
+    public PantsOpenOptions WithLeaseTimeToLive(TimeSpan timeToLive) =>
+        With(_configuration with { LeaseTimeToLive = timeToLive });
 
     public PantsOpenOptions WithLeaseClockSkewTolerance(TimeSpan tolerance) =>
         With(_configuration with { LeaseClockSkewTolerance = tolerance });
@@ -430,11 +446,19 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
         }
 
-        if (LeaseClockSkewTolerance < TimeSpan.Zero ||
-            LeaseClockSkewTolerance > TimeSpan.FromSeconds(30))
+        if (LeaseTimeToLive < MinimumLeaseTimeToLive)
         {
             throw PantsException.InvalidArgument(
-                "Lease clock-skew tolerance must be between zero and 30 seconds.");
+                $"LeaseTimeToLive ({LeaseTimeToLive:c}) must be at least " +
+                $"{MinimumLeaseTimeToLive:c}.");
+        }
+
+        if (LeaseClockSkewTolerance < TimeSpan.Zero ||
+            LeaseClockSkewTolerance >= LeaseTimeToLive)
+        {
+            throw PantsException.InvalidArgument(
+                $"LeaseClockSkewTolerance ({LeaseClockSkewTolerance:c}) must be non-negative " +
+                $"and strictly less than LeaseTimeToLive ({LeaseTimeToLive:c}).");
         }
 
         if (CloudWritePolicy.EventualFlushSegmentGap <= 0 ||
@@ -614,6 +638,7 @@ public sealed class PantsOpenOptions
         long? MemtableFlushThresholdBytes,
         long? TransactionMemoryPoolBytes,
         int? WalBufferSizeBytes,
+        TimeSpan LeaseTimeToLive,
         TimeSpan LeaseClockSkewTolerance,
         Action? LeaseLossCallback,
         IPantsClock TtlClock,
@@ -638,6 +663,7 @@ public sealed class PantsOpenOptions
             null,
             null,
             null,
+            TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(15),
             null,
             SystemPantsClock.Instance,

@@ -101,6 +101,8 @@ sealed class Actor : IAsyncDisposable
         _runtimeResponses = new RuntimeResponseRegistry(telemetry, _runtimeTimeProvider);
         _scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
         var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
+        var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
+                                     options.LeaseHeartbeatInterval;
         _state = new RuntimeState(ttlClock, telemetry);
         switch (options.Storage)
         {
@@ -121,9 +123,10 @@ sealed class Actor : IAsyncDisposable
                     targetSstSizeBytes: options.TargetSstSizeBytes,
                     blockCachePolicy: options.BlockCachePolicy,
                     blockCacheBytes: options.BlockCacheBytes,
-                    leaseHeartbeatInterval: dependencies.LeaseHeartbeatInterval,
+                    leaseHeartbeatInterval: leaseHeartbeatInterval,
                     startupPhases: startupPhases,
-                    leaseClock: leaseClock);
+                    leaseClock: leaseClock,
+                    leaseTimeToLive: options.LeaseTimeToLive);
                 _cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -154,10 +157,11 @@ sealed class Actor : IAsyncDisposable
                         options.TargetSstSizeBytes,
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
-                        dependencies.LeaseHeartbeatInterval,
+                        leaseHeartbeatInterval,
                         new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
                         startupPhases,
-                        leaseClock);
+                        leaseClock,
+                        options.LeaseTimeToLive);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         _diskStore.WriterEpoch,
@@ -202,7 +206,7 @@ sealed class Actor : IAsyncDisposable
                     new CloudObjectLeaseStore(controlStore, PantsCloudObjectLayout.LeaseObjectKey),
                     leaseClock,
                     $"pants-{Environment.ProcessId}-{Guid.NewGuid():N}",
-                    TimeSpan.FromSeconds(30),
+                    options.LeaseTimeToLive,
                     options.LeaseClockSkewTolerance,
                     options.LeaseLossCallback);
                 _cloudLease = cloudLease;
@@ -243,10 +247,11 @@ sealed class Actor : IAsyncDisposable
                         options.TargetSstSizeBytes,
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
-                        dependencies.LeaseHeartbeatInterval,
+                        leaseHeartbeatInterval,
                         new ProviderCloudSstSourceFactory(sstStore),
                         startupPhases,
-                        leaseClock);
+                        leaseClock,
+                        options.LeaseTimeToLive);
                     var providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         walStore,
@@ -279,7 +284,7 @@ sealed class Actor : IAsyncDisposable
                     _cloudLeaseCancellation = new CancellationTokenSource();
                     _cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
                         cloudLease,
-                        dependencies.LeaseHeartbeatInterval,
+                        leaseHeartbeatInterval,
                         _cloudLeaseCancellation.Token);
                     _cloudMode = true;
                 }

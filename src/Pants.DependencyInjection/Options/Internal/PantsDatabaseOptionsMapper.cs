@@ -36,6 +36,7 @@ static class PantsDatabaseOptionsMapper
             options.MemtableFlushThresholdBytes,
             options.TransactionMemoryPoolBytes,
             options.WalBufferSizeBytes,
+            options.LeaseTimeToLive,
             options.LeaseClockSkewTolerance,
             CreateCompaction(options.Compaction),
             options.MinimumEpoch);

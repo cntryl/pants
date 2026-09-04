@@ -4,7 +4,6 @@ namespace Cntryl.Pants.Storage.Internal;
 
 sealed class FileLease : IDisposable
 {
-    static readonly TimeSpan LeaseTakeoverBaseDelay = TimeSpan.FromSeconds(60);
     readonly object _gate = new();
     readonly Timer _heartbeat;
     readonly string _holderId;
@@ -88,8 +87,19 @@ sealed class FileLease : IDisposable
         TimeSpan clockSkewTolerance,
         Action? leaseLossCallback,
         TimeSpan heartbeatInterval,
-        IPantsClock? clock = null)
+        IPantsClock? clock = null,
+        TimeSpan? leaseTimeToLive = null)
     {
+        var effectiveTimeToLive = leaseTimeToLive ?? TimeSpan.FromSeconds(30);
+        if (effectiveTimeToLive < TimeSpan.FromMilliseconds(3) ||
+            clockSkewTolerance < TimeSpan.Zero ||
+            clockSkewTolerance >= effectiveTimeToLive)
+        {
+            throw PantsException.InvalidArgument(
+                "The file lease requires a TTL of at least three milliseconds and " +
+                "non-negative clock skew shorter than that TTL.");
+        }
+
         var effectiveClock = clock ?? SystemPantsClock.Instance;
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
@@ -111,10 +121,13 @@ sealed class FileLease : IDisposable
                     "Midge leader timestamp is in the future; ownership is ambiguous.");
             }
 
-            if (age < LeaseTakeoverBaseDelay + clockSkewTolerance)
+            var takeoverBoundary = AddSaturating(effectiveTimeToLive, clockSkewTolerance);
+            if (age <= takeoverBoundary)
             {
                 throw new PantsLeaseHeldException(
-                    $"Another Midge-compatible writer '{current.HolderId}' owns this database.");
+                    $"Another Midge-compatible writer '{current.HolderId}' owns this database; " +
+                    $"configured LeaseTimeToLive is {effectiveTimeToLive:c} and " +
+                    $"LeaseClockSkewTolerance is {clockSkewTolerance:c}.");
             }
         }
 
@@ -143,6 +156,11 @@ sealed class FileLease : IDisposable
             heartbeatInterval,
             effectiveClock);
     }
+
+    static TimeSpan AddSaturating(TimeSpan left, TimeSpan right) =>
+        left.Ticks > TimeSpan.MaxValue.Ticks - right.Ticks
+            ? TimeSpan.MaxValue
+            : left + right;
 
     public void EnsureValid()
     {

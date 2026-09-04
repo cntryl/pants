@@ -1373,7 +1373,8 @@ sealed class LocalDiskStore : IDisposable
         TimeSpan? leaseHeartbeatInterval = null,
         IAsyncSstSourceFactory? remoteSstSourceFactory = null,
         StartupPhaseRecorder? startupPhases = null,
-        IPantsClock? leaseClock = null)
+        IPantsClock? leaseClock = null,
+        TimeSpan? leaseTimeToLive = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1412,7 +1413,8 @@ sealed class LocalDiskStore : IDisposable
                     leaseClockSkewTolerance ?? TimeSpan.FromSeconds(15),
                     leaseLossCallback,
                     leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10),
-                    leaseClock);
+                    leaseClock,
+                    leaseTimeToLive);
             }
             lease.EnsureValid();
             using (startupPhases.Measure(StartupPhase.Format))

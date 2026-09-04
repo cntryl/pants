@@ -275,7 +275,7 @@ public sealed class PantsDiskStorageTests
     public async Task LeaseTakeoverHonorsConfiguredClockSkewTolerance()
     {
         using var directory = new TemporaryDirectory();
-        var acquiredAt = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(65);
+        var acquiredAt = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(40);
         await WriteLeaseRecordAsync(directory.Path, 41, "crashed-writer", acquiredAt);
 
         var held = await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>

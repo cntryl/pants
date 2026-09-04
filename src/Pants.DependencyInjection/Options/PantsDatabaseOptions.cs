@@ -35,6 +35,8 @@ public sealed class PantsDatabaseOptions
 
     public int? WalBufferSizeBytes { get; set; }
 
+    public TimeSpan LeaseTimeToLive { get; set; } = TimeSpan.FromSeconds(30);
+
     public TimeSpan LeaseClockSkewTolerance { get; set; } = TimeSpan.FromSeconds(15);
 
     public ulong MinimumEpoch { get; set; }

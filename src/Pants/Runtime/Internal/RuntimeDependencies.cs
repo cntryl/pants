@@ -15,14 +15,14 @@ sealed class RuntimeDependencies
     {
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Cntryl.Pants.Storage.Internal.StorageVerifier.VerifyPathAsync;
-        LeaseHeartbeatInterval = leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10);
+        LeaseHeartbeatInterval = leaseHeartbeatInterval;
         CloudHttpClient = cloudHttpClient;
         VerificationBarrierResponse = verificationBarrierResponse ?? NoopVerificationBarrierResponse;
         RuntimeTimeProvider = runtimeTimeProvider ?? TimeProvider.System;
         LeaseClock = leaseClock ?? SystemPantsClock.Instance;
         HybridLocalStorageBudgetBytes = hybridLocalStorageBudgetBytes;
         StartupPhases = new StartupPhaseRecorder(startupPhaseMeasurement);
-        if (LeaseHeartbeatInterval <= TimeSpan.Zero)
+        if (LeaseHeartbeatInterval is { } interval && interval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(leaseHeartbeatInterval),
@@ -41,7 +41,7 @@ sealed class RuntimeDependencies
 
     public StorageVerificationDelegate StorageVerifier { get; }
 
-    public TimeSpan LeaseHeartbeatInterval { get; }
+    public TimeSpan? LeaseHeartbeatInterval { get; }
 
     public HttpClient? CloudHttpClient { get; }
 
