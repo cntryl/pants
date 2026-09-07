@@ -8,6 +8,12 @@ static class DiskFormat
 {
     public const int FormatVersion = 3;
     public const int WalMaximumRecordBytes = 64 * 1024 * 1024;
+
+    /// <summary>
+    ///     Largest an SST block may be once decompressed, and therefore the largest a single entry
+    ///     can encode to.
+    /// </summary>
+    public const int MaximumDecodedBlockBytes = 64 * 1024 * 1024;
     public const uint SstFormatVersion = 4;
     public const int SstFooterSize = 84;
     public const ulong SstFooterMagic = 0xdb47_7524_8b80_fb57;
@@ -71,7 +77,7 @@ static class DiskFormat
                 }
 
                 var decodedLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
-                if (decodedLength > 64 * 1024 * 1024)
+                if (decodedLength > MaximumDecodedBlockBytes)
                 {
                     throw new StorageException("Midge LZ4 payload exceeds the decompression limit.");
                 }
@@ -89,7 +95,7 @@ static class DiskFormat
                 using (var decompressor = new Decompressor())
                 {
                     var output = decompressor.Unwrap(bytes.ToArray());
-                    if (output.Length > 64 * 1024 * 1024)
+                    if (output.Length > MaximumDecodedBlockBytes)
                     {
                         throw new StorageException("Midge Zstd payload exceeds the decompression limit.");
                     }

@@ -9,6 +9,30 @@ static class WalCodec
     const int TransactionBatchRecordMinimumLength =
         4 * sizeof(byte) + 2 * sizeof(uint) + sizeof(ulong);
 
+    /// <summary>
+    ///     Conservative managed footprint of one decoded operation: the <see cref="WalMutation" />
+    ///     object, its list slot, and the smallest possible key array.
+    /// </summary>
+    const int DecodedOperationBytes = 128;
+
+    /// <summary>
+    ///     Default ceiling on the allocation a single transaction batch may imply during replay.
+    /// </summary>
+    /// <remarks>
+    ///     Derived from the largest batch the write path can legitimately produce, so replay never
+    ///     rejects a transaction this engine itself accepted — that would render a validly committed
+    ///     database unopenable. At this default the check is a fail-fast guard that converts a
+    ///     would-be out-of-memory kill during recovery into a typed, salvageable error. Callers that
+    ///     know their memory budget should pass a tighter limit.
+    /// </remarks>
+    const long DefaultTransactionBatchReplayBudgetBytes =
+        2L * DiskFormat.WalMaximumRecordBytes +
+        (long)(DiskFormat.WalMaximumRecordBytes / TransactionBatchRecordMinimumLength) *
+        DecodedOperationBytes;
+
+    public static long DefaultTransactionBatchReplayBudget =>
+        DefaultTransactionBatchReplayBudgetBytes;
+
     static ReadOnlySpan<byte> RecordMagic => "MW"u8;
 
     static ReadOnlySpan<byte> BatchMagic => "TB"u8;
@@ -279,6 +303,27 @@ static class WalCodec
     public static IReadOnlyList<WalMutation> DecodeTransactionBatch(
         WalRecord record,
         out ulong commitSequence,
+        out ulong writerEpoch) =>
+        DecodeTransactionBatch(
+            record,
+            DefaultTransactionBatchReplayBudgetBytes,
+            out commitSequence,
+            out writerEpoch);
+
+    /// <summary>
+    ///     Decodes a transaction batch, rejecting it when the allocation its declared operation
+    ///     count implies would exceed <paramref name="maximumDecodedBytes" />.
+    /// </summary>
+    /// <remarks>
+    ///     The payload-ratio guard alone bounds the operation count relative to the encoded bytes,
+    ///     but each decoded operation becomes a heap object several times larger than its encoding.
+    ///     A maximal record can therefore drive an allocation many times the payload, so replay of
+    ///     a corrupt or hostile WAL needs an absolute ceiling as well.
+    /// </remarks>
+    public static IReadOnlyList<WalMutation> DecodeTransactionBatch(
+        WalRecord record,
+        long maximumDecodedBytes,
+        out ulong commitSequence,
         out ulong writerEpoch)
     {
         if (record.Operation != WalOperation.TransactionBatch || record.Value is null)
@@ -321,6 +366,15 @@ static class WalCodec
         {
             throw new StorageException(
                 "WAL transaction batch operation count exceeds remaining bytes.");
+        }
+
+        var decodedBound =
+            (long)batch.Length * 2 + (long)operationCount * DecodedOperationBytes;
+        if (decodedBound > maximumDecodedBytes)
+        {
+            throw new StorageException(
+                $"WAL transaction batch decoded allocation bound {decodedBound} exceeds the " +
+                $"{maximumDecodedBytes}-byte replay limit.");
         }
 
         var mutations = new List<WalMutation>(operationCount);

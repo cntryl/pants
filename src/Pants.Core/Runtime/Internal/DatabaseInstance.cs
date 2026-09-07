@@ -310,7 +310,7 @@ sealed class DatabaseInstance :
         ArgumentNullException.ThrowIfNull(dependencies);
         var plan = RuntimePlan.Resolve(options);
         var transactionMemoryPool = new TransactionMemoryPool(plan.TransactionMemoryPoolBytes);
-        var clock = new MonotonicPantsClock(options.TtlClock);
+        var clock = new NonDecreasingPantsClock(options.TtlClock);
         var telemetry = new RuntimeTelemetry(dependencies.RuntimeTimeProvider);
         var runtime = await RuntimeBootstrapper.OpenAsync(
                 plan,

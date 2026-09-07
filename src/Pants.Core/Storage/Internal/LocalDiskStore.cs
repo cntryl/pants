@@ -56,6 +56,14 @@ sealed class LocalDiskStore :
     readonly string _walPath;
     readonly object _walStateGate = new();
     ManifestReadSnapshot _manifestReadSnapshot;
+
+    readonly Lock _localSstLengthGate = new();
+    readonly Dictionary<string, LocalSstLength> _localSstLengths = new(StringComparer.Ordinal);
+    long _localSstScanGeneration;
+
+    readonly Lock _readViewGate = new();
+    SstReadView _readView = SstReadView.Empty;
+    ManifestReadSnapshot? _readViewSource;
     long _nextFrozenFlushId;
     ulong _nextSequence;
     long _sstBytesWrittenTotal;
@@ -228,7 +236,79 @@ sealed class LocalDiskStore :
         }
     }
 
-    public long LocalSstBytes => GetLocalFileBytes(_sstDirectory, "*.sst");
+    /// <summary>
+    ///     Bytes of published SSTs currently resident locally.
+    /// </summary>
+    /// <remarks>
+    ///     Read on every commit in cloud mode to decide whether maintenance is due, and by the
+    ///     local-storage budget on every admission, so a stat per file per call is not affordable.
+    ///     Published SSTs are written to a staging name and renamed into place, never modified
+    ///     afterwards, so a length cached against a file name stays correct for as long as that name
+    ///     exists. Presence is still established by enumerating the directory each call — that is
+    ///     what keeps eviction and obsolete-file collection accounted for without every one of their
+    ///     call sites having to remember to invalidate anything.
+    /// </remarks>
+    public long LocalSstBytes
+    {
+        get
+        {
+            lock (_localSstLengthGate)
+            {
+                if (!Directory.Exists(_sstDirectory))
+                {
+                    _localSstLengths.Clear();
+                    return 0;
+                }
+
+                var generation = ++_localSstScanGeneration;
+                var total = 0L;
+                var present = 0;
+                foreach (var path in Directory.EnumerateFiles(
+                             _sstDirectory,
+                             "*.sst",
+                             SearchOption.TopDirectoryOnly))
+                {
+                    var name = Path.GetFileName(path);
+                    if (!_localSstLengths.TryGetValue(name, out var entry))
+                    {
+                        try
+                        {
+                            entry = new LocalSstLength(new FileInfo(path).Length, generation);
+                        }
+                        catch (FileNotFoundException)
+                        {
+                            // Collected between enumeration and accounting; no longer local.
+                            continue;
+                        }
+                    }
+
+                    _localSstLengths[name] = entry with { SeenInGeneration = generation };
+                    total = checked(total + entry.Length);
+                    present++;
+                }
+
+                if (_localSstLengths.Count != present)
+                {
+                    PruneLocalSstLengths(generation);
+                }
+
+                return total;
+            }
+        }
+    }
+
+    void PruneLocalSstLengths(long generation)
+    {
+        foreach (var name in _localSstLengths
+                     .Where(pair => pair.Value.SeenInGeneration != generation)
+                     .Select(static pair => pair.Key)
+                     .ToArray())
+        {
+            _localSstLengths.Remove(name);
+        }
+    }
+
+    readonly record struct LocalSstLength(long Length, long SeenInGeneration);
     public ulong WriterEpoch => _lease.Epoch;
 
     public void Dispose()
@@ -256,6 +336,21 @@ sealed class LocalDiskStore :
                 file.Name,
                 new FileInfo(Path.Combine(_sstDirectory, file.Name)).Length))
             .ToArray();
+
+    public bool TryGetManifestSstSizeBytes(string name, out long sizeBytes)
+    {
+        foreach (var file in GetManifestFilesSnapshot())
+        {
+            if (StringComparer.Ordinal.Equals(file.Name, name))
+            {
+                sizeBytes = checked((long)file.SizeBytes);
+                return true;
+            }
+        }
+
+        sizeBytes = 0;
+        return false;
+    }
 
     public async ValueTask VerifyRemoteSstMatchesLocalAsync(
         string name,
@@ -780,6 +875,25 @@ sealed class LocalDiskStore :
         GetManifestFilesSnapshot()
             .GroupBy(static file => file.ColumnFamilyId)
             .ToDictionary(static group => group.Key, static group => group.ToImmutableArray());
+
+    /// <summary>
+    ///     The published files indexed for candidate selection, rebuilt only when the manifest
+    ///     changes and shared by every snapshot taken against it.
+    /// </summary>
+    public SstReadView GetSstReadView()
+    {
+        var snapshot = Volatile.Read(ref _manifestReadSnapshot);
+        lock (_readViewGate)
+        {
+            if (!ReferenceEquals(_readViewSource, snapshot))
+            {
+                _readView = SstReadView.Create(snapshot.Files);
+                _readViewSource = snapshot;
+            }
+
+            return _readView;
+        }
+    }
 
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
@@ -1807,6 +1921,7 @@ sealed class LocalDiskStore :
 
             lease.EnsureValid();
             TransactionSpillStore.CleanupOrphans(root);
+            WalRecoverySpool.CleanupOrphans(root);
             lease.EnsureValid();
             ManifestLoadResult manifestLoad;
             using (startupPhases.Measure(StartupPhase.ManifestSnapshot))
@@ -3581,7 +3696,7 @@ sealed class LocalDiskStore :
             .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
             .ToArray();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = new WalRecoveryStateMachine(Path.Combine(RootPath, "recovery"));
         var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
         for (var index = 0; index < sealedSegments.Length; index++)

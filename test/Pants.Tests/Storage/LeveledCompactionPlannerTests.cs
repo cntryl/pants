@@ -35,7 +35,7 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
-    public void ShouldSkipFamilyWhenOverlapClosureExceedsInputLimit()
+    public void ShouldShrinkSourceSetWhenOverlapClosureExceedsInputLimit()
     {
         FileMeta[] files =
         [
@@ -46,7 +46,7 @@ public sealed class LeveledCompactionPlannerTests
             File("l1-3.sst", 1, 5, "n", "z")
         ];
 
-        var poisoned = LeveledCompactionPlanner.Pick(
+        var wide = LeveledCompactionPlanner.Pick(
             files,
             0,
             Configuration(l0FileCountTrigger: 2, maximumInputFiles: 4),
@@ -62,9 +62,37 @@ public sealed class LeveledCompactionPlannerTests
             null,
             false);
 
-        Assert.Null(poisoned);
+        Assert.NotNull(wide);
+        Assert.Equal(4, wide.Inputs.Count);
+        Assert.Contains(wide.Inputs, file => file.Name == "l0-1.sst");
+        Assert.DoesNotContain(wide.Inputs, file => file.Name == "l0-2.sst");
+        Assert.Equal(3, wide.Inputs.Count(file => file.Level == 1));
         Assert.NotNull(healthy);
         Assert.Equal(2, healthy.Inputs.Count);
+    }
+
+    [Fact]
+    public void ShouldPlanSingleSourceFileWhenCompleteTargetSpanExceedsInputLimit()
+    {
+        FileMeta[] files =
+        [
+            File("l0-1.sst", 0, 1, "a", "z"),
+            File("l0-2.sst", 0, 2, "a", "z"),
+            File("l1-1.sst", 1, 3, "a", "f"),
+            File("l1-2.sst", 1, 4, "g", "m"),
+            File("l1-3.sst", 1, 5, "n", "z")
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 2, maximumInputFiles: 2),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Single(plan.Inputs, file => file.Level == 0);
+        Assert.Equal(3, plan.Inputs.Count(file => file.Level == 1));
     }
 
     [Fact]
@@ -126,7 +154,7 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
-    public void ShouldRespectInputLimitWhenForced()
+    public void ShouldShrinkSourcesToTheInputLimitWhenForced()
     {
         FileMeta[] files =
         [
@@ -138,7 +166,9 @@ public sealed class LeveledCompactionPlannerTests
         var plan = LeveledCompactionPlanner.Pick(
             files, 0, Configuration(maximumInputFiles: 2), null, true);
 
-        Assert.Null(plan);
+        Assert.NotNull(plan);
+        Assert.Equal(2, plan.Inputs.Count);
+        Assert.Equal("l0-1.sst", Assert.Single(plan.Inputs, file => file.Level == 0).Name);
     }
 
     [Fact]

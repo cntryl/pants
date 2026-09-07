@@ -398,7 +398,15 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldKeepLocalUsageBoundedAcrossBurstyFlushCycles()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await OpenAsync(directory.Path, 192 * 1024);
+
+        // This exercises eviction, not write admission. Background compaction stays off so the
+        // local/cloud file counts are deterministic, which means nothing drains L0 across the 20
+        // cycles below; lift the L0 trigger so the admission ceiling is not what ends the loop.
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateOptions(directory.Path, 192 * 1024)
+                .WithCompaction(new PantsCompactionConfiguration(
+                    L0FileCountTrigger: 32,
+                    BackgroundEnabled: false)));
         var sawPartialEviction = false;
         for (var index = 0; index < 20; index++)
         {

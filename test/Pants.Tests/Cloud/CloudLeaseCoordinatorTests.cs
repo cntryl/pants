@@ -36,6 +36,30 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
+    public async Task ShouldFenceLeaseGivenWallClockStepsBackwardWhileElapsedTimeAdvances()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var timeProvider = new ManualTimeProvider();
+        var lost = false;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => lost = true,
+            timeProvider);
+        await lease.AcquireAsync(CancellationToken.None);
+
+        clock.UtcNow -= TimeSpan.FromMinutes(5);
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.False(lease.IsHealthy);
+        Assert.True(lost);
+    }
+
+    [Fact]
     public async Task ShouldDrainRenewalBeforeDisposingMutationGate()
     {
         var store = new TestCloudLeaseStore();

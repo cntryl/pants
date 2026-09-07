@@ -1,0 +1,64 @@
+name: Decoder fuzzing
+
+# Exploration is open-ended, so it runs on a schedule and on request rather than on pull requests.
+# Pull requests still replay the committed corpus through the same targets at the harness default,
+# which is deterministic and takes a couple of seconds.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Mutations per seed input
+        required: false
+        default: '250000'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  decoders:
+    name: Persisted-format decoders
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Build
+        run: dotnet build Pants.slnx --configuration Release
+
+      - name: Explore decoders
+        env:
+          PANTS_FUZZ_ITERATIONS: ${{ github.event.inputs.iterations || '250000' }}
+        run: >-
+          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter 'FullyQualifiedName~Cntryl.Pants.Fuzz'
+          --logger 'trx;LogFileName=fuzz.trx'
+          --results-directory ${{ runner.temp }}/fuzz-results
+
+      # The failure message carries the seed, input index, iteration and the offending bytes, so a
+      # discovered defect can be replayed as an ordinary deterministic test.
+      - name: Upload reproduction
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-reproduction
+          path: ${{ runner.temp }}/fuzz-results
+          retention-days: 30

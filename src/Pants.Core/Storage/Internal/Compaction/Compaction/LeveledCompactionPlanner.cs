@@ -54,6 +54,73 @@ static class LeveledCompactionPlanner
         return null;
     }
 
+    /// <summary>
+    ///     Adds every target-level file overlapping the source key range, to a fixed point, since
+    ///     each addition can widen the range and pull in further files.
+    /// </summary>
+    static List<FileMeta> ExpandToCompleteTargetSpan(
+        IReadOnlyList<FileMeta> sources,
+        IReadOnlyList<FileMeta> targetFiles)
+    {
+        var selected = sources.ToList();
+        var selectedNames = sources
+            .Select(static file => file.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var smallest = sources.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;
+        var largest = sources.Select(GetLargestKey).Max(ByteArrayComparer.Instance)!;
+
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var target in targetFiles)
+            {
+                if (selectedNames.Contains(target.Name))
+                {
+                    continue;
+                }
+
+                var targetSmallest = GetSmallestKey(target);
+                var targetLargest = GetLargestKey(target);
+                if (!Overlaps(smallest, largest, targetSmallest, targetLargest))
+                {
+                    continue;
+                }
+
+                selected.Add(target);
+                selectedNames.Add(target.Name);
+                if (ByteArrayComparer.Instance.Compare(targetSmallest, smallest) < 0)
+                {
+                    smallest = targetSmallest;
+                }
+
+                if (ByteArrayComparer.Instance.Compare(targetLargest, largest) > 0)
+                {
+                    largest = targetLargest;
+                }
+
+                changed = true;
+            }
+        } while (changed);
+
+        return selected;
+    }
+
+    /// <summary>
+    ///     Builds a plan whose source set is bounded by <paramref name="maximumInputs" /> but whose
+    ///     target span is always complete.
+    /// </summary>
+    /// <remarks>
+    ///     The target span cannot be truncated: dropping an overlapping target file would publish an
+    ///     output that overlaps a file left behind at the same level. Only the source set can shrink,
+    ///     so a wide overlap closure narrows the sources instead of abandoning the plan. Abandoning
+    ///     is not an option — write admission stalls on L0 debt that only compaction can drain, so a
+    ///     planner that declines to plan turns backpressure into a deadlock. A single source file
+    ///     plus its complete target span is always legal and always makes progress, so that is the
+    ///     floor; at that point <paramref name="maximumInputs" /> is advisory rather than a cap.
+    ///     Sources arrive in priority order — oldest first at L0, key order below it — so shrinking
+    ///     drops from the end and never violates recency.
+    /// </remarks>
     static CompactionPlan? CreatePlan(
         FileMeta[] familyFiles,
         IReadOnlyList<FileMeta> sourceFiles,
@@ -64,29 +131,17 @@ static class LeveledCompactionPlanner
         int maximumInputs,
         long? snapshotHorizon)
     {
-        var selected = sourceFiles.ToList();
-        bool changed;
-        do
+        var sources = sourceFiles.ToList();
+        List<FileMeta> selected;
+        while (true)
         {
-            changed = false;
-            var smallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;
-            var largest = selected.Select(GetLargestKey).Max(ByteArrayComparer.Instance)!;
-            foreach (var target in targetFiles)
+            selected = ExpandToCompleteTargetSpan(sources, targetFiles);
+            if (selected.Count <= maximumInputs || sources.Count == 1)
             {
-                if (selected.Contains(target) ||
-                    !Overlaps(smallest, largest, GetSmallestKey(target), GetLargestKey(target)))
-                {
-                    continue;
-                }
-
-                selected.Add(target);
-                changed = true;
+                break;
             }
-        } while (changed);
 
-        if (selected.Count > maximumInputs)
-        {
-            return null;
+            sources.RemoveAt(sources.Count - 1);
         }
 
         var selectedSmallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;

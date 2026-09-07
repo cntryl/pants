@@ -174,7 +174,15 @@ public sealed class PantsMemoryBoundedCorpusTests
         var targetBytes = checked(budgetBytes * multiplier);
         var options = PantsOpenOptions.Local(databasePath)
             .WithBackgroundCompaction(false)
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budgetBytes));
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budgetBytes))
+
+            // Compaction stays off so resident memory is attributable to the engine rather than to
+            // background merge work. Nothing then drains L0 across the corpus, so lift the trigger
+            // above the file count this corpus produces; published SSTs are on disk and do not move
+            // the RSS figure under test.
+            .WithCompaction(new PantsCompactionConfiguration(
+                L0FileCountTrigger: 4096,
+                BackgroundEnabled: false));
 
         long openRss;
         long steadyStateRss;

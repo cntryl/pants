@@ -10,9 +10,23 @@ sealed class CloudLeaseCoordinator : IDisposable
     readonly Action? _leaseLossCallback;
     readonly string _ownerToken = Guid.NewGuid().ToString("N");
     readonly ICloudLeaseStore _store;
+    readonly TimeProvider _timeProvider;
     int _activeOperations;
     int _disposed;
     ulong _epoch;
+
+    /// <summary>
+    ///     Fencing deadline as a monotonic timestamp. Elapsed time, not wall-clock: a backward
+    ///     clock adjustment must never extend authority.
+    /// </summary>
+    long _expiresAtTimestamp;
+
+    /// <summary>
+    ///     The same deadline as the wall-clock instant published in the shared lease record.
+    ///     A competing acquirer decides takeover by comparing that instant against its own clock,
+    ///     so a forward clock jump must fence this holder even though no elapsed time has passed.
+    ///     Authority requires both deadlines to be in the future; fencing early is always safe.
+    /// </summary>
     long _expiresAtUtcTicks;
     int _gateDisposed;
     long _latestObservedUtcTicks;
@@ -24,10 +38,12 @@ sealed class CloudLeaseCoordinator : IDisposable
         string holderId,
         TimeSpan leaseDuration,
         TimeSpan clockSkewTolerance,
-        Action? leaseLossCallback = null)
+        Action? leaseLossCallback = null,
+        TimeProvider? timeProvider = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _timeProvider = timeProvider ?? TimeProvider.System;
         ArgumentException.ThrowIfNullOrWhiteSpace(holderId);
         if (leaseDuration <= TimeSpan.Zero)
         {
@@ -57,7 +73,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                 return false;
             }
 
-            if (ObserveMonotonicUtcTicks() < Volatile.Read(ref _expiresAtUtcTicks))
+            if (_timeProvider.GetTimestamp() < Volatile.Read(ref _expiresAtTimestamp) &&
+                ObserveMonotonicUtcTicks() < Volatile.Read(ref _expiresAtUtcTicks))
             {
                 return true;
             }
@@ -89,6 +106,9 @@ sealed class CloudLeaseCoordinator : IDisposable
                 throw new PantsFencedException("The cloud primary lease coordinator is fenced.");
             }
 
+            // Captured before the store round trip so the fencing deadline covers that latency
+            // rather than starting after it.
+            var startedAt = _timeProvider.GetTimestamp();
             var now = ObserveMonotonicUtcNow();
             var current = await _store.ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -139,6 +159,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 throw new PantsLeaseHeldException("Lost the conditional cloud lease acquisition race.");
             }
 
+            Volatile.Write(ref _expiresAtTimestamp, AddSaturating(startedAt, _leaseDuration));
             Volatile.Write(
                 ref _expiresAtUtcTicks,
                 AddSaturating(now, _leaseDuration).UtcTicks);
@@ -166,6 +187,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 throw new PantsFencedException("The cloud primary lease is owned by another writer.");
             }
 
+            var renewedAt = _timeProvider.GetTimestamp();
             var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
             var proposed = current.Lease with { ExpiresAtUtc = expiresAt };
             EnsureValid();
@@ -191,7 +213,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                     cancellationToken).ConfigureAwait(false);
             }
 
-            if (!TryAdvanceDeadline(epoch, expiresAt))
+            if (!TryAdvanceDeadline(epoch, AddSaturating(renewedAt, _leaseDuration), expiresAt))
             {
                 LoseLease();
                 await TryExpireLateRenewalAsync(proposed, confirmed, cancellationToken)
@@ -307,21 +329,29 @@ sealed class CloudLeaseCoordinator : IDisposable
         return current;
     }
 
-    bool TryAdvanceDeadline(ulong epoch, DateTimeOffset candidate)
+    bool TryAdvanceDeadline(ulong epoch, long candidateTimestamp, DateTimeOffset candidate)
     {
         if (Volatile.Read(ref _lost) != 0 || Epoch != epoch)
         {
             return false;
         }
 
-        var currentDeadline = Volatile.Read(ref _expiresAtUtcTicks);
-        var now = ObserveMonotonicUtcTicks();
-        if (now >= currentDeadline || candidate.UtcTicks <= now)
+        var currentDeadline = Volatile.Read(ref _expiresAtTimestamp);
+        var now = _timeProvider.GetTimestamp();
+        if (now >= currentDeadline || candidateTimestamp <= now)
         {
             return false;
         }
 
-        Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentDeadline, candidate.UtcTicks));
+        var currentUtcDeadline = Volatile.Read(ref _expiresAtUtcTicks);
+        var nowUtcTicks = ObserveMonotonicUtcTicks();
+        if (nowUtcTicks >= currentUtcDeadline || candidate.UtcTicks <= nowUtcTicks)
+        {
+            return false;
+        }
+
+        Volatile.Write(ref _expiresAtTimestamp, Math.Max(currentDeadline, candidateTimestamp));
+        Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentUtcDeadline, candidate.UtcTicks));
         return Volatile.Read(ref _lost) == 0;
     }
 
@@ -357,6 +387,18 @@ sealed class CloudLeaseCoordinator : IDisposable
         lease.Epoch == epoch &&
         StringComparer.Ordinal.Equals(lease.HolderId, _holderId) &&
         StringComparer.Ordinal.Equals(lease.OwnerToken, _ownerToken);
+
+    /// <summary>
+    ///     Advances a monotonic timestamp by <paramref name="elapsed" />, saturating rather than
+    ///     wrapping.
+    /// </summary>
+    long AddSaturating(long timestamp, TimeSpan elapsed)
+    {
+        var frequency = _timeProvider.TimestampFrequency;
+        var headroom = long.MaxValue - timestamp;
+        var requested = elapsed.TotalSeconds * frequency;
+        return requested >= headroom ? long.MaxValue : timestamp + (long)requested;
+    }
 
     static DateTimeOffset AddSaturating(DateTimeOffset value, TimeSpan elapsed) =>
         elapsed.Ticks > DateTimeOffset.MaxValue.UtcTicks - value.UtcTicks

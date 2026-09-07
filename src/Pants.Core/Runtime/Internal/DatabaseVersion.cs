@@ -7,8 +7,15 @@ sealed record DatabaseVersion(
     ImmutableDictionary<ColumnFamilyIdentity, ImmutableSortedDictionary<byte[], CellState>> Families,
     ImmutableDictionary<ColumnFamilyIdentity, ImmutableArray<CommittedRangeTombstone>> RangeTombstones,
     ImmutableDictionary<string, int> ActiveColumnFamilyVersions,
-    ImmutableDictionary<uint, ImmutableArray<FileMeta>> VisibleFiles)
+    ImmutableDictionary<uint, ImmutableArray<FileMeta>> VisibleFiles,
+    SstReadView? ReadView = null)
 {
+    /// <summary>
+    ///     The indexed form of <see cref="VisibleFiles" />, shared with every other snapshot taken
+    ///     against the same manifest.
+    /// </summary>
+    public SstReadView Index => ReadView ?? SstReadView.Empty;
+
     /// <summary>
     ///     Manifest-visible SST files for <paramref name="columnFamilyId" /> at the moment this
     ///     snapshot was taken (independent of later flush/compaction publications), or an empty

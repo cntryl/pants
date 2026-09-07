@@ -20,6 +20,11 @@ static class SnapshotReadPath
         ReadOnlySpan<byte> key)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.ReadView is { } index)
+        {
+            return index.SelectPointCandidates(family.Id, key, out _);
+        }
+
         var keyCopy = key.ToArray();
         return snapshot.GetVisibleFiles(family.Id)
             .Where(file => LocalDiskStore.IsWithinFileRange(file, keyCopy))

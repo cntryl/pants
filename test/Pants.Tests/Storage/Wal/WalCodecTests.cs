@@ -5,6 +5,67 @@ namespace Cntryl.Pants.Storage.Wal;
 public sealed class WalCodecTests
 {
     [Fact]
+    public void ShouldAdmitLargestEncodableTransactionBatchUnderTheDefaultReplayBudget()
+    {
+        const int perOperationDecodedBytes = 128;
+        const int recordMinimumLength = 4 * sizeof(byte) + 2 * sizeof(uint) + sizeof(ulong);
+        var maximumEncodableOperations =
+            DiskFormat.WalMaximumRecordBytes / recordMinimumLength;
+
+        var worstCaseDecodedBound =
+            2L * DiskFormat.WalMaximumRecordBytes +
+            (long)maximumEncodableOperations * perOperationDecodedBytes;
+
+        Assert.True(
+            worstCaseDecodedBound <= WalCodec.DefaultTransactionBatchReplayBudget,
+            "Replay must never reject a batch the write path can legitimately produce; " +
+            "a tighter default would make a validly committed database unopenable.");
+    }
+
+    [Fact]
+    public void ShouldRejectTransactionBatchGivenDecodedAllocationExceedsReplayBudget()
+    {
+        var mutations = Enumerable.Range(0, 64)
+            .Select(index => new WalMutation(
+                1,
+                WalOperation.Put,
+                BitConverter.GetBytes(index),
+                [],
+                (ulong)index,
+                null,
+                null))
+            .ToArray();
+        var encoded = WalCodec.EncodeTransactionBatch(7, 0, 9, mutations);
+        var record = WalCodec.DecodeRecord(encoded);
+
+        var error = Assert.Throws<StorageException>(() =>
+            WalCodec.DecodeTransactionBatch(record, 512, out _, out _));
+
+        Assert.Contains("replay", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ShouldDecodeTransactionBatchGivenDecodedAllocationFitsReplayBudget()
+    {
+        var mutations = Enumerable.Range(0, 64)
+            .Select(index => new WalMutation(
+                1,
+                WalOperation.Put,
+                BitConverter.GetBytes(index),
+                [],
+                (ulong)index,
+                null,
+                null))
+            .ToArray();
+        var encoded = WalCodec.EncodeTransactionBatch(7, 0, 9, mutations);
+        var record = WalCodec.DecodeRecord(encoded);
+
+        var decoded = WalCodec.DecodeTransactionBatch(record, 1024 * 1024, out _, out _);
+
+        Assert.Equal(64, decoded.Count);
+    }
+
+    [Fact]
     public void ShouldRoundTripCurrentMidgeCompressedTransactionBatchOuterRecord()
     {
         var mutations = new[]
