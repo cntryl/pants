@@ -245,7 +245,7 @@ static class StorageVerifier
             replayPaths,
             cancellationToken);
         var replayOrdinal = 0UL;
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = new WalRecoveryStateMachine(Path.Combine(root, "recovery"));
         var recoveredVersions = new WalRecoveredVersionTracker();
         foreach (var sealedPath in sealedPaths)
         {

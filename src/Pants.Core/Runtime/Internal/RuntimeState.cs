@@ -68,6 +68,41 @@ sealed class RuntimeState
 
     public Dictionary<long, ImmutableMemtableFlush> ImmutableMemtableFlushes { get; }
 
+    /// <summary>
+    ///     Published level-0 file count per column-family id, refreshed whenever the read snapshot
+    ///     is republished.
+    /// </summary>
+    /// <remarks>
+    ///     Write admission has to see L0 debt, but the manifest is owned by the disk store and the
+    ///     stall predicate must stay a pure function of runtime state. Caching the count here on
+    ///     every republish keeps the predicate pure and the value exactly as fresh as the snapshot
+    ///     readers are already using. Keyed by numeric id rather than identity because L0 debt is a
+    ///     physical property of the family that survives a family-version bump.
+    /// </remarks>
+    public Dictionary<uint, int> PublishedL0FileCounts { get; } = [];
+
+    public void SetPublishedL0FileCounts(
+        IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles)
+    {
+        PublishedL0FileCounts.Clear();
+        foreach (var (columnFamilyId, files) in visibleFiles)
+        {
+            var count = 0;
+            foreach (var file in files)
+            {
+                if (file.Level == 0)
+                {
+                    count++;
+                }
+            }
+
+            if (count != 0)
+            {
+                PublishedL0FileCounts[columnFamilyId] = count;
+            }
+        }
+    }
+
     public int ActiveSnapshotCount =>
         ActiveTransactions.Count + DirectReadOnlyTransactions.Count + ActiveScanSnapshots.Count;
 
@@ -198,12 +233,14 @@ sealed class RuntimeState
     ///     concurrent compaction/flush publish without changing what an already-open snapshot sees.
     /// </summary>
     public DatabaseVersion CreateVersion(
-        IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles) => new(
+        IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> visibleFiles,
+        SstReadView? readView = null) => new(
         Sequence,
         FamilyData.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),
         RangeTombstones.ToImmutableDictionary(ColumnFamilyIdentityComparer.Instance),
         ActiveFamilyVersions.ToImmutableDictionary(StringComparer.Ordinal),
-        visibleFiles.ToImmutableDictionary());
+        visibleFiles.ToImmutableDictionary(),
+        readView);
 
     static TaskCompletionSource CreateWritePressureCompletion() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

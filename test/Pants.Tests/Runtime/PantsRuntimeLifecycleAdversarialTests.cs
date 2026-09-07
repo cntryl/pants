@@ -15,7 +15,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         var failpoint = new RunLoopFaultFailpointHandler();
         var actor = await Actor.OpenAsync(
             RuntimePlan.Resolve(options),
-            new MonotonicPantsClock(options.TtlClock),
+            new NonDecreasingPantsClock(options.TtlClock),
             new RuntimeTelemetry(),
             new RuntimeDependencies(failpoint));
 

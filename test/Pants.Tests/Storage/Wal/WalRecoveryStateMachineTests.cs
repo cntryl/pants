@@ -7,7 +7,7 @@ public sealed class WalRecoveryStateMachineTests
     [Fact]
     public void ShouldApplySplitMutationsAtCommitSequenceGivenMatchingCommit()
     {
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = CreateRecovery();
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
         var mutation = CreatePut("alpha", "one", 2);
 
@@ -46,7 +46,7 @@ public sealed class WalRecoveryStateMachineTests
     public void ShouldDiscardSplitMutationsGivenMissingCommit()
     {
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
-        using (var recovery = new WalRecoveryStateMachine())
+        using (var recovery = CreateRecovery())
         {
             Visit(
                 recovery,
@@ -68,7 +68,7 @@ public sealed class WalRecoveryStateMachineTests
     [Fact]
     public void ShouldRejectDuplicateBeginGivenOpenTransactionWithSameEpochAndId()
     {
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = CreateRecovery();
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
         var begin = WalCodec.EncodeTransactionMarker(
             WalOperation.TransactionBegin,
@@ -83,7 +83,7 @@ public sealed class WalRecoveryStateMachineTests
     [Fact]
     public void ShouldIsolateOpenTransactionsByWriterEpochGivenSameTransactionId()
     {
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = CreateRecovery();
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
 
         Visit(
@@ -140,7 +140,7 @@ public sealed class WalRecoveryStateMachineTests
     [Fact]
     public void ShouldApplyTaggedMutationAsStandaloneGivenNoMatchingBegin()
     {
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = CreateRecovery();
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
 
         Visit(
@@ -159,7 +159,7 @@ public sealed class WalRecoveryStateMachineTests
     [Fact]
     public void ShouldApplyAtomicBatchGivenDirectTransactionRecord()
     {
-        using var recovery = new WalRecoveryStateMachine();
+        using var recovery = CreateRecovery();
         var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
         var batch = WalCodec.EncodeTransactionBatch(
             9,
@@ -222,4 +222,9 @@ public sealed class WalRecoveryStateMachineTests
 
         return stream.ToArray();
     }
+
+    // The spool file is created lazily and removed on dispose, so this directory usually never
+    // materializes.
+    static WalRecoveryStateMachine CreateRecovery() =>
+        new(Path.Combine(Path.GetTempPath(), $"pants-recovery-tests-{Guid.NewGuid():N}"));
 }

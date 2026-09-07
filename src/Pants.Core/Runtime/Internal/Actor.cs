@@ -20,6 +20,20 @@ sealed class Actor : IAsyncDisposable
     readonly ConcurrentDictionary<ColumnFamilyIdentity, byte> _writeStallHints =
         new(ColumnFamilyIdentityComparer.Instance);
 
+    /// <summary>
+    ///     Column-family ids whose published level-0 debt is high enough that the hard admission
+    ///     ceiling could be reached, republished with every read snapshot.
+    /// </summary>
+    /// <remarks>
+    ///     The soft memtable stall is gated on a hint left by the family's previous commit, which is
+    ///     fine for pressure a caller is already generating. L0 debt is different: it accrues because
+    ///     compaction fell behind, so a family's first write after reopening onto a deep L0 would
+    ///     otherwise skip admission entirely. This set is read lock-free on the commit path so the
+    ///     ceiling is consulted without a coordinator round-trip per commit; the coordinator still
+    ///     makes the authoritative decision.
+    /// </remarks>
+    volatile ImmutableHashSet<uint> _l0AdmissionWatchlist = [];
+
     int _activeCompactionRequests;
     bool _backgroundCompactionEnabled;
     bool _backgroundCompactionPending;
@@ -285,7 +299,7 @@ sealed class Actor : IAsyncDisposable
         var runtimeTimeProvider = dependencies.RuntimeTimeProvider;
         var runtimeResponses = new RuntimeResponseRegistry(telemetry, runtimeTimeProvider);
         var scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
-        var leaseClock = new MonotonicPantsClock(dependencies.LeaseClock);
+        var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
         var state = new RuntimeState(ttlClock, telemetry);
@@ -412,7 +426,8 @@ sealed class Actor : IAsyncDisposable
                         $"pants-{Environment.ProcessId}-{Guid.NewGuid():N}",
                         options.LeaseTimeToLive,
                         options.LeaseClockSkewTolerance,
-                        options.LeaseLossCallback);
+                        options.LeaseLossCallback,
+                        dependencies.RuntimeTimeProvider);
                     ulong cloudEpoch;
                     using (startupPhases.Measure(StartupPhase.Lease))
                     {
@@ -580,6 +595,11 @@ sealed class Actor : IAsyncDisposable
                 _ => null
             };
 
+            if (_hybridCache is not null && _diskStore is not null)
+            {
+                _hybridCache.BindStore(_diskStore);
+            }
+
             if (_cloudMode && _diskStore is not null && _cloudPersistence is not null)
             {
                 var recoveryDeadline = OperationDeadline.FromBudget(
@@ -640,9 +660,7 @@ sealed class Actor : IAsyncDisposable
                 _telemetry);
             _immutableFlushPipeline = new ImmutableFlushPipeline(
                 telemetry,
-                (frozen, publicationPlan) => _flushRuntime.ScheduleFrozenFlushAsync(
-                    frozen,
-                    publicationPlan),
+                ScheduleFrozenFlushWithReservationAsync,
                 CompleteImmutableFlushAttemptAsync,
                 RetryImmutableFlushAttemptAsync,
                 () => Volatile.Read(ref _disposed) != 0,
@@ -1108,7 +1126,8 @@ sealed class Actor : IAsyncDisposable
                     mode,
                     snapshot,
                     state.Clock.UtcNow,
-                    _diskStore?.RootPath);
+                    _diskStore?.RootPath,
+                    _hybridCache?.Ledger);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
@@ -1155,6 +1174,7 @@ sealed class Actor : IAsyncDisposable
                 PantsTransactionMode.ReadOnly,
                 version,
                 startedAt,
+                null,
                 null,
                 false);
             if (!_state.DirectReadOnlyTransactions.TryAdd(
@@ -1236,7 +1256,9 @@ sealed class Actor : IAsyncDisposable
             if (RequiresWriteAdmission(payload))
             {
                 var families = GetCommitFamilies(payload);
-                if (families.Any(_writeStallHints.ContainsKey))
+                var watchlist = _l0AdmissionWatchlist;
+                if (families.Any(_writeStallHints.ContainsKey) ||
+                    families.Any(family => watchlist.Contains(family.Id)))
                 {
                     await EnsureWriteAdmissionAsync(families, cancellationToken).ConfigureAwait(false);
                 }
@@ -1387,10 +1409,18 @@ sealed class Actor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
+                        var inputs = _diskStore.GetCompactionInputNames(state, true);
+                        using var inputProtection = await ProtectCompactionInputsAsync(
+                                inputs,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        using var compactionReservation = await ReserveCompactionAsync(
+                                state,
+                                true,
+                                cancellationToken)
+                            .ConfigureAwait(false);
                         await deadline.RunAsync(
-                                token => EnsureHybridSstsLocalAsync(
-                                    _diskStore.GetCompactionInputNames(state, true),
-                                    token),
+                                token => EnsureHybridSstsLocalForMaintenanceAsync(inputs, token),
                                 cancellationToken)
                             .ConfigureAwait(false);
                         var result = await deadline.RunMutationAsync(
@@ -1398,7 +1428,7 @@ sealed class Actor : IAsyncDisposable
                                     state,
                                     true,
                                     _cloudCompactionOutputPublisher,
-                                    prepareInputs: EnsureHybridSstsLocalAsync,
+                                    prepareInputs: EnsureHybridSstsLocalForMaintenanceAsync,
                                     cancellationToken: token),
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -4045,9 +4075,17 @@ sealed class Actor : IAsyncDisposable
 
         _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
-        await EnsureHybridSstsLocalAsync(
-                _diskStore.GetCompactionInputNames(state, false),
+        var inputs = _diskStore.GetCompactionInputNames(state, false);
+        using var inputProtection = await ProtectCompactionInputsAsync(
+                inputs,
                 CancellationToken.None)
+            .ConfigureAwait(false);
+        using var compactionReservation = await ReserveCompactionAsync(
+                state,
+                false,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
             .CompactAsync(
@@ -4055,7 +4093,7 @@ sealed class Actor : IAsyncDisposable
                 false,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalAsync)
+                EnsureHybridSstsLocalForMaintenanceAsync)
             .ConfigureAwait(false);
 
         if (result.PersistenceAnomaly)
@@ -4112,9 +4150,17 @@ sealed class Actor : IAsyncDisposable
         _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordReadAmplificationCompactionTrigger();
-        await EnsureHybridSstsLocalAsync(
-                _diskStore!.GetCompactionInputNames(state, true),
+        var inputs = _diskStore!.GetCompactionInputNames(state, true);
+        using var inputProtection = await ProtectCompactionInputsAsync(
+                inputs,
                 CancellationToken.None)
+            .ConfigureAwait(false);
+        using var compactionReservation = await ReserveCompactionAsync(
+                state,
+                true,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
             .ConfigureAwait(false);
         var result = await _compactionRuntime
             .CompactAsync(
@@ -4122,7 +4168,7 @@ sealed class Actor : IAsyncDisposable
                 true,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalAsync)
+                EnsureHybridSstsLocalForMaintenanceAsync)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
         {
@@ -4377,12 +4423,54 @@ sealed class Actor : IAsyncDisposable
             _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
         }
 
-        await HybridCacheManager.EnsureLocalSstsAsync(
+        await _hybridCache.EnsureLocalSstsAsync(
                 _diskStore,
                 names,
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    async ValueTask EnsureHybridSstsLocalForMaintenanceAsync(
+        IReadOnlyList<string> names,
+        CancellationToken cancellationToken)
+    {
+        if (_hybridCache is null || _diskStore is null || _cloudPersistence is null)
+        {
+            return;
+        }
+
+        if (_verificationBarrier is not null &&
+            names.Any(name => !_diskStore.IsSstLocal(name)))
+        {
+            throw new PantsBusyException(
+                "Hybrid cache hydration is deferred by online verification.");
+        }
+
+        if (names.Any(name => !_diskStore.IsSstLocal(name)))
+        {
+            _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
+        }
+
+        await _hybridCache.EnsureLocalSstsForMaintenanceAsync(
+                _diskStore,
+                names,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    ValueTask<IDisposable?> ProtectCompactionInputsAsync(
+        IReadOnlyList<string> names,
+        CancellationToken cancellationToken) =>
+        _hybridCache is null
+            ? ValueTask.FromResult<IDisposable?>(null)
+            : ProtectAsync(_hybridCache, names, cancellationToken);
+
+    static async ValueTask<IDisposable?> ProtectAsync(
+        HybridCacheManager hybridCache,
+        IReadOnlyList<string> names,
+        CancellationToken cancellationToken) =>
+        await hybridCache.ProtectSstsFromEvictionAsync(names, cancellationToken)
+            .ConfigureAwait(false);
 
     static void RecordMemtableBytes(RuntimeState state, CommitPayload payload)
     {
@@ -4536,9 +4624,24 @@ sealed class Actor : IAsyncDisposable
 
     void PublishSnapshot(RuntimeState state)
     {
+        var visibleFiles = VisibleFilesSnapshot();
+        var wasStalled = MemtableWritePressure.IsStalled(_options, state);
+        state.SetPublishedL0FileCounts(visibleFiles);
+        _l0AdmissionWatchlist = BuildL0AdmissionWatchlist(state);
+
+        // Compaction publishing its outputs is what drains L0 debt, and nothing else touches write
+        // pressure on that path. Without this signal a caller parked in WaitForWriteStallClearAsync
+        // sleeps until its timeout even though the debt it was waiting on has already cleared.
+        if (wasStalled && !MemtableWritePressure.IsStalled(_options, state))
+        {
+            state.SignalWritePressureChanged();
+        }
+
         lock (_directReadAdmissionGate)
         {
-            Volatile.Write(ref _currentVersion, state.CreateVersion(VisibleFilesSnapshot()));
+            Volatile.Write(
+                ref _currentVersion,
+                state.CreateVersion(visibleFiles, _diskStore?.GetSstReadView()));
             if (_diskStore?.SnapshotPinnedObsoleteFileCount > 0)
             {
                 // A direct read can acquire only the newly-published version while this gate is
@@ -4561,6 +4664,108 @@ sealed class Actor : IAsyncDisposable
                 Volatile.Read(ref _publishedRuntimeMetrics),
                 state,
                 Volatile.Read(ref _walCloudDurableSequence)));
+    }
+
+    /// <summary>
+    ///     Schedules a frozen memtable for publication, holding a local-disk reservation for its
+    ///     encoded size until the resulting SST has been published.
+    /// </summary>
+    async ValueTask<Task<FrozenFlushRuntimeResult>> ScheduleFrozenFlushWithReservationAsync(
+        FrozenMemtableFlush frozen,
+        FlushPublicationPlan? publicationPlan)
+    {
+        if (_hybridCache is null || _diskStore is null)
+        {
+            return await _flushRuntime
+                .ScheduleFrozenFlushAsync(frozen, publicationPlan)
+                .ConfigureAwait(false);
+        }
+
+        var reservation = await _hybridCache.ReserveForMaintenanceAsync(
+                _diskStore,
+                StorageAdmissionKind.Flush,
+                frozen.SizeBytes,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            var publication = await _flushRuntime
+                .ScheduleFrozenFlushAsync(frozen, publicationPlan)
+                .ConfigureAwait(false);
+            return ReleaseAfterAsync(publication, reservation);
+        }
+        catch
+        {
+            reservation.Dispose();
+            throw;
+        }
+    }
+
+    static async Task<FrozenFlushRuntimeResult> ReleaseAfterAsync(
+        Task<FrozenFlushRuntimeResult> publication,
+        IDisposable reservation)
+    {
+        using (reservation)
+        {
+            return await publication.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    ///     Reserves local disk for a compaction, sized at the total of its inputs.
+    /// </summary>
+    /// <remarks>
+    ///     A compaction holds its inputs and its outputs at the same time until the inputs retire,
+    ///     and its outputs are at most the size of its inputs, so the inputs bound the transient
+    ///     growth. Returns <see langword="null" /> outside hybrid storage, where there is no local
+    ///     budget to honour.
+    /// </remarks>
+    async ValueTask<StorageBudgetLedger.StorageReservation?> ReserveCompactionAsync(
+        RuntimeState state,
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        if (_hybridCache is null || _diskStore is null)
+        {
+            return null;
+        }
+
+        var estimate = 0L;
+        foreach (var name in _diskStore.GetCompactionInputNames(state, force))
+        {
+            if (_diskStore.TryGetManifestSstSizeBytes(name, out var sizeBytes))
+            {
+                estimate = checked(estimate + sizeBytes);
+            }
+        }
+
+        return await _hybridCache.ReserveForMaintenanceAsync(
+                _diskStore,
+                StorageAdmissionKind.Compaction,
+                estimate,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Families whose published level-0 count alone could combine with a full immutable-flush
+    ///     queue to reach the ceiling. Deliberately conservative — it may name a family that turns
+    ///     out to be admissible, and the coordinator corrects that, but it never misses one.
+    /// </summary>
+    ImmutableHashSet<uint> BuildL0AdmissionWatchlist(RuntimeState state)
+    {
+        var threshold = MemtableWritePressure.GetL0HardCeiling(_options) -
+            MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily;
+        var watchlist = ImmutableHashSet.CreateBuilder<uint>();
+        foreach (var (columnFamilyId, count) in state.PublishedL0FileCounts)
+        {
+            if (count >= threshold)
+            {
+                watchlist.Add(columnFamilyId);
+            }
+        }
+
+        return watchlist.ToImmutable();
     }
 
     IReadOnlyDictionary<uint, ImmutableArray<FileMeta>> VisibleFilesSnapshot() =>

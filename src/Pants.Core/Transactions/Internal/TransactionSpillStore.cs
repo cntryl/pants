@@ -7,6 +7,13 @@ sealed class TransactionSpillStore : IDisposable
     const int HeaderLength = 48;
     const int SparseIndexStride = 16;
     const int RangeHeaderLength = 32;
+
+    /// <summary>
+    ///     Per-entry framing charged on top of an operation's own bytes when reserving budget.
+    ///     Deliberately generous: admitting a spill that then fails to write is worse than a
+    ///     slightly conservative estimate.
+    /// </summary>
+    const int RunEntryOverheadBytes = 64;
     const int RangeTableEntryLength = 12;
     const ulong NoRangeChild = ulong.MaxValue;
 
@@ -21,14 +28,26 @@ sealed class TransactionSpillStore : IDisposable
     bool _disposeRequested;
     int _disposed;
 
+    readonly StorageBudgetLedger? _ledger;
+
+    readonly List<StorageBudgetLedger.StorageReservation> _reservations = [];
+
+    /// <summary>
+    ///     <paramref name="ledger" /> charges spilled bytes against the local-disk budget, or is
+    ///     <see langword="null" /> where no local budget applies. Spill files sit outside the
+    ///     resident figure the budget measures, so their charge is held for the store's lifetime
+    ///     rather than released once written.
+    /// </summary>
     public TransactionSpillStore(
         string databasePath,
         long transactionId,
-        ColumnFamilyIdentity family)
+        ColumnFamilyIdentity family,
+        StorageBudgetLedger? ledger = null)
     {
         _directory = Path.Combine(databasePath, "txn");
         _transactionId = checked((ulong)transactionId);
         _family = family;
+        _ledger = ledger;
     }
 
     static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
@@ -71,6 +90,34 @@ sealed class TransactionSpillStore : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Charges the bytes this run is about to write, before writing them.
+    /// </summary>
+    void ReserveRunBytes(IReadOnlyList<TransactionIntentOperation> operations)
+    {
+        if (_ledger is null)
+        {
+            return;
+        }
+
+        var estimate = (long)HeaderLength;
+        foreach (var operation in operations)
+        {
+            estimate = checked(
+                estimate +
+                operation.Key.Length +
+                (operation.Value?.Length ?? 0) +
+                (operation.EndExclusive?.Length ?? 0) +
+                RunEntryOverheadBytes);
+        }
+
+        var reservation = _ledger.Reserve(StorageAdmissionKind.TransactionSpill, estimate);
+        lock (_lifetimeGate)
+        {
+            _reservations.Add(reservation);
+        }
+    }
+
     public void WriteRun(IReadOnlyList<TransactionIntentOperation> operations)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -79,6 +126,7 @@ sealed class TransactionSpillStore : IDisposable
             return;
         }
 
+        ReserveRunBytes(operations);
         var runNumber = _runs.Count;
         var stem = $"{_transactionId:x16}-{runNumber:x8}";
         var runPath = Path.Combine(_directory, $"{stem}.run");
@@ -217,6 +265,14 @@ sealed class TransactionSpillStore : IDisposable
         }
 
         _runs.Clear();
+        // Released here rather than on dispose: a read view can defer deletion, and the bytes stay
+        // on disk until it drains.
+        foreach (var reservation in _reservations)
+        {
+            reservation.Dispose();
+        }
+
+        _reservations.Clear();
         try
         {
             lock (DirectoryMutationGate)

@@ -8,6 +8,51 @@ static class SstCodec
 {
     const int TargetBlockSize = 64 * 1024;
     const int EntryHeaderSize = 26;
+
+    const int ExtendedLengthSize = 2 * sizeof(uint);
+
+    /// <summary>
+    ///     Rejects a key/value pair that could not be encoded into an SST block.
+    /// </summary>
+    /// <remarks>
+    ///     Measured against the worst case, where the entry sits first in its block and so stores
+    ///     its key in full: prefix compression is a property of an entry's position, which flush and
+    ///     compaction choose later. Admitting on the compressed size would let a write succeed that
+    ///     no subsequent flush could write down.
+    /// </remarks>
+    public static void ValidateEntrySize(int keyLength, int valueLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
+        ArgumentOutOfRangeException.ThrowIfNegative(valueLength);
+
+        var header = EntryHeaderSize + (keyLength > ushort.MaxValue ? ExtendedLengthSize : 0);
+        var encoded = (long)header + keyLength + valueLength;
+        if (encoded > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsResourceLimitException(
+                $"An entry with {keyLength} key bytes and {valueLength} value bytes encodes to " +
+                $"{encoded} bytes, which exceeds the " +
+                $"{DiskFormat.MaximumDecodedBlockBytes}-byte decoded block limit.");
+        }
+    }
+
+    /// <summary>
+    ///     Rejects a range tombstone whose bounds could not be encoded into a block.
+    /// </summary>
+    public static void ValidateRangeTombstoneSize(int startLength, int endLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(startLength);
+        ArgumentOutOfRangeException.ThrowIfNegative(endLength);
+
+        var encoded = (long)EntryHeaderSize + startLength + endLength;
+        if (encoded > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsResourceLimitException(
+                $"A range tombstone spanning {startLength} and {endLength} bound bytes encodes to " +
+                $"{encoded} bytes, which exceeds the " +
+                $"{DiskFormat.MaximumDecodedBlockBytes}-byte decoded block limit.");
+        }
+    }
     const ulong BloomSeedOne = 0x9E37_79B1_85EB_CA87;
     const ulong BloomSeedTwo = 0xC2B2_AE3D_27D4_EB4F;
 

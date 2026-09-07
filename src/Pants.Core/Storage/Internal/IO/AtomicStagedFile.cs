@@ -9,6 +9,64 @@ static class AtomicStagedFile
     const int PublishLockCount = 64;
     static readonly object[] PublishLocks = CreatePublishLocks();
 
+    /// <summary>
+    ///     Stages a file whose payload is produced incrementally, so the caller never holds the
+    ///     whole contents in memory.
+    /// </summary>
+    /// <remarks>
+    ///     The callback is asynchronous because producing the payload generally means fetching it,
+    ///     and a synchronous callback would force the caller to buffer everything first, which is
+    ///     exactly what this exists to avoid.
+    /// </remarks>
+    public static async ValueTask WriteStreamedAsync(
+        string path,
+        Func<SafeFileHandle, ValueTask> writePayloadAsync,
+        bool overwrite = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(writePayloadAsync);
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath) ??
+                        throw new ArgumentException(
+                            "A staged file path must have a parent directory.",
+                            nameof(path));
+        Directory.CreateDirectory(directory);
+        var temporary = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            using (var handle = File.OpenHandle(
+                       temporary,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None))
+            {
+                await writePayloadAsync(handle).ConfigureAwait(false);
+                RandomAccess.FlushToDisk(handle);
+            }
+
+            lock (GetPublishLock(fullPath))
+            {
+                File.Move(temporary, fullPath, overwrite);
+                FlushParentDirectory(directory);
+            }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                // An unpublished temporary is safer than deleting an uncertain target.
+            }
+        }
+    }
+
     public static void Write(
         string path,
         ReadOnlySpan<byte> bytes,

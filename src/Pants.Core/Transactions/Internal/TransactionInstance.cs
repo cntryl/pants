@@ -29,6 +29,7 @@ sealed class TransactionInstance : IPantsTransaction
         DatabaseVersion startSnapshot,
         DateTimeOffset snapshotTime,
         string? persistentDatabasePath,
+        StorageBudgetLedger? storageBudget = null,
         bool coordinatorRegistered = true)
     {
         _database = database;
@@ -40,7 +41,11 @@ sealed class TransactionInstance : IPantsTransaction
         _coordinatorRegistered = coordinatorRegistered;
         _spillStore = mode == PantsTransactionMode.ReadOnly || persistentDatabasePath is null
             ? null
-            : new TransactionSpillStore(persistentDatabasePath, transactionId, columnFamily.Identity);
+            : new TransactionSpillStore(
+                persistentDatabasePath,
+                transactionId,
+                columnFamily.Identity,
+                storageBudget);
     }
 
     public IPantsColumnFamily ColumnFamily => _columnFamily;
@@ -111,6 +116,7 @@ sealed class TransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureWritable();
+            SstCodec.ValidateRangeTombstoneSize(startInclusive.Length, endExclusive.Length);
             var startCopy = startInclusive.ToArray();
             var endCopy = endExclusive.ToArray();
             if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) > 0)
@@ -485,6 +491,7 @@ sealed class TransactionInstance : IPantsTransaction
         {
             EnsureWritable();
             ValidateTimeToLive(timeToLive);
+            SstCodec.ValidateEntrySize(key.Length, value.Length);
             var keyCopy = key.ToArray();
             var valueCopy = value.ToArray();
             StageIntent(new TransactionIntentOperation(
