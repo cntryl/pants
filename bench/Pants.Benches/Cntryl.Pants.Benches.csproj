@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet"/>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" VersionOverride="10.0.12" />
     <ProjectReference Include="..\..\src\Pants.Core\Pants.Core.csproj"/>
   </ItemGroup>
 
