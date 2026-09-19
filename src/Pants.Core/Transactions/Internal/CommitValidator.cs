@@ -420,7 +420,9 @@ static class CommitValidator
             return actual is null || actual.Value is null || actual.IsExpired(now);
         }
 
-        return actual?.Value is { } value && value.AsSpan().SequenceEqual(expected.Value);
+        return actual?.Value is { } value &&
+               !actual.IsExpired(now) &&
+               value.AsSpan().SequenceEqual(expected.Value);
     }
 
     static bool IsInRange(byte[] key, byte[] start, byte[] end) =>

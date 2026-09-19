@@ -84,6 +84,56 @@ public sealed class PantsTransactionParityTests
         await ttlAssertion.CommitAsync(PantsWriteOptions.Buffered);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldRejectConcreteAssertionGivenValueExpiredBeforeBeginWhenCommitting(
+        bool flushed)
+    {
+        // Arrange
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithTtlClock(clock));
+        await using (var seeding = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            seeding.Put("ttl"u8.ToArray(), "value"u8.ToArray(), TimeSpan.FromSeconds(1));
+            await seeding.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        if (flushed)
+        {
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        clock.UtcNow += TimeSpan.FromSeconds(2);
+        await using var rejecting = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        Assert.Null(await rejecting.GetAsync("ttl"u8.ToArray()));
+        rejecting.AssertValue("ttl"u8.ToArray(), "value"u8.ToArray());
+        rejecting.Put("guarded"u8.ToArray(), "must-not-publish"u8.ToArray());
+
+        // Act
+        var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(() =>
+            rejecting.CommitAsync(PantsWriteOptions.Sync).AsTask());
+
+        // Assert
+        Assert.Equal(PantsErrorCode.WriteConflict, conflict.Code);
+        Assert.Null(await ReadAsync(database, "guarded"));
+        await using var accepting = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        accepting.AssertValue("ttl"u8.ToArray(), null);
+        accepting.Put("allowed"u8.ToArray(), "yes"u8.ToArray());
+        await accepting.CommitAsync(PantsWriteOptions.Sync);
+        Assert.Equal("yes", await ReadAsync(database, "allowed"));
+    }
+
     [Fact]
     public async Task ShouldApplyInsertAndIntentOrderingAgainstFlushedState()
     {
