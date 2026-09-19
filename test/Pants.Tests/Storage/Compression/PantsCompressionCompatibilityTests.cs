@@ -104,6 +104,24 @@ public sealed class PantsCompressionCompatibilityTests
         Assert.Equal(data, SstBlockCodec.DecompressWithTrailer(firstAdaptive));
     }
 
+    /// <summary>
+    ///     Readers refuse to decompress past the decoded block limit, so a larger block - such as
+    ///     metadata carrying two maximal keys - must be emitted raw for any goal to stay readable.
+    /// </summary>
+    [Theory]
+    [InlineData(PantsPerformanceGoal.Latency)]
+    [InlineData(PantsPerformanceGoal.Throughput)]
+    [InlineData(PantsPerformanceGoal.Economy)]
+    public void ShouldKeepBlockAboveDecodedLimitRawAndReadable(PantsPerformanceGoal goal)
+    {
+        var block = new byte[DiskFormat.MaximumDecodedBlockBytes + 1];
+
+        var encoded = SstBlockCodec.CompressWithTrailer(block, goal);
+
+        Assert.Equal((byte)CompressionAlgorithm.None, encoded[^SstBlockTrailerSize]);
+        Assert.Equal(block.Length, SstBlockCodec.DecompressWithTrailer(encoded).Length);
+    }
+
     [Fact]
     public void ShouldRejectInvalidSstBlockTrailers()
     {

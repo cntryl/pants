@@ -40,14 +40,27 @@ sealed class CommitCoalescer(
         try
         {
             var containsInsert = false;
+            var walBatchBytes = WalCodec.TransactionBatchRecordOverhead;
             command.Payload.Operations.ForEach(operation =>
             {
                 containsInsert |= operation.InsertOnly;
                 commandBytesByFamily[operation.Family] = checked(
                     commandBytesByFamily.GetValueOrDefault(operation.Family) +
                     CoalescedCommitApplyPreflight.EstimateOperationBytes(operation));
+                walBatchBytes = checked(walBatchBytes + WalCodec.MeasureTransactionBatchOperation(
+                    operation.Key.Length,
+                    operation.Value?.Length,
+                    operation.EndExclusive?.Length));
             });
             if (containsInsert)
+            {
+                return false;
+            }
+
+            // A batch that cannot be framed fails when it is encoded. Committing it alone keeps
+            // that failure from rolling back the well-formed commits it would be grouped with.
+            if (durability != PantsDurability.BestEffort &&
+                walBatchBytes > DiskFormat.WalMaximumRecordBytes)
             {
                 return false;
             }

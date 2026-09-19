@@ -37,6 +37,76 @@ static class WalCodec
 
     static ReadOnlySpan<byte> BatchMagic => "TB"u8;
 
+    const int RecordPrefixBytes = 3;
+    const int TlvHeaderBytes = sizeof(byte) + sizeof(uint);
+    const int TransactionBatchHeaderBytes = 3 + 3 * sizeof(ulong) + sizeof(uint);
+
+    /// <summary>
+    ///     Operation, column family, sequence, writer epoch and transaction id: the TLV fields every
+    ///     transactional record carries.
+    /// </summary>
+    const int FixedRecordFieldBytes =
+        RecordPrefixBytes +
+        TlvHeaderBytes + sizeof(byte) +
+        TlvHeaderBytes + sizeof(uint) +
+        TlvHeaderBytes + sizeof(ulong) +
+        TlvHeaderBytes + sizeof(ulong) +
+        TlvHeaderBytes + sizeof(ulong);
+
+    /// <summary>A value TLV plus the compression tag the writer may add alongside it.</summary>
+    const int ValueFieldBytes = TlvHeaderBytes + TlvHeaderBytes + sizeof(byte);
+
+    /// <summary>
+    ///     Bytes a transaction batch record spends outside its operations. Adding
+    ///     <see cref="MeasureTransactionBatchOperation" /> for each operation bounds the whole record.
+    /// </summary>
+    public const long TransactionBatchRecordOverhead =
+        FixedRecordFieldBytes +
+        TlvHeaderBytes + 3 +
+        ValueFieldBytes +
+        TransactionBatchHeaderBytes;
+
+    /// <summary>
+    ///     Measures one operation's share of a transaction batch record, assuming an expiration so
+    ///     the bound holds whether or not the operation carries one.
+    /// </summary>
+    public static long MeasureTransactionBatchOperation(
+        int keyLength,
+        int? valueLength,
+        int? rangeEndLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
+        return (long)sizeof(byte) + sizeof(uint) + sizeof(ulong) +
+               sizeof(byte) + sizeof(ulong) +
+               sizeof(uint) + keyLength +
+               sizeof(byte) + (valueLength is { } value ? sizeof(uint) + value : 0) +
+               sizeof(byte) + (rangeEndLength is { } rangeEnd ? sizeof(uint) + rangeEnd : 0);
+    }
+
+    /// <summary>
+    ///     Measures the largest WAL record that could carry one operation, under either framing
+    ///     a commit may choose: inside a transaction batch or as its own spilled record.
+    /// </summary>
+    /// <remarks>
+    ///     Values are measured raw with a compression tag, so the bound holds whether or not the
+    ///     writer later finds them worth compressing. An expiration is always assumed.
+    /// </remarks>
+    public static long MeasureWorstCaseOperationRecord(
+        int keyLength,
+        int? valueLength,
+        int? rangeEndLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
+        var spilled = (long)FixedRecordFieldBytes +
+                      TlvHeaderBytes + keyLength +
+                      TlvHeaderBytes + sizeof(ulong) +
+                      (valueLength is { } value ? ValueFieldBytes + value : 0) +
+                      (rangeEndLength is { } rangeEnd ? TlvHeaderBytes + rangeEnd : 0);
+        var batched = TransactionBatchRecordOverhead +
+                      MeasureTransactionBatchOperation(keyLength, valueLength, rangeEndLength);
+        return Math.Max(spilled, batched);
+    }
+
     public static byte[] EncodeRecord(WalRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -50,6 +120,13 @@ static class WalCodec
         WriteTlvUInt64(payload, 10, record.WriterEpoch);
         if (record.Value is not null)
         {
+            if (record.Value.Length > DiskFormat.MaximumDecodedBlockBytes)
+            {
+                throw new PantsResourceLimitException(
+                    $"A {record.Value.Length}-byte WAL value exceeds the " +
+                    $"{DiskFormat.MaximumDecodedBlockBytes}-byte limit replay can decode.");
+            }
+
             var encodedValue = record.Value;
             byte? compression = null;
             if (record.Value.Length >= 256)
@@ -82,6 +159,13 @@ static class WalCodec
         if (record.TransactionId.HasValue)
         {
             WriteTlvUInt64(payload, 8, record.TransactionId.Value);
+        }
+
+        if (payload.Length > DiskFormat.WalMaximumRecordBytes)
+        {
+            throw new PantsResourceLimitException(
+                $"A {payload.Length}-byte WAL record exceeds the " +
+                $"{DiskFormat.WalMaximumRecordBytes}-byte frame limit.");
         }
 
         return payload.ToArray();
