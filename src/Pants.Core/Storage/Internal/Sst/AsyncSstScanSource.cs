@@ -12,12 +12,10 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         byte[]? endExclusive)
     {
         _iterator = iterator;
-        SmallestKey = LocalDiskStore.GetMetadataKey(
-            file.SmallestKey ?? throw new PantsCorruptionException(
-                $"Manifest SST '{file.Name}' has no smallest key."));
-        LargestKey = LocalDiskStore.GetMetadataKey(
-            file.LargestKey ?? throw new PantsCorruptionException(
-                $"Manifest SST '{file.Name}' has no largest key."));
+        SmallestKey = reader.SmallestKey ??
+                      throw new PantsCorruptionException($"SST '{file.Name}' has no smallest key.");
+        LargestKey = reader.LargestKey ??
+                     throw new PantsCorruptionException($"SST '{file.Name}' has no largest key.");
         RangeTombstones = reader.RangeTombstones;
         CandidateBlockCount = reader.CountOverlappingDataBlocks(startInclusive, endExclusive);
     }

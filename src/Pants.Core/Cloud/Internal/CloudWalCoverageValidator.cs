@@ -89,6 +89,7 @@ static class CloudWalCoverageValidator
     static bool Covers(FileMeta file, WalMutation mutation)
     {
         if (file.ColumnFamilyId != mutation.ColumnFamilyId ||
+            !file.HasTrustedKeyBounds() ||
             !file.SmallestSequence.HasValue ||
             !file.LargestSequence.HasValue ||
             mutation.Sequence < file.SmallestSequence.Value ||

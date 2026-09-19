@@ -34,7 +34,7 @@ static class CloudManifestReader
 
         try
         {
-            return DecodeManifest(File.ReadAllBytes(path));
+            return DecodeManifest(PositionalFile.ReadAllBytes(path));
         }
         catch (JsonException exception)
         {

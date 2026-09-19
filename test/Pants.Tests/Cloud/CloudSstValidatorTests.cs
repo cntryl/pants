@@ -17,6 +17,7 @@ public sealed class CloudSstValidatorTests
             ColumnFamilyId = 0,
             SmallestKey = "alpha"u8.ToArray().Select(static value => (int)value).ToArray(),
             LargestKey = "zulu"u8.ToArray().Select(static value => (int)value).ToArray(),
+            KeyBoundsComplete = true,
             SmallestSequence = 4,
             LargestSequence = 4
         };

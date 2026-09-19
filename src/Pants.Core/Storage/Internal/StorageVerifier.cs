@@ -63,7 +63,7 @@ static class StorageVerifier
         try
         {
             manifest = JsonSerializer.Deserialize<ManifestState>(
-                File.ReadAllBytes(manifestPath),
+                PositionalFile.ReadAllBytes(manifestPath),
                 JsonOptions) ?? throw new JsonException("Manifest is empty.");
         }
         catch (JsonException exception)
