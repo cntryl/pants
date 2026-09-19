@@ -7,6 +7,11 @@ static class SstManifestMetadataValidator
         FileMeta file,
         string storageKind)
     {
+        if (!file.HasTrustedKeyBounds())
+        {
+            return;
+        }
+
         ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, metadata.SmallestKey);
         ValidateKey(storageKind, file.Name, "largest", file.LargestKey, metadata.LargestKey);
     }
@@ -25,8 +30,11 @@ static class SstManifestMetadataValidator
             .Concat(contents.RangeTombstones.Select(static range => range.Sequence))
             .ToArray();
 
-        ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, keys.FirstOrDefault());
-        ValidateKey(storageKind, file.Name, "largest", file.LargestKey, keys.LastOrDefault());
+        if (file.HasTrustedKeyBounds())
+        {
+            ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, keys.FirstOrDefault());
+            ValidateKey(storageKind, file.Name, "largest", file.LargestKey, keys.LastOrDefault());
+        }
         ValidateSequence(
             storageKind,
             file.Name,

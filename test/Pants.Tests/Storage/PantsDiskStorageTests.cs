@@ -935,6 +935,7 @@ public sealed class PantsDiskStorageTests
             ["cf_id"] = manifestFile.GetProperty("cf_id").Clone(),
             ["smallest_key"] = manifestFile.GetProperty("smallest_key").Clone(),
             ["largest_key"] = manifestFile.GetProperty("largest_key").Clone(),
+            ["key_bounds_complete"] = manifestFile.GetProperty("key_bounds_complete").Clone(),
             ["smallest_seq"] = manifestFile.GetProperty("smallest_seq").Clone(),
             ["largest_seq"] = manifestFile.GetProperty("largest_seq").Clone()
         };

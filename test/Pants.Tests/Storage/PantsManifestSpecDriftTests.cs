@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Cntryl.Pants.Compatibility;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -15,6 +17,35 @@ public sealed class PantsManifestSpecDriftTests
     const byte DurabilityMarkerRecordType = 9;
     const byte DropColumnFamilyAtRecordType = 10;
     const byte ReclaimColumnFamilyRecordType = 11;
+
+    [Fact]
+    public async Task ShouldReadSstGivenIncompleteBoundsInDurableManifestJournalWhenReopening()
+    {
+        // Arrange
+        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
+            "v3_populated_v4_sst_db");
+        var manifest = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(directory.Path, "manifest.json")))!.AsObject();
+        var file = manifest["files"]!.AsArray()[0]!.AsObject();
+        file["level"] = 1;
+        file["key_bounds_complete"] = false;
+        file.Remove("smallest_key");
+        file.Remove("largest_key");
+        var edit = new JsonObject { ["AddSst"] = file.DeepClone() };
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "manifest.journal"),
+            BuildEnvelopedJournal((2, AddSstRecordType, edit.ToJsonString())));
+
+        // Act
+        await using var database = await OpenAsync(directory.Path);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        var value = await reader.GetAsync("fixture/alpha"u8.ToArray());
+
+        // Assert
+        Assert.Equal("value-alpha", Encoding.UTF8.GetString(value!.Value.Span));
+    }
 
     // Issue #47 -----------------------------------------------------------
 

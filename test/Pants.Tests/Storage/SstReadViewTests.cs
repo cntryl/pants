@@ -36,6 +36,38 @@ public sealed class SstReadViewTests
         Assert.Equal(["l0-b.sst", "l0-a.sst"], candidates.Select(static file => file.Name));
     }
 
+    [Fact]
+    public void ShouldIncludeFileGivenMissingManifestBoundsWhenSelectingPointCandidate()
+    {
+        // Arrange
+        var bounded = File("bounded.sst", 1, 1, "a", "b");
+        var unbounded = File("unbounded.sst", 1, 2, "a", "b");
+        unbounded.SmallestKey = null;
+        unbounded.LargestKey = null;
+        var view = SstReadView.Create([bounded, unbounded]);
+
+        // Act
+        var candidates = view.SelectPointCandidates(0, Key("z"), out _);
+
+        // Assert
+        Assert.Equal(["unbounded.sst"], candidates.Select(static file => file.Name));
+    }
+
+    [Fact]
+    public void ShouldIncludeFileGivenIncompleteManifestBoundsWhenSelectingPointCandidate()
+    {
+        // Arrange
+        var file = File("incomplete.sst", 1, 1, "a", "b");
+        file.KeyBoundsComplete = false;
+        var view = SstReadView.Create([file]);
+
+        // Act
+        var candidates = view.SelectPointCandidates(0, Key("z"), out _);
+
+        // Assert
+        Assert.Equal(["incomplete.sst"], candidates.Select(static candidate => candidate.Name));
+    }
+
     /// <summary>
     ///     A manifest that claims a non-overlapping level but does not deliver one must not silently
     ///     lose a candidate; the level falls back to a full scan instead.
@@ -114,7 +146,8 @@ public sealed class SstReadViewTests
                 SstSequence = checked((ulong)index + 1),
                 SizeBytes = 1024,
                 SmallestKey = KeyValues(index),
-                LargestKey = KeyValues(index)
+                LargestKey = KeyValues(index),
+                KeyBoundsComplete = true
             })
             .ToArray();
 
@@ -145,6 +178,7 @@ public sealed class SstReadViewTests
             SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest)
             .Select(static value => (int)value).ToArray(),
             LargestKey = System.Text.Encoding.UTF8.GetBytes(largest)
-            .Select(static value => (int)value).ToArray()
+            .Select(static value => (int)value).ToArray(),
+            KeyBoundsComplete = true
         };
 }

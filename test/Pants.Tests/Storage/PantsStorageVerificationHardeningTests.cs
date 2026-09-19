@@ -639,6 +639,7 @@ public sealed class PantsStorageVerificationHardeningTests
             SstSequence = 1,
             SmallestKey = key.Select(static value => (int)value).ToArray(),
             LargestKey = key.Select(static value => (int)value).ToArray(),
+            KeyBoundsComplete = true,
             SmallestSequence = 7,
             LargestSequence = 7
         };

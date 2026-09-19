@@ -1206,11 +1206,10 @@ sealed class LocalDiskStore :
         GetManifestFilesSnapshot()
             .Where(file =>
                 file.ColumnFamilyId == columnFamily.Id &&
-                file.SmallestKey is not null &&
-                file.LargestKey is not null &&
-                bounds.Overlaps(
-                    GetMetadataKey(file.SmallestKey),
-                    GetMetadataKey(file.LargestKey)))
+                (!file.HasTrustedKeyBounds() ||
+                 bounds.Overlaps(
+                     GetMetadataKey(file.SmallestKey!),
+                     GetMetadataKey(file.LargestKey!))))
             .Select(static file => file.Name)
             .ToArray();
 
@@ -1830,9 +1829,8 @@ sealed class LocalDiskStore :
         {
             foreach (var file in GetManifestFilesSnapshot().Where(file =>
                          file.ColumnFamilyId == columnFamily.Id &&
-                         file.SmallestKey is not null &&
-                         file.LargestKey is not null &&
-                         bounds.Overlaps(GetMetadataKey(file.SmallestKey), GetMetadataKey(file.LargestKey))))
+                         (!file.HasTrustedKeyBounds() ||
+                          bounds.Overlaps(GetMetadataKey(file.SmallestKey!), GetMetadataKey(file.LargestKey!)))))
             {
                 var reader = SstReader.Open(Path.Combine(_sstDirectory, file.Name));
                 readers.Add(reader);
@@ -4213,6 +4211,7 @@ sealed class LocalDiskStore :
             SstSequence = sequence,
             SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
             LargestKey = allKeys.Count == 0 ? null : allKeys[^1].Select(value => (int)value).ToArray(),
+            KeyBoundsComplete = true,
             SmallestSequence = allSequences.Count == 0 ? null : allSequences.Min(),
             LargestSequence = allSequences.Count == 0 ? null : allSequences.Max(),
             Sublevel = 0
@@ -4315,6 +4314,7 @@ sealed class LocalDiskStore :
         left.SstSequence == right.SstSequence &&
         left.SmallestSequence == right.SmallestSequence &&
         left.LargestSequence == right.LargestSequence &&
+        left.KeyBoundsComplete == right.KeyBoundsComplete &&
         left.Sublevel == right.Sublevel &&
         HasSameKey(left.SmallestKey, right.SmallestKey) &&
         HasSameKey(left.LargestKey, right.LargestKey);
@@ -4333,6 +4333,7 @@ sealed class LocalDiskStore :
         ["cf_id"] = metadata.ColumnFamilyId,
         ["smallest_key"] = metadata.SmallestKey,
         ["largest_key"] = metadata.LargestKey,
+        ["key_bounds_complete"] = metadata.KeyBoundsComplete,
         ["smallest_seq"] = metadata.SmallestSequence,
         ["largest_seq"] = metadata.LargestSequence
     };
@@ -4821,25 +4822,25 @@ sealed class LocalDiskStore :
 
     internal static bool IsWithinFileRange(FileMeta file, ReadOnlySpan<byte> key)
     {
-        if (file.SmallestKey is null || file.LargestKey is null)
+        if (!file.HasTrustedKeyBounds())
         {
-            return false;
+            return true;
         }
 
-        var smallest = file.SmallestKey.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
+        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
+        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
         return key.SequenceCompareTo(smallest) >= 0 && key.SequenceCompareTo(largest) <= 0;
     }
 
     static bool OverlapsFileRange(FileMeta file, ReadOnlySpan<byte> start, ReadOnlySpan<byte> end)
     {
-        if (file.SmallestKey is null || file.LargestKey is null)
+        if (!file.HasTrustedKeyBounds())
         {
-            return false;
+            return true;
         }
 
-        var smallest = file.SmallestKey.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey.Select(static value => checked((byte)value)).ToArray();
+        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
+        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
         return largest.AsSpan().SequenceCompareTo(start) >= 0 &&
                smallest.AsSpan().SequenceCompareTo(end) < 0;
     }
@@ -4966,6 +4967,7 @@ sealed class LocalDiskStore :
                     SstSequence = sstSequence,
                     SmallestKey = keys.Count == 0 ? null : keys[0].Select(static value => (int)value).ToArray(),
                     LargestKey = keys.Count == 0 ? null : keys[^1].Select(static value => (int)value).ToArray(),
+                    KeyBoundsComplete = true,
                     SmallestSequence = sequences.Count == 0 ? null : sequences.Min(),
                     LargestSequence = sequences.Count == 0 ? null : sequences.Max(),
                     Sublevel = 0
@@ -5346,6 +5348,7 @@ sealed class LocalDiskStore :
             ColumnFamilyId = GetRequiredUInt32(element, "cf_id"),
             SmallestKey = GetOptionalByteArray(element, "smallest_key"),
             LargestKey = GetOptionalByteArray(element, "largest_key"),
+            KeyBoundsComplete = GetOptionalBoolean(element, "key_bounds_complete"),
             SmallestSequence = GetOptionalUInt64(element, "smallest_seq"),
             LargestSequence = GetOptionalUInt64(element, "largest_seq")
         };
@@ -5798,6 +5801,18 @@ sealed class LocalDiskStore :
             : value.TryGetUInt64(out var result)
                 ? result
                 : throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
+
+    static bool GetOptionalBoolean(JsonElement element, string name) =>
+        !element.TryGetProperty(name, out var value)
+            ? false
+            : value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"Manifest edit field '{name}' is invalid.")
+            };
 
     static int[]? GetOptionalByteArray(JsonElement element, string name)
     {

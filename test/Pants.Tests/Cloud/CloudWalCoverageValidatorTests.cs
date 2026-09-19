@@ -16,6 +16,21 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     [Fact]
+    public void ShouldKeepWalGivenIncompleteManifestBoundsWhenCheckingCoverage()
+    {
+        // Arrange
+        var bytes = CreateWalBytes(WalOperation.Put, "middle"u8.ToArray());
+        var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
+        manifest.Files[0].KeyBoundsComplete = false;
+
+        // Act
+        var covered = CloudWalCoverageValidator.ValidateAndIsCovered(bytes, 3, 7, manifest);
+
+        // Assert
+        Assert.False(covered);
+    }
+
+    [Fact]
     public void ShouldRejectWalMutationGivenKeyOutsideManifestFileRange()
     {
         var bytes = CreateWalBytes(WalOperation.Put, "zulu-plus"u8.ToArray());
@@ -233,6 +248,7 @@ public sealed class CloudWalCoverageValidatorTests
                 ColumnFamilyId = 0,
                 SmallestKey = smallestKey.Select(static value => (int)value).ToArray(),
                 LargestKey = largestKey.Select(static value => (int)value).ToArray(),
+                KeyBoundsComplete = true,
                 SmallestSequence = 2,
                 LargestSequence = 2
             }

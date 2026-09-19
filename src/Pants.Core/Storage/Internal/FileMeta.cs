@@ -20,11 +20,19 @@ sealed class FileMeta
 
     public int[]? LargestKey { get; set; }
 
+    [JsonPropertyName("key_bounds_complete")] public bool KeyBoundsComplete { get; set; }
+
     [JsonPropertyName("smallest_seq")] public ulong? SmallestSequence { get; set; }
 
     [JsonPropertyName("largest_seq")] public ulong? LargestSequence { get; set; }
 
     public uint Sublevel { get; set; }
+
+    public bool HasTrustedKeyBounds() =>
+        KeyBoundsComplete &&
+        SmallestKey is not null &&
+        LargestKey is not null &&
+        SmallestKey.AsSpan().SequenceCompareTo(LargestKey) <= 0;
 
     public FileMeta Clone() => new()
     {
@@ -36,6 +44,7 @@ sealed class FileMeta
         SstSequence = SstSequence,
         SmallestKey = SmallestKey?.ToArray(),
         LargestKey = LargestKey?.ToArray(),
+        KeyBoundsComplete = KeyBoundsComplete,
         SmallestSequence = SmallestSequence,
         LargestSequence = LargestSequence,
         Sublevel = Sublevel
