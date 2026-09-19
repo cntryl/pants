@@ -1,4 +1,5 @@
 using Cntryl.Pants.Storage.Internal.Wal;
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -252,6 +253,50 @@ public sealed class PantsSstEntryAdmissionTests
         Assert.Equal(
             "value",
             TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("later")))!.Value));
+    }
+
+    /// <summary>
+    ///     An unframeable transaction must not share a coalesced WAL group: its encoding failure
+    ///     would otherwise roll back and fail every well-formed commit batched alongside it.
+    /// </summary>
+    [Fact]
+    public async Task ShouldNotFailCoalescedNeighbourGivenUnframeableResidentCommit()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler();
+        var half = DiskFormat.MaximumDecodedBlockBytes / 2;
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(1024L * 1024 * 1024))
+                .WithTransactionMemoryPool(512L * 1024 * 1024),
+            new RuntimeDependencies(failpoints));
+        var family = database.ColumnFamilies.DefaultFamily;
+        await using var oversized = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        oversized.Put(TestBytes.FromString("first"), new byte[half]);
+        oversized.Put(TestBytes.FromString("second"), new byte[half]);
+        await using var neighbour = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        neighbour.Put(TestBytes.FromString("neighbour"), TestBytes.FromString("value"));
+
+        var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
+        var oversizedCommit = oversized.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        var neighbourCommit = neighbour.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        failpoints.ReleaseRuntimeBarrier();
+        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() => oversizedCommit);
+        await neighbourCommit;
+        await using var reader = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "value",
+            TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("neighbour")))!.Value));
     }
 
     static async Task CommitDeleteAsync(PantsOpenOptions options, byte[] key)
