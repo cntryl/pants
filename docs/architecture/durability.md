@@ -12,6 +12,12 @@ be reported as durable. A deadline after admission is outcome-unknown rather tha
 rejection: Pants retains the sealed local WAL and continues or retries the accepted publication
 obligation under writer-epoch fencing. Callers must reconcile before retrying the mutation.
 
+A read-write `CloudStrict` commit with no mutations also confirms that the current runtime
+sequence is cloud-durable. This includes assertion-only and fully empty commits. If that sequence
+is already durable, the commit returns without sealing another WAL segment; otherwise it seals
+pending WAL work or waits behind an upload already in progress. The confirmation adds no sequence
+or WAL record. A failed upload cannot be acknowledged as a successful confirmation.
+
 `CloudAsync` may acknowledge after the local WAL durability boundary and queues sealed WAL
 objects for upload. Runtime metrics expose pending and completed uploads. `BestEffort` provides
 no recovery guarantee until an explicit flush publishes an SST.
