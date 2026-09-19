@@ -4900,7 +4900,7 @@ sealed class LocalDiskStore :
             try
             {
                 var manifest = JsonSerializer.Deserialize<ManifestState>(
-                    File.ReadAllBytes(source),
+                    PositionalFile.ReadAllBytes(source),
                     JsonOptions) ?? throw new JsonException("Midge manifest is empty.");
                 if (failure is not null)
                 {

@@ -39,7 +39,7 @@ sealed class CloudControlMetadataSnapshot
             var path = Path.Combine(root, fileName);
             if (File.Exists(path))
             {
-                files.Add(fileName, File.ReadAllBytes(path));
+                files.Add(fileName, PositionalFile.ReadAllBytes(path));
             }
         }
 

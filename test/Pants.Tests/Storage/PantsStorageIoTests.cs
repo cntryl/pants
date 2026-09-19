@@ -34,6 +34,33 @@ public sealed class PantsStorageIoTests
     }
 
     [Fact]
+    public void ShouldReadOldManifestGivenReplacementWhileReadHandleIsOpen()
+    {
+        // Arrange
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "manifest.snapshot.json");
+        AtomicStagedFile.Write(path, "old-generation"u8);
+        var replaced = false;
+
+        // Act
+        var captured = PositionalFile.ReadAllBytes(path, (handle, buffer, offset) =>
+        {
+            if (!replaced)
+            {
+                AtomicStagedFile.Write(path, "new-generation"u8);
+                replaced = true;
+            }
+
+            return RandomAccess.Read(handle, buffer, offset);
+        });
+
+        // Assert
+        Assert.True(replaced);
+        Assert.Equal("old-generation"u8.ToArray(), captured);
+        Assert.Equal("new-generation"u8.ToArray(), File.ReadAllBytes(path));
+    }
+
+    [Fact]
     public void ShouldAppendVectoredBuffersWithoutSharingAFileCursor()
     {
         using var directory = new TemporaryDirectory();
