@@ -34,28 +34,30 @@ public sealed class PantsStorageIoTests
     }
 
     [Fact]
-    public void ShouldReadOldManifestGivenReplacementWhileReadHandleIsOpen()
+    public async Task ShouldReadOldManifestBeforeConcurrentReplacement()
     {
         // Arrange
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "manifest.snapshot.json");
         AtomicStagedFile.Write(path, "old-generation"u8);
-        var replaced = false;
+        using var publishing = new ManualResetEventSlim();
+        Task? replacement = null;
 
         // Act
         var captured = PositionalFile.ReadAllBytes(path, (handle, buffer, offset) =>
         {
-            if (!replaced)
-            {
-                AtomicStagedFile.Write(path, "new-generation"u8);
-                replaced = true;
-            }
+            replacement = Task.Run(() => AtomicStagedFile.Write(
+                path,
+                "new-generation"u8,
+                beforePublish: publishing.Set));
+            Assert.True(publishing.Wait(TimeSpan.FromSeconds(10)));
+            Assert.False(replacement.IsCompleted);
 
             return RandomAccess.Read(handle, buffer, offset);
         });
+        await replacement!;
 
         // Assert
-        Assert.True(replaced);
         Assert.Equal("old-generation"u8.ToArray(), captured);
         Assert.Equal("new-generation"u8.ToArray(), File.ReadAllBytes(path));
     }
