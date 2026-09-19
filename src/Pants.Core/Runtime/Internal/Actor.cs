@@ -2115,7 +2115,10 @@ sealed class Actor : IAsyncDisposable
                     return true;
                 }
 
-                if (_diskStore is not null)
+                // A fenced WAL can make nothing further durable, and restart recovery is the
+                // authority for what it holds. Skipping the final boundary lets shutdown release
+                // the lease and files that recovery needs instead of failing on the fence forever.
+                if (_diskStore is { IsWalFenced: false })
                 {
                     _ = await _walRuntime.FlushDurabilityBoundaryAsync(
                             Failpoint.BeforeShutdownWalDurabilityBoundary)

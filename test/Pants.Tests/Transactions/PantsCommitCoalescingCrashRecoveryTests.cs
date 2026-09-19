@@ -167,15 +167,18 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsFencedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
             database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Maintenance.CompactAllAsync().AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+        await Assert.ThrowsAsync<PantsFencedException>(() => database.Maintenance.CompactAllAsync().AsTask());
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
             database.ColumnFamilies.CreateAsync("fenced-family").AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
+
+        // A fenced WAL can make nothing further durable, so shutdown skips the final boundary and
+        // completes, releasing what restart recovery needs.
+        await database.ShutdownAsync(TimeSpan.FromSeconds(5));
 
         WriteDurableSignal(
             Path.Combine(databasePath, RollbackFailureSentinelFileName),
@@ -212,12 +215,12 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             suffix.Put("fenced-single-suffix"u8.ToArray(), "must-not-recover"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsFencedException>(() => suffix.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() =>
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
             database.ColumnFamilies.CreateAsync("fenced-single-family").AsTask());
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(5)).AsTask());
+        await database.ShutdownAsync(TimeSpan.FromSeconds(5));
 
         WriteDurableSignal(
             Path.Combine(databasePath, SingleRollbackFailureSentinelFileName),

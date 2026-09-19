@@ -354,19 +354,31 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         var spilledBoundary = TransactionSpillHardeningTestHarness.GetRequiredFailpoint(
             "BeforeSpilledTransactionCommitMarker");
         var failpoints = new ThrowingTransactionCommitBoundaryFailpointHandler(spilledBoundary);
-        await using var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
-            directory.Path,
-            failpoints);
-        await using (var spilled = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
-                         PantsTransactionMode.ReadWrite))
+        await using (var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
+                         directory.Path,
+                         failpoints))
         {
-            TransactionSpillHardeningTestHarness.Fill(spilled, "failed", 12);
-            await Assert.ThrowsAsync<PantsIOException>(() => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await using (var spilled = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                TransactionSpillHardeningTestHarness.Fill(spilled, "failed", 12);
+                await Assert.ThrowsAsync<PantsIOException>(() => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            }
+
+            // The spilled records were already appended, so the writer is fenced until reopen.
+            await using var fenced = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            fenced.Put("survivor"u8.ToArray(), "visible"u8.ToArray());
+            await Assert.ThrowsAsync<PantsFencedException>(() => fenced.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await using (var direct = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
+        await using var reopened = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
+            directory.Path,
+            failpoints);
+        await using (var direct = await reopened.Transactions.BeginAsync(
+                         reopened.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             direct.Put("survivor"u8.ToArray(), "visible"u8.ToArray());
@@ -383,9 +395,9 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             static frame => frame.Operation == TransactionCommitOperation);
         Assert.Equal(TransactionBatchOperation, frames[^1].Operation);
         Assert.Equal("visible", await TransactionSpillHardeningTestHarness.ReadTextAsync(
-            database,
+            reopened,
             "survivor"));
-        Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(database, "failed-000"));
+        Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(reopened, "failed-000"));
     }
 
     [Fact]

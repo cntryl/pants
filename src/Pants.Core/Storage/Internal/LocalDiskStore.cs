@@ -75,7 +75,7 @@ sealed class LocalDiskStore :
     int _walPendingWrites;
     int _walRecords;
     FileStream _walStream;
-    Exception? _walWriteFailure;
+    readonly WalIoState _walIo = new();
 
     LocalDiskStore(
         string root,
@@ -408,7 +408,7 @@ sealed class LocalDiskStore :
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         var metadata = GetManifestSst(name);
         var path = Path.Combine(_sstDirectory, name);
         if (File.Exists(path))
@@ -494,7 +494,7 @@ sealed class LocalDiskStore :
     public void EvictLocalSst(string name)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         _ = GetManifestSst(name);
         RemoveSstFromCaches(name);
@@ -557,7 +557,7 @@ sealed class LocalDiskStore :
     {
         ArgumentNullException.ThrowIfNull(frozen);
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         _failpoints.Hit(Failpoint.BeforeFlushBuild);
         _lease.EnsureValid();
@@ -576,7 +576,7 @@ sealed class LocalDiskStore :
         ArgumentNullException.ThrowIfNull(frozen);
         ArgumentNullException.ThrowIfNull(plan);
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         var published = Volatile.Read(ref _manifestReadSnapshot).Files.SingleOrDefault(file =>
             file.Name == frozen.SstName);
@@ -600,6 +600,8 @@ sealed class LocalDiskStore :
         return new FlushPublicationResult(persistenceAnomaly);
     }
 
+    public bool IsWalFenced => _walIo.IsFenced;
+
     public WalCommitResult AppendCommit(
         CommitPayload payload,
         RuntimeState state,
@@ -609,7 +611,7 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfDurableWalFenced(durability);
             var walLength = _walStream.Length;
             var reservedSequence = checked((long)_nextSequence);
             var unflushedCommitSequence = _unflushedCommitSequence;
@@ -618,12 +620,14 @@ sealed class LocalDiskStore :
             var durabilityState = CaptureWalDurabilityState();
             try
             {
-                return AppendCommitCore(
+                var result = AppendCommitCore(
                     payload,
                     state,
                     durability,
                     out reservedSequence,
                     metrics);
+                _walIo.CompleteTransition();
+                return result;
             }
             catch (Exception appendFailure)
             {
@@ -644,11 +648,12 @@ sealed class LocalDiskStore :
                     var uncertainty = new WalCommitRollbackException(
                         appendFailure,
                         rollbackFailure);
-                    Volatile.Write(ref _walWriteFailure, uncertainty);
+                    _walIo.Fence(uncertainty);
                     state.Health = PantsEngineHealth.Degraded;
                     throw uncertainty;
                 }
 
+                FenceIfWalTransitioning(state, appendFailure);
                 throw;
             }
         }
@@ -679,7 +684,7 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfDurableWalFenced(durability);
             _lease.EnsureValid();
             var walLength = _walStream.Length;
             var reservedSequence = commits[^1].ExpectedSequence;
@@ -712,6 +717,7 @@ sealed class LocalDiskStore :
                 {
                     var appendStarted = Stopwatch.GetTimestamp();
                     var payloads = prepared.Select(static commit => commit.Payload).ToArray();
+                    _walIo.BeginTransition();
                     WalCodec.AppendFrames(
                         _walStream.SafeFileHandle,
                         walLength,
@@ -745,12 +751,13 @@ sealed class LocalDiskStore :
                     beforeSync();
                     _lease.EnsureValid();
                     var syncStarted = Stopwatch.GetTimestamp();
-                    _walStream.Flush(true);
+                    SyncWal();
                     var syncElapsed = Stopwatch.GetElapsedTime(syncStarted);
                     RecordWalSync(state.Sequence);
                     metrics?.RecordFsync(syncElapsed, state.Sequence);
                 }
 
+                _walIo.CompleteTransition();
                 return new WalCommitGroupResult(commits.Count);
             }
             catch (Exception groupFailure)
@@ -771,11 +778,12 @@ sealed class LocalDiskStore :
                     var uncertainty = new WalCommitGroupRollbackException(
                         groupFailure,
                         rollbackFailure);
-                    Volatile.Write(ref _walWriteFailure, uncertainty);
+                    _walIo.Fence(uncertainty);
                     state.Health = PantsEngineHealth.Degraded;
                     throw uncertainty;
                 }
 
+                FenceIfWalTransitioning(state, groupFailure);
                 throw;
             }
         }
@@ -786,9 +794,9 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfWalFenced();
             var started = Stopwatch.GetTimestamp();
-            _walStream.Flush(true);
+            SyncWal();
             var elapsed = Stopwatch.GetElapsedTime(started);
             RecordWalSync(_walLastAppendedSequence);
             metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
@@ -815,7 +823,7 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfWalFenced();
             if (_walStream.Length != 0 ||
                 _walLastAppendedSequence > checked((long)segment.MaximumSequence))
             {
@@ -857,7 +865,7 @@ sealed class LocalDiskStore :
     public void DeleteCloudDurableWalSegment(SealedWalSegment segment)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         var path = Path.Combine(_walDirectory, segment.FileName);
         if (File.Exists(path))
@@ -1077,6 +1085,11 @@ sealed class LocalDiskStore :
             return state.Health;
         }
 
+        if (_walIo.IsFenced)
+        {
+            return PantsEngineHealth.Degraded;
+        }
+
         return GetObsoleteFiles().Any(name => !_snapshotPinnedObsoleteFiles.Contains(name))
             ? PantsEngineHealth.Degraded
             : PantsEngineHealth.Healthy;
@@ -1098,7 +1111,14 @@ sealed class LocalDiskStore :
     public bool CollectObsoleteFiles(RuntimeState state)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+
+        // Housekeeping must not change the storage restart recovery will read, and it must not
+        // fail the BestEffort commits a fenced writer still accepts.
+        if (_walIo.IsFenced)
+        {
+            return false;
+        }
+
         _lease.EnsureValid();
         if (state.ActiveSnapshotCount != 0)
         {
@@ -1189,7 +1209,7 @@ sealed class LocalDiskStore :
     public void HydrateLocalSst(string name, ReadOnlySpan<byte> bytes)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         var metadata = GetManifestSst(name);
         if (checked((ulong)bytes.Length) != metadata.SizeBytes ||
@@ -2185,7 +2205,7 @@ sealed class LocalDiskStore :
     public void CreateColumnFamily(ColumnFamilyIdentity identity)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         var edit = CreateManifestEdit(
             "CreateColumnFamily",
@@ -2218,7 +2238,7 @@ sealed class LocalDiskStore :
         lock (_manifestGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfWalFenced();
             _lease.EnsureValid();
             if (!_familyIds.TryGetValue(identity, out var id))
             {
@@ -2249,7 +2269,7 @@ sealed class LocalDiskStore :
     public void CommitColumnFamilyEdit(RuntimeState state, JsonElement edit)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         CloudDdlEdit.Validate(edit);
         if (IsColumnFamilyEditApplied(edit))
@@ -2270,7 +2290,7 @@ sealed class LocalDiskStore :
         JsonElement edit)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         CloudDdlEdit.Validate(edit);
         if (!IsColumnFamilyEditApplied(edit))
@@ -2284,7 +2304,7 @@ sealed class LocalDiskStore :
     public void ApplyColumnFamilyEditVisibility(RuntimeState state, JsonElement edit)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         CloudDdlEdit.Validate(edit);
         var id = CloudDdlEdit.GetColumnFamilyId(edit);
         if (CloudDdlEdit.IsCreate(edit))
@@ -2342,7 +2362,7 @@ sealed class LocalDiskStore :
             lock (_manifestGate)
             {
                 ThrowIfDisposed();
-                ThrowIfWalWriteFailed();
+                ThrowIfWalFenced();
                 _lease.EnsureValid();
                 if (!_familyIds.TryGetValue(identity, out var id))
                 {
@@ -2439,7 +2459,7 @@ sealed class LocalDiskStore :
         bool flushBufferedWrites = true)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfDurableWalFenced(durability);
         _lease.EnsureValid();
         reservedSequence = checked((long)_nextSequence);
         if (payload.Operations.Count == 0)
@@ -2510,7 +2530,15 @@ sealed class LocalDiskStore :
         {
             _failpoints.Hit(Failpoint.BeforeWalFlush);
             var flushStarted = Stopwatch.GetTimestamp();
-            _walStream.Flush(durability == PantsDurability.Sync);
+            if (durability == PantsDurability.Sync)
+            {
+                SyncWal();
+            }
+            else
+            {
+                _walStream.Flush(false);
+            }
+
             var flushElapsed = Stopwatch.GetElapsedTime(flushStarted);
             if (durability == PantsDurability.Sync)
             {
@@ -2529,6 +2557,14 @@ sealed class LocalDiskStore :
         }
 
         return new WalCommitResult(postDurabilityFailure);
+    }
+
+    void FenceIfWalTransitioning(RuntimeState state, Exception failure)
+    {
+        if (_walIo.FenceIfTransitioning(failure))
+        {
+            state.Health = PantsEngineHealth.Degraded;
+        }
     }
 
     void RollBackWalCommitGroup(
@@ -2742,6 +2778,7 @@ sealed class LocalDiskStore :
 
     void AppendWalFrame(ref long offset, byte[] payload, Action? afterPartialPayload = null)
     {
+        _walIo.BeginTransition();
         WalCodec.AppendFrame(
             _walStream.SafeFileHandle,
             offset,
@@ -2761,7 +2798,7 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfWalFenced();
             _lease.EnsureValid();
             if (!_familyIds.TryGetValue(identity, out var familyId))
             {
@@ -2800,7 +2837,7 @@ sealed class LocalDiskStore :
     void FlushCore()
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         if (_mutableOperations.Count == 0)
         {
@@ -2816,7 +2853,7 @@ sealed class LocalDiskStore :
     void FlushCore(ColumnFamilyIdentity identity)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         if (!_familyIds.TryGetValue(identity, out var familyId))
         {
@@ -2848,7 +2885,7 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalWriteFailed();
+            ThrowIfWalFenced();
             if (!_frozenFlushIds.Contains(frozen.Id))
             {
                 return;
@@ -2879,7 +2916,7 @@ sealed class LocalDiskStore :
         IReadOnlyList<WalMutation> operations,
         ulong? persistedSequence)
     {
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         var plan = BuildFlushPlan(operations);
         _ = PublishFlushPlan(
             plan,
@@ -3036,7 +3073,7 @@ sealed class LocalDiskStore :
         Action? validateCloudWriteAuthority)
     {
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         if (_walStream.Length == 0)
         {
@@ -3132,7 +3169,7 @@ sealed class LocalDiskStore :
                     var uncertainty = new WalRotationRecoveryException(
                         rotationFailure,
                         recoveryFailure);
-                    Volatile.Write(ref _walWriteFailure, uncertainty);
+                    _walIo.Fence(uncertainty);
                     throw uncertainty;
                 }
 
@@ -3159,7 +3196,7 @@ sealed class LocalDiskStore :
     void SyncWalForLocalRotation(WalMetricsRecorder? metrics)
     {
         var started = Stopwatch.GetTimestamp();
-        _walStream.Flush(true);
+        SyncWal();
         var elapsed = Stopwatch.GetElapsedTime(started);
         RecordWalSync(_walLastAppendedSequence);
         metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
@@ -3345,7 +3382,7 @@ sealed class LocalDiskStore :
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _lease.EnsureValid();
         if (HasManifestPublishedCompactionIntent())
         {
@@ -4721,7 +4758,7 @@ sealed class LocalDiskStore :
 
     void RotateWal()
     {
-        ThrowIfWalWriteFailed();
+        ThrowIfWalFenced();
         _failpoints.Hit(Failpoint.BeforeWalRotation);
         _walStream.Dispose();
         using (var truncate = new FileStream(_walPath, FileMode.Create, FileAccess.Write, FileShare.Read))
@@ -5840,14 +5877,35 @@ sealed class LocalDiskStore :
 
     void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(IsDisposed, this);
 
-    void ThrowIfWalWriteFailed()
+    void ThrowIfWalFenced() => _walIo.ThrowIfFenced();
+
+    void ThrowIfDurableWalFenced(PantsDurability durability)
     {
-        if (Volatile.Read(ref _walWriteFailure) is { } failure)
+        if (durability != PantsDurability.BestEffort)
         {
-            throw new PantsAbortedException(
-                "The WAL is unavailable after an uncertain commit rollback.",
-                failure);
+            ThrowIfWalFenced();
         }
+    }
+
+    /// <summary>
+    ///     Fsyncs the active WAL. A failure fences the writer: the kernel may already have dropped
+    ///     the dirty pages, so a later successful fsync would not prove they reached the disk.
+    /// </summary>
+    void SyncWal()
+    {
+        _walIo.BeginTransition();
+        try
+        {
+            _failpoints.Hit(Failpoint.BeforeWalSync);
+            _walStream.Flush(true);
+        }
+        catch (Exception failure)
+        {
+            _walIo.FenceIfTransitioning(failure);
+            throw;
+        }
+
+        _walIo.CompleteTransition();
     }
 
     enum WalReplayOutcome

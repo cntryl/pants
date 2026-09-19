@@ -2,6 +2,11 @@ namespace Cntryl.Pants.Storage.Internal;
 
 interface ILocalWalStore
 {
+    /// <summary>
+    ///     Whether an ambiguous append or sync failure has fenced the writer until restart recovery.
+    /// </summary>
+    bool IsWalFenced { get; }
+
     WalCommitResult AppendCommit(
         CommitPayload payload,
         RuntimeState state,

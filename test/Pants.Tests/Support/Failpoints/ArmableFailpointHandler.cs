@@ -4,6 +4,7 @@ sealed class ArmableFailpointHandler : IFailpointHandler
 {
     readonly Lock _gate = new();
     Failpoint? _target;
+    Func<Failpoint, Exception>? _exceptionFactory;
 
     public void Hit(Failpoint failpoint)
     {
@@ -17,14 +18,16 @@ sealed class ArmableFailpointHandler : IFailpointHandler
             _target = null;
         }
 
-        throw new IOException($"Injected failure at {failpoint}.");
+        throw _exceptionFactory?.Invoke(failpoint) ??
+              new IOException($"Injected failure at {failpoint}.");
     }
 
-    public void Arm(Failpoint target)
+    public void Arm(Failpoint target, Func<Failpoint, Exception>? exceptionFactory = null)
     {
         lock (_gate)
         {
             _target = target;
+            _exceptionFactory = exceptionFactory;
         }
     }
 }

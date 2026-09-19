@@ -34,9 +34,10 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             Assert.IsType<IOException>(failure.RotationFailure);
             Assert.IsType<IOException>(failure.RecoveryFailure);
 
-            var aborted = Assert.Throws<PantsAbortedException>(() =>
+            var fenced = Assert.Throws<PantsFencedException>(() =>
                 store.CreateColumnFamily(new ColumnFamilyIdentity(1, "fenced", 1)));
-            Assert.Same(failure, aborted.InnerException);
+            Assert.Equal(PantsErrorCode.Fenced, fenced.Code);
+            Assert.Same(failure, fenced.InnerException);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(

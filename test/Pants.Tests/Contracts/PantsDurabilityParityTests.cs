@@ -159,11 +159,13 @@ public sealed class PantsDurabilityParityTests
         }
     }
 
+    /// <summary>
+    ///     Only a failure proven to precede any WAL byte leaves the writer usable; failures after the
+    ///     first byte fence it (see <c>PantsWalWriterFencingTests</c>).
+    /// </summary>
     [Theory]
     [InlineData(nameof(Failpoint.BeforeWalAppend))]
-    [InlineData(nameof(Failpoint.MidWalAppend))]
-    [InlineData(nameof(Failpoint.AfterWalAppend))]
-    [InlineData(nameof(Failpoint.BeforeWalFlush))]
+    [InlineData(nameof(Failpoint.BeforeDirectTransactionCommitMarker))]
     public async Task ShouldNotRecoverRejectedCommitGivenLaterSyncSucceeds(string failpointName)
     {
         using var directory = new TemporaryDirectory();
