@@ -35,7 +35,7 @@ public sealed class PantsCloudAssertionDurabilityTests
 
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(before.WalCloudDurableSequence < before.CurrentSequence);
-        var walBefore = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"));
+        var walBefore = PositionalFile.ReadAllBytes(Path.Combine(directory.Path, "wal", "wal.log"));
         await using var confirming = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
@@ -94,7 +94,7 @@ public sealed class PantsCloudAssertionDurabilityTests
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.CurrentSequence, before.WalCloudDurableSequence);
         var activeWalPath = Path.Combine(directory.Path, "wal", "wal.log");
-        var walBefore = await File.ReadAllBytesAsync(activeWalPath);
+        var walBefore = PositionalFile.ReadAllBytes(activeWalPath);
         await using var confirming = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
@@ -111,7 +111,7 @@ public sealed class PantsCloudAssertionDurabilityTests
         Assert.Equal(before.CurrentSequence, after.CurrentSequence);
         Assert.Equal(before.CloudAsyncWalSegmentsSealed, after.CloudAsyncWalSegmentsSealed);
         Assert.Equal(before.CloudAsyncWalUploadsStarted, after.CloudAsyncWalUploadsStarted);
-        Assert.Equal(walBefore, await File.ReadAllBytesAsync(activeWalPath));
+        Assert.Equal(walBefore, PositionalFile.ReadAllBytes(activeWalPath));
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
     }
 
