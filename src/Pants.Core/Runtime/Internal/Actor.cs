@@ -2920,6 +2920,22 @@ sealed class Actor : IAsyncDisposable
         {
             _ = await _walRuntime.FlushDurabilityBoundaryAsync().ConfigureAwait(false);
         }
+        else if (payload.Mode == PantsTransactionMode.ReadWrite &&
+                 writeOptions.Durability == PantsDurability.CloudStrict &&
+                 _cloudPersistence is not null &&
+                 state.Sequence > Volatile.Read(ref _walCloudDurableSequence))
+        {
+            try
+            {
+                await CompleteCloudStrictCommitAsync(payload, deadline).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                RecordPostDurabilityFailure(state, exception);
+                PublishSnapshot(state);
+                ExceptionDispatchInfo.Capture(exception).Throw();
+            }
+        }
 
         PublishSnapshot(state);
         _telemetry.RecordTransactionCommit();
