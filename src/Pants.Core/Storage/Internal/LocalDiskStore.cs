@@ -4805,7 +4805,7 @@ sealed class LocalDiskStore :
             AtomicStagedFile.FlushDirectory(_walDirectory);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or PantsException)
+            exception is IOException or UnauthorizedAccessException)
         {
             // The SST or remote WAL publication already covers these segments. A failed
             // directory sync may leave an obsolete file after a crash, so report the anomaly
