@@ -57,7 +57,7 @@ jobs:
       # discovered defect can be replayed as an ordinary deterministic test.
       - name: Upload reproduction
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-reproduction
           path: ${{ runner.temp }}/fuzz-results
