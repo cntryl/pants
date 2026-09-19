@@ -75,7 +75,7 @@ static class SstBlockCodec
         ReadOnlySpan<byte> data,
         PantsPerformanceGoal performanceGoal)
     {
-        if (data.Length < MinimumCompressionInputSize)
+        if (!ShouldCompress(data))
         {
             return (data.ToArray(), CompressionAlgorithm.None);
         }
@@ -92,9 +92,18 @@ static class SstBlockCodec
     static (byte[] Payload, CompressionAlgorithm Algorithm) Compress(
         ReadOnlySpan<byte> data,
         CompressionAlgorithm algorithm) =>
-        data.Length < MinimumCompressionInputSize
-            ? (data.ToArray(), CompressionAlgorithm.None)
-            : CompressWithoutThreshold(data, algorithm);
+        ShouldCompress(data)
+            ? CompressWithoutThreshold(data, algorithm)
+            : (data.ToArray(), CompressionAlgorithm.None);
+
+    /// <summary>
+    ///     Readers refuse to decompress past <see cref="DiskFormat.MaximumDecodedBlockBytes" />, so a
+    ///     larger block - an index or metadata block carrying several maximal keys - stays raw to
+    ///     remain readable without relaxing that bound.
+    /// </summary>
+    static bool ShouldCompress(ReadOnlySpan<byte> data) =>
+        data.Length >= MinimumCompressionInputSize &&
+        data.Length <= DiskFormat.MaximumDecodedBlockBytes;
 
     static (byte[] Payload, CompressionAlgorithm Algorithm) CompressWithoutThreshold(
         ReadOnlySpan<byte> data,

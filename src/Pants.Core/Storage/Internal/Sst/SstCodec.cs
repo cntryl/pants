@@ -80,6 +80,18 @@ static class SstCodec
                 nameof(file));
         }
 
+        // Validate everything before the first byte lands so a rejected input leaves no
+        // partial file behind for a caller to publish or clean up.
+        foreach (var entry in sourceEntries)
+        {
+            ValidateEntrySize(entry.Key.Length, entry.Value?.Length ?? 0);
+        }
+
+        foreach (var tombstone in tombstones)
+        {
+            ValidateRangeTombstoneSize(tombstone.Start.Length, tombstone.End.Length);
+        }
+
         var entries = sourceEntries
             .OrderBy(entry => entry.Key, ByteArrayComparer.Instance)
             .ThenByDescending(entry => entry.Sequence)

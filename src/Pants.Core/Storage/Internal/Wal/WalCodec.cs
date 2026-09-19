@@ -37,6 +37,51 @@ static class WalCodec
 
     static ReadOnlySpan<byte> BatchMagic => "TB"u8;
 
+    const int RecordPrefixBytes = 3;
+    const int TlvHeaderBytes = sizeof(byte) + sizeof(uint);
+    const int TransactionBatchHeaderBytes = 3 + 3 * sizeof(ulong) + sizeof(uint);
+
+    /// <summary>
+    ///     Measures the largest WAL record that could carry one operation, under either framing
+    ///     a commit may choose: inside a transaction batch or as its own spilled record.
+    /// </summary>
+    /// <remarks>
+    ///     Values are measured raw with a compression tag, so the bound holds whether or not the
+    ///     writer later finds them worth compressing. An expiration is always assumed.
+    /// </remarks>
+    public static long MeasureWorstCaseOperationRecord(
+        int keyLength,
+        int? valueLength,
+        int? rangeEndLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
+        var fixedFields =
+            RecordPrefixBytes +
+            TlvHeaderBytes + sizeof(byte) +
+            TlvHeaderBytes + sizeof(uint) +
+            TlvHeaderBytes + sizeof(ulong) +
+            TlvHeaderBytes + sizeof(ulong) +
+            TlvHeaderBytes + sizeof(ulong);
+        var compressedValueField = TlvHeaderBytes + TlvHeaderBytes + sizeof(byte);
+
+        var spilled = (long)fixedFields +
+                      TlvHeaderBytes + keyLength +
+                      TlvHeaderBytes + sizeof(ulong) +
+                      (valueLength is { } value ? compressedValueField + value : 0) +
+                      (rangeEndLength is { } rangeEnd ? TlvHeaderBytes + rangeEnd : 0);
+
+        var batchOperation = (long)sizeof(byte) + sizeof(uint) + sizeof(ulong) +
+                             sizeof(byte) + sizeof(ulong) +
+                             sizeof(uint) + keyLength +
+                             sizeof(byte) + (valueLength is { } batchValue ? sizeof(uint) + batchValue : 0) +
+                             sizeof(byte) + (rangeEndLength is { } batchRangeEnd ? sizeof(uint) + batchRangeEnd : 0);
+        var batched = fixedFields +
+                      TlvHeaderBytes + "txn"u8.Length +
+                      compressedValueField + TransactionBatchHeaderBytes + batchOperation;
+
+        return Math.Max(spilled, batched);
+    }
+
     public static byte[] EncodeRecord(WalRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -50,6 +95,13 @@ static class WalCodec
         WriteTlvUInt64(payload, 10, record.WriterEpoch);
         if (record.Value is not null)
         {
+            if (record.Value.Length > DiskFormat.MaximumDecodedBlockBytes)
+            {
+                throw new PantsResourceLimitException(
+                    $"A {record.Value.Length}-byte WAL value exceeds the " +
+                    $"{DiskFormat.MaximumDecodedBlockBytes}-byte limit replay can decode.");
+            }
+
             var encodedValue = record.Value;
             byte? compression = null;
             if (record.Value.Length >= 256)
@@ -82,6 +134,13 @@ static class WalCodec
         if (record.TransactionId.HasValue)
         {
             WriteTlvUInt64(payload, 8, record.TransactionId.Value);
+        }
+
+        if (payload.Length > DiskFormat.WalMaximumRecordBytes)
+        {
+            throw new PantsResourceLimitException(
+                $"A {payload.Length}-byte WAL record exceeds the " +
+                $"{DiskFormat.WalMaximumRecordBytes}-byte frame limit.");
         }
 
         return payload.ToArray();

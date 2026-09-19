@@ -94,6 +94,7 @@ sealed class TransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureWritable();
+            EntryAdmission.ValidatePointWrite(key.Length, null);
             var keyCopy = key.ToArray();
             StageIntent(new TransactionIntentOperation(
                     _nextOrdinal,
@@ -116,7 +117,7 @@ sealed class TransactionInstance : IPantsTransaction
         lock (_gate)
         {
             EnsureWritable();
-            SstCodec.ValidateRangeTombstoneSize(startInclusive.Length, endExclusive.Length);
+            EntryAdmission.ValidateRangeDelete(startInclusive.Length, endExclusive.Length);
             var startCopy = startInclusive.ToArray();
             var endCopy = endExclusive.ToArray();
             if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) > 0)
@@ -491,7 +492,7 @@ sealed class TransactionInstance : IPantsTransaction
         {
             EnsureWritable();
             ValidateTimeToLive(timeToLive);
-            SstCodec.ValidateEntrySize(key.Length, value.Length);
+            EntryAdmission.ValidatePointWrite(key.Length, value.Length);
             var keyCopy = key.ToArray();
             var valueCopy = value.ToArray();
             StageIntent(new TransactionIntentOperation(
