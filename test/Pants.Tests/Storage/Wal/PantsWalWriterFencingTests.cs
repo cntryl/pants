@@ -124,6 +124,36 @@ public sealed class PantsWalWriterFencingTests
         Assert.Null(await ReadAsync(database, "torn"));
     }
 
+    [Fact]
+    public async Task ShouldRejectBothCloudDurabilityModesAfterWalIsFenced()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new ArmableFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "wal-fencing/")
+                .WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        await CommitAsync(database, PantsWriteOptions.CloudStrict, static transaction =>
+            transaction.Put(Key("acknowledged"), Value("durable")));
+
+        failpoints.Arm(Failpoint.MidWalAppend);
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            CommitAsync(database, PantsWriteOptions.CloudAsync, static transaction =>
+                transaction.Put(Key("torn"), Value("ghost"))));
+
+        foreach (var options in new[] { PantsWriteOptions.CloudAsync, PantsWriteOptions.CloudStrict })
+        {
+            var fenced = await Assert.ThrowsAsync<PantsFencedException>(() =>
+                CommitAsync(database, options, static transaction =>
+                    transaction.Put(Key("follow-up"), Value("rejected"))));
+            Assert.Equal(PantsErrorCode.Fenced, fenced.Code);
+        }
+
+        Assert.Equal("durable", await ReadAsync(database, "acknowledged"));
+        Assert.Null(await ReadAsync(database, "torn"));
+        Assert.Null(await ReadAsync(database, "follow-up"));
+    }
+
     /// <summary>
     ///     An explicit durability boundary is an fsync of everything appended so far; if it fails,
     ///     the unsynced suffix is in the same unknown state as a failed commit fsync.
