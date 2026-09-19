@@ -161,7 +161,7 @@
         "dependencies": {
           "Cntryl.Pants.Abstractions": "[1.0.0, )",
           "K4os.Compression.LZ4": "[1.3.8, )",
-          "System.IO.Hashing": "[10.0.11, )",
+          "System.IO.Hashing": "[10.0.12, )",
           "ZstdSharp.Port": "[0.8.8, )"
         }
       },
@@ -188,9 +188,9 @@
       },
       "System.IO.Hashing": {
         "type": "CentralTransitive",
-        "requested": "[10.0.11, )",
-        "resolved": "10.0.11",
-        "contentHash": "OzKDcIRkeNJeC8qAsbn8yJXnfTLP1dtkWILe+T56Gf/z+IkAASi7sMqLqJQat08j5z/mRN5xVtoAwbkMNMoBUQ=="
+        "requested": "[10.0.12, )",
+        "resolved": "10.0.12",
+        "contentHash": "jDix4bBMYnpZdSPcnY+KDV6ik3SRMzpMKby/bZl/XUwIiflwRNAFZ0oOl61R/pSaveIJ8t1gs2BUlrGsPs/bcg=="
       },
       "ZstdSharp.Port": {
         "type": "CentralTransitive",
