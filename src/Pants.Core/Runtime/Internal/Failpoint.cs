@@ -8,6 +8,7 @@ enum Failpoint
     BeforeDirectTransactionCommitMarker,
     BeforeSpilledTransactionCommitMarker,
     BeforeWalFlush,
+    BeforeWalSync,
     AfterWalFlush,
     BeforeCoalescedWalDurabilityBoundary,
     AfterCoalescedWalDurabilityBoundary,

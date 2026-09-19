@@ -239,11 +239,12 @@ public sealed class PantsCommitCoalescingTests
                 await transaction.DisposeAsync();
             }
 
-            await using var accepted = await database.Transactions.BeginAsync(
+            await using var fenced = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
-            accepted.Put("accepted-after-buffered-rollback"u8.ToArray(), "accepted"u8.ToArray());
-            await accepted.CommitAsync(PantsWriteOptions.Sync);
+            fenced.Put("fenced-after-buffered-rollback"u8.ToArray(), "rejected"u8.ToArray());
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                fenced.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
@@ -256,10 +257,7 @@ public sealed class PantsCommitCoalescingTests
                 TestBytes.FromString($"rolled-back-buffered-key-{index}")));
         }
 
-        Assert.Equal(
-            "accepted",
-            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-                await reopenedReader.GetAsync("accepted-after-buffered-rollback"u8.ToArray()))));
+        Assert.Null(await reopenedReader.GetAsync("fenced-after-buffered-rollback"u8.ToArray()));
     }
 
     [Fact]
@@ -358,7 +356,7 @@ public sealed class PantsCommitCoalescingTests
     }
 
     [Fact]
-    public async Task ShouldExecuteStoppedBufferedCommitGivenCleanCoalescedGroupFailure()
+    public async Task ShouldFenceStoppedBufferedCommitGivenCoalescedGroupSyncFailure()
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitSyncFailureFailpointHandler();
@@ -388,7 +386,7 @@ public sealed class PantsCommitCoalescingTests
 
         await Assert.ThrowsAsync<PantsNoSpaceException>(() => firstCommit.WaitAsync(AssertionTimeout));
         await Assert.ThrowsAsync<PantsNoSpaceException>(() => secondCommit.WaitAsync(AssertionTimeout));
-        await bufferedCommit.WaitAsync(AssertionTimeout);
+        await Assert.ThrowsAsync<PantsFencedException>(() => bufferedCommit.WaitAsync(AssertionTimeout));
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.NoSpaceEvents);
@@ -398,10 +396,7 @@ public sealed class PantsCommitCoalescingTests
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync("failed-prefix-1"u8.ToArray()));
         Assert.Null(await reader.GetAsync("failed-prefix-2"u8.ToArray()));
-        Assert.Equal(
-            "accepted",
-            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-                await reader.GetAsync("buffered-suffix"u8.ToArray()))));
+        Assert.Null(await reader.GetAsync("buffered-suffix"u8.ToArray()));
     }
 
     [Fact]
@@ -459,7 +454,7 @@ public sealed class PantsCommitCoalescingTests
     }
 
     [Fact]
-    public async Task ShouldNotRecoverFailedCoalescedGroupGivenLaterSyncSucceeds()
+    public async Task ShouldFenceLaterSyncAndRecoverNothingGivenFailedCoalescedGroup()
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
@@ -494,11 +489,12 @@ public sealed class PantsCommitCoalescingTests
                 await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
             }
 
-            await using var accepted = await database.Transactions.BeginAsync(
+            await using var fenced = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
-            accepted.Put("accepted-after-failure"u8.ToArray(), "accepted"u8.ToArray());
-            await accepted.CommitAsync(PantsWriteOptions.Sync);
+            fenced.Put("fenced-after-failure"u8.ToArray(), "rejected"u8.ToArray());
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                fenced.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
@@ -510,14 +506,11 @@ public sealed class PantsCommitCoalescingTests
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"ghost-key-{index}")));
         }
 
-        Assert.Equal(
-            "accepted",
-            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-                await reader.GetAsync("accepted-after-failure"u8.ToArray()))));
+        Assert.Null(await reader.GetAsync("fenced-after-failure"u8.ToArray()));
     }
 
     [Fact]
-    public async Task ShouldNotHideLaterSyncBehindTornCoalescedWalFrame()
+    public async Task ShouldFenceLaterSyncGivenTornCoalescedWalFrame()
     {
         using var directory = new TemporaryDirectory();
         using var failpoints = new CoalescedCommitFailureFailpointHandler(
@@ -552,11 +545,12 @@ public sealed class PantsCommitCoalescingTests
                 await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
             }
 
-            await using var accepted = await database.Transactions.BeginAsync(
+            await using var fenced = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
-            accepted.Put("accepted-after-torn-group"u8.ToArray(), "accepted"u8.ToArray());
-            await accepted.CommitAsync(PantsWriteOptions.Sync);
+            fenced.Put("fenced-after-torn-group"u8.ToArray(), "rejected"u8.ToArray());
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                fenced.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
@@ -568,10 +562,7 @@ public sealed class PantsCommitCoalescingTests
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"torn-key-{index}")));
         }
 
-        Assert.Equal(
-            "accepted",
-            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-                await reader.GetAsync("accepted-after-torn-group"u8.ToArray()))));
+        Assert.Null(await reader.GetAsync("fenced-after-torn-group"u8.ToArray()));
     }
 
     [Fact]

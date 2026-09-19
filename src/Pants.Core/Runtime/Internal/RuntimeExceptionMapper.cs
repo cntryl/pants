@@ -40,6 +40,13 @@ static class RuntimeExceptionMapper
             return true;
         }
 
+        // A fenced rejection carries the failure that fenced the writer as its cause; that
+        // failure was counted when it happened and must not be counted again per rejection.
+        if (exception is PantsFencedException)
+        {
+            return false;
+        }
+
         if (exception is AggregateException aggregate)
         {
             return aggregate.InnerExceptions.Any(IsNoSpace);
