@@ -15,7 +15,9 @@ sealed class AsyncSstReader : IAsyncDisposable
         (byte[] FirstKey, SstBlockHandle Handle)[] index,
         byte[]? blockBlooms,
         TrieIndex? trieIndex,
-        IReadOnlyList<RangeTombstone> rangeTombstones)
+        IReadOnlyList<RangeTombstone> rangeTombstones,
+        byte[]? smallestKey,
+        byte[]? largestKey)
     {
         _source = source;
         _fileLength = fileLength;
@@ -23,11 +25,17 @@ sealed class AsyncSstReader : IAsyncDisposable
         _blockBlooms = blockBlooms;
         _trieIndex = trieIndex;
         RangeTombstones = rangeTombstones;
+        SmallestKey = smallestKey;
+        LargestKey = largestKey;
     }
 
     public int DataBlockCount => _index.Length;
 
     public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
+
+    public byte[]? SmallestKey { get; }
+
+    public byte[]? LargestKey { get; }
 
     public async ValueTask DisposeAsync()
     {
@@ -142,7 +150,9 @@ sealed class AsyncSstReader : IAsyncDisposable
                 index,
                 blockBlooms,
                 trieIndex,
-                rangeTombstones);
+                rangeTombstones,
+                metadata.SmallestKey,
+                metadata.LargestKey);
         }
         catch
         {

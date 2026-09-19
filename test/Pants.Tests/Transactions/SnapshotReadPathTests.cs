@@ -85,6 +85,26 @@ public sealed class SnapshotReadPathTests
         Assert.Equal(["only.sst"], candidates.Select(candidate => candidate.Name));
     }
 
+    [Fact]
+    public void ShouldIncludeFileGivenMissingManifestBoundsWhenSelectingRangeCandidate()
+    {
+        // Arrange
+        var file = File("unbounded.sst", Family, Bytes(5), Bytes(15));
+        file.SmallestKey = null;
+        file.LargestKey = null;
+        var snapshot = Snapshot(file);
+
+        // Act
+        var candidates = SnapshotReadPath.ResolveCandidateFilesForRange(
+            snapshot,
+            Family,
+            Bytes(50),
+            Bytes(60));
+
+        // Assert
+        Assert.Equal(["unbounded.sst"], candidates.Select(candidate => candidate.Name));
+    }
+
     static FileMeta File(
         string name,
         ColumnFamilyIdentity family,
@@ -96,6 +116,7 @@ public sealed class SnapshotReadPathTests
             ColumnFamilyId = family.Id,
             SmallestKey = smallest.Select(value => (int)value).ToArray(),
             LargestKey = largest.Select(value => (int)value).ToArray(),
+            KeyBoundsComplete = true,
             SstSequence = sstSequence
         };
 

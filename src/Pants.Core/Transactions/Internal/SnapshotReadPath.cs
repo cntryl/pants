@@ -51,13 +51,13 @@ static class SnapshotReadPath
 
     static bool Overlaps(FileMeta file, byte[]? startInclusive, byte[]? endExclusive)
     {
-        if (file.SmallestKey is null || file.LargestKey is null)
+        if (!file.HasTrustedKeyBounds())
         {
-            return false;
+            return true;
         }
 
-        var smallest = LocalDiskStore.GetMetadataKey(file.SmallestKey);
-        var largest = LocalDiskStore.GetMetadataKey(file.LargestKey);
+        var smallest = LocalDiskStore.GetMetadataKey(file.SmallestKey!);
+        var largest = LocalDiskStore.GetMetadataKey(file.LargestKey!);
         return (endExclusive is null || smallest.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
                (startInclusive is null || largest.AsSpan().SequenceCompareTo(startInclusive) >= 0);
     }

@@ -1,9 +1,73 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeCompatibilityFixtureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldReadMidgeSstGivenMissingManifestBoundsWhenReopening(bool markedComplete)
+    {
+        // Arrange
+        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
+            "v3_populated_v4_sst_db");
+        foreach (var name in new[] { "manifest.snapshot.json", "manifest.json" })
+        {
+            var path = Path.Combine(directory.Path, name);
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+            var file = root["files"]!.AsArray()[0]!.AsObject();
+            file["level"] = 1;
+            file["key_bounds_complete"] = markedComplete;
+            file.Remove("smallest_key");
+            file.Remove("largest_key");
+            await File.WriteAllTextAsync(path, root.ToJsonString());
+        }
+
+        // Act
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadOnly))
+            {
+                var point = await transaction.GetAsync("fixture/alpha"u8.ToArray());
+                await using var scan = await transaction.ScanAsync(new PantsScanQuery
+                {
+                    StartInclusive = "fixture/alpha"u8.ToArray(),
+                    EndExclusive = "fixture/empty"u8.ToArray()
+                });
+                var rows = new List<string>();
+                await foreach (var entry in scan)
+                {
+                    rows.Add(Encoding.UTF8.GetString(entry.Key.Span));
+                }
+
+                Assert.Equal("value-alpha", Encoding.UTF8.GetString(point!.Value.Span));
+                Assert.Equal(["fixture/alpha"], rows);
+            }
+
+            await database.ColumnFamilies.CreateAsync("checkpoint-marker");
+        }
+
+        await using (var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await using var reader = await reopened.Transactions.BeginAsync(
+                reopened.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            var point = await reader.GetAsync("fixture/alpha"u8.ToArray());
+            Assert.Equal("value-alpha", Encoding.UTF8.GetString(point!.Value.Span));
+        }
+
+        // Assert
+        using var checkpoint = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json")));
+        var fileAfterCheckpoint = Assert.Single(checkpoint.RootElement.GetProperty("files").EnumerateArray());
+        Assert.Equal(markedComplete, fileAfterCheckpoint.GetProperty("key_bounds_complete").GetBoolean());
+    }
+
     [Fact]
     public async Task ShouldVerifyPopulatedReleaseV3V4FixtureGivenSupportedFormatWhenReopening()
     {

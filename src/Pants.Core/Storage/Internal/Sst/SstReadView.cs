@@ -68,10 +68,12 @@ sealed class SstReadView
     sealed class LevelView
     {
         readonly IndexedFile[] _files;
+        readonly FileMeta[] _fallback;
 
-        LevelView(IndexedFile[] files, bool searchable)
+        LevelView(IndexedFile[] files, FileMeta[] fallback, bool searchable)
         {
             _files = files;
+            _fallback = fallback;
             Searchable = searchable;
         }
 
@@ -84,12 +86,15 @@ sealed class SstReadView
 
         public static LevelView Create(IEnumerable<FileMeta> files, bool allowSearch)
         {
-            var indexed = files
+            var candidates = files.ToArray();
+            var indexed = candidates
+                .Where(static file => file.HasTrustedKeyBounds())
                 .Select(IndexedFile.Create)
                 .OrderBy(static file => file.SmallestKey, ByteArrayComparer.Instance)
                 .ThenBy(static file => file.File.Name, StringComparer.Ordinal)
                 .ToArray();
-            return new LevelView(indexed, allowSearch && IsNonOverlapping(indexed));
+            var fallback = candidates.Where(static file => !file.HasTrustedKeyBounds()).ToArray();
+            return new LevelView(indexed, fallback, allowSearch && IsNonOverlapping(indexed));
         }
 
         public void AddPointCandidates(
@@ -97,6 +102,12 @@ sealed class SstReadView
             List<FileMeta> candidates,
             ref int filesExamined)
         {
+            foreach (var file in _fallback)
+            {
+                filesExamined++;
+                candidates.Add(file);
+            }
+
             if (!Searchable)
             {
                 foreach (var indexed in _files)
@@ -210,8 +221,8 @@ sealed class SstReadView
 
         public static IndexedFile Create(FileMeta file) => new(
             file,
-            LocalDiskStore.GetMetadataKey(file.SmallestKey ?? []),
-            LocalDiskStore.GetMetadataKey(file.LargestKey ?? []));
+            LocalDiskStore.GetMetadataKey(file.SmallestKey!),
+            LocalDiskStore.GetMetadataKey(file.LargestKey!));
 
         public bool Contains(ReadOnlySpan<byte> key) =>
             key.SequenceCompareTo(SmallestKey) >= 0 &&
