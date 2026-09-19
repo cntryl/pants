@@ -4,6 +4,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="Cntryl.Conventions.Testing.Analyzers" Version="1.0.0" />
+    <PackageVersion Include="Cntryl.Conventions.Testing.CodeFixes" Version="1.0.0" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />

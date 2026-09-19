@@ -51,3 +51,9 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+[test/**.cs]
+conventions_test_naming_require_given = true
+conventions_test_naming_require_when = false
+dotnet_diagnostic.CNTRYL0001.severity = suggestion
+dotnet_diagnostic.CNTRYL0002.severity = suggestion

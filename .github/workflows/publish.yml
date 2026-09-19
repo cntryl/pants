@@ -24,6 +24,7 @@ jobs:
       contents: write
       packages: write
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PACKAGE_VERSION: ${{ needs.version.outputs.semver }}
       PACKAGE_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
     defaults:

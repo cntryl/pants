@@ -1,6 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Cntryl.Conventions.Testing.Analyzers"/>
+    <PackageReference Include="Cntryl.Conventions.Testing.CodeFixes"/>
     <PackageReference Include="coverlet.collector"/>
     <PackageReference Include="Microsoft.Extensions.Configuration"/>
     <PackageReference Include="Microsoft.NET.Test.Sdk"/>
