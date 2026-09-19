@@ -201,6 +201,38 @@ public sealed class PantsCloudEventualFlushTests
     }
 
     [Fact]
+    public async Task ShouldCompleteCloudWalUploadWhenPruneDirectorySyncFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new OneShotCloudWalSealFailureHandler(
+            Failpoint.BeforeWalPruneDirectorySync);
+        var policy = CreatePolicy(128, 1, TimeSpan.FromHours(1));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path, policy),
+            new RuntimeDependencies(failpoints));
+
+        await CommitAsync(
+            database,
+            database.ColumnFamilies.DefaultFamily,
+            "prune-directory-sync",
+            PantsWriteOptions.CloudAsync);
+        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        var published = await WaitForMetricsAsync(
+            database,
+            static candidate =>
+                candidate.WalPendingWrites == 0 &&
+                candidate.PendingCloudUploads == 0 &&
+                candidate.WalCloudDurableSequence >= candidate.CurrentSequence &&
+                candidate.Health == PantsEngineHealth.Degraded);
+
+        Assert.Equal(PantsEngineHealth.Degraded, published.Health);
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task ShouldApplyCloudAsyncCommitGivenPostAppendSealIsFenced()
     {
         using var directory = new TemporaryDirectory();

@@ -74,6 +74,7 @@ sealed class LocalDiskStore :
     long _walLocalDurableSequence;
     int _walPendingWrites;
     int _walRecords;
+    bool _walDirectoryPersistenceAnomaly;
     FileStream _walStream;
     readonly WalIoState _walIo = new();
 
@@ -823,7 +824,6 @@ sealed class LocalDiskStore :
         lock (_walStateGate)
         {
             ThrowIfDisposed();
-            ThrowIfWalFenced();
             if (_walStream.Length != 0 ||
                 _walLastAppendedSequence > checked((long)segment.MaximumSequence))
             {
@@ -865,12 +865,23 @@ sealed class LocalDiskStore :
     public void DeleteCloudDurableWalSegment(SealedWalSegment segment)
     {
         ThrowIfDisposed();
-        ThrowIfWalFenced();
+        // The caller has already published this sealed segment remotely. Retiring that local
+        // copy is safe even when the active writer was fenced by a later rotation failure.
         _lease.EnsureValid();
         var path = Path.Combine(_walDirectory, segment.FileName);
         if (File.Exists(path))
         {
-            File.Delete(path);
+            try
+            {
+                File.Delete(path);
+            }
+            catch
+            {
+                Volatile.Write(ref _walDirectoryPersistenceAnomaly, true);
+                throw;
+            }
+
+            SyncWalDirectoryAfterPrune();
         }
     }
 
@@ -1085,7 +1096,7 @@ sealed class LocalDiskStore :
             return state.Health;
         }
 
-        if (_walIo.IsFenced)
+        if (_walIo.IsFenced || Volatile.Read(ref _walDirectoryPersistenceAnomaly))
         {
             return PantsEngineHealth.Degraded;
         }
@@ -3104,50 +3115,47 @@ sealed class LocalDiskStore :
             var sealedPath = Path.Combine(_walDirectory, fileName);
             FileStream? replacementStream = null;
             SealedWalSegment? segment = null;
+            var renamed = false;
             try
             {
                 _failpoints.Hit(Failpoint.AfterWalRotationStreamDisposed);
                 File.Move(_walPath, sealedPath, false);
+                renamed = true;
+                _failpoints.Hit(Failpoint.AfterWalSealRename);
+                _failpoints.Hit(Failpoint.BeforeWalSealDirectorySync);
+                AtomicStagedFile.FlushDirectory(_walDirectory);
                 segment = ReadSealedWalSegment(sealedPath, forCloudUpload);
                 _manifest.NextWalSeq = checked(segmentId + 1);
                 SaveManifestCheckpoint();
+                _failpoints.Hit(Failpoint.BeforeWalReplacementWriterCreate);
                 replacementStream = new FileStream(
                     _walPath,
                     FileMode.CreateNew,
                     FileAccess.ReadWrite,
                     FileShare.Read);
                 _walStream = replacementStream;
+                _failpoints.Hit(Failpoint.AfterWalReplacementWriterCreate);
+                _failpoints.Hit(Failpoint.BeforeWalReplacementDirectorySync);
+                AtomicStagedFile.FlushDirectory(_walDirectory);
+                _failpoints.Hit(Failpoint.AfterWalReplacementDirectorySync);
                 _walRecords = 0;
                 _failpoints.Hit(Failpoint.AfterWalRotation);
                 return segment;
             }
             catch (Exception rotationFailure)
             {
-                if (replacementStream is not null)
+                // Once the rename may have happened, reopening an active writer could let a
+                // later commit run ahead of a seal whose directory update is not durable.
+                // Recovery will find either the old active file or the sealed segment.
+                if (renamed || File.Exists(sealedPath) || !File.Exists(_walPath))
                 {
-                    if (forCloudUpload && segment is not null)
+                    _walIo.Fence(rotationFailure);
+                    if (forCloudUpload && replacementStream is not null && segment is not null)
                     {
-                        throw new WalCloudSealCompletedException(
-                            segment,
-                            rotationFailure);
+                        throw new WalCloudSealCompletedException(segment, rotationFailure);
                     }
 
                     throw;
-                }
-
-                Exception? rollbackFailure = null;
-                if (!File.Exists(_walPath) && File.Exists(sealedPath))
-                {
-                    try
-                    {
-                        File.Move(sealedPath, _walPath, false);
-                    }
-                    catch (IOException exception)
-                    {
-                        // The sealed segment remains immutable and recoverable. A
-                        // fresh active segment is safer than appending to it.
-                        rollbackFailure = exception;
-                    }
                 }
 
                 try
@@ -3155,7 +3163,7 @@ sealed class LocalDiskStore :
                     _failpoints.Hit(Failpoint.BeforeWalRotationRecoveryStreamReopen);
                     var recoveryStream = new FileStream(
                         _walPath,
-                        FileMode.OpenOrCreate,
+                        FileMode.Open,
                         FileAccess.ReadWrite,
                         FileShare.Read);
                     recoveryStream.Seek(0, SeekOrigin.End);
@@ -3163,12 +3171,9 @@ sealed class LocalDiskStore :
                 }
                 catch (Exception reopenFailure)
                 {
-                    var recoveryFailure = rollbackFailure is null
-                        ? reopenFailure
-                        : new AggregateException(rollbackFailure, reopenFailure);
                     var uncertainty = new WalRotationRecoveryException(
                         rotationFailure,
-                        recoveryFailure);
+                        reopenFailure);
                     _walIo.Fence(uncertainty);
                     throw uncertainty;
                 }
@@ -4769,12 +4774,44 @@ sealed class LocalDiskStore :
         _walStream = new FileStream(_walPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
         _walRecords = 0;
         _walPendingWrites = 0;
-        foreach (var sealedSegment in EnumerateSealedWalSegmentPaths(_walDirectory))
+        var deletedSegment = false;
+        try
         {
-            File.Delete(sealedSegment);
+            foreach (var sealedSegment in EnumerateSealedWalSegmentPaths(_walDirectory))
+            {
+                File.Delete(sealedSegment);
+                deletedSegment = true;
+            }
+        }
+        catch
+        {
+            Volatile.Write(ref _walDirectoryPersistenceAnomaly, true);
+            throw;
+        }
+
+        if (deletedSegment)
+        {
+            SyncWalDirectoryAfterPrune();
         }
 
         _failpoints.Hit(Failpoint.AfterWalRotation);
+    }
+
+    void SyncWalDirectoryAfterPrune()
+    {
+        try
+        {
+            _failpoints.Hit(Failpoint.BeforeWalPruneDirectorySync);
+            AtomicStagedFile.FlushDirectory(_walDirectory);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or PantsException)
+        {
+            // The SST or remote WAL publication already covers these segments. A failed
+            // directory sync may leave an obsolete file after a crash, so report the anomaly
+            // without leaving a completed cloud upload stuck in the pending queue.
+            Volatile.Write(ref _walDirectoryPersistenceAnomaly, true);
+        }
     }
 
     uint ResolveFamilyId(ColumnFamilyIdentity identity) =>

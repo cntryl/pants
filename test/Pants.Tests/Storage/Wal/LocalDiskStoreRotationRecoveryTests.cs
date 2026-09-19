@@ -11,6 +11,132 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         RuntimeState.DefaultFamilyVersion);
 
     [Fact]
+    public async Task ShouldFenceWalAfterSealedSegmentGetsReplacementWriter()
+    {
+        using var directory = new TemporaryDirectory();
+        var telemetry = new RuntimeTelemetry();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            telemetry);
+        var failpoints = new ArmableFailpointHandler();
+        using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
+        {
+            _ = store.AppendCommit(
+                CreateCommitPayload(state),
+                state,
+                PantsDurability.Sync);
+
+            failpoints.Arm(Failpoint.AfterWalRotation);
+            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+
+            Assert.True(store.IsWalFenced);
+            Assert.Throws<PantsFencedException>(() => store.AppendCommit(
+                CreateCommitPayload(state),
+                state,
+                PantsDurability.Sync));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "rotation-value",
+            TestBytes.ToText((await reader.GetAsync("rotation-key"u8.ToArray()))!.Value));
+    }
+
+    [Theory]
+    [InlineData(nameof(Failpoint.AfterWalSealRename))]
+    [InlineData(nameof(Failpoint.BeforeWalSealDirectorySync))]
+    [InlineData(nameof(Failpoint.BeforeWalReplacementWriterCreate))]
+    [InlineData(nameof(Failpoint.AfterWalReplacementWriterCreate))]
+    [InlineData(nameof(Failpoint.BeforeWalReplacementDirectorySync))]
+    [InlineData(nameof(Failpoint.AfterWalReplacementDirectorySync))]
+    public async Task ShouldFenceAtEveryPostRenameWalRotationBoundary(string boundaryName)
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var failpoints = new ArmableFailpointHandler();
+        using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
+        {
+            _ = store.AppendCommit(
+                CreateCommitPayload(state),
+                state,
+                PantsDurability.Sync);
+
+            failpoints.Arm(Enum.Parse<Failpoint>(boundaryName));
+            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+
+            Assert.True(store.IsWalFenced);
+            Assert.Equal(PantsEngineHealth.Degraded, store.GetHealth(state));
+            Assert.Throws<PantsFencedException>(() => store.AppendCommit(
+                CreateCommitPayload(state),
+                state,
+                PantsDurability.Sync));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "rotation-value",
+            TestBytes.ToText((await reader.GetAsync("rotation-key"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
+    public void ShouldKeepWalWritableWhenRotationFailsBeforeRename()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var failpoints = new ArmableFailpointHandler();
+        using var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints);
+        _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+
+        failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
+        _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+
+        Assert.False(store.IsWalFenced);
+        _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+    }
+
+    [Fact]
+    public async Task ShouldReportPersistenceAnomalyWhenWalPruneDirectorySyncFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var failpoints = new ArmableFailpointHandler();
+        using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
+        {
+            _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+            _ = store.RotateActiveLocalWal();
+            failpoints.Arm(Failpoint.BeforeWalPruneDirectorySync);
+
+            store.Flush(state);
+
+            Assert.False(store.IsWalFenced);
+            Assert.Equal(PantsEngineHealth.Degraded, store.GetHealth(state));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "rotation-value",
+            TestBytes.ToText((await reader.GetAsync("rotation-key"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldFenceLayoutAndRecoverDurableCommitGivenRotationReopenFails()
     {
         using var directory = new TemporaryDirectory();
