@@ -57,6 +57,81 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldFenceWalBatchAndFireLossCallbackWhenLeaseObjectWasRewrittenBeforeLocalExpiry()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero,
+            () => losses++);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+        // A successor takes the lease object while this writer's local deadline has not passed.
+        leaseStore.Seed(new CloudLeaseRecord(
+            "successor",
+            epoch + 1,
+            "successor-token",
+            clock.UtcNow,
+            clock.UtcNow + TimeSpan.FromSeconds(10)));
+        Assert.True(lease.IsHealthy);
+
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            persistence.PublishWalBatchAsync(
+                [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+                CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, losses);
+        Assert.Equal(0, walStore.PutCount);
+    }
+
+    [Fact]
+    public async Task ShouldValidateTheRemoteLeaseOncePerWalBatch()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            new CountingCloudObjectStore(),
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+        var reads = leaseStore.ReadCount;
+
+        await persistence.PublishWalBatchAsync(
+            Enumerable.Range(1, 3)
+                .Select(index => new SealedWalSegment(
+                    checked((ulong)index),
+                    epoch,
+                    checked((ulong)index),
+                    $"{index}.wal",
+                    [(byte)index]))
+                .ToArray(),
+            CancellationToken.None);
+
+        Assert.Equal(1, leaseStore.ReadCount - reads);
+    }
+
+    [Fact]
     public async Task ShouldRejectWalBatchGivenWriterEpochChangesWithinBatch()
     {
         using var cache = new TemporaryDirectory();

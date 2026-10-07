@@ -4,6 +4,7 @@ namespace Cntryl.Pants.Support.TestDoubles;
 
 sealed class TestCloudLeaseStore : ICloudLeaseStore
 {
+    int _readCount;
     int _version;
 
     public Action? AfterNextRead { get; set; }
@@ -28,9 +29,12 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
 
     public int ReplaceAttempts { get; set; }
 
+    public int ReadCount => Volatile.Read(ref _readCount);
+
     public ValueTask<CloudLeaseSnapshot?> ReadAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _readCount);
         if (IndeterminateRead)
         {
             throw new PantsLeaseIndeterminateException(
