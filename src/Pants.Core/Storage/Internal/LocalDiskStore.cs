@@ -3713,6 +3713,7 @@ sealed class LocalDiskStore :
                 outcome = ReplayWalStream(
                     state,
                     stream,
+                    sealedSegment.Name,
                     false,
                     recovery,
                     recoveredVersions,
@@ -3742,6 +3743,7 @@ sealed class LocalDiskStore :
         if (ReplayWalStream(
                 state,
                 _walStream,
+                "wal.log",
                 true,
                 recovery,
                 recoveredVersions,
@@ -3878,6 +3880,7 @@ sealed class LocalDiskStore :
     WalReplayOutcome ReplayWalStream(
         RuntimeState state,
         Stream stream,
+        string sourceName,
         bool allowIncompleteTail,
         WalRecoveryStateMachine recovery,
         WalRecoveredVersionTracker recoveredVersions,
@@ -3907,13 +3910,16 @@ sealed class LocalDiskStore :
                         record,
                         (mutation, commitSequence) =>
                             recoveredMutations.Add((mutation, commitSequence)));
-                    recoveredVersions.ValidateAndRecord(
-                        recoveredMutations.Select(static item => item.Mutation).ToArray());
+                    var firstSeen = recoveredVersions.ValidateAndRecord(
+                            recoveredMutations.Select(static item => item.Mutation).ToArray(),
+                            sourceName)
+                        .ToHashSet(ReferenceEqualityComparer.Instance);
                     var applicableMutations = recoveredMutations
                         .Where(item =>
                         {
                             var mutation = item.Mutation;
-                            return activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
+                            return firstSeen.Contains(mutation) &&
+                                   activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
                                    mutation.Sequence > persistedFamilySequences.GetValueOrDefault(
                                        mutation.ColumnFamilyId);
                         })
