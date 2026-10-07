@@ -480,7 +480,8 @@ sealed class Actor : IAsyncDisposable
                         new ProviderCloudSstSourceFactory(objectStores.Sst),
                         startupPhases,
                         leaseClock,
-                        options.LeaseTimeToLive);
+                        options.LeaseTimeToLive,
+                        remoteWalSegments: hydration.RemoteWalSegments);
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,
