@@ -37,6 +37,7 @@ sealed class LocalDiskStore :
     readonly string _intentPath;
     readonly FileLease _lease;
     readonly FileStream _lockStream;
+    IDisposable? _rootTrust;
     readonly ManifestState _manifest;
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
@@ -324,6 +325,7 @@ sealed class LocalDiskStore :
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
+        _rootTrust?.Dispose();
     }
 
     public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
@@ -1892,11 +1894,14 @@ sealed class LocalDiskStore :
         FileStream? lockStream = null;
         FileStream? walStream = null;
         FileLease? lease = null;
+        IDisposable? rootTrust = null;
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         startupPhases ??= new StartupPhaseRecorder(null);
         try
         {
             Directory.CreateDirectory(root);
+            StoragePathGuard.EnsureTreeHasNoLinks(root);
+            rootTrust = StoragePathGuard.TrustRoot(root);
             try
             {
                 lockStream = new FileStream(
@@ -1997,7 +2002,11 @@ sealed class LocalDiskStore :
                 targetSstSizeBytes,
                 blockCachePolicy,
                 blockCacheBytes,
-                remoteSstSourceFactory);
+                remoteSstSourceFactory)
+            {
+                _rootTrust = rootTrust
+            };
+            rootTrust = null;
             lease.EnsureValid();
             store.Recover(state, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
@@ -2019,6 +2028,7 @@ sealed class LocalDiskStore :
             walStream?.Dispose();
             lease?.Dispose();
             lockStream?.Dispose();
+            rootTrust?.Dispose();
             throw;
         }
         catch (Exception ex)
@@ -2026,6 +2036,7 @@ sealed class LocalDiskStore :
             walStream?.Dispose();
             lease?.Dispose();
             lockStream?.Dispose();
+            rootTrust?.Dispose();
             throw new StorageException($"Could not open Pants database at '{root}'.", ex);
         }
     }
