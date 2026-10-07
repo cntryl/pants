@@ -6,12 +6,17 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 /// </summary>
 sealed class RemoteFileCursor : ICompactionFileCursor
 {
+    readonly CancellationToken _cancellationToken;
     readonly AsyncSstBlockIterator _iterator;
     readonly AsyncSstReader _reader;
 
-    public RemoteFileCursor(AsyncSstReader reader, ResourceBudget? resourceBudget)
+    public RemoteFileCursor(
+        AsyncSstReader reader,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
     {
         _reader = reader;
+        _cancellationToken = cancellationToken;
         _iterator = new AsyncSstBlockIterator(
             reader,
             PantsScanDirection.Forward,
@@ -25,7 +30,7 @@ sealed class RemoteFileCursor : ICompactionFileCursor
     public SstEntry Current => _iterator.Current;
 
     public bool MoveNext() =>
-        _iterator.MoveNextAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        _iterator.MoveNextAsync(_cancellationToken).AsTask().GetAwaiter().GetResult();
 
     public void Dispose() => _iterator.DisposeAsync().AsTask().GetAwaiter().GetResult();
 }
