@@ -39,6 +39,7 @@ sealed class LocalDiskStore :
     readonly FileStream _lockStream;
     IDisposable? _rootTrust;
     bool _localWalPruningEnabled = true;
+    IReadOnlyList<IRemoteWalSegment> _remoteWalSegments = [];
     readonly ManifestState _manifest;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
 
@@ -1686,7 +1687,8 @@ sealed class LocalDiskStore :
         StartupPhaseRecorder? startupPhases = null,
         IPantsClock? leaseClock = null,
         TimeSpan? leaseTimeToLive = null,
-        TimeProvider? leaseTimeProvider = null)
+        TimeProvider? leaseTimeProvider = null,
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1789,7 +1791,8 @@ sealed class LocalDiskStore :
             Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
             AdvanceNextWalSequencePastSealedSegments(
                 Path.Combine(root, "wal"),
-                manifest);
+                manifest,
+                remoteWalSegments);
             lease.EnsureValid();
             walStream = new FileStream(Path.Combine(root, "wal", "wal.log"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.Read);
@@ -1808,7 +1811,8 @@ sealed class LocalDiskStore :
                 blockCacheBytes,
                 remoteSstSourceFactory)
             {
-                _rootTrust = rootTrust
+                _rootTrust = rootTrust,
+                _remoteWalSegments = remoteWalSegments ?? []
             };
             rootTrust = null;
             lease.EnsureValid();
@@ -2007,13 +2011,15 @@ sealed class LocalDiskStore :
 
     static void AdvanceNextWalSequencePastSealedSegments(
         string walDirectory,
-        ManifestState manifest)
+        ManifestState manifest,
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments)
     {
         var maximumSegmentId = EnumerateSealedWalSegmentPaths(walDirectory)
             .Select(static path =>
                 TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
                     ? segmentId
                     : 0)
+            .Concat((remoteWalSegments ?? []).Select(static segment => segment.SegmentId))
             .DefaultIfEmpty()
             .Max();
         if (maximumSegmentId == ulong.MaxValue)
@@ -3624,27 +3630,16 @@ sealed class LocalDiskStore :
                 static group => group.Key,
                 static group => group.Max(file => file.LargestSequence!.Value));
         var activeFamilyIds = _familyIds.Values.ToHashSet();
-        var sealedSegments = EnumerateSealedWalSegmentPaths(_walDirectory)
-            .Where(static path => Path.GetFileName(path) != "wal.log")
-            .OrderBy(static path =>
-                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
-                    ? segmentId
-                    : ulong.MaxValue)
-            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .ToArray();
+        var sealedSegments = CollectWalReplaySources();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
         using var recovery = new WalRecoveryStateMachine(Path.Combine(RootPath, "recovery"));
         var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
-        for (var index = 0; index < sealedSegments.Length; index++)
+        for (var index = 0; index < sealedSegments.Count; index++)
         {
             var sealedSegment = sealedSegments[index];
             WalReplayOutcome outcome;
-            using (var stream = new FileStream(
-                       sealedSegment,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.Read))
+            using (var stream = sealedSegment.Open())
             {
                 outcome = ReplayWalStream(
                     state,
@@ -3660,10 +3655,13 @@ sealed class LocalDiskStore :
 
             if (outcome == WalReplayOutcome.Salvaged)
             {
-                RetainCorruptFile(sealedSegment);
-                for (var laterIndex = index + 1; laterIndex < sealedSegments.Length; laterIndex++)
+                for (var retainIndex = index; retainIndex < sealedSegments.Count; retainIndex++)
                 {
-                    RetainCorruptFile(sealedSegments[laterIndex]);
+                    // A remote segment has no local file to keep; its bytes stay in the cloud.
+                    if (sealedSegments[retainIndex].Path is { } retainedPath)
+                    {
+                        RetainCorruptFile(retainedPath);
+                    }
                 }
 
                 ResetActiveWalAfterSalvage();
@@ -3687,19 +3685,98 @@ sealed class LocalDiskStore :
         }
     }
 
+    /// <summary>
+    ///     Sealed local segments plus catalog-authorized remote segments, in segment order. A
+    ///     segment present both ways must match byte for byte and is replayed once, locally; a
+    ///     divergence is corruption, never something salvage may paper over.
+    /// </summary>
+    List<WalReplaySource> CollectWalReplaySources()
+    {
+        var sources = new List<WalReplaySource>();
+        var localIds = new HashSet<ulong>();
+        foreach (var path in EnumerateSealedWalSegmentPaths(_walDirectory)
+                     .Where(static path => Path.GetFileName(path) != "wal.log"))
+        {
+            var parsed = TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId);
+            sources.Add(new WalReplaySource(
+                Path.GetFileName(path),
+                parsed ? segmentId : ulong.MaxValue,
+                path,
+                null));
+            if (parsed)
+            {
+                localIds.Add(segmentId);
+            }
+        }
+
+        foreach (var remote in _remoteWalSegments)
+        {
+            if (!localIds.Contains(remote.SegmentId))
+            {
+                sources.Add(new WalReplaySource(remote.Name, remote.SegmentId, null, remote));
+                continue;
+            }
+
+            var local = sources.First(source => source.Path is not null && source.SegmentId == remote.SegmentId);
+            RequireLocalMatchesRemote(local.Path!, remote);
+        }
+
+        return
+        [
+            .. sources
+                .OrderBy(static source => source.SegmentId)
+                .ThenBy(static source => source.Name, StringComparer.Ordinal)
+        ];
+    }
+
+    static void RequireLocalMatchesRemote(string localPath, IRemoteWalSegment remote)
+    {
+        using var local = new FileStream(
+            localPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        using var remoteStream = remote.OpenRead();
+        if ((ulong)local.Length != remote.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Local WAL segment '{Path.GetFileName(localPath)}' differs in length from its published cloud object.");
+        }
+
+        var localBuffer = new byte[64 * 1024];
+        var remoteBuffer = new byte[localBuffer.Length];
+        int read;
+        while ((read = local.Read(localBuffer, 0, localBuffer.Length)) > 0)
+        {
+            if (!DiskFormat.ReadExactly(remoteStream, remoteBuffer.AsSpan(0, read)) ||
+                !localBuffer.AsSpan(0, read).SequenceEqual(remoteBuffer.AsSpan(0, read)))
+            {
+                throw new PantsCorruptionException(
+                    $"Local WAL segment '{Path.GetFileName(localPath)}' differs from its published cloud object.");
+            }
+        }
+    }
+
+    sealed record WalReplaySource(
+        string Name,
+        ulong SegmentId,
+        string? Path,
+        IRemoteWalSegment? Remote)
+    {
+        public Stream Open() => Remote is not null
+            ? Remote.OpenRead()
+            : new FileStream(Path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
+
     WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
         RuntimeState state,
-        IReadOnlyList<string> sealedSegments)
+        IReadOnlyList<WalReplaySource> sealedSegments)
     {
         var frontiers = new WalWriterEpochFrontiers();
         var ordinal = 0UL;
         foreach (var sealedSegment in sealedSegments)
         {
-            using var stream = new FileStream(
-                sealedSegment,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read);
+            using var stream = sealedSegment.Open();
             if (VisitWalStream(
                     state,
                     stream,
@@ -3731,7 +3808,7 @@ sealed class LocalDiskStore :
 
     WalReplayOutcome ReplayWalStream(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
         bool allowIncompleteTail,
         WalRecoveryStateMachine recovery,
         WalRecoveredVersionTracker recoveredVersions,
@@ -3796,7 +3873,7 @@ sealed class LocalDiskStore :
 
     WalReplayOutcome VisitWalStream(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
         bool allowIncompleteTail,
         ref ulong recordOrdinal,
         Func<WalRecord, int, ulong, bool> visitor)
@@ -3899,7 +3976,7 @@ sealed class LocalDiskStore :
 
     WalReplayOutcome HandleIncompleteWalTail(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
         long validLength,
         bool allowIncompleteTail)
     {

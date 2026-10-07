@@ -9,6 +9,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     ///     How much of a published WAL segment recovery holds in memory at once.
     /// </summary>
     public const int WalRecoveryPageBytes = 4 * 1024 * 1024;
+    public const ulong MaximumWholeObjectWalRecoveryBytes = 256UL * 1024 * 1024;
 
     static readonly string[] MetadataFiles =
     [
@@ -358,7 +359,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         PantsRecoveryPolicy recoveryPolicy,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes)
     {
         var root = Path.GetFullPath(localRoot);
         Directory.CreateDirectory(root);
@@ -436,6 +438,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
         var requiresSalvage = false;
         var cloudDurableSequence = 0UL;
+        var remoteSegments = new List<IRemoteWalSegment>();
         foreach (var (segmentId, segment) in catalog.Segments)
         {
             ValidateSegment(segmentId, segment, catalog.FencingEpoch);
@@ -444,11 +447,16 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 "wal",
                 $"{segmentId:00000000000000000000}.wal");
 
-            // The common case: copy the segment a page at a time so peak memory is the page size
-            // rather than however far pruning had fallen behind before the crash.
-            if (await TryCopySegmentInPagesAsync(walStore, segment, localPath, cancellationToken)
+            // The common case: verify size and checksum a bounded page at a time and replay the
+            // segment straight from remote ranges, so recovery needs no local disk for the backlog
+            // and peak memory is one page.
+            if (await TryVerifySegmentInPagesAsync(walStore, segment, cancellationToken)
                 .ConfigureAwait(false))
             {
+                remoteSegments.Add(new ProviderRemoteWalSegment(
+                    walStore,
+                    segment,
+                    WalRecoveryPageBytes));
                 if (!requiresSalvage)
                 {
                     cloudDurableSequence = Math.Max(
@@ -457,6 +465,16 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 }
 
                 continue;
+            }
+
+            // Without ranged reads, or to salvage, the whole object must be held. Refuse before
+            // any GET when it cannot be admitted rather than risk exhausting memory mid-recovery.
+            if (segment.SizeBytes > maximumWholeObjectBytes)
+            {
+                throw new PantsResourceLimitException(
+                    $"Published cloud WAL object '{segment.ObjectKey}' is {segment.SizeBytes} bytes, " +
+                    $"above the {maximumWholeObjectBytes}-byte limit for whole-object " +
+                    "recovery without ranged reads.");
             }
 
             var remote = await walStore.GetAsync(segment.ObjectKey, cancellationToken)
@@ -488,33 +506,26 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         return new ProviderCloudHydrationResult(
             catalog.Segments,
             cloudDurableSequence,
-            requiresSalvage);
+            requiresSalvage,
+            remoteSegments);
     }
 
     /// <summary>
-    ///     Copies a published WAL segment into the local cache a page at a time, verifying its size
-    ///     and checksum as it goes, so recovery never holds a whole segment in memory.
+    ///     Verifies a published WAL segment's size and checksum a page at a time without keeping it.
     /// </summary>
     /// <remarks>
-    ///     Reports <see langword="false" /> rather than throwing when the segment cannot be copied
-    ///     this way — the store may decline ranged reads, which the public object-store contract
+    ///     Reports <see langword="false" /> rather than throwing when the segment cannot be verified
+    ///     this way: the store may decline ranged reads, which the public object-store contract
     ///     permits, or the bytes may not match the catalog. The caller then takes the whole-object
     ///     path, which also carries the salvage handling for a mismatch.
     /// </remarks>
-    static async ValueTask<bool> TryCopySegmentInPagesAsync(
+    static async ValueTask<bool> TryVerifySegmentInPagesAsync(
         ICloudObjectStore walStore,
         ProviderPublishedWalSegment segment,
-        string destinationPath,
         CancellationToken cancellationToken)
     {
-        var checksum = 0U;
-        var copied = 0UL;
-        var completed = false;
         try
         {
-            // Establish the real size before paging. A segment that disagrees with the catalog is a
-            // validation failure the whole-object path already knows how to classify, and reading
-            // past the end of a short object is an error rather than a short read on some providers.
             var metadata = await walStore.HeadAsync(segment.ObjectKey, cancellationToken)
                 .ConfigureAwait(false);
             if (metadata is null || metadata.SizeBytes != segment.SizeBytes)
@@ -522,49 +533,29 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 return false;
             }
 
-            await AtomicStagedFile.WriteStreamedAsync(
-                    destinationPath,
-                    async handle =>
-                    {
-                        while (copied < segment.SizeBytes)
-                        {
-                            var remaining = segment.SizeBytes - copied;
-                            var length = (int)Math.Min((ulong)WalRecoveryPageBytes, remaining);
-                            var page = await walStore
-                                .GetRangeAsync(
-                                    segment.ObjectKey,
-                                    copied,
-                                    length,
-                                    cancellationToken)
-                                .ConfigureAwait(false);
-                            if (page is null || page.Data.Length == 0)
-                            {
-                                return;
-                            }
+            var checksum = 0U;
+            var read = 0UL;
+            while (read < segment.SizeBytes)
+            {
+                var length = (int)Math.Min((ulong)WalRecoveryPageBytes, segment.SizeBytes - read);
+                var page = await walStore
+                    .GetRangeAsync(segment.ObjectKey, read, length, cancellationToken)
+                    .ConfigureAwait(false);
+                if (page is null || page.Data.Length != length)
+                {
+                    return false;
+                }
 
-                            checksum = DiskFormat.Crc32CAppend(checksum, page.Data.Span);
-                            RandomAccess.Write(handle, page.Data.Span, checked((long)copied));
-                            copied = checked(copied + (ulong)page.Data.Length);
-                        }
+                checksum = DiskFormat.Crc32CAppend(checksum, page.Data.Span);
+                read = checked(read + (ulong)length);
+            }
 
-                        completed = copied == segment.SizeBytes &&
-                                    checksum == segment.ContentCrc32C;
-                    })
-                .ConfigureAwait(false);
+            return checksum == segment.ContentCrc32C;
         }
         catch (PantsNotSupportedException)
         {
             return false;
         }
-
-        if (!completed)
-        {
-            // The staged copy was published but does not match the catalog. Remove it so the
-            // whole-object path, which owns salvage, starts from a clean slate.
-            AtomicStagedFile.Delete(destinationPath);
-        }
-
-        return completed;
     }
 
     public async ValueTask FenceWalCatalogAsync(CancellationToken cancellationToken)
