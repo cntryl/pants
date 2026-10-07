@@ -79,6 +79,8 @@ sealed class LocalDiskStore :
     long _walBytesWrittenTotal;
     long _walLastAppendedSequence;
     long _walLastSyncedSequence;
+    long _walBytesAtLastSync;
+    readonly BufferedWalSyncScheduler _bufferedSync;
     long _walLocalDurableSequence;
     int _walPendingWrites;
     int _walRecords;
@@ -123,6 +125,10 @@ sealed class LocalDiskStore :
         _remoteSstSourceFactory = remoteSstSourceFactory;
         BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
+        _bufferedSync = new BufferedWalSyncScheduler(
+            BufferedWalSyncScheduler.DefaultMaximumDelay,
+            BufferedWalSyncScheduler.DefaultMaximumBytes,
+            SyncBufferedWalIfPending);
         _manifest = manifest;
         var visibleSequenceFloor = GetManifestVisibleSequenceFloor(manifest);
         _manifest.LastPersistedSequence = Math.Max(
@@ -331,6 +337,7 @@ sealed class LocalDiskStore :
         }
 
         IsDisposed = true;
+        _bufferedSync.Dispose();
         _readerCache.Dispose();
         _asyncReaderCache.Dispose();
         _walStream.Dispose();
@@ -2509,10 +2516,38 @@ sealed class LocalDiskStore :
     {
         _walPendingWrites = checked(_walPendingWrites + physicalRecordCount);
         _walLastAppendedSequence = Math.Max(_walLastAppendedSequence, sequence);
+        _bufferedSync.NotifyAppend(
+            Interlocked.Read(ref _walBytesWrittenTotal) - _walBytesAtLastSync);
+    }
+
+    /// <summary>
+    ///     Background half of the Buffered contract. A failed fsync fences the WAL inside
+    ///     <see cref="SyncWal" />, so there is nothing further to do with the failure here.
+    /// </summary>
+    void SyncBufferedWalIfPending()
+    {
+        lock (_walStateGate)
+        {
+            if (IsDisposed || _walPendingWrites == 0 || _walIo.IsFenced)
+            {
+                return;
+            }
+
+            try
+            {
+                SyncWal();
+                RecordWalSync(_walLastAppendedSequence);
+            }
+            catch (Exception)
+            {
+                // The WAL is fenced; later commits fail with the original cause.
+            }
+        }
     }
 
     void RecordWalSync(long sequence)
     {
+        _walBytesAtLastSync = Interlocked.Read(ref _walBytesWrittenTotal);
         _walPendingWrites = 0;
         _walLastSyncedSequence = Math.Max(_walLastSyncedSequence, sequence);
         _walLocalDurableSequence = Math.Max(_walLocalDurableSequence, sequence);
