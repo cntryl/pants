@@ -13,7 +13,8 @@ interface IStorageReadStore
     ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        PointReadObservation? observation = null);
 
     ValueTask<ulong?> GetLatestMutationSequenceAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,

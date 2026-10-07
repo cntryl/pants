@@ -253,16 +253,14 @@ public sealed class PantsTelemetryContractTests
         Assert.True(diagnostics.BloomChecks >= 33);
         Assert.True(diagnostics.BloomRejects > 0);
         Assert.True(diagnostics.DataBlocksRead < diagnostics.BloomChecks);
-        // Every key here has exactly one candidate SST, and real value resolution (which runs
-        // before this exhaustive diagnostic/amplification pass) already touched that same
-        // candidate for every key — so the diagnostic pass's own reader/block cache checks are
-        // always hits, and it never itself performs a "first" data-block read.
-        Assert.Equal(0, diagnostics.DataBlocksRead);
+        // Every key here has exactly one candidate SST. The first read opens its reader and
+        // reads the one data block; every later read finds both cached.
+        Assert.Equal(1, diagnostics.DataBlocksRead);
         Assert.True(diagnostics.BloomTruePositives > 0);
         Assert.True(diagnostics.SstReaderCacheHits > 0);
-        Assert.Equal(0, diagnostics.SstReaderCacheMisses);
+        Assert.Equal(1, diagnostics.SstReaderCacheMisses);
         Assert.True(diagnostics.SstBlockCacheHits > 0);
-        Assert.Equal(0, diagnostics.SstBlockCacheMisses);
+        Assert.Equal(1, diagnostics.SstBlockCacheMisses);
         Assert.Equal(diagnostics.SstBlockCacheHits, runtime.CacheHits);
         Assert.Equal(diagnostics.SstBlockCacheMisses, runtime.CacheMisses);
         Assert.Equal(diagnostics.BloomChecks, runtime.SstBloomChecksTotal);

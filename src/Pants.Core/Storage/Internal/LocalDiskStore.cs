@@ -927,7 +927,8 @@ sealed class LocalDiskStore :
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PointReadObservation? observation = null)
     {
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
@@ -935,12 +936,16 @@ sealed class LocalDiskStore :
         SstEntry? best = null;
         foreach (var candidate in candidatesNewestFirst)
         {
+            var tier = IsSstLocal(candidate.Name)
+                ? PantsSstReadTier.Local
+                : PantsSstReadTier.HydratedFromCloud;
             await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
                 .ConfigureAwait(false);
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
+                observation?.RecordCandidate(candidate, decision, tier, false, false, false);
                 continue;
             }
 
@@ -951,10 +956,19 @@ sealed class LocalDiskStore :
                 firstCandidateBlock--;
             }
 
+            var blockCacheHit = false;
+            var candidateBlockContainsKey = false;
             for (var blockIndex = firstCandidateBlock;
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
+                var cacheKey = new SstBlockCacheKey(candidate.Name, blockIndex);
+                var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
+                if (isCandidateBlock)
+                {
+                    blockCacheHit = _blockCache.TryGet(cacheKey, out var probe) && probe is not null;
+                }
+
                 var blockContent = await ReadPointBlockAsync(
                         candidate.Name,
                         reader,
@@ -968,12 +982,21 @@ sealed class LocalDiskStore :
                         continue;
                     }
 
+                    candidateBlockContainsKey |= isCandidateBlock;
                     if (best is null || entry.Sequence > best.Sequence)
                     {
                         best = entry;
                     }
                 }
             }
+
+            observation?.RecordCandidate(
+                candidate,
+                decision,
+                tier,
+                false,
+                blockCacheHit,
+                candidateBlockContainsKey);
         }
 
         return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
@@ -1274,7 +1297,8 @@ sealed class LocalDiskStore :
     /// </summary>
     public SstEntry? TryReadPointValue(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
-        ReadOnlySpan<byte> key)
+        ReadOnlySpan<byte> key,
+        PointReadObservation? observation = null)
     {
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
@@ -1283,12 +1307,19 @@ sealed class LocalDiskStore :
         foreach (var candidate in candidatesNewestFirst)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out var readerCacheHit);
             var reader = readerLease.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
+                observation?.RecordCandidate(
+                    candidate,
+                    decision,
+                    PantsSstReadTier.Local,
+                    readerCacheHit,
+                    false,
+                    false);
                 continue;
             }
 
@@ -1304,11 +1335,23 @@ sealed class LocalDiskStore :
                 firstCandidateBlock--;
             }
 
+            var blockCacheHit = false;
+            var candidateBlockContainsKey = false;
             for (var blockIndex = firstCandidateBlock;
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
-                var blockContent = ReadPointBlock(candidate.Name, reader, blockIndex);
+                var blockContent = ReadPointBlock(
+                    candidate.Name,
+                    reader,
+                    blockIndex,
+                    out var cacheHit);
+                var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
+                if (isCandidateBlock)
+                {
+                    blockCacheHit = cacheHit;
+                }
+
                 foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
                 {
                     if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
@@ -1316,12 +1359,21 @@ sealed class LocalDiskStore :
                         continue;
                     }
 
+                    candidateBlockContainsKey |= isCandidateBlock;
                     if (best is null || entry.Sequence > best.Sequence)
                     {
                         best = entry;
                     }
                 }
             }
+
+            observation?.RecordCandidate(
+                candidate,
+                decision,
+                PantsSstReadTier.Local,
+                readerCacheHit,
+                blockCacheHit,
+                candidateBlockContainsKey);
         }
 
         return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
@@ -1406,14 +1458,16 @@ sealed class LocalDiskStore :
         return false;
     }
 
-    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
+    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex, out bool cacheHit)
     {
         var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
+            cacheHit = true;
             return cachedBlock.Content.ToArray();
         }
 
+        cacheHit = false;
         var blockContent = reader.ReadDataBlock(blockIndex);
         _ = _blockCache.Add(cacheKey, blockContent);
         return blockContent;
@@ -1576,264 +1630,6 @@ sealed class LocalDiskStore :
 
         return await AsyncSstReader.OpenAsync(source, file, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    public bool RecordPointRead(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key) =>
-        RecordPointReadCore(
-            telemetry,
-            columnFamily,
-            key,
-            null,
-            null,
-            out _);
-
-    public bool RecordPointRead(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key,
-        IReadOnlySet<string>? hydratedFromCloud,
-        out PantsPointReadTrace trace)
-    {
-        var sstTraces = new List<PantsSstReadTrace>();
-        var exceedsBudget = RecordPointReadCore(
-            telemetry,
-            columnFamily,
-            key,
-            hydratedFromCloud,
-            sstTraces,
-            out var keyRangeRejects);
-        trace = new PantsPointReadTrace(keyRangeRejects, [.. sstTraces]);
-        return exceedsBudget;
-    }
-
-    public async ValueTask<(bool ExceedsBudget, PantsPointReadTrace Trace)> RecordPointReadAsync(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        var keyCopy = key.ToArray();
-        var familyFiles = GetManifestFilesSnapshot()
-            .Where(file => file.ColumnFamilyId == columnFamily.Id)
-            .ToArray();
-        var candidates = familyFiles
-            .Where(file => IsWithinFileRange(file, keyCopy))
-            .ToArray();
-        var bloomChecks = 0;
-        var candidateBlocks = 0;
-        var amplificationBlocksRead = 0;
-        var dataBlocksRead = 0;
-        var bloomTruePositives = 0;
-        var bloomFalsePositives = 0;
-        var bloomTrueNegatives = 0;
-        var blockCacheHits = 0;
-        var blockCacheMisses = 0;
-        var traces = new List<PantsSstReadTrace>();
-        foreach (var candidate in candidates)
-        {
-            var local = IsSstLocal(candidate.Name);
-            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
-                .ConfigureAwait(false);
-            var decision = reader.GetPointReadDecision(keyCopy);
-            bloomChecks = checked(bloomChecks + decision.BloomChecks);
-            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
-            amplificationBlocksRead = checked(amplificationBlocksRead + 1 + decision.BlocksRead);
-            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
-            var bloomFilterOutcome = decision.Rejected
-                ? PantsBloomFilterOutcome.Rejected
-                : PantsBloomFilterOutcome.NotChecked;
-            var sstDataBlocksRead = 0;
-            if (decision.BlocksRead != 0)
-            {
-                var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-                bool containsKey;
-                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
-                {
-                    blockCacheHits++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
-                    containsKey = cachedBlock.ContainsKey(keyCopy);
-                }
-                else
-                {
-                    blockCacheMisses++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
-                    var blockContent = await reader.ReadDataBlockAsync(
-                            decision.CandidateBlockIndex,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    dataBlocksRead++;
-                    sstDataBlocksRead = 1;
-                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
-                    _ = _blockCache.Add(cacheKey, blockContent);
-                }
-
-                if (containsKey)
-                {
-                    bloomTruePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
-                }
-                else
-                {
-                    bloomFalsePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
-                }
-            }
-
-            traces.Add(new PantsSstReadTrace(
-                candidate.Name,
-                candidate.Level,
-                local ? PantsSstReadTier.Local : PantsSstReadTier.HydratedFromCloud,
-                bloomFilterOutcome,
-                PantsCacheReadOutcome.Miss,
-                blockCacheOutcome,
-                sstDataBlocksRead));
-        }
-
-        var keyRangeRejects = familyFiles.Length - candidates.Length;
-        var exceedsBudget = telemetry.RecordSstRead(new SstReadSample
-        {
-            SstsTouched = candidates.Length,
-            L0SstsTouched = candidates.Count(static file => file.Level == 0),
-            AmplificationBlocksRead = amplificationBlocksRead,
-            DataBlocksRead = dataBlocksRead,
-            ReaderCacheMisses = candidates.Length,
-            BlockCacheHits = blockCacheHits,
-            BlockCacheMisses = blockCacheMisses,
-            CandidateBlocks = candidateBlocks,
-            KeyRangeRejects = keyRangeRejects,
-            BloomChecks = bloomChecks,
-            BloomTruePositives = bloomTruePositives,
-            BloomFalsePositives = bloomFalsePositives,
-            BloomTrueNegatives = bloomTrueNegatives
-        });
-        return (exceedsBudget, new PantsPointReadTrace(keyRangeRejects, [.. traces]));
-    }
-
-    bool RecordPointReadCore(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key,
-        IReadOnlySet<string>? hydratedFromCloud,
-        List<PantsSstReadTrace>? traces,
-        out int keyRangeRejects)
-    {
-        var keyCopy = key.ToArray();
-        var familyFiles = GetManifestFilesSnapshot()
-            .Where(file => file.ColumnFamilyId == columnFamily.Id)
-            .ToArray();
-        var candidates = familyFiles
-            .Where(file => IsWithinFileRange(file, keyCopy))
-            .ToArray();
-        var bloomChecks = 0;
-        var candidateBlocks = 0;
-        var amplificationBlocksRead = 0;
-        var dataBlocksRead = 0;
-        var bloomTruePositives = 0;
-        var bloomFalsePositives = 0;
-        var bloomTrueNegatives = 0;
-        var blockCacheHits = 0;
-        var blockCacheMisses = 0;
-        var readerCacheHits = 0;
-        var readerCacheMisses = 0;
-        foreach (var candidate in candidates)
-        {
-            var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(
-                candidate.Name,
-                path,
-                out var readerCacheHit);
-            var reader = readerLease.Reader;
-            if (readerCacheHit)
-            {
-                readerCacheHits++;
-            }
-            else
-            {
-                readerCacheMisses++;
-            }
-
-            var decision = reader.GetPointReadDecision(keyCopy);
-            bloomChecks = checked(bloomChecks + decision.BloomChecks);
-            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
-            amplificationBlocksRead = checked(
-                amplificationBlocksRead + 1 + decision.BlocksRead);
-            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
-            var bloomFilterOutcome = decision.Rejected
-                ? PantsBloomFilterOutcome.Rejected
-                : PantsBloomFilterOutcome.NotChecked;
-            var sstDataBlocksRead = 0;
-            if (decision.BlocksRead != 0)
-            {
-                var cacheKey = new SstBlockCacheKey(
-                    candidate.Name,
-                    decision.CandidateBlockIndex);
-                bool containsKey;
-                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
-                {
-                    blockCacheHits++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
-                    containsKey = cachedBlock.ContainsKey(keyCopy);
-                }
-                else
-                {
-                    blockCacheMisses++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
-                    var blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
-                    dataBlocksRead = checked(dataBlocksRead + 1);
-                    sstDataBlocksRead = 1;
-                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
-                    _ = _blockCache.Add(cacheKey, blockContent);
-                }
-
-                if (containsKey)
-                {
-                    bloomTruePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
-                }
-                else
-                {
-                    bloomFalsePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
-                }
-            }
-
-            traces?.Add(new PantsSstReadTrace(
-                candidate.Name,
-                candidate.Level,
-                hydratedFromCloud?.Contains(candidate.Name) is true
-                    ? PantsSstReadTier.HydratedFromCloud
-                    : PantsSstReadTier.Local,
-                bloomFilterOutcome,
-                readerCacheHit
-                    ? PantsCacheReadOutcome.Hit
-                    : PantsCacheReadOutcome.Miss,
-                blockCacheOutcome,
-                sstDataBlocksRead));
-        }
-
-        keyRangeRejects = familyFiles.Length - candidates.Length;
-        return telemetry.RecordSstRead(new SstReadSample
-        {
-            SstsTouched = candidates.Length,
-            L0SstsTouched = candidates.Count(static file => file.Level == 0),
-            AmplificationBlocksRead = amplificationBlocksRead,
-            DataBlocksRead = dataBlocksRead,
-            ReaderCacheHits = readerCacheHits,
-            ReaderCacheMisses = readerCacheMisses,
-            BlockCacheHits = blockCacheHits,
-            BlockCacheMisses = blockCacheMisses,
-            CandidateBlocks = candidateBlocks,
-            KeyRangeRejects = keyRangeRejects,
-            BloomChecks = bloomChecks,
-            BloomTruePositives = bloomTruePositives,
-            BloomFalsePositives = bloomFalsePositives,
-            BloomTrueNegatives = bloomTrueNegatives
-        });
     }
 
     public IScanReadValidator CreateScanReadValidator(

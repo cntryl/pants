@@ -1628,7 +1628,8 @@ sealed class Actor : IAsyncDisposable
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PointReadObservation? observation = null)
     {
         if (_diskStore is null)
         {
@@ -1637,7 +1638,7 @@ sealed class Actor : IAsyncDisposable
 
         if (_hybridCache is null)
         {
-            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span);
+            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span, observation);
         }
 
         if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocal(file.Name)))
@@ -1652,8 +1653,33 @@ sealed class Actor : IAsyncDisposable
         return await _diskStore.TryReadPointValueAsync(
                 candidatesNewestFirst,
                 key,
-                cancellationToken)
+                cancellationToken,
+                observation)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Records the telemetry a point read gathered while resolving its value and starts
+    ///     read-amplification compaction when the read exceeded the budget.
+    /// </summary>
+    public async ValueTask ReportPointReadAsync(
+        PointReadObservation observation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        var exceedsBudget = _telemetry.RecordSstRead(observation.ToSample());
+        if (!exceedsBudget || !_backgroundCompactionEnabled || _diskStore is null)
+        {
+            return;
+        }
+
+        _ = await SendAsync(
+            async state =>
+            {
+                await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1688,111 +1714,6 @@ sealed class Actor : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
     }
-
-    public async ValueTask RecordPointReadAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_hybridCache is null)
-        {
-            var exceedsBudget = _diskStore is null
-                ? _telemetry.RecordSstRead(default)
-                : _diskStore.RecordPointRead(_telemetry, columnFamily, key.Span);
-            if (!exceedsBudget || !_backgroundCompactionEnabled || _diskStore is null)
-            {
-                return;
-            }
-
-            _ = await SendAsync(
-                async state =>
-                {
-                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
-                    return true;
-                },
-                cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        _ = await RecordPointReadCoreAsync(
-            columnFamily,
-            key,
-            false,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken) =>
-        await RecordPointReadCoreAsync(
-            columnFamily,
-            key,
-            true,
-            cancellationToken).ConfigureAwait(false) ??
-        throw new PantsInternalException("Point-read diagnostics were not captured.");
-
-    async ValueTask<PantsPointReadTrace?> RecordPointReadCoreAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        bool captureDiagnostics,
-        CancellationToken cancellationToken) =>
-        await SendAsync(
-            async state =>
-            {
-                bool exceedsBudget;
-                PantsPointReadTrace? trace = null;
-                if (_diskStore is null)
-                {
-                    exceedsBudget = _telemetry.RecordSstRead(default);
-                    if (captureDiagnostics)
-                    {
-                        trace = new PantsPointReadTrace(0, []);
-                    }
-                }
-                else if (_hybridCache is not null)
-                {
-                    var result = await _diskStore.RecordPointReadAsync(
-                            _telemetry,
-                            columnFamily,
-                            key,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    exceedsBudget = result.ExceedsBudget;
-                    if (captureDiagnostics)
-                    {
-                        trace = result.Trace;
-                    }
-                }
-                else
-                {
-                    if (captureDiagnostics)
-                    {
-                        exceedsBudget = _diskStore.RecordPointRead(
-                            _telemetry,
-                            columnFamily,
-                            key.Span,
-                            null,
-                            out trace);
-                    }
-                    else
-                    {
-                        exceedsBudget = _diskStore.RecordPointRead(
-                            _telemetry,
-                            columnFamily,
-                            key.Span);
-                    }
-                }
-
-                if (exceedsBudget && _backgroundCompactionEnabled && _diskStore is not null)
-                {
-                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
-                }
-
-                return trace;
-            },
-            cancellationToken).ConfigureAwait(false);
 
     public IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>
