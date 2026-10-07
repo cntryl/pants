@@ -40,6 +40,8 @@ sealed class LocalDiskStore :
     IDisposable? _rootTrust;
     bool _localWalPruningEnabled = true;
     IReadOnlyList<IRemoteWalSegment> _remoteWalSegments = [];
+    long? _recoveryCheckpointBytes;
+    const long RecoveryTransactionLimitMultiple = 8;
     readonly ManifestState _manifest;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
 
@@ -1688,7 +1690,8 @@ sealed class LocalDiskStore :
         IPantsClock? leaseClock = null,
         TimeSpan? leaseTimeToLive = null,
         TimeProvider? leaseTimeProvider = null,
-        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null)
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null,
+        long? recoveryCheckpointBytes = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1812,7 +1815,8 @@ sealed class LocalDiskStore :
                 remoteSstSourceFactory)
             {
                 _rootTrust = rootTrust,
-                _remoteWalSegments = remoteWalSegments ?? []
+                _remoteWalSegments = remoteWalSegments ?? [],
+                _recoveryCheckpointBytes = recoveryCheckpointBytes
             };
             rootTrust = null;
             lease.EnsureValid();
@@ -3849,6 +3853,7 @@ sealed class LocalDiskStore :
                                        mutation.ColumnFamilyId);
                         })
                         .ToArray();
+                    RequireTransactionFitsRecoveryWorkingSet(applicableMutations);
                     foreach (var (mutation, commitSequence) in applicableMutations)
                     {
                         ApplyMutations(state, [mutation]);
@@ -3859,6 +3864,12 @@ sealed class LocalDiskStore :
                             commitSequence);
                     }
                 }
+                catch (PantsResourceLimitException)
+                {
+                    // A transaction too large to recover is a resource failure, never corruption:
+                    // salvage would truncate acknowledged data.
+                    throw;
+                }
                 catch (PantsException exception)
                 {
                     return HandleWalCorruption(
@@ -3867,9 +3878,74 @@ sealed class LocalDiskStore :
                         exception) != WalReplayOutcome.Salvaged;
                 }
 
+                CheckpointRecoveredMemtableIfOverTarget(state, recoveredVersions);
                 _walRecords++;
                 return true;
             });
+
+    static long EstimateRecoveredBytes(WalMutation mutation) =>
+        (long)mutation.Key.Length +
+        (mutation.Value?.Length ?? 0) +
+        (mutation.RangeEnd?.Length ?? 0) +
+        64;
+
+    /// <summary>
+    ///     One transaction is applied atomically, so it cannot be split across checkpoints. Beyond a
+    ///     generous multiple of the working-set target it cannot be recovered in bounded memory.
+    /// </summary>
+    void RequireTransactionFitsRecoveryWorkingSet(
+        IReadOnlyList<(WalMutation Mutation, ulong CommitSequence)> mutations)
+    {
+        if (_recoveryCheckpointBytes is not { } target)
+        {
+            return;
+        }
+
+        var limit = target > long.MaxValue / RecoveryTransactionLimitMultiple
+            ? long.MaxValue
+            : target * RecoveryTransactionLimitMultiple;
+        long bytes = 0;
+        foreach (var (mutation, _) in mutations)
+        {
+            bytes = checked(bytes + EstimateRecoveredBytes(mutation));
+            if (bytes > limit)
+            {
+                throw PantsException.ResourceLimit(
+                    $"A WAL transaction needs more than {limit} bytes to recover, above the " +
+                    $"{target}-byte recovery working-set target; the WAL was left untouched.");
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Publishes the recovered memtable as an SST and manifest entry once it reaches the
+    ///     working-set target, then releases its memory. Checkpoints never retire WAL: a crash at
+    ///     any point replays the WAL again, and per-family SST coverage skips what was published.
+    ///     Running between records keeps every transaction, including cross-family ones, whole.
+    /// </summary>
+    void CheckpointRecoveredMemtableIfOverTarget(
+        RuntimeState state,
+        WalRecoveredVersionTracker recoveredVersions)
+    {
+        if (_recoveryCheckpointBytes is not { } target ||
+            state.ActiveMemtableBytes.Values.Sum() < target ||
+            _mutableOperations.Count == 0)
+        {
+            return;
+        }
+
+        _lease.EnsureValid();
+        FlushOperations(_mutableOperations.SnapshotAll(), null);
+        _mutableOperations.Clear();
+        foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
+        {
+            state.ActiveMemtableBytes[identity] = 0;
+            state.FamilyData[identity] = RuntimeState.EmptyFamily;
+        }
+
+        state.UnflushedFamilies.Clear();
+        recoveredVersions.Clear();
+    }
 
     WalReplayOutcome VisitWalStream(
         RuntimeState state,

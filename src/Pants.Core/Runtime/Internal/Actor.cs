@@ -343,7 +343,8 @@ sealed class Actor : IAsyncDisposable
                     startupPhases: startupPhases,
                     leaseClock: leaseClock,
                     leaseTimeToLive: options.LeaseTimeToLive,
-                    leaseTimeProvider: runtimeTimeProvider);
+                    leaseTimeProvider: runtimeTimeProvider,
+                    recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -379,7 +380,8 @@ sealed class Actor : IAsyncDisposable
                         new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
                         startupPhases,
                         leaseClock,
-                        options.LeaseTimeToLive);
+                        options.LeaseTimeToLive,
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         diskStore.WriterEpoch,
@@ -481,7 +483,8 @@ sealed class Actor : IAsyncDisposable
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,
-                        remoteWalSegments: hydration.RemoteWalSegments);
+                        remoteWalSegments: hydration.RemoteWalSegments,
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,

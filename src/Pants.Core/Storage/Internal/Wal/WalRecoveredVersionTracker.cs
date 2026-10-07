@@ -4,6 +4,12 @@ sealed class WalRecoveredVersionTracker
 {
     readonly Dictionary<(uint ColumnFamilyId, ulong Sequence), HashSet<byte[]>> _versions = [];
 
+    /// <summary>
+    ///     Forgets recorded versions once a recovery checkpoint has made them durable, which bounds
+    ///     this tracker's memory by the checkpoint interval instead of the whole WAL backlog.
+    /// </summary>
+    public void Clear() => _versions.Clear();
+
     public void ValidateAndRecord(IReadOnlyList<WalMutation> mutations)
     {
         ArgumentNullException.ThrowIfNull(mutations);
