@@ -295,6 +295,41 @@ public sealed class PantsWalWriterEpochRecoveryTests
     }
 
     [Fact]
+    public async Task ShouldApplyIdenticalRecordOnceWhenItRepeatsInALaterWalFile()
+    {
+        using var directory = new TemporaryDirectory();
+        await InitializeDatabaseAsync(directory.Path);
+        var frame = Frame([CreatePut("duplicate", "original", 7, 1)]);
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
+            frame);
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"), frame);
+
+        await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
+
+        Assert.Equal("original", await ReadAsync(database, "duplicate"));
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+    }
+
+    [Fact]
+    public async Task ShouldFailStrictRecoveryGivenSameVersionWithDifferentContentInALaterWalFile()
+    {
+        using var directory = new TemporaryDirectory();
+        await InitializeDatabaseAsync(directory.Path);
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
+            Frame([CreatePut("duplicate", "original", 7, 1)]));
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "wal", "wal.log"),
+            Frame([CreatePut("duplicate", "conflicting", 7, 1)]));
+
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+    }
+
+    [Fact]
     public async Task ShouldRejectDuplicateLogicalVersionGivenOnlineVerification()
     {
         using var directory = new TemporaryDirectory();

@@ -355,7 +355,7 @@ static class StorageVerifier
         {
             WalFrameReader.Visit(
                 stream,
-                (record, _) =>
+                (record, frameBytes) =>
                 {
                     var recordOrdinal = currentOrdinal;
                     if (currentOrdinal != ulong.MaxValue)
@@ -378,8 +378,8 @@ static class StorageVerifier
                     var applicableMutations = new List<WalMutation>();
                     recovery.Accept(
                         record,
-                        (mutation, _) => applicableMutations.Add(mutation));
-                    recoveredVersions.ValidateAndRecord(applicableMutations);
+                        (mutation, commitSequence) => applicableMutations.Add(mutation));
+                    _ = recoveredVersions.ValidateAndRecord(applicableMutations, Path.GetFileName(walPath));
                     boundary = boundary.HasValue
                         ? Math.Max(boundary.Value, decodedBoundary)
                         : decodedBoundary;
