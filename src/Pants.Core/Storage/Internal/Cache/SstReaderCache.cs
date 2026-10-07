@@ -2,7 +2,9 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 
 sealed class SstReaderCache : IDisposable
 {
+    readonly long _budgetBytes;
     readonly object _gate = new();
+    readonly LinkedList<ReaderEntry> _idleOrder = [];
     readonly Func<string, SstReader> _openReader;
     readonly HashSet<ReaderEntry> _retiredReaders = [];
     readonly Dictionary<string, ReaderSlot> _slots = new(StringComparer.Ordinal);
@@ -10,15 +12,32 @@ sealed class SstReaderCache : IDisposable
 
     int _disposed;
     int _openingReaders;
+    long _cachedBytes;
 
     public SstReaderCache()
-        : this(SstReader.Open)
+        : this(long.MaxValue, SstReader.Open)
+    {
+    }
+
+    /// <summary>
+    ///     Caches parsed readers up to <paramref name="budgetBytes" /> of estimated metadata,
+    ///     evicting the least recently used readers nobody currently holds.
+    /// </summary>
+    public SstReaderCache(long budgetBytes)
+        : this(budgetBytes, SstReader.Open)
     {
     }
 
     internal SstReaderCache(Func<string, SstReader> openReader)
+        : this(long.MaxValue, openReader)
+    {
+    }
+
+    internal SstReaderCache(long budgetBytes, Func<string, SstReader> openReader)
     {
         ArgumentNullException.ThrowIfNull(openReader);
+        ArgumentOutOfRangeException.ThrowIfNegative(budgetBytes);
+        _budgetBytes = budgetBytes;
         _openReader = openReader;
     }
 
@@ -71,13 +90,28 @@ sealed class SstReaderCache : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             slot = GetOrCreateSlot(fileName);
-            if (slot.Reader is { } cached)
+            while (true)
             {
-                cacheHit = true;
-                return Acquire(cached);
+                if (slot.Reader is { } cached)
+                {
+                    cacheHit = true;
+                    return Acquire(cached);
+                }
+
+                if (!slot.Opening)
+                {
+                    break;
+                }
+
+                // Concurrent first opens of one SST share a single open: wait for its owner, and
+                // take over if that open fails.
+                Monitor.Wait(_gate);
+                ObjectDisposedException.ThrowIf(_disposed != 0, this);
+                slot = GetOrCreateSlot(fileName);
             }
 
             generation = slot.Generation;
+            slot.Opening = true;
             slot.OpeningReaders++;
             _openingReaders++;
         }
@@ -118,8 +152,11 @@ sealed class SstReaderCache : IDisposable
                 return Acquire(winner);
             }
 
-            var added = new ReaderEntry(created) { References = 1 };
+            var added = new ReaderEntry(fileName, created) { References = 1 };
             slot.Reader = added;
+            _cachedBytes = checked(_cachedBytes + added.Bytes);
+            added.Node = _idleOrder.AddLast(added);
+            EvictIdleOverBudget();
             cacheHit = false;
             return new SstReaderLease(created, () => Release(added));
         }
@@ -161,6 +198,12 @@ sealed class SstReaderCache : IDisposable
     SstReaderLease Acquire(ReaderEntry entry)
     {
         entry.References = checked(entry.References + 1);
+        if (entry.Node is { List: not null } node)
+        {
+            _idleOrder.Remove(node);
+            _idleOrder.AddLast(node);
+        }
+
         return new SstReaderLease(entry.Reader, () => Release(entry));
     }
 
@@ -175,6 +218,7 @@ sealed class SstReaderCache : IDisposable
 
     void CompleteOpeningUnderLock(ReaderSlot slot)
     {
+        slot.Opening = false;
         slot.OpeningReaders--;
         _openingReaders--;
         Monitor.PulseAll(_gate);
@@ -202,6 +246,34 @@ sealed class SstReaderCache : IDisposable
                 _retiredReaders.Remove(entry);
                 Monitor.PulseAll(_gate);
             }
+            else if (entry.References == 0)
+            {
+                EvictIdleOverBudget();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Retires least-recently-used readers that no caller holds until the cache fits its
+    ///     budget. A held reader is never evicted, so the cache may exceed the budget while leased.
+    /// </summary>
+    void EvictIdleOverBudget()
+    {
+        var node = _idleOrder.First;
+        while (_cachedBytes > _budgetBytes && node is not null)
+        {
+            var next = node.Next;
+            var entry = node.Value;
+            if (entry.References == 0 &&
+                _slots.TryGetValue(entry.FileName, out var slot) &&
+                ReferenceEquals(slot.Reader, entry))
+            {
+                slot.Reader = null;
+                Retire(entry);
+                RemoveUnusedSlot(entry.FileName, slot);
+            }
+
+            node = next;
         }
     }
 
@@ -217,6 +289,12 @@ sealed class SstReaderCache : IDisposable
     void Retire(ReaderEntry entry)
     {
         entry.Retired = true;
+        if (entry.Node is { List: not null } node)
+        {
+            _idleOrder.Remove(node);
+            _cachedBytes -= entry.Bytes;
+        }
+
         if (entry.References == 0)
         {
             entry.Reader.Dispose();
@@ -226,9 +304,15 @@ sealed class SstReaderCache : IDisposable
         _retiredReaders.Add(entry);
     }
 
-    sealed class ReaderEntry(SstReader reader)
+    sealed class ReaderEntry(string fileName, SstReader reader)
     {
+        public string FileName { get; } = fileName;
+
         public SstReader Reader { get; } = reader;
+
+        public long Bytes { get; } = reader.EstimatedMetadataBytes;
+
+        public LinkedListNode<ReaderEntry>? Node { get; set; }
 
         public int References { get; set; }
 
@@ -238,6 +322,8 @@ sealed class SstReaderCache : IDisposable
     sealed class ReaderSlot
     {
         public int Generation { get; set; }
+
+        public bool Opening { get; set; }
 
         public int OpeningReaders { get; set; }
 
