@@ -11,8 +11,10 @@ sealed class RuntimeDependencies
         TimeProvider? runtimeTimeProvider = null,
         Action<StartupPhaseMeasurement>? startupPhaseMeasurement = null,
         IPantsClock? leaseClock = null,
-        long? hybridLocalStorageBudgetBytes = null)
+        long? hybridLocalStorageBudgetBytes = null,
+        TimeSpan? workerDisposalTimeout = null)
     {
+        WorkerDisposalTimeout = workerDisposalTimeout;
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Storage.Internal.StorageVerifier.VerifyPathAsync;
         LeaseHeartbeatInterval = leaseHeartbeatInterval;
@@ -48,6 +50,9 @@ sealed class RuntimeDependencies
     public VerificationBarrierResponseDelegate VerificationBarrierResponse { get; }
 
     public TimeProvider RuntimeTimeProvider { get; }
+
+    /// <summary>How long disposal waits for a background worker loop before deferring release.</summary>
+    public TimeSpan? WorkerDisposalTimeout { get; }
 
     public IPantsClock LeaseClock { get; }
 

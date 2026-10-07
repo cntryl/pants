@@ -238,12 +238,14 @@ sealed class Actor : IAsyncDisposable
 
         await CaptureCleanupAsync(_cloudWalDrainScheduler.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_cloudMaintenanceScheduler.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_cloudWorker.DisposeAsync).ConfigureAwait(false);
+        var stuckWorkers = new List<Task>();
+        await DisposeWorkerAsync(_cloudWorker).ConfigureAwait(false);
+
         await CaptureCleanupAsync(_walRuntime.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_flushRuntime.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_compactionRuntime.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_manifestWorker.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_garbageCollectionWorker.DisposeAsync).ConfigureAwait(false);
+        await DisposeWorkerAsync(_manifestWorker).ConfigureAwait(false);
+        await DisposeWorkerAsync(_garbageCollectionWorker).ConfigureAwait(false);
         if (_cloudLeaseCancellation is not null)
         {
             await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
@@ -256,28 +258,64 @@ sealed class Actor : IAsyncDisposable
                 .ConfigureAwait(false);
         }
 
-        if (_cloudLease is not null)
+        if (stuckWorkers.Count != 0)
+        {
+            // A worker loop that outlived its disposal deadline may still be mid-operation. The
+            // lease, the LOCK and the store stay held until it has actually exited, so a
+            // successor cannot take over while it runs.
+            _ = Task.WhenAll(stuckWorkers).ContinueWith(
+                _ => ReleaseOwnedResourcesAsync(),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+        }
+        else
+        {
+            await ReleaseOwnedResourcesAsync().ConfigureAwait(false);
+        }
+
+        async Task DisposeWorkerAsync(RuntimeWorker worker)
         {
             try
             {
-                await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                await worker.DisposeAsync().ConfigureAwait(false);
             }
-            catch (PantsException)
+            catch (PantsTimeoutException exception)
             {
-                // A failed release leaves the bounded lease to expire naturally.
+                stuckWorkers.Add(worker.Completion);
+                cleanupFailure ??= exception;
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
             }
         }
 
-        CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
-        CaptureCleanup(() => _cloudLease?.Dispose());
-        if (_cloudPersistence is not null)
+        async Task ReleaseOwnedResourcesAsync()
         {
-            await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
-        }
+            if (_cloudLease is not null)
+            {
+                try
+                {
+                    await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (PantsException)
+                {
+                    // A failed release leaves the bounded lease to expire naturally.
+                }
+            }
 
-        CaptureCleanup(() => _hybridCache?.Dispose());
-        CaptureCleanup(() => _diskStore?.Dispose());
-        CaptureCleanup(_loopCancellation.Dispose);
+            CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
+            CaptureCleanup(() => _cloudLease?.Dispose());
+            if (_cloudPersistence is not null)
+            {
+                await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
+            }
+
+            CaptureCleanup(() => _hybridCache?.Dispose());
+            CaptureCleanup(() => _diskStore?.Dispose());
+            CaptureCleanup(_loopCancellation.Dispose);
+        }
 
         var failure = loopFailure ?? cleanupFailure;
         if (failure is not null)
@@ -691,9 +729,15 @@ sealed class Actor : IAsyncDisposable
                 _diskStore,
                 telemetry,
                 options.CompactionMemoryPoolBytes);
-            _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
-            _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
-            _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
+            _manifestWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
+            _garbageCollectionWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
+            _cloudWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
             _cloudWalDrainScheduler = new CloudWorkScheduler(
                 _cloudWorker,
                 DrainCloudWalBacklogWithFailureTrackingAsync,
