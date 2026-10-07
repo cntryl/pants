@@ -4,6 +4,9 @@ namespace Cntryl.Pants.Storage.Internal;
 
 sealed class FileLease : IDisposable
 {
+    const int ReleaseAttempts = 20;
+    static readonly TimeSpan ReleaseRetryDelay = TimeSpan.FromMilliseconds(25);
+
     readonly IPantsClock _clock;
     readonly object _gate = new();
     readonly Timer _heartbeat;
@@ -71,25 +74,69 @@ sealed class FileLease : IDisposable
             _disposed = true;
             _heartbeat.Dispose();
             _watchdog.Dispose();
-            try
+            TryWriteReleaseSentinel();
+            _valid = false;
+        }
+    }
+
+    /// <summary>
+    ///     Runs once after this lease fences itself, outside any lock. The store uses it to drop
+    ///     the same-host exclusion handle, which the lease spec allows only as defense in depth.
+    /// </summary>
+    internal Action? FencedRelease { get; set; }
+
+    /// <summary>
+    ///     Best effort: ages the record to the sentinel timestamp when it is still this lease's,
+    ///     so a successor need not wait out the TTL. Never touches a record another writer owns.
+    /// </summary>
+    bool TryWriteReleaseSentinel()
+    {
+        try
+        {
+            using var leaseLock = AcquireMutationLock(
+                _lockPath,
+                _holderId,
+                _clock,
+                MutationLockDisposalInterferenceHookForTesting);
+            var current = ReadRecord(_leaderPath);
+            if (current?.Epoch == Epoch && current.HolderId == _holderId)
             {
-                using var leaseLock = AcquireMutationLock(
-                    _lockPath,
-                    _holderId,
-                    _clock,
-                    MutationLockDisposalInterferenceHookForTesting);
-                var current = ReadRecord(_leaderPath);
-                if (current?.Epoch == Epoch && current.HolderId == _holderId)
-                {
-                    WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
-                }
-            }
-            catch
-            {
-                // Disposal is best-effort; the timestamp ages into a safe takeover.
+                WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
             }
 
-            _valid = false;
+            return true;
+        }
+        catch
+        {
+            // Release is best-effort; the timestamp ages into a safe takeover.
+            return false;
+        }
+    }
+
+    void ReleaseAfterSelfFence()
+    {
+        // The mutation lock may be momentarily held by a successor probing the record, so a few
+        // short retries keep the release from losing that race.
+        for (var attempt = 0; attempt < ReleaseAttempts; attempt++)
+        {
+            lock (_gate)
+            {
+                if (_disposed || TryWriteReleaseSentinel())
+                {
+                    break;
+                }
+            }
+
+            Thread.Sleep(ReleaseRetryDelay);
+        }
+
+        try
+        {
+            FencedRelease?.Invoke();
+        }
+        catch
+        {
+            // Dropping the exclusion handle is best-effort.
         }
     }
 
@@ -354,6 +401,10 @@ sealed class FileLease : IDisposable
             {
                 // User callbacks cannot restore a lost lease or crash its heartbeat.
             }
+
+            // A fenced writer must not keep a successor waiting. Done off this thread because it
+            // takes the lease gate, which a blocked renewal may still hold.
+            _ = Task.Run(ReleaseAfterSelfFence);
         }
     }
 
