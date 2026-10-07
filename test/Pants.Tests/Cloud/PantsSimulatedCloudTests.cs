@@ -68,6 +68,77 @@ public sealed class PantsSimulatedCloudTests
     }
 
     [Fact]
+    public async Task ShouldConvergeCatalogMirrorAndRecoverFromTornPrimaryAfterLosingLocalCache()
+    {
+        using var directory = new TemporaryDirectory();
+        await CommitCloudStrictAsync(directory.Path);
+        var primaryPath = CatalogPath(directory.Path, "publication-catalog.v1.json");
+        var mirrorPath = CatalogPath(directory.Path, "publication-catalog.v1.mirror.json");
+        var expected = await File.ReadAllBytesAsync(primaryPath);
+        Assert.Equal(expected, await File.ReadAllBytesAsync(mirrorPath));
+        await File.WriteAllBytesAsync(primaryPath, expected.AsMemory(0, expected.Length / 2).ToArray());
+        RemoveLocalCache(directory.Path);
+
+        await using var recovered = await OpenAsync(directory.Path);
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal("remote/value", TestBytes.ToText((await reader.GetAsync("remote/key"u8.ToArray()))!.Value));
+        using var repaired = JsonDocument.Parse(await File.ReadAllBytesAsync(primaryPath));
+        Assert.True(repaired.RootElement.GetProperty("segments").TryGetProperty("1", out _));
+        Assert.Equal(
+            await File.ReadAllBytesAsync(primaryPath),
+            await File.ReadAllBytesAsync(mirrorPath));
+    }
+
+    [Fact]
+    public async Task ShouldFailClosedWithoutMutatingEitherCatalogCopyWhenBothAreInvalid()
+    {
+        using var directory = new TemporaryDirectory();
+        await CommitCloudStrictAsync(directory.Path);
+        var primaryPath = CatalogPath(directory.Path, "publication-catalog.v1.json");
+        var mirrorPath = CatalogPath(directory.Path, "publication-catalog.v1.mirror.json");
+        await File.WriteAllBytesAsync(primaryPath, "{ torn"u8.ToArray());
+        await File.WriteAllBytesAsync(mirrorPath, "{ also torn"u8.ToArray());
+        RemoveLocalCache(directory.Path);
+
+        await Assert.ThrowsAnyAsync<PantsException>(async () => await OpenAsync(directory.Path));
+
+        Assert.Equal("{ torn"u8.ToArray(), await File.ReadAllBytesAsync(primaryPath));
+        Assert.Equal("{ also torn"u8.ToArray(), await File.ReadAllBytesAsync(mirrorPath));
+    }
+
+    [Fact]
+    public async Task ShouldRejectOpenWhenWalObjectsExistButBothCatalogCopiesAreMissing()
+    {
+        using var directory = new TemporaryDirectory();
+        await CommitCloudStrictAsync(directory.Path);
+        File.Delete(CatalogPath(directory.Path, "publication-catalog.v1.json"));
+        File.Delete(CatalogPath(directory.Path, "publication-catalog.v1.mirror.json"));
+        RemoveLocalCache(directory.Path);
+
+        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
+            async () => await OpenAsync(directory.Path));
+
+        Assert.Contains("publication-catalog.v1.json", exception.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(CatalogPath(directory.Path, "publication-catalog.v1.json")));
+    }
+
+    static async Task CommitCloudStrictAsync(string path)
+    {
+        await using var database = await OpenAsync(path);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put("remote/key"u8.ToArray(), "remote/value"u8.ToArray());
+        await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+    }
+
+    static string CatalogPath(string root, string name) =>
+        Path.Combine(root, "cloud_store", "wal", name);
+
+    [Fact]
     public async Task ShouldMirrorFlushedSstAndRecoveryMetadata()
     {
         using var directory = new TemporaryDirectory();
