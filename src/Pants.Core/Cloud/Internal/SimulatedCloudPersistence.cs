@@ -471,10 +471,66 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
     }
 
+    static string CatalogPath(string cloudRoot) =>
+        Path.Combine(cloudRoot, "wal", "publication-catalog.v1.json");
+
+    static string CatalogMirrorPath(string cloudRoot) =>
+        Path.Combine(cloudRoot, "wal", "publication-catalog.v1.mirror.json");
+
+    /// <summary>
+    ///     Loads the catalog from its primary or mirror copy. A valid primary wins and the mirror is
+    ///     converged to it; a torn or missing primary is repaired from a valid mirror; both copies
+    ///     invalid fails closed without touching either; and with neither present, any WAL segment
+    ///     object means the catalog was lost, so open fails rather than orphaning those writes.
+    /// </summary>
     static WalPublicationCatalog? LoadCatalog(string cloudRoot)
     {
-        var path = Path.Combine(cloudRoot, "wal", "publication-catalog.v1.json");
-        if (!File.Exists(path))
+        var primaryPath = CatalogPath(cloudRoot);
+        var mirrorPath = CatalogMirrorPath(cloudRoot);
+        var primaryBytes = File.Exists(primaryPath) ? File.ReadAllBytes(primaryPath) : null;
+        var mirrorBytes = File.Exists(mirrorPath) ? File.ReadAllBytes(mirrorPath) : null;
+        var primary = TryDecodeCatalog(primaryBytes, out var primaryError);
+        var mirror = TryDecodeCatalog(mirrorBytes, out var mirrorError);
+        if (primary is not null)
+        {
+            if (mirrorBytes is null || !mirrorBytes.AsSpan().SequenceEqual(primaryBytes))
+            {
+                AtomicStagedFile.Write(mirrorPath, primaryBytes);
+            }
+
+            return primary;
+        }
+
+        if (mirror is not null)
+        {
+            AtomicStagedFile.Write(primaryPath, mirrorBytes);
+            return mirror;
+        }
+
+        if (primaryBytes is null && mirrorBytes is null)
+        {
+            var walDirectory = Path.Combine(cloudRoot, "wal");
+            if (Directory.Exists(walDirectory) &&
+                Directory.EnumerateFiles(walDirectory, "*.wal", SearchOption.AllDirectories).Any())
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Cloud WAL segment objects exist but the publication catalog " +
+                    $"'{PantsCloudObjectLayout.WalCatalogObjectKey}' and its mirror are both missing; " +
+                    "refusing to open and orphan acknowledged writes.");
+            }
+
+            return null;
+        }
+
+        throw primaryError ?? mirrorError ?? PantsException.Create(
+            PantsErrorCode.Corruption,
+            "Both cloud WAL publication catalog copies are unusable.");
+    }
+
+    static WalPublicationCatalog? TryDecodeCatalog(byte[]? bytes, out PantsException? error)
+    {
+        error = null;
+        if (bytes is null)
         {
             return null;
         }
@@ -482,7 +538,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         try
         {
             var catalog = JsonSerializer.Deserialize<WalPublicationCatalog>(
-                File.ReadAllBytes(path),
+                bytes,
                 JsonOptions) ?? throw new JsonException("Cloud WAL catalog is empty.");
             if (catalog.FormatVersion != CatalogFormatVersion || catalog.FencingEpoch == 0)
             {
@@ -498,10 +554,16 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
         catch (JsonException exception)
         {
-            throw PantsException.Create(
+            error = PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Cloud WAL publication catalog v1 cannot be decoded.",
                 exception);
+            return null;
+        }
+        catch (PantsCorruptionException exception)
+        {
+            error = exception;
+            return null;
         }
     }
 
@@ -533,9 +595,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     void SaveCatalog() => SaveCatalog(_catalog);
 
-    void SaveCatalog(WalPublicationCatalog catalog) => AtomicStagedFile.Write(
-        Path.Combine(_cloudRoot, "wal", "publication-catalog.v1.json"),
-        JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions));
+    void SaveCatalog(WalPublicationCatalog catalog)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions);
+        AtomicStagedFile.Write(CatalogPath(_cloudRoot), bytes);
+        AtomicStagedFile.Write(CatalogMirrorPath(_cloudRoot), bytes);
+    }
 
     void PruneCoveredWal(CloudControlMetadataSnapshot metadata)
     {

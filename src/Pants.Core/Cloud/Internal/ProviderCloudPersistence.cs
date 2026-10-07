@@ -39,6 +39,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly CloudSstGarbageCollector _sstGarbageCollector;
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
+    readonly ProviderWalCatalogStore _catalog;
     readonly ulong _writerEpoch;
     int _disposed;
     int _persistenceAnomaly;
@@ -53,6 +54,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     {
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
+        _catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => DecodeCatalog(bytes.Span),
+            lease.EnsureValid);
         _sstStore = sstStore;
         _controlStore = controlStore;
         _lease = lease;
@@ -141,13 +146,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = await _walStore.GetAsync(
-                PantsCloudObjectLayout.WalCatalogObjectKey,
-                cancellationToken).ConfigureAwait(false);
+            var read = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
-            var catalog = current is null
-                ? new ProviderWalCatalog { FencingEpoch = _writerEpoch }
-                : DecodeCatalog(current.Data.Span);
+            var current = read.Object;
+            var catalog = read.Catalog ?? new ProviderWalCatalog { FencingEpoch = _writerEpoch };
             if (catalog.FencingEpoch != _writerEpoch)
             {
                 throw new PantsFencedException("The cloud WAL catalog is not fenced to this writer.");
@@ -195,6 +197,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     cancellationToken).ConfigureAwait(false);
                 if (readback is not null && readback.Data.Span.SequenceEqual(bytes))
                 {
+                    await _catalog.ConvergeMirrorAsync(bytes, cancellationToken)
+                        .ConfigureAwait(false);
                     _lease.EnsureValid();
                     return;
                 }
@@ -415,10 +419,12 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             }
         }
 
-        var catalogObject = await walStore.GetAsync(
-            PantsCloudObjectLayout.WalCatalogObjectKey,
-            cancellationToken).ConfigureAwait(false);
-        if (catalogObject is null)
+        var catalogRead = await new ProviderWalCatalogStore(
+                walStore,
+                static bytes => DecodeCatalog(bytes.Span),
+                static () => { })
+            .ReadAsync(true, cancellationToken).ConfigureAwait(false);
+        if (catalogRead.Catalog is not { } catalog)
         {
             return new ProviderCloudHydrationResult(
                 new Dictionary<ulong, ProviderPublishedWalSegment>(),
@@ -426,7 +432,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 false);
         }
 
-        var catalog = DecodeCatalog(catalogObject.Data.Span);
         var requiresSalvage = false;
         var cloudDurableSequence = 0UL;
         foreach (var (segmentId, segment) in catalog.Segments)
@@ -565,12 +570,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _lease.EnsureValid();
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = await _walStore.GetAsync(
-                PantsCloudObjectLayout.WalCatalogObjectKey,
-                cancellationToken).ConfigureAwait(false);
-            var catalog = current is null
-                ? new ProviderWalCatalog()
-                : DecodeCatalog(current.Data.Span);
+            var read = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
+            var current = read.Object;
+            var catalog = read.Catalog ?? new ProviderWalCatalog();
             if (catalog.FencingEpoch > _writerEpoch)
             {
                 throw new PantsFencedException("The cloud WAL catalog has a newer fencing epoch.");
@@ -604,6 +606,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                         "The cloud WAL catalog fence read back different bytes after CAS.");
                 }
 
+                await _catalog.ConvergeMirrorAsync(bytes, cancellationToken)
+                    .ConfigureAwait(false);
                 return;
             }
         }
@@ -877,15 +881,12 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         for (var attempt = 0; attempt < 8; attempt++)
         {
             _lease.EnsureValid();
-            var current = await _walStore.GetAsync(
-                PantsCloudObjectLayout.WalCatalogObjectKey,
-                cancellationToken).ConfigureAwait(false);
-            if (current is null)
+            var read = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
+            if (read.Object is not { } current || read.Catalog is not { } catalog)
             {
                 return;
             }
 
-            var catalog = DecodeCatalog(current.Data.Span);
             if (catalog.FencingEpoch != _writerEpoch)
             {
                 throw new PantsFencedException(
@@ -981,6 +982,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     "Cloud WAL catalog retirement read back different bytes after CAS.");
             }
 
+            await _catalog.ConvergeMirrorAsync(bytes, cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
 
             foreach (var segment in retired)
