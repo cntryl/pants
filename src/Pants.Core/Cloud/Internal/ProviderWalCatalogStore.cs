@@ -98,6 +98,19 @@ sealed class ProviderWalCatalogStore(
         throw new PantsBusyException("Cloud WAL catalog repair exceeded its bounded CAS retries.");
     }
 
+    /// <summary>The catalog's fencing epoch, or 0 when no catalog exists yet.</summary>
+    public async ValueTask<ulong> ReadFencingEpochAsync(CancellationToken cancellationToken)
+    {
+        var read = await ReadAsync(false, cancellationToken).ConfigureAwait(false);
+        return read.Catalog is null
+            ? 0
+            : Math.Max(
+                read.Catalog.FencingEpoch,
+                read.Catalog.Segments.Values.Select(static segment => segment.WriterEpoch)
+                    .DefaultIfEmpty()
+                    .Max());
+    }
+
     /// <summary>
     ///     Converges the mirror to <paramref name="primaryBytes" /> after the primary has been
     ///     committed and read back. A lost primary CAS never reaches here, so a losing writer cannot

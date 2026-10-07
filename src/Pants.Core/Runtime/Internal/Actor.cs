@@ -366,7 +366,7 @@ sealed class Actor : IAsyncDisposable
                     diskStore = LocalDiskStore.Open(
                         simulated.LocalCachePath,
                         state,
-                        simulatedHydration.MinimumWriterEpoch,
+                        Math.Max(simulatedHydration.MinimumWriterEpoch, options.MinimumEpoch),
                         options.RecoveryPolicy,
                         options.PerformanceGoal,
                         options.LeaseClockSkewTolerance,
@@ -439,8 +439,19 @@ sealed class Actor : IAsyncDisposable
                     ulong cloudEpoch;
                     using (startupPhases.Measure(StartupPhase.Lease))
                     {
+                        // The floor covers the catalog's fencing epoch and any caller-supplied
+                        // minimum, so a deleted lease object cannot regress below recovered state.
+                        var catalogFloor = await cloudStartupDeadline.RunAsync(
+                                token => new ProviderWalCatalogStore(
+                                        objectStores.Wal,
+                                        static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+                                        static () => { })
+                                    .ReadFencingEpochAsync(token),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        var leaseFloor = Math.Max(options.MinimumEpoch, catalogFloor);
                         cloudEpoch = await cloudStartupDeadline.RunMutationAsync(
-                                cloudLease.AcquireAsync,
+                                token => cloudLease.AcquireAsync(leaseFloor, token),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }

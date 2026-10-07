@@ -1127,6 +1127,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
+    internal static ProviderWalCatalog DecodeCatalogForFloor(ReadOnlySpan<byte> bytes) =>
+        DecodeCatalog(bytes);
+
     static ProviderWalCatalog DecodeCatalog(ReadOnlySpan<byte> bytes)
     {
         try
