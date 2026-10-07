@@ -719,6 +719,11 @@ sealed class Actor : IAsyncDisposable
             {
                 _ = ScheduleRecoveredMemtableFlushesAsync();
             }
+
+            if (!_backgroundCompactionEnabled && _diskStore is not null)
+            {
+                _ = ScheduleStartupL0RecoveryAsync();
+            }
         }
         catch
         {
@@ -4072,9 +4077,32 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    ///     Publishes the recovered layout once so a database reopened over the L0 ceiling starts
+    ///     recovery compaction instead of staying write-stalled.
+    /// </summary>
+    async Task ScheduleStartupL0RecoveryAsync()
+    {
+        try
+        {
+            _ = await SendAsync(
+                state =>
+                {
+                    PublishSnapshot(state);
+                    return ValueTask.FromResult(true);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+        }
+    }
+
     async ValueTask RunBackgroundCompactionAsync(RuntimeState state)
     {
-        if (!_backgroundCompactionEnabled || _diskStore is null)
+        if (_diskStore is null ||
+            (!_backgroundCompactionEnabled &&
+             !MemtableWritePressure.HasAnyCriticalL0Debt(_options, state)))
         {
             _backgroundCompactionPending = false;
             return;
@@ -4653,6 +4681,16 @@ sealed class Actor : IAsyncDisposable
         var wasStalled = MemtableWritePressure.IsStalled(_options, state);
         state.SetPublishedL0FileCounts(visibleFiles);
         _l0AdmissionWatchlist = BuildL0AdmissionWatchlist(state);
+        if (!_backgroundCompactionEnabled &&
+            _diskStore is not null &&
+            !state.IsShuttingDown &&
+            MemtableWritePressure.HasAnyCriticalL0Debt(_options, state))
+        {
+            // With background compaction off nothing else drains L0, so a family that has used
+            // every slot would stay write-stalled forever. Compact only while the debt is critical.
+            _backgroundCompactionPending = true;
+            ScheduleDeferredCompaction();
+        }
 
         // Compaction publishing its outputs is what drains L0 debt, and nothing else touches write
         // pressure on that path. Without this signal a caller parked in WaitForWriteStallClearAsync
