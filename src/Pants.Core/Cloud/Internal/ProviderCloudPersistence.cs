@@ -367,17 +367,32 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         Directory.CreateDirectory(root);
         var localManifest = CloudManifestReader.ReadManifest(root);
         var remoteMetadata = new Dictionary<string, CloudObject>(StringComparer.Ordinal);
+        var metadataSalvage = false;
         foreach (var fileName in MetadataFiles)
         {
-            var value = await controlStore.GetAsync(
-                PantsCloudObjectLayout.MetadataPrefix + fileName,
-                cancellationToken).ConfigureAwait(false);
+            CloudObject? value;
+            try
+            {
+                value = await controlStore.GetAsync(
+                    PantsCloudObjectLayout.MetadataPrefix + fileName,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (PantsException) when (
+                recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                !cancellationToken.IsCancellationRequested)
+            {
+                // Salvage tolerates one unreadable metadata object; Strict does not.
+                metadataSalvage = true;
+                continue;
+            }
+
             if (value is not null)
             {
                 remoteMetadata.Add(fileName, value);
             }
         }
 
+        metadataSalvage |= DropOlderManifestOfTornMetadataSet(remoteMetadata, recoveryPolicy);
         var remoteManifestObject = remoteMetadata.GetValueOrDefault("manifest.snapshot.json") ??
                                    remoteMetadata.GetValueOrDefault("manifest.json");
         var remoteManifest = remoteManifestObject is null
@@ -434,10 +449,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return new ProviderCloudHydrationResult(
                 new Dictionary<ulong, ProviderPublishedWalSegment>(),
                 0,
-                false);
+                metadataSalvage);
         }
 
-        var requiresSalvage = false;
+        var requiresSalvage = metadataSalvage;
         var cloudDurableSequence = 0UL;
         var remoteSegments = new List<IRemoteWalSegment>();
         foreach (var (segmentId, segment) in catalog.Segments)
@@ -520,6 +535,44 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     ///     permits, or the bytes may not match the catalog. The caller then takes the whole-object
     ///     path, which also carries the salvage handling for a mismatch.
     /// </remarks>
+    /// <summary>
+    ///     Without a journal to reconcile them, <c>manifest.snapshot.json</c> and
+    ///     <c>manifest.json</c> must describe the same sequence. Metadata objects are mirrored as
+    ///     independent writes, so a crash can leave them apart; Strict refuses to pick one, and
+    ///     Salvage keeps the newer and ignores the older.
+    /// </summary>
+    static bool DropOlderManifestOfTornMetadataSet(
+        Dictionary<string, CloudObject> remoteMetadata,
+        PantsRecoveryPolicy recoveryPolicy)
+    {
+        if (remoteMetadata.ContainsKey("manifest.journal") ||
+            !remoteMetadata.TryGetValue("manifest.snapshot.json", out var snapshotObject) ||
+            !remoteMetadata.TryGetValue("manifest.json", out var manifestObject))
+        {
+            return false;
+        }
+
+        var snapshotSequence = CloudManifestReader.DecodeManifest(snapshotObject.Data.Span)
+            .LastPersistedSequence;
+        var manifestSequence = CloudManifestReader.DecodeManifest(manifestObject.Data.Span)
+            .LastPersistedSequence;
+        if (snapshotSequence == manifestSequence)
+        {
+            return false;
+        }
+
+        if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+        {
+            throw new PantsRecoveryFailedException(
+                "Cloud manifest snapshot and manifest.json carry different sequences " +
+                $"({snapshotSequence} and {manifestSequence}) and no journal reconciles them.");
+        }
+
+        _ = remoteMetadata.Remove(
+            snapshotSequence < manifestSequence ? "manifest.snapshot.json" : "manifest.json");
+        return true;
+    }
+
     static async ValueTask<bool> TryVerifySegmentInPagesAsync(
         ICloudObjectStore walStore,
         ProviderPublishedWalSegment segment,
