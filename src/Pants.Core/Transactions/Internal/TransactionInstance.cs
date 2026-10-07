@@ -165,21 +165,13 @@ sealed class TransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
-        var (keyCopy, value, resolvedByIntent) = await PreparePointReadAsync(
-                key,
-                cancellationToken)
+        var observation = new PointReadObservation(false);
+        var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
             .ConfigureAwait(false);
-
-        // Unconditional even when ReadVisibleValue already resolved the value from an SST:
-        // this exhaustive pass is the sole source of read-amplification telemetry and the
-        // signal that triggers background read-amplification-driven compaction, independent of
-        // this early-exit real resolution.
-        if (!resolvedByIntent)
+        if (observation.ReachedSsts)
         {
-            await _database.RecordPointReadAsync(
-                _columnFamily.Identity,
-                keyCopy,
-                cancellationToken).ConfigureAwait(false);
+            await _database.ReportPointReadAsync(observation, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return CopyValue(value);
@@ -189,22 +181,19 @@ sealed class TransactionInstance : IPantsTransaction
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken = default)
     {
-        var (keyCopy, value, resolvedByIntent) = await PreparePointReadAsync(
-                key,
-                cancellationToken)
+        var observation = new PointReadObservation(true);
+        var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
             .ConfigureAwait(false);
-        if (resolvedByIntent)
+        if (!observation.ReachedSsts)
         {
             return new PantsPointReadResult(
                 CopyValue(value),
                 new PantsPointReadTrace(0, []));
         }
 
-        var trace = await _database.RecordPointReadWithDiagnosticsAsync(
-            _columnFamily.Identity,
-            keyCopy,
-            cancellationToken).ConfigureAwait(false);
-        return new PantsPointReadResult(CopyValue(value), trace);
+        await _database.ReportPointReadAsync(observation, cancellationToken)
+            .ConfigureAwait(false);
+        return new PantsPointReadResult(CopyValue(value), observation.Trace);
     }
 
     public async ValueTask<IPantsScan> ScanAsync(
@@ -511,6 +500,7 @@ sealed class TransactionInstance : IPantsTransaction
 
     async ValueTask<(byte[]? Value, bool ResolvedByIntent)> ReadVisibleValueAsync(
         byte[] key,
+        PointReadObservation observation,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<FileMeta> candidates;
@@ -536,6 +526,9 @@ sealed class TransactionInstance : IPantsTransaction
                 _startSnapshot,
                 _columnFamily.Identity,
                 key);
+            observation.BeginSstStage(
+                _startSnapshot.GetVisibleFiles(_columnFamily.Identity.Id).Length,
+                candidates.Count);
             coveringRangeSequence = _startSnapshot.RangeTombstones[_columnFamily.Identity]
                 .Where(tombstone =>
                     ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
@@ -546,7 +539,11 @@ sealed class TransactionInstance : IPantsTransaction
 
         var entry = candidates.Count == 0
             ? null
-            : await _database.TryReadPointValueAsync(candidates, key, cancellationToken)
+            : await _database.TryReadPointValueAsync(
+                    candidates,
+                    key,
+                    observation,
+                    cancellationToken)
                 .ConfigureAwait(false);
         if (coveringRangeSequence is { } rangeSequence &&
             (entry is null || rangeSequence > checked((long)entry.Sequence)))
@@ -564,6 +561,7 @@ sealed class TransactionInstance : IPantsTransaction
 
     async ValueTask<(byte[] Key, byte[]? Value, bool ResolvedByIntent)> PreparePointReadAsync(
         ReadOnlyMemory<byte> key,
+        PointReadObservation observation,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -575,7 +573,7 @@ sealed class TransactionInstance : IPantsTransaction
             keyCopy = key.ToArray();
         }
 
-        var (value, resolvedByIntent) = await ReadVisibleValueAsync(keyCopy, cancellationToken)
+        var (value, resolvedByIntent) = await ReadVisibleValueAsync(keyCopy, observation, cancellationToken)
             .ConfigureAwait(false);
         return (keyCopy, value, resolvedByIntent);
     }
