@@ -315,4 +315,99 @@ public sealed class FileLeaseTests
 
         throw new InvalidOperationException("No epoch field found in leader record.");
     }
+
+    [Fact]
+    public void ShouldFenceAtMonotonicDeadlineWhenRenewalNeverRuns()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var losses = 0;
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, () => losses++);
+        lease.EnsureValid();
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        Assert.Equal(1, losses);
+    }
+
+    [Fact]
+    public void ShouldReportLossAtDeadlineWithoutCallerActivity()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var losses = 0;
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, () => losses++);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+        lease.CheckExpiryForTesting();
+        lease.CheckExpiryForTesting();
+
+        Assert.Equal(1, losses);
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    [Fact]
+    public void ShouldStayValidPastOriginalDeadlineWhenRenewalAdvancesInTime()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, null);
+
+        time.Advance(TimeSpan.FromSeconds(40));
+        Assert.True(lease.RenewForTesting());
+        time.Advance(TimeSpan.FromSeconds(40));
+
+        lease.EnsureValid();
+    }
+
+    [Fact]
+    public void ShouldNotRestoreLeaseWhenRenewalArrivesAfterDeadline()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, null);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.False(lease.RenewForTesting());
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    [Fact]
+    public void ShouldNotExtendDeadlineWhenWallClockStepsBackward()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60),
+            time);
+
+        clock.UtcNow -= TimeSpan.FromHours(1);
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    static FileLease AcquireWithMonotonicTime(
+        string root,
+        ManualTimeProvider time,
+        Action? leaseLossCallback) =>
+        FileLease.Acquire(
+            root,
+            0,
+            TimeSpan.Zero,
+            leaseLossCallback,
+            LongHeartbeatInterval,
+            new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            TimeSpan.FromSeconds(60),
+            time);
 }
