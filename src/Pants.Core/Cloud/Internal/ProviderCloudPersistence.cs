@@ -9,6 +9,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     ///     How much of a published WAL segment recovery holds in memory at once.
     /// </summary>
     public const int WalRecoveryPageBytes = 4 * 1024 * 1024;
+    public const int WalPruningPageBytes = 256 * 1024;
     public const ulong MaximumWholeObjectWalRecoveryBytes = 256UL * 1024 * 1024;
 
     static readonly string[] MetadataFiles =
@@ -522,7 +523,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     static async ValueTask<bool> TryVerifySegmentInPagesAsync(
         ICloudObjectStore walStore,
         ProviderPublishedWalSegment segment,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int pageBytes = WalRecoveryPageBytes)
     {
         try
         {
@@ -537,7 +539,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             var read = 0UL;
             while (read < segment.SizeBytes)
             {
-                var length = (int)Math.Min((ulong)WalRecoveryPageBytes, segment.SizeBytes - read);
+                var length = (int)Math.Min((ulong)pageBytes, segment.SizeBytes - read);
                 var page = await walStore
                     .GetRangeAsync(segment.ObjectKey, read, length, cancellationToken)
                     .ConfigureAwait(false);
@@ -839,63 +841,71 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     "The cloud WAL catalog is not fenced to this writer during pruning.");
             }
 
-            var candidates = catalog.Segments.Values
-                .Where(segment => segment.MaximumSequence <= coveredSequence)
-                .ToArray();
-            if (candidates.Length == 0)
+            // Retire only the contiguous oldest prefix: a gap must stay recoverable in order, so a
+            // segment that is not yet covered ends the prefix however many newer ones are.
+            var candidates = new List<ProviderPublishedWalSegment>();
+            foreach (var segment in catalog.Segments.Values.OrderBy(static segment => segment.SegmentId))
+            {
+                if (segment.MaximumSequence > coveredSequence)
+                {
+                    break;
+                }
+
+                candidates.Add(segment);
+            }
+
+            if (candidates.Count == 0)
+            {
+                return;
+            }
+
+            var retired = new List<ProviderPublishedWalSegment>(candidates.Count);
+            var walGuards = new Dictionary<ulong, CloudObjectIdentityGuard>();
+            var coveringFiles = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var segment in candidates)
+            {
+                string? version;
+                try
+                {
+                    version = await ProveWalSegmentCoveredAsync(
+                        segment,
+                        manifest,
+                        coveringFiles,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is PantsTimeoutException or PantsResourceLimitException or PantsBusyException)
+                {
+                    // Out of time or memory is not an error: authority is retained and the proof
+                    // resumes on a later maintenance turn. What is already proven still retires.
+                    break;
+                }
+
+                if (version is null)
+                {
+                    break;
+                }
+
+                retired.Add(segment);
+                walGuards.Add(
+                    segment.SegmentId,
+                    new CloudObjectIdentityGuard(_walStore, segment.ObjectKey, version));
+            }
+
+            if (retired.Count == 0 || cancellationToken.IsCancellationRequested)
             {
                 return;
             }
 
             var dependencyGuards = await ValidateManifestDependenciesAsync(
                 (ManifestState)manifest,
+                coveringFiles,
                 metadata,
                 cancellationToken).ConfigureAwait(false);
-
-            var retired = new List<ProviderPublishedWalSegment>(candidates.Length);
-            var walObjects = new Dictionary<ulong, CloudObject>();
-            var walGuards = new Dictionary<ulong, CloudObjectIdentityGuard>();
-            foreach (var segment in candidates)
-            {
-                var remote = await ReadWalCandidateForPruningAsync(
-                    segment,
-                    cancellationToken).ConfigureAwait(false);
-                if (!CloudWalCoverageValidator.ValidateAndIsCovered(
-                        remote.Data.Span,
-                        segment.MaximumSequence,
-                        segment.WriterEpoch,
-                        manifest))
-                {
-                    continue;
-                }
-
-                retired.Add(segment);
-                walObjects.Add(segment.SegmentId, remote);
-                walGuards.Add(
-                    segment.SegmentId,
-                    new CloudObjectIdentityGuard(
-                        _walStore,
-                        segment.ObjectKey,
-                        remote.Version));
-            }
-
-            if (retired.Count == 0)
-            {
-                return;
-            }
-
             await VerifyIdentityGuardsAsync(
                 dependencyGuards.Concat(walGuards.Values),
                 cancellationToken).ConfigureAwait(false);
             _lease.EnsureValid();
-            foreach (var segment in retired)
-            {
-                CloudWalCoverageValidator.ValidateAndEnsureCovered(
-                    walObjects[segment.SegmentId].Data.Span,
-                    segment.MaximumSequence,
-                    segment.WriterEpoch,
-                    manifest);
-            }
 
             var retiredIds = retired
                 .Select(static segment => segment.SegmentId)
@@ -968,33 +978,100 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
-    async ValueTask<CloudObject> ReadWalCandidateForPruningAsync(
+    /// <summary>
+    ///     Proves a published WAL segment's size, checksum and manifest coverage by reading it a
+    ///     bounded page at a time, so pruning memory does not depend on segment size.
+    /// </summary>
+    /// <returns>The object version that was proven, or null when the segment is not yet covered.</returns>
+    async ValueTask<string?> ProveWalSegmentCoveredAsync(
         ProviderPublishedWalSegment segment,
+        ManifestState manifest,
+        HashSet<string> coveringFiles,
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        var remote = await _walStore.GetAsync(segment.ObjectKey, cancellationToken)
+        var metadata = await _walStore.HeadAsync(segment.ObjectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
             $"Published cloud WAL object '{segment.ObjectKey}' is missing during pruning.");
-        _lease.EnsureValid();
-        if (checked((ulong)remote.Data.Length) != segment.SizeBytes ||
-            DiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
+        if (metadata.SizeBytes != segment.SizeBytes)
         {
             throw new PantsCorruptionException(
                 $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
         }
 
-        return remote;
+        var covered = new HashSet<string>(StringComparer.Ordinal);
+        bool isCovered;
+        if (await TryVerifySegmentInPagesAsync(
+                _walStore,
+                segment,
+                cancellationToken,
+                WalPruningPageBytes).ConfigureAwait(false))
+        {
+            using var stream = new RemoteRangeStream(
+                _walStore,
+                segment.ObjectKey,
+                checked((long)segment.SizeBytes),
+                WalPruningPageBytes);
+            isCovered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
+                stream,
+                segment.MaximumSequence,
+                segment.WriterEpoch,
+                manifest,
+                covered);
+        }
+        else
+        {
+            // No ranged reads (or a mismatch to classify): the whole object is the only proof, so
+            // admit it against the whole-object limit before any GET.
+            if (segment.SizeBytes > MaximumWholeObjectWalRecoveryBytes)
+            {
+                throw new PantsResourceLimitException(
+                    $"Published cloud WAL object '{segment.ObjectKey}' is too large to prove " +
+                    "without ranged reads.");
+            }
+
+            var remote = await _walStore.GetAsync(segment.ObjectKey, cancellationToken)
+                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
+                $"Published cloud WAL object '{segment.ObjectKey}' is missing during pruning.");
+            if (checked((ulong)remote.Data.Length) != segment.SizeBytes ||
+                DiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
+            {
+                throw new PantsCorruptionException(
+                    $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
+            }
+
+            using var stream = new MemoryStream(remote.Data.ToArray(), false);
+            isCovered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
+                stream,
+                segment.MaximumSequence,
+                segment.WriterEpoch,
+                manifest,
+                covered);
+        }
+
+        _lease.EnsureValid();
+        if (!isCovered)
+        {
+            return null;
+        }
+
+        coveringFiles.UnionWith(covered);
+        return metadata.Version;
     }
 
     async ValueTask<IReadOnlyList<CloudObjectIdentityGuard>> ValidateManifestDependenciesAsync(
         ManifestState manifest,
+        HashSet<string> coveringFileNames,
         CloudControlMetadataSnapshot metadata,
         CancellationToken cancellationToken)
     {
         var guards = new List<CloudObjectIdentityGuard>(
-            manifest.Files.Count + MetadataFiles.Length);
-        foreach (var file in manifest.Files)
+            coveringFileNames.Count + MetadataFiles.Length);
+
+        // Only the SSTs that cover the retiring segments matter; unrelated ones are never touched.
+        // An SST's bytes were verified when it was published and it is immutable, so existence,
+        // length and an identity guard are the proof that it is still the covering object.
+        foreach (var file in manifest.Files.Where(file => coveringFileNames.Contains(file.Name)))
         {
             _lease.EnsureValid();
             var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
@@ -1007,32 +1084,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 throw new PantsCorruptionException(
                     $"Manifest cloud SST '{file.Name}' length differs during WAL pruning.");
             }
-
-            var factory = new ProviderCloudSstSourceFactory(_sstStore);
-            await using var source = await factory.OpenAsync(file, cancellationToken)
-                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-                $"Manifest cloud SST '{file.Name}' is missing during WAL pruning.");
-            var checksum = 0U;
-            for (long offset = 0; offset < source.Length;)
-            {
-                var length = checked((int)Math.Min(64 * 1024, source.Length - offset));
-                var bytes = await source.ReadExactlyAsync(offset, length, cancellationToken)
-                    .ConfigureAwait(false);
-                checksum = DiskFormat.Crc32CAppend(checksum, bytes);
-                offset = checked(offset + length);
-            }
-
-            if (file.ContentCrc32C.HasValue && checksum != file.ContentCrc32C.Value)
-            {
-                throw new PantsCorruptionException(
-                    $"Manifest cloud SST '{file.Name}' checksum differs during WAL pruning.");
-            }
-
-            await using var reader = await AsyncSstReader.OpenAsync(
-                    source,
-                    file,
-                    cancellationToken)
-                .ConfigureAwait(false);
 
             guards.Add(new CloudObjectIdentityGuard(_sstStore, objectKey, remote.Version));
         }

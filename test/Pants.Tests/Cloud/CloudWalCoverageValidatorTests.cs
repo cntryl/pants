@@ -16,6 +16,44 @@ public sealed class CloudWalCoverageValidatorTests
     }
 
     [Fact]
+    public void ShouldReportCoveringFilesWhenStreamingACoveredSegment()
+    {
+        var bytes = CreateWalBytes(WalOperation.Put, "middle"u8.ToArray());
+        var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
+        var covering = new HashSet<string>(StringComparer.Ordinal);
+
+        using var stream = new MemoryStream(bytes, false);
+        var covered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
+            stream,
+            3,
+            7,
+            manifest,
+            covering);
+
+        Assert.True(covered);
+        Assert.Equal([manifest.Files[0].Name], covering);
+    }
+
+    [Fact]
+    public void ShouldReportUncoveredWhenStreamingASegmentOutsideEveryManifestFile()
+    {
+        var bytes = CreateWalBytes(WalOperation.Put, "zulu-plus"u8.ToArray());
+        var manifest = CreateManifest("alpha"u8.ToArray(), "zulu"u8.ToArray());
+        var covering = new HashSet<string>(StringComparer.Ordinal);
+
+        using var stream = new MemoryStream(bytes, false);
+        var covered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
+            stream,
+            3,
+            7,
+            manifest,
+            covering);
+
+        Assert.False(covered);
+        Assert.Empty(covering);
+    }
+
+    [Fact]
     public void ShouldKeepWalGivenIncompleteManifestBoundsWhenCheckingCoverage()
     {
         // Arrange
