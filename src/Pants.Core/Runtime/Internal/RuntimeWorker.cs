@@ -38,6 +38,9 @@ sealed class RuntimeWorker : IAsyncDisposable, IRuntimeServiceMetrics
 
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
+    /// <summary>Completes when the worker loop has actually exited.</summary>
+    internal Task Completion => _loopTask;
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
