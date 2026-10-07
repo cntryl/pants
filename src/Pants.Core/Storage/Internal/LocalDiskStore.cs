@@ -3336,54 +3336,46 @@ sealed class LocalDiskStore :
                         .ConfigureAwait(false);
                 }
 
-                // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
-                // index/bloom + the small resident range-tombstone list) and walks its entries one
-                // block at a time through the k-way merge — the same version-retention/tombstone-
-                // masking/GC-eligibility rules as CompactionMerger.Merge +
-                // CompactionOutputPartitioner.Partition (see its doc comment), just driven
-                // incrementally instead of over one materialized array per input plus one
-                // materialized merged/partitioned result.
-                var inputReaders = plan.Inputs
-                    .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
-                    .ToArray();
+                // The merge walks level-0 sources one stream per file and each sorted, disjoint
+                // set (an inner-level source set, the target span) as one chained stream, so open
+                // readers never exceed the source stream count plus one however wide the span is.
+                // Same version-retention/tombstone-masking/GC-eligibility rules as
+                // CompactionMerger + CompactionOutputPartitioner (see StreamingCompactionMerger).
+                using var compactionStreams = CompactionStreams.Create(
+                    plan,
+                    input => Path.Combine(_sstDirectory, input.Name),
+                    SstReader.Open,
+                    _compaction.MaximumInputFiles,
+                    compactionBudget);
                 var outputs = new List<FileMeta>();
                 var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
                     familyId,
                     out var nextOutputSequence)
                     ? nextOutputSequence
                     : 1UL;
-                try
+                var outputIndex = 0UL;
+                foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
+                             compactionStreams.Streams,
+                             compactionStreams.RangeTombstones,
+                             plan,
+                             _targetSstSizeBytes,
+                             compactionBudget))
                 {
-                    var outputIndex = 0UL;
-                    foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
-                                 inputReaders,
-                                 plan,
-                                 _targetSstSizeBytes,
-                                 compactionBudget))
-                    {
-                        var outputSequence = checked(firstOutputSequence + outputIndex);
-                        outputNames.Add(CreateSstFileName(
-                            familyId,
-                            plan.TargetLevel,
-                            outputSequence));
-                        var output = CreateSst(
-                            familyId,
-                            plan.TargetLevel,
-                            partition.Entries,
-                            partition.RangeTombstones,
-                            Failpoint.AfterCompactionOutputDurable,
-                            outputSequence);
-                        outputs.Add(output);
-                        edits.Add(CreateManifestEdit("AddSst", output));
-                        outputIndex = checked(outputIndex + 1);
-                    }
-                }
-                finally
-                {
-                    foreach (var inputReader in inputReaders)
-                    {
-                        inputReader.Dispose();
-                    }
+                    var outputSequence = checked(firstOutputSequence + outputIndex);
+                    outputNames.Add(CreateSstFileName(
+                        familyId,
+                        plan.TargetLevel,
+                        outputSequence));
+                    var output = CreateSst(
+                        familyId,
+                        plan.TargetLevel,
+                        partition.Entries,
+                        partition.RangeTombstones,
+                        Failpoint.AfterCompactionOutputDurable,
+                        outputSequence);
+                    outputs.Add(output);
+                    edits.Add(CreateManifestEdit("AddSst", output));
+                    outputIndex = checked(outputIndex + 1);
                 }
 
                 if (outputs.Count > 0)
