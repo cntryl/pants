@@ -70,6 +70,7 @@ enum Failpoint
     AfterCloudCatalogPublish,
     BeforeDdlPrepare,
     AfterDdlPrepare,
+    AfterDdlAmbiguousPrepare,
     BeforeDdlRemoteCas,
     AfterDdlRemoteCas,
     BeforeDdlAuthorityReadback,

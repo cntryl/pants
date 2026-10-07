@@ -381,6 +381,87 @@ public sealed class CloudDdlTwoPhaseTests
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
     }
 
+    [Fact]
+    public async Task ShouldFenceAndKeepAmbiguityMarkerGivenCasFailureWithNegativeReadback()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = CreateOptions(directory.Path);
+        var failpoints = new DdlFailpointHandler("AfterDdlAmbiguousPrepare");
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoints));
+
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            database.ColumnFamilies.CreateAsync("late-commit").AsTask());
+
+        using var prepare = JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(directory.Path, "ddl.prepare.json")));
+        Assert.True(prepare.RootElement.GetProperty("remote_cas_ambiguous").GetBoolean());
+        Assert.Equal(PantsEngineHealth.Degraded, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
+    }
+
+    [Fact]
+    public async Task ShouldRedriveAmbiguousDdlExactlyOnceWhenReopeningAfterCrashBeforeCasSubmission()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = CreateOptions(directory.Path);
+        var failpoints = new DdlFailpointHandler("AfterDdlAmbiguousPrepare");
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoints)))
+        {
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                database.ColumnFamilies.CreateAsync("redriven").AsTask());
+        }
+
+        await using (var reopened = await PantsDatabase.OpenAsync(options))
+        {
+            Assert.NotNull(await reopened.ColumnFamilies.GetAsync("redriven"));
+            Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
+        }
+
+        await using var again = await PantsDatabase.OpenAsync(options);
+        Assert.NotNull(await again.ColumnFamilies.GetAsync("redriven"));
+        using var registry = ReadRegistry(directory.Path);
+        Assert.Equal(1UL, registry.RootElement.GetProperty("epoch").GetUInt64());
+        Assert.Single(registry.RootElement.GetProperty("operations").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task ShouldFailOpenFencedGivenAmbiguousDdlAndAdvancedRegistryEpoch()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = CreateOptions(directory.Path);
+        var failpoints = new DdlFailpointHandler("AfterDdlAmbiguousPrepare");
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoints)))
+        {
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                database.ColumnFamilies.CreateAsync("undecidable").AsTask());
+        }
+
+        var registryPath = Path.Combine(
+            directory.Path,
+            "cloud_store",
+            "metadata",
+            "ddl.registry.json");
+        var registry = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(registryPath))!;
+        registry["epoch"] = 7;
+        File.WriteAllBytes(registryPath, System.Text.Encoding.UTF8.GetBytes(registry.ToJsonString()));
+
+        await Assert.ThrowsAsync<PantsFencedException>(async () =>
+            await PantsDatabase.OpenAsync(options));
+
+        Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
