@@ -47,7 +47,7 @@ public sealed class LocalDiskStoreBoundedRecoveryTests
         // The corruption in the first block is deferred, not silently ignored: it surfaces as a
         // corruption error at the first read that actually touches that block, per the issue's
         // explicitly allowed "detectable by ... the first affected read" boundary.
-        await Assert.ThrowsAsync<StorageException>(() => reader.GetAsync(TestBytes.FromString("key-0000")).AsTask());
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => reader.GetAsync(TestBytes.FromString("key-0000")).AsTask());
     }
 
     [Fact]
