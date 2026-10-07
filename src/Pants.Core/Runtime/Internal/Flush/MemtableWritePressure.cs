@@ -50,6 +50,23 @@ static class MemtableWritePressure
         return published + queued >= GetL0HardCeiling(options);
     }
 
+    /// <summary>Whether any family holds every level-0 slot it is entitled to.</summary>
+    public static bool HasAnyCriticalL0Debt(RuntimePlan options, RuntimeState state)
+    {
+        var ceiling = GetL0HardCeiling(options);
+        foreach (var (columnFamilyId, published) in state.PublishedL0FileCounts)
+        {
+            var queued = state.ImmutableMemtableFlushes.Values.Count(flush =>
+                flush.Frozen.ColumnFamily.Id == columnFamilyId);
+            if (published + queued >= ceiling)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool IsQueueFull(
         RuntimeState state,
         ColumnFamilyIdentity identity) =>

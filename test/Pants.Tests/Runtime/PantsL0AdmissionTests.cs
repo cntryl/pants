@@ -7,11 +7,11 @@ public sealed class PantsL0AdmissionTests
     const int L0FileCountTrigger = 2;
 
     /// <summary>
-    ///     With background compaction disabled nothing drains L0, so write admission is the only
-    ///     thing standing between a write-heavy caller and unbounded read amplification.
+    ///     With background compaction disabled, critical L0 debt must still drain on its own so a
+    ///     write-heavy caller is never wedged and published L0 stays bounded.
     /// </summary>
     [Fact]
-    public async Task ShouldStallWritesWhenPublishedL0ReachesTheHardCeiling()
+    public async Task ShouldBoundPublishedL0WithoutCompactAllWhenBackgroundCompactionIsDisabled()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
@@ -19,61 +19,56 @@ public sealed class PantsL0AdmissionTests
         var ceiling = L0FileCountTrigger +
             MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily + 1;
 
-        var stalled = false;
-        for (var attempt = 0; attempt < ceiling * 3 && !stalled; attempt++)
+        var maximumL0 = 0;
+        for (var attempt = 0; attempt < ceiling * 2; attempt++)
         {
-            try
+            Assert.True(
+                await database.Maintenance.WaitForWriteStallClearAsync(
+                    family,
+                    TimeSpan.FromSeconds(30)),
+                "A stalled write must clear without CompactAllAsync.");
+            await CommitAsync(database, family, $"key-{attempt}");
+            await database.Maintenance.FlushAsync(family);
+            maximumL0 = Math.Max(maximumL0, await CountL0FilesAsync(database));
+        }
+
+        Assert.True(maximumL0 <= ceiling, $"Published L0 reached {maximumL0}; ceiling is {ceiling}.");
+        await CommitAsync(database, family, "after");
+    }
+
+    [Fact]
+    public async Task ShouldRecoverOverCeilingL0OnOpenWhenBackgroundCompactionIsDisabled()
+    {
+        using var directory = new TemporaryDirectory();
+        var ceiling = L0FileCountTrigger +
+            MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily + 1;
+        await using (var database = await PantsDatabase.OpenAsync(
+                         CreateOptions(directory.Path, L0FileCountTrigger * 100)))
+        {
+            var family = database.ColumnFamilies.DefaultFamily;
+            for (var attempt = 0; attempt < ceiling + 2; attempt++)
             {
                 await CommitAsync(database, family, $"key-{attempt}");
                 await database.Maintenance.FlushAsync(family);
             }
-            catch (PantsWriteStallException)
-            {
-                stalled = true;
-            }
+
+            Assert.True(await CountL0FilesAsync(database) >= ceiling);
         }
 
-        Assert.True(stalled, "Writes must eventually be refused while L0 debt cannot drain.");
+        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
         Assert.True(
-            await CountL0FilesAsync(database) <= ceiling,
-            "Published L0 files must never exceed the admission ceiling.");
+            await reopened.Maintenance.WaitForWriteStallClearAsync(
+                reopened.ColumnFamilies.DefaultFamily,
+                TimeSpan.FromSeconds(30)));
+        Assert.True(await CountL0FilesAsync(reopened) < ceiling);
+        await CommitAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "after-open");
     }
 
-    /// <summary>
-    ///     The ceiling must not wedge the engine: draining the debt has to restore writability.
-    /// </summary>
-    [Fact]
-    public async Task ShouldResumeWritesAfterCompactionDrainsL0Debt()
-    {
-        using var directory = new TemporaryDirectory();
-        await using var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
-        var family = database.ColumnFamilies.DefaultFamily;
-        var ceiling = L0FileCountTrigger +
-            MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily + 1;
-
-        for (var attempt = 0; attempt < ceiling * 3; attempt++)
-        {
-            try
-            {
-                await CommitAsync(database, family, $"key-{attempt}");
-                await database.Maintenance.FlushAsync(family);
-            }
-            catch (PantsWriteStallException)
-            {
-                break;
-            }
-        }
-
-        await database.Maintenance.CompactAllAsync();
-
-        await CommitAsync(database, family, "after-drain");
-    }
-
-    static PantsOpenOptions CreateOptions(string path) =>
+    static PantsOpenOptions CreateOptions(string path, int l0FileCountTrigger = L0FileCountTrigger) =>
         PantsOpenOptions.Local(path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(
-                L0FileCountTrigger: L0FileCountTrigger,
+                L0FileCountTrigger: l0FileCountTrigger,
                 BackgroundEnabled: false));
 
     static async Task CommitAsync(IPantsDatabase database, IPantsColumnFamily family, string key)
