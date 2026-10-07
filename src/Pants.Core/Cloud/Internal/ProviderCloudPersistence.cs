@@ -40,6 +40,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
     readonly ProviderWalCatalogStore _catalog;
+    readonly ProviderSstPublisher _sstPublisher;
     readonly ulong _writerEpoch;
     int _disposed;
     int _persistenceAnomaly;
@@ -59,6 +60,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             static bytes => DecodeCatalog(bytes.Span),
             lease.EnsureValid);
         _sstStore = sstStore;
+        _sstPublisher = new ProviderSstPublisher(sstStore, lease.EnsureValid);
         _controlStore = controlStore;
         _lease = lease;
         _writerEpoch = lease.Epoch;
@@ -624,18 +626,12 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                      .GroupBy(static file => file.Name, StringComparer.Ordinal))
         {
             var name = ValidateSstName(references.Key);
-            var proofs = references.ToArray();
             var path = Path.Combine(_localRoot, "sst", name);
-            var localBytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
-            if (localBytes is not null)
-            {
-                foreach (var proof in proofs)
-                {
-                    CloudSstValidator.Validate(localBytes, proof);
-                }
-            }
-
-            await PublishSstAsync(name, localBytes, proofs, cancellationToken)
+            await _sstPublisher.EnsurePublishedAsync(
+                    name,
+                    File.Exists(path) ? path : null,
+                    references.ToArray(),
+                    cancellationToken)
                 .ConfigureAwait(false);
             publishedNames.Add(name);
         }
@@ -651,51 +647,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 var name = ValidateSstName(Path.GetFileName(path));
                 if (publishedNames.Add(name))
                 {
-                    await PublishSstAsync(
-                            name,
-                            File.ReadAllBytes(path),
-                            [],
-                            cancellationToken)
+                    await _sstPublisher.EnsurePublishedAsync(name, path, [], cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
-        }
-    }
-
-    async ValueTask PublishSstAsync(
-        string name,
-        byte[]? localBytes,
-        FileMeta[] proofs,
-        CancellationToken cancellationToken)
-    {
-        _lease.EnsureValid();
-        var objectKey = PantsCloudObjectLayout.SstPrefix + name;
-        var created = false;
-        if (localBytes is not null)
-        {
-            created = await _sstStore.PutAsync(
-                objectKey,
-                localBytes,
-                new PantsCloudObjectWriteCondition.IfAbsent(),
-                cancellationToken).ConfigureAwait(false);
-        }
-
-        var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-            $"Manifest cloud SST '{name}' is unavailable for publication.");
-        _lease.EnsureValid();
-        if (localBytes is not null && !readback.Data.Span.SequenceEqual(localBytes))
-        {
-            throw created
-                ? new PantsCorruptionException(
-                    $"Cloud SST upload for '{objectKey}' read back different bytes.")
-                : new PantsFencedException(
-                    $"Immutable cloud SST '{objectKey}' conflicts.");
-        }
-
-        foreach (var proof in proofs)
-        {
-            CloudSstValidator.Validate(readback.Data, proof);
         }
     }
 
