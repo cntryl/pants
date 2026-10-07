@@ -13,11 +13,62 @@ public sealed class CloudObjectStoreFactoryTests
         Assert.Equal(Timeout.InfiniteTimeSpan, handler.ConnectTimeout);
         Assert.False(handler.UseCookies);
         Assert.Equal(64, handler.MaxConnectionsPerServer);
+        Assert.False(handler.AllowAutoRedirect);
         Assert.Equal(HttpVersion.Version11, CloudObjectStoreFactory.StorageHttpClient.DefaultRequestVersion);
         Assert.Equal(
             HttpVersionPolicy.RequestVersionOrLower,
             CloudObjectStoreFactory.StorageHttpClient.DefaultVersionPolicy);
         Assert.Equal(Timeout.InfiniteTimeSpan, CloudObjectStoreFactory.StorageHttpClient.Timeout);
+    }
+
+    [Fact]
+    public async Task ShouldNotFollowRedirectsGivenMutatingStorageRequest()
+    {
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var requests = 0;
+        var server = Task.Run(async () =>
+        {
+            while (listener.IsListening)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync();
+                }
+                catch (Exception exception) when (exception is HttpListenerException or ObjectDisposedException)
+                {
+                    return;
+                }
+
+                Interlocked.Increment(ref requests);
+                context.Response.StatusCode = 307;
+                context.Response.RedirectLocation = $"http://127.0.0.1:{port}/elsewhere";
+                context.Response.Close();
+            }
+        });
+        using var client = new HttpClient(CloudObjectStoreFactory.CreateStorageHandler());
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"http://127.0.0.1:{port}/object")
+        {
+            Content = new ByteArrayContent([1, 2, 3])
+        };
+        request.Headers.TryAddWithoutValidation("x-amz-security-token", "secret");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, response.StatusCode);
+        Assert.Equal(1, Volatile.Read(ref requests));
+        listener.Stop();
+        await server;
+    }
+
+    static int GetFreePort()
+    {
+        using var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
 
     [Fact]
