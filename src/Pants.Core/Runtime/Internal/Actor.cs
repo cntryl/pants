@@ -4431,11 +4431,9 @@ sealed class Actor : IAsyncDisposable
             _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
         }
 
-        await _hybridCache.EnsureLocalSstsForMaintenanceAsync(
-                _diskStore,
-                names,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // Cold inputs are merged through bounded ranged reads; hydrating them first would double
+        // the local footprint of a compaction, so nothing is staged here.
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     ValueTask<IDisposable?> ProtectCompactionInputsAsync(

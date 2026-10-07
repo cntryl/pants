@@ -50,6 +50,18 @@ sealed class CompactionStreams : IDisposable
         Func<FileMeta, string> pathOf,
         Func<string, SstReader> openReader,
         int maximumSourceStreams,
+        ResourceBudget? resourceBudget) =>
+        Create(
+            plan,
+            file => new LocalFileCursor(openReader(pathOf(file)), resourceBudget),
+            maximumSourceStreams,
+            resourceBudget);
+
+    /// <param name="openFile">Opens one input, locally or through remote ranges.</param>
+    public static CompactionStreams Create(
+        CompactionPlan plan,
+        Func<FileMeta, ICompactionFileCursor> openFile,
+        int maximumSourceStreams,
         ResourceBudget? resourceBudget)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -77,16 +89,13 @@ sealed class CompactionStreams : IDisposable
         {
             foreach (var group in sourceGroups.Concat(targetGroups))
             {
-                streams.Add(new ChainedFileEntryStream(
-                    group.Select(pathOf).ToArray(),
-                    openReader,
-                    resourceBudget));
+                streams.Add(new ChainedFileEntryStream(group, openFile));
             }
 
             foreach (var file in plan.Inputs)
             {
-                using var reader = openReader(pathOf(file));
-                foreach (var tombstone in reader.RangeTombstones)
+                using var cursor = openFile(file);
+                foreach (var tombstone in cursor.RangeTombstones)
                 {
                     if (resourceBudget is not null)
                     {
