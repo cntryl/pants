@@ -1884,7 +1884,8 @@ sealed class LocalDiskStore :
         IAsyncSstSourceFactory? remoteSstSourceFactory = null,
         StartupPhaseRecorder? startupPhases = null,
         IPantsClock? leaseClock = null,
-        TimeSpan? leaseTimeToLive = null)
+        TimeSpan? leaseTimeToLive = null,
+        TimeProvider? leaseTimeProvider = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1927,7 +1928,8 @@ sealed class LocalDiskStore :
                     leaseLossCallback,
                     leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10),
                     leaseClock,
-                    leaseTimeToLive);
+                    leaseTimeToLive,
+                    leaseTimeProvider);
             }
 
             lease.EnsureValid();

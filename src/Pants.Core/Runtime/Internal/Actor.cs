@@ -342,7 +342,8 @@ sealed class Actor : IAsyncDisposable
                     leaseHeartbeatInterval,
                     startupPhases: startupPhases,
                     leaseClock: leaseClock,
-                    leaseTimeToLive: options.LeaseTimeToLive);
+                    leaseTimeToLive: options.LeaseTimeToLive,
+                    leaseTimeProvider: runtimeTimeProvider);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
