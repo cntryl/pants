@@ -3431,7 +3431,7 @@ sealed class LocalDiskStore :
                 // CompactionMerger + CompactionOutputPartitioner (see StreamingCompactionMerger).
                 using var compactionStreams = CompactionStreams.Create(
                     plan,
-                    input => OpenCompactionFile(input, compactionBudget),
+                    input => OpenCompactionFile(input, compactionBudget, cancellationToken),
                     _compaction.MaximumInputFiles,
                     compactionBudget);
                 var outputs = new List<FileMeta>();
@@ -3621,7 +3621,10 @@ sealed class LocalDiskStore :
     ///     Opens a compaction input from local disk, or through bounded remote ranges when the SST
     ///     is cloud-only, so a cold input is never hydrated just to be merged.
     /// </summary>
-    ICompactionFileCursor OpenCompactionFile(FileMeta input, ResourceBudget? budget)
+    ICompactionFileCursor OpenCompactionFile(
+        FileMeta input,
+        ResourceBudget? budget,
+        CancellationToken cancellationToken)
     {
         var path = Path.Combine(_sstDirectory, ValidateSstName(input.Name));
         if (File.Exists(path))
@@ -3643,9 +3646,9 @@ sealed class LocalDiskStore :
             throw new PantsRecoveryFailedException($"Manifest-owned SST '{input.Name}' is missing.");
         }
 
-        var reader = OpenAsyncSstReaderAsync(input, CancellationToken.None)
+        var reader = OpenAsyncSstReaderAsync(input, cancellationToken)
             .AsTask().GetAwaiter().GetResult();
-        return new RemoteFileCursor(reader, budget);
+        return new RemoteFileCursor(reader, budget, cancellationToken);
     }
 
     static string CreateSstFileName(uint familyId, uint level, ulong sequence) =>
