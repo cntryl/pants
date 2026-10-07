@@ -1554,25 +1554,15 @@ sealed class LocalDiskStore :
             {
                 var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
                     .ConfigureAwait(false);
-                try
-                {
-                    sources.Add(new AsyncSstScanSource(
+                sources.Add(await AsyncSstScanSource.CreateAsync(
                         candidate,
                         reader,
-                        new AsyncSstBlockIterator(
-                            reader,
-                            direction,
-                            startInclusive,
-                            endExclusive,
-                            resourceBudget),
+                        reopenToken => OpenAsyncSstReaderAsync(candidate, reopenToken),
+                        direction,
                         startInclusive,
-                        endExclusive));
-                }
-                catch
-                {
-                    await reader.DisposeAsync().ConfigureAwait(false);
-                    throw;
-                }
+                        endExclusive,
+                        resourceBudget)
+                    .ConfigureAwait(false));
             }
 
             return sources;

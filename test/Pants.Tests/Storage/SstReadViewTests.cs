@@ -20,6 +20,42 @@ public sealed class SstReadViewTests
             "non-overlapping, so the search should be logarithmic.");
     }
 
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(100_000)]
+    [InlineData(1_000_000)]
+    public void ShouldBoundRangeCandidateWorkAsLevelCardinalityGrows(int fileCount)
+    {
+        var view = SstReadView.Create(BuildLevel(0, fileCount));
+        var middle = fileCount / 2;
+
+        var candidates = view.SelectRangeCandidates(0, Key(middle), Key(middle + 4), out var filesExamined);
+
+        Assert.Equal(
+            Enumerable.Range(middle, 4).Select(static index => $"l1-{index}.sst"),
+            candidates.Select(static file => file.Name));
+        Assert.True(
+            filesExamined < 64,
+            $"A range read inspected {filesExamined} of {fileCount} files; the level is sorted " +
+            "and non-overlapping, so the search should be logarithmic plus the files returned.");
+    }
+
+    [Fact]
+    public void ShouldSelectRangeCandidatesExactlyWhenBoundsAreOpenOrOutsideTheLevel()
+    {
+        var files = BuildLevel(0, 64);
+        var view = SstReadView.Create(files);
+
+        Assert.Equal(64, view.SelectRangeCandidates(0, null, null, out _).Count);
+        Assert.Equal(
+            Enumerable.Range(0, 3).Select(static index => $"l1-{index}.sst"),
+            view.SelectRangeCandidates(0, null, Key(3), out _).Select(static file => file.Name));
+        Assert.Equal(
+            Enumerable.Range(60, 4).Select(static index => $"l1-{index}.sst"),
+            view.SelectRangeCandidates(0, Key(60), null, out _).Select(static file => file.Name));
+        Assert.Empty(view.SelectRangeCandidates(0, Key(200), Key(300), out _));
+    }
+
     [Fact]
     public void ShouldReturnEveryLevelZeroCandidateNewestFirst()
     {
