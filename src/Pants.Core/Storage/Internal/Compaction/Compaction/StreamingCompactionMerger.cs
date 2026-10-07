@@ -25,12 +25,27 @@ static class StreamingCompactionMerger
         IReadOnlyList<SstReader> readers,
         CompactionPlan plan,
         long targetSizeBytes,
+        ResourceBudget? resourceBudget = null) =>
+        MergeAndPartition(
+            readers
+                .Select(reader => (ICompactionEntryStream)new ReaderEntryStream(reader, resourceBudget))
+                .ToArray(),
+            readers.SelectMany(static reader => reader.RangeTombstones).ToArray(),
+            plan,
+            targetSizeBytes,
+            resourceBudget);
+
+    /// <summary>Merges <paramref name="streams" />, which this call disposes.</summary>
+    public static IEnumerable<CompactionMergeResult> MergeAndPartition(
+        IReadOnlyList<ICompactionEntryStream> streams,
+        IReadOnlyList<RangeTombstone> rangeTombstones,
+        CompactionPlan plan,
+        long targetSizeBytes,
         ResourceBudget? resourceBudget = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         var horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : (ulong?)null;
-        var allRanges = readers
-            .SelectMany(static reader => reader.RangeTombstones)
+        var allRanges = rangeTombstones
             .OrderBy(static tombstone => tombstone.Start, ByteArrayComparer.Instance)
             .ThenByDescending(static tombstone => tombstone.Sequence)
             .ToArray();
@@ -41,7 +56,7 @@ static class StreamingCompactionMerger
             .Where(tombstone => !CanDrop(tombstone.Sequence, horizon, plan.RangeTombstoneGcEligible))
             .ToArray();
 
-        if (readers.Count == 0)
+        if (streams.Count == 0)
         {
             if (retainedRanges.Length > 0)
             {
@@ -71,7 +86,7 @@ static class StreamingCompactionMerger
         try
         {
             foreach (var entry in MergeEntries(
-                         readers,
+                         streams,
                          horizon,
                          plan.PointTombstoneGcEligible,
                          droppedRanges,
@@ -199,22 +214,16 @@ static class StreamingCompactionMerger
     ///     same order (ascending key, descending sequence within a key).
     /// </summary>
     static IEnumerable<SstEntry> MergeEntries(
-        IReadOnlyList<SstReader> readers,
+        IReadOnlyList<ICompactionEntryStream> iterators,
         ulong? horizon,
         bool pointTombstoneGcEligible,
         IReadOnlyList<RangeTombstone> droppedRanges,
         ResourceBudget? resourceBudget)
     {
-        var iterators = readers
-            .Select(reader => SstBlockIterator.Create(
-                reader,
-                PantsScanDirection.Forward,
-                resourceBudget: resourceBudget))
-            .ToArray();
         try
         {
-            var heads = new SstEntry?[iterators.Length];
-            for (var i = 0; i < iterators.Length; i++)
+            var heads = new SstEntry?[iterators.Count];
+            for (var i = 0; i < iterators.Count; i++)
             {
                 heads[i] = iterators[i].MoveNext() ? iterators[i].Current : null;
             }
