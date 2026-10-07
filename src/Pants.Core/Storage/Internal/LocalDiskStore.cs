@@ -40,13 +40,16 @@ sealed class LocalDiskStore :
     IDisposable? _rootTrust;
     bool _localWalPruningEnabled = true;
     readonly ManifestState _manifest;
+    const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
+
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
     readonly string _manifestPath;
     readonly string _manifestSnapshotPath;
     readonly MutableMemtableOperations _mutableOperations = new();
     readonly PantsPerformanceGoal _performanceGoal;
-    readonly SstReaderCache _readerCache = new();
+    readonly SstReaderCache _readerCache;
+    readonly AsyncSstReaderCache _asyncReaderCache;
     readonly PantsRecoveryPolicy _recoveryPolicy;
     readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
     readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
@@ -111,6 +114,9 @@ sealed class LocalDiskStore :
         _compaction = compaction;
         _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
+        var readerCacheBytes = blockCacheBytes > 0 ? blockCacheBytes / 4 : DefaultReaderCacheBytes;
+        _readerCache = new SstReaderCache(readerCacheBytes);
+        _asyncReaderCache = new AsyncSstReaderCache(readerCacheBytes);
         _remoteSstSourceFactory = remoteSstSourceFactory;
         BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
@@ -323,6 +329,7 @@ sealed class LocalDiskStore :
 
         IsDisposed = true;
         _readerCache.Dispose();
+        _asyncReaderCache.Dispose();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
@@ -1527,7 +1534,15 @@ sealed class LocalDiskStore :
         }
     }
 
-    async ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+    ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+        FileMeta file,
+        CancellationToken cancellationToken) =>
+        _asyncReaderCache.GetOrOpenAsync(
+            file,
+            openToken => OpenUncachedAsyncSstReaderAsync(file, openToken),
+            cancellationToken);
+
+    async ValueTask<AsyncSstReader> OpenUncachedAsyncSstReaderAsync(
         FileMeta file,
         CancellationToken cancellationToken)
     {
@@ -3733,6 +3748,7 @@ sealed class LocalDiskStore :
     void RemoveSstFromCaches(string name)
     {
         _readerCache.RemoveFile(name);
+        _asyncReaderCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
     }
 
@@ -3792,7 +3808,7 @@ sealed class LocalDiskStore :
                         throw new StorageException($"Manifest SST '{file.Name}' is missing.");
                     }
 
-                    var remoteReader = OpenAsyncSstReaderAsync(file, CancellationToken.None)
+                    var remoteReader = OpenUncachedAsyncSstReaderAsync(file, CancellationToken.None)
                         .AsTask().GetAwaiter().GetResult();
                     remoteReader.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }

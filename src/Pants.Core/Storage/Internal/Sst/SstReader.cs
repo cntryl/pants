@@ -31,6 +31,36 @@ sealed class SstReader : IDisposable
     public int DataBlockCount => _index.Length;
 
     /// <summary>
+    ///     Approximate heap bytes of the parsed index, blooms, trie and range tombstones, which is
+    ///     what a cached reader costs beyond its file handle.
+    /// </summary>
+    public long EstimatedMetadataBytes
+    {
+        get
+        {
+            const int fixedOverhead = 512;
+            const int perIndexEntryOverhead = 56;
+            long bytes = fixedOverhead + (_blockBlooms?.Length ?? 0);
+            foreach (var (firstKey, _) in _index)
+            {
+                bytes += firstKey.Length + perIndexEntryOverhead;
+            }
+
+            if (_trieIndex is not null)
+            {
+                bytes += (long)_index.Length * 32;
+            }
+
+            foreach (var tombstone in RangeTombstones)
+            {
+                bytes += tombstone.Start.Length + tombstone.End.Length + 48;
+            }
+
+            return bytes;
+        }
+    }
+
+    /// <summary>
     ///     The SST's range tombstones. Loaded eagerly by <see cref="Open" /> since a file's
     ///     tombstone set is small and bounded, unlike its data blocks.
     /// </summary>

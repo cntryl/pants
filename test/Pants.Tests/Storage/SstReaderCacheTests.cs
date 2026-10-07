@@ -56,55 +56,32 @@ public sealed class SstReaderCacheTests
     }
 
     [Fact]
-    public async Task ShouldDisposeEveryLosingReaderFromConcurrentFirstCreation()
+    public async Task ShouldOpenOnceWhenCallersFirstOpenTheSameSstConcurrently()
     {
         const int callerCount = 8;
         using var directory = new TemporaryDirectory();
         var (path, _) = CreateSst(directory.Path);
-        var createdReaders = new ConcurrentBag<SstReader>();
-        using var allOpening = new CountdownEvent(callerCount);
+        var opens = 0;
+        using var openStarted = new ManualResetEventSlim();
         using var releaseOpening = new ManualResetEventSlim();
         using var cache = new SstReaderCache(openPath =>
         {
-            var reader = SstReader.Open(openPath);
-            createdReaders.Add(reader);
-            allOpening.Signal();
+            Interlocked.Increment(ref opens);
+            openStarted.Set();
             Assert.True(releaseOpening.Wait(AssertionTimeout));
-            return reader;
+            return SstReader.Open(openPath);
         });
-        using var start = new ManualResetEventSlim();
         var acquisitions = Enumerable.Range(0, callerCount)
-            .Select(callerIndex => Task.Factory.StartNew(
-                () =>
-                {
-                    Assert.True(start.Wait(AssertionTimeout));
-                    return cache.GetOrAdd("reader.sst", path, out _);
-                },
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default))
+            .Select(callerIndex => Task.Run(() => cache.GetOrAdd("reader.sst", path, out _)))
             .ToArray();
 
-        start.Set();
-        try
-        {
-            Assert.True(allOpening.Wait(AssertionTimeout));
-        }
-        finally
-        {
-            releaseOpening.Set();
-        }
-
+        Assert.True(openStarted.Wait(AssertionTimeout));
+        releaseOpening.Set();
         var leases = await Task.WhenAll(acquisitions).WaitAsync(AssertionTimeout);
         try
         {
-            var winner = leases[0].Reader;
-            Assert.All(leases, lease => Assert.Same(winner, lease.Reader));
-            Assert.Equal(callerCount, createdReaders.Count);
-            Assert.All(createdReaders.Where(reader => !ReferenceEquals(reader, winner)),
-                static reader => Assert.True(reader.IsDisposed));
-            Assert.False(winner.IsDisposed);
-            Assert.Equal(["reader.sst"], cache.SnapshotFiles());
+            Assert.Equal(1, Volatile.Read(ref opens));
+            Assert.All(leases, lease => Assert.Same(leases[0].Reader, lease.Reader));
         }
         finally
         {
@@ -113,6 +90,90 @@ public sealed class SstReaderCacheTests
                 lease.Dispose();
             }
         }
+    }
+
+    [Fact]
+    public async Task ShouldOpenUnrelatedSstWhileAnotherOpenIsBlocked()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        using var blockedStarted = new ManualResetEventSlim();
+        using var releaseBlocked = new ManualResetEventSlim();
+        using var cache = new SstReaderCache(openPath =>
+        {
+            if (openPath.EndsWith("slow.sst", StringComparison.Ordinal))
+            {
+                blockedStarted.Set();
+                Assert.True(releaseBlocked.Wait(AssertionTimeout));
+            }
+
+            return SstReader.Open(path);
+        });
+        var blocked = Task.Run(() => cache.GetOrAdd("slow.sst", "slow.sst", out _));
+        Assert.True(blockedStarted.Wait(AssertionTimeout));
+
+        using var unrelated = await Task.Run(() => cache.GetOrAdd("cold.sst", "cold.sst", out _))
+            .WaitAsync(AssertionTimeout);
+
+        releaseBlocked.Set();
+        using var slow = await blocked.WaitAsync(AssertionTimeout);
+        Assert.NotSame(slow.Reader, unrelated.Reader);
+    }
+
+    [Fact]
+    public void ShouldAllowRetryWhenTheOwningOpenFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        var attempts = 0;
+        using var cache = new SstReaderCache(openPath =>
+            Interlocked.Increment(ref attempts) == 1
+                ? throw new IOException("injected")
+                : SstReader.Open(openPath));
+
+        Assert.Throws<IOException>(() => cache.GetOrAdd("reader.sst", path, out _));
+        using var lease = cache.GetOrAdd("reader.sst", path, out var hit);
+
+        Assert.False(hit);
+        Assert.False(lease.Reader.IsDisposed);
+    }
+
+    [Fact]
+    public void ShouldEvictLeastRecentlyUsedIdleReadersWhenOverBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        long readerBytes;
+        using (var probe = SstReader.Open(path))
+        {
+            readerBytes = probe.EstimatedMetadataBytes;
+        }
+
+        using var cache = new SstReaderCache(readerBytes * 3, SstReader.Open);
+        for (var index = 0; index < 100; index++)
+        {
+            using var lease = cache.GetOrAdd($"reader-{index}.sst", path, out _);
+        }
+
+        Assert.True(cache.SnapshotFiles().Count <= 3);
+        Assert.Contains("reader-99.sst", cache.SnapshotFiles());
+        Assert.DoesNotContain("reader-0.sst", cache.SnapshotFiles());
+    }
+
+    [Fact]
+    public void ShouldNeverEvictAReaderThatIsStillLeased()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        using var cache = new SstReaderCache(1, SstReader.Open);
+        using var held = cache.GetOrAdd("held.sst", path, out _);
+        using (cache.GetOrAdd("other.sst", path, out _))
+        {
+        }
+
+        Assert.False(held.Reader.IsDisposed);
+        Assert.Contains("held.sst", cache.SnapshotFiles());
+        Assert.DoesNotContain("other.sst", cache.SnapshotFiles());
     }
 
     [Fact]
