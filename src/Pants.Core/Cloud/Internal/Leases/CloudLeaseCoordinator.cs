@@ -96,7 +96,15 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
-    public async ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken)
+    public ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken) =>
+        AcquireAsync(0, cancellationToken);
+
+    /// <summary>
+    ///     Acquires the lease at an epoch strictly above both the stored lease and
+    ///     <paramref name="minimumEpoch" />, so a deleted or reset lease object can never hand out
+    ///     an epoch the catalog or WAL already used.
+    /// </summary>
+    public async ValueTask<ulong> AcquireAsync(ulong minimumEpoch, CancellationToken cancellationToken)
     {
         await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -114,9 +122,15 @@ sealed class CloudLeaseCoordinator : IDisposable
                 .ConfigureAwait(false);
             ulong nextEpoch;
             bool acquired;
+            if (minimumEpoch == ulong.MaxValue)
+            {
+                throw new PantsLeaseEpochExhaustedException(
+                    "The cloud primary lease epoch is exhausted.");
+            }
+
             if (current is null)
             {
-                nextEpoch = 1;
+                nextEpoch = Math.Max(1, checked(minimumEpoch + 1));
                 acquired = await _store.TryCreateAsync(
                     new CloudLeaseRecord(
                         _holderId,
@@ -142,7 +156,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                         "The cloud primary lease epoch is exhausted.");
                 }
 
-                nextEpoch = checked(current.Lease.Epoch + 1);
+                nextEpoch = Math.Max(checked(current.Lease.Epoch + 1), checked(minimumEpoch + 1));
                 acquired = await _store.TryReplaceAsync(
                     current.Version,
                     new CloudLeaseRecord(

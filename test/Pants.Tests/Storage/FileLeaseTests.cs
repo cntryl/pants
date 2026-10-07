@@ -159,6 +159,41 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
+    public async Task LocalOpenGrantsEpochAboveWalWriterEpochWhenLeaderRecordIsMissing()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var seed = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+        }
+
+        var wal = WalCodec.EncodeRecord(new WalRecord(
+            0,
+            WalOperation.Put,
+            "key"u8.ToArray(),
+            "value"u8.ToArray(),
+            7,
+            null,
+            null,
+            null,
+            9));
+        using (var frame = new MemoryStream())
+        {
+            DiskFormat.WriteUInt32(frame, checked((uint)wal.Length));
+            DiskFormat.WriteUInt32(frame, DiskFormat.Crc32C(wal));
+            frame.Write(wal);
+            await File.WriteAllBytesAsync(
+                Path.Combine(directory.Path, "wal", "wal.log"),
+                frame.ToArray());
+        }
+
+        File.Delete(Path.Combine(directory.Path, ".midge_leader"));
+
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+
+        Assert.True(await ReadLeaseEpochAsync(directory.Path) > 9UL);
+    }
+
+    [Fact]
     public async Task LocalOpenDefaultMinimumEpochLeavesBehaviorUnchanged()
     {
         using var directory = new TemporaryDirectory();

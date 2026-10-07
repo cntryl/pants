@@ -1732,6 +1732,9 @@ sealed class LocalDiskStore :
                     exception);
             }
 
+            // lease.md section 4 step 4: the floor must cover every epoch the WAL already holds, so
+            // a lost or reset leader record can never grant an epoch a recovered write predates.
+            minimumWriterEpoch = Math.Max(minimumWriterEpoch, ScanMaximumWriterEpoch(root));
             using (startupPhases.Measure(StartupPhase.Lease))
             {
                 lease = FileLease.Acquire(
@@ -2018,6 +2021,46 @@ sealed class LocalDiskStore :
         {
             state.Health = PantsEngineHealth.Degraded;
         }
+    }
+
+    /// <summary>
+    ///     The highest writer epoch recorded in any WAL file. A damaged file is not this scan's
+    ///     concern: recovery classifies it, so whatever readable prefix it has still counts.
+    /// </summary>
+    static ulong ScanMaximumWriterEpoch(string root)
+    {
+        var walDirectory = Path.Combine(root, "wal");
+        if (!Directory.Exists(walDirectory))
+        {
+            return 0;
+        }
+
+        var maximum = 0UL;
+        foreach (var path in Directory.EnumerateFiles(walDirectory)
+                     .Where(static path =>
+                         Path.GetFileName(path) == "wal.log" ||
+                         path.EndsWith(".wal", StringComparison.Ordinal) ||
+                         LegacyWalSegmentFileNameRegex.IsMatch(Path.GetFileName(path))))
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                WalFrameReader.Visit(
+                    stream,
+                    (record, frameBytes) => maximum = Math.Max(maximum, record.WriterEpoch),
+                    WalTailPolicy.AllowIncompleteFinalTail);
+            }
+            catch (Exception exception) when (exception is PantsException or IOException)
+            {
+                // Recovery reports the damage; the epochs read before it still count.
+            }
+        }
+
+        return maximum;
     }
 
     static void AdvanceNextWalSequencePastSealedSegments(

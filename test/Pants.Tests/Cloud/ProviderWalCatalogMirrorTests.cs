@@ -106,6 +106,22 @@ public sealed class ProviderWalCatalogMirrorTests
     }
 
     [Fact]
+    public async Task ShouldReportCatalogEpochAsTheLeaseFloorAndZeroForAFreshBucket()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new CountingCloudObjectStore();
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { });
+        Assert.Equal(0UL, await catalog.ReadFencingEpochAsync(CancellationToken.None));
+
+        await PublishAsync(cache.Path, walStore);
+
+        Assert.True(await catalog.ReadFencingEpochAsync(CancellationToken.None) >= 1UL);
+    }
+
+    [Fact]
     public async Task ShouldOpenFreshBucketWithNeitherCatalogNorWalObjects()
     {
         using var cache = new TemporaryDirectory();

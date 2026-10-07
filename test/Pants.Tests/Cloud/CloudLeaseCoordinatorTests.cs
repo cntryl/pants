@@ -36,6 +36,49 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
+    public async Task ShouldAcquireAboveTheFloorWhenTheLeaseObjectWasDeleted()
+    {
+        var store = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1));
+
+        var epoch = await lease.AcquireAsync(9, CancellationToken.None);
+
+        Assert.Equal(10UL, epoch);
+        Assert.Equal(10UL, store.Lease?.Epoch);
+    }
+
+    [Fact]
+    public async Task ShouldAcquireAboveTheFloorWhenItExceedsTheStoredLeaseEpoch()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using (var first = new CloudLeaseCoordinator(
+                   store,
+                   clock,
+                   "first",
+                   TimeSpan.FromSeconds(10),
+                   TimeSpan.FromSeconds(1)))
+        {
+            Assert.Equal(1UL, await first.AcquireAsync(CancellationToken.None));
+        }
+
+        clock.UtcNow += TimeSpan.FromMinutes(1);
+        using var second = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "second",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1));
+
+        Assert.Equal(21UL, await second.AcquireAsync(20, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ShouldFenceLeaseGivenWallClockStepsBackwardWhileElapsedTimeAdvances()
     {
         var store = new TestCloudLeaseStore();
