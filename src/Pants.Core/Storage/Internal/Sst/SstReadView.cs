@@ -64,6 +64,29 @@ sealed class SstReadView
         return family.SelectPointCandidates(key, ref filesExamined);
     }
 
+    /// <summary>
+    ///     Files whose key range overlaps <c>[startInclusive, endExclusive)</c>, where a null bound
+    ///     is unbounded. Order is unspecified; a merge decides priority by sequence.
+    /// </summary>
+    /// <param name="filesExamined">
+    ///     Key comparisons against file bounds, exposed so the work bound can be asserted: a
+    ///     searchable level costs a binary search plus the files it returns, not its file count.
+    /// </param>
+    public IReadOnlyList<FileMeta> SelectRangeCandidates(
+        uint columnFamilyId,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        out int filesExamined)
+    {
+        filesExamined = 0;
+        if (!_families.TryGetValue(columnFamilyId, out var family))
+        {
+            return [];
+        }
+
+        return family.SelectRangeCandidates(startInclusive, endExclusive, ref filesExamined);
+    }
+
     /// <summary>One level's files for one column family.</summary>
     sealed class LevelView
     {
@@ -145,6 +168,63 @@ sealed class SstReadView
             }
         }
 
+        public void AddRangeCandidates(
+            byte[]? startInclusive,
+            byte[]? endExclusive,
+            List<FileMeta> candidates,
+            ref int filesExamined)
+        {
+            foreach (var file in _fallback)
+            {
+                filesExamined++;
+                candidates.Add(file);
+            }
+
+            if (!Searchable)
+            {
+                foreach (var indexed in _files)
+                {
+                    filesExamined++;
+                    if (indexed.Overlaps(startInclusive, endExclusive))
+                    {
+                        candidates.Add(indexed.File);
+                    }
+                }
+
+                return;
+            }
+
+            // Non-overlapping and sorted, so largest keys ascend too: find the first file that
+            // can reach the start, then take files until one begins at or past the end.
+            var low = 0;
+            var high = _files.Length;
+            while (startInclusive is not null && low < high)
+            {
+                var middle = low + ((high - low) / 2);
+                filesExamined++;
+                if (_files[middle].LargestKey.AsSpan().SequenceCompareTo(startInclusive) < 0)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            for (var index = startInclusive is null ? 0 : low; index < _files.Length; index++)
+            {
+                filesExamined++;
+                if (endExclusive is not null &&
+                    _files[index].SmallestKey.AsSpan().SequenceCompareTo(endExclusive) >= 0)
+                {
+                    return;
+                }
+
+                candidates.Add(_files[index].File);
+            }
+        }
+
         static bool IsNonOverlapping(IndexedFile[] files)
         {
             for (var index = 1; index < files.Length; index++)
@@ -188,6 +268,20 @@ sealed class SstReadView
             return new FamilyView(levels);
         }
 
+        public List<FileMeta> SelectRangeCandidates(
+            byte[]? startInclusive,
+            byte[]? endExclusive,
+            ref int filesExamined)
+        {
+            var candidates = new List<FileMeta>();
+            foreach (var level in _levels)
+            {
+                level.AddRangeCandidates(startInclusive, endExclusive, candidates, ref filesExamined);
+            }
+
+            return candidates;
+        }
+
         public List<FileMeta> SelectPointCandidates(
             ReadOnlySpan<byte> key,
             ref int filesExamined)
@@ -223,6 +317,10 @@ sealed class SstReadView
             file,
             LocalDiskStore.GetMetadataKey(file.SmallestKey!),
             LocalDiskStore.GetMetadataKey(file.LargestKey!));
+
+        public bool Overlaps(byte[]? startInclusive, byte[]? endExclusive) =>
+            (endExclusive is null || SmallestKey.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
+            (startInclusive is null || LargestKey.AsSpan().SequenceCompareTo(startInclusive) >= 0);
 
         public bool Contains(ReadOnlySpan<byte> key) =>
             key.SequenceCompareTo(SmallestKey) >= 0 &&

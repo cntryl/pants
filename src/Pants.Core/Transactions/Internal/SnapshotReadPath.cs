@@ -44,6 +44,11 @@ static class SnapshotReadPath
         byte[]? endExclusive)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.ReadView is { } index)
+        {
+            return index.SelectRangeCandidates(family.Id, startInclusive, endExclusive, out _);
+        }
+
         return snapshot.GetVisibleFiles(family.Id)
             .Where(file => Overlaps(file, startInclusive, endExclusive))
             .ToArray();
