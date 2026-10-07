@@ -1121,7 +1121,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
-    public async Task ShouldRetryShutdownWalDurabilityBoundaryAfterFailure()
+    public async Task ShouldReplayShutdownWalDurabilityBoundaryFailureWithoutRetrying()
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new RetryingShutdownBoundaryFailpointHandler();
@@ -1142,16 +1142,10 @@ public sealed class PantsBackgroundFlushPipelineTests
         Assert.Equal(PantsErrorCode.Io, firstFailure.Code);
         Assert.Equal(1, failpoint.HitCount);
 
-        await database.ShutdownAsync(AssertionTimeout);
-        Assert.Equal(2, failpoint.HitCount);
-
-        await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.Transactions.BeginAsync(
-            reopened.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-        Assert.Equal(
-            "value",
-            TestBytes.ToText((await read.GetAsync("buffered-shutdown"u8.ToArray()))!.Value));
+        var replayed = await Assert.ThrowsAsync<PantsIOException>(() =>
+            database.ShutdownAsync(AssertionTimeout).AsTask());
+        Assert.Same(firstFailure, replayed);
+        Assert.Equal(1, failpoint.HitCount);
     }
 
     [Fact]
