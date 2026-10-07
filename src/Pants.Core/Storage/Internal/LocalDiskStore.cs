@@ -3353,8 +3353,7 @@ sealed class LocalDiskStore :
                 // CompactionMerger + CompactionOutputPartitioner (see StreamingCompactionMerger).
                 using var compactionStreams = CompactionStreams.Create(
                     plan,
-                    input => Path.Combine(_sstDirectory, input.Name),
-                    SstReader.Open,
+                    input => OpenCompactionFile(input, compactionBudget),
                     _compaction.MaximumInputFiles,
                     compactionBudget);
                 var outputs = new List<FileMeta>();
@@ -3538,6 +3537,37 @@ sealed class LocalDiskStore :
         _readerCache.RemoveFile(name);
         _asyncReaderCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
+    }
+
+    /// <summary>
+    ///     Opens a compaction input from local disk, or through bounded remote ranges when the SST
+    ///     is cloud-only, so a cold input is never hydrated just to be merged.
+    /// </summary>
+    ICompactionFileCursor OpenCompactionFile(FileMeta input, ResourceBudget? budget)
+    {
+        var path = Path.Combine(_sstDirectory, ValidateSstName(input.Name));
+        if (File.Exists(path))
+        {
+            try
+            {
+                return new LocalFileCursor(SstReader.Open(path), budget);
+            }
+            catch (Exception exception) when (
+                _remoteSstSourceFactory is not null &&
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // A verified cache eviction won the race; the remote copy is still authoritative.
+            }
+        }
+
+        if (_remoteSstSourceFactory is null)
+        {
+            throw new PantsRecoveryFailedException($"Manifest-owned SST '{input.Name}' is missing.");
+        }
+
+        var reader = OpenAsyncSstReaderAsync(input, CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        return new RemoteFileCursor(reader, budget);
     }
 
     static string CreateSstFileName(uint familyId, uint level, ulong sequence) =>
