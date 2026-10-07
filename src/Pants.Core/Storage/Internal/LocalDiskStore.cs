@@ -38,6 +38,7 @@ sealed class LocalDiskStore :
     readonly FileLease _lease;
     readonly FileStream _lockStream;
     IDisposable? _rootTrust;
+    bool _localWalPruningEnabled = true;
     readonly ManifestState _manifest;
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
@@ -2898,6 +2899,92 @@ sealed class LocalDiskStore :
 
         FlushOperations(familyOperations, null);
         _unflushedCommitSequence = checked(_mutableOperations.LastSequence + 1);
+        PruneCoveredWalSegments();
+    }
+
+    /// <summary>
+    ///     Cloud mode retires WAL segments through remote acknowledgement instead, so the runtime
+    ///     turns local pruning off there.
+    /// </summary>
+    public void DisableLocalWalPruning() => _localWalPruningEnabled = false;
+
+    void PruneCoveredWalSegments()
+    {
+        if (!_localWalPruningEnabled)
+        {
+            return;
+        }
+
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalFenced();
+            _lease.EnsureValid();
+            _ = SealActiveWalCore(false, null, null);
+            Dictionary<uint, ulong> persistedFamilySequences;
+            HashSet<uint> activeFamilyIds;
+            lock (_manifestGate)
+            {
+                persistedFamilySequences = _manifest.Files
+                    .Where(static file => file.LargestSequence.HasValue)
+                    .GroupBy(static file => file.ColumnFamilyId)
+                    .ToDictionary(
+                        static group => group.Key,
+                        static group => group.Max(file => file.LargestSequence!.Value));
+                activeFamilyIds = _familyIds.Values.ToHashSet();
+            }
+
+            var segments = EnumerateSealedWalSegmentPaths(_walDirectory)
+                .Where(static path => TryParseSealedWalSegmentId(Path.GetFileName(path), out _))
+                .OrderBy(static path =>
+                {
+                    _ = TryParseSealedWalSegmentId(Path.GetFileName(path), out var id);
+                    return id;
+                })
+                .ToArray();
+            var results = new List<WalSegmentCoverageResult>(segments.Length);
+            var scratchDirectory = Path.Combine(RootPath, "recovery");
+            try
+            {
+                foreach (var segment in segments)
+                {
+                    results.Add(WalSegmentCoverage.Evaluate(
+                        File.ReadAllBytes(segment),
+                        persistedFamilySequences,
+                        activeFamilyIds,
+                        scratchDirectory));
+                }
+            }
+            catch (PantsException)
+            {
+                // A segment recovery cannot decode is for recovery to judge; keep everything.
+                return;
+            }
+
+            var prunable = WalSegmentCoverage.SelectPrunable(results);
+            var deleted = false;
+            try
+            {
+                for (var index = 0; index < segments.Length; index++)
+                {
+                    if (prunable[index])
+                    {
+                        File.Delete(segments[index]);
+                        deleted = true;
+                    }
+                }
+            }
+            catch
+            {
+                Volatile.Write(ref _walDirectoryPersistenceAnomaly, true);
+                throw;
+            }
+
+            if (deleted)
+            {
+                SyncWalDirectoryAfterPrune();
+            }
+        }
     }
 
     void CompleteFrozenFlush(FrozenMemtableFlush frozen)
@@ -2926,9 +3013,12 @@ sealed class LocalDiskStore :
             {
                 _lease.EnsureValid();
                 RotateWal();
+                _frozenFlushIds.Remove(frozen.Id);
+                return;
             }
 
             _frozenFlushIds.Remove(frozen.Id);
+            PruneCoveredWalSegments();
         }
     }
 

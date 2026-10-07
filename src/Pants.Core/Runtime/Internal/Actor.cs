@@ -142,6 +142,11 @@ sealed class Actor : IAsyncDisposable
         _state = state;
         _cloudMode = cloudMode;
         _diskStore = diskStore;
+        if (cloudMode)
+        {
+            diskStore?.DisableLocalWalPruning();
+        }
+
         _cloudPersistence = cloudPersistence;
         _cloudCompactionOutputPublisher = cloudCompactionOutputPublisher;
         _cloudDdlCoordinator = cloudDdlCoordinator;
