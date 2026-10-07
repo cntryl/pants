@@ -40,7 +40,7 @@ sealed class CloudDdlCoordinator
         await _authority.FenceDdlRegistryAsync(
             FromLocalManifest(),
             cancellationToken).ConfigureAwait(false);
-        await ReconcilePreparedAsync(state, cancellationToken).ConfigureAwait(false);
+        await ReconcilePreparedAsync(state, cancellationToken, true).ConfigureAwait(false);
         var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
         if (remote is null)
         {
@@ -86,6 +86,7 @@ sealed class CloudDdlCoordinator
     {
         CloudDdlEdit.Validate(edit);
         await ReconcilePreparedAsync(state, cancellationToken).ConfigureAwait(false);
+        EnsureAuthorityResolved();
         if (_diskStore.IsColumnFamilyEditApplied(edit))
         {
             _diskStore.ApplyColumnFamilyEditVisibility(state, edit);
@@ -112,15 +113,24 @@ sealed class CloudDdlCoordinator
             Edit = edit.Clone()
         });
 
+        var submitted = false;
         try
         {
             _failpoints.Hit(Failpoint.BeforeDdlRemoteCas);
+            // Record that the CAS may land before submitting it, so a crash or a lost response
+            // cannot be mistaken for an aborted DDL.
+            prepare.RemoteCasAmbiguous = true;
+            WritePrepare(prepare);
+            submitted = true;
+            _failpoints.Hit(Failpoint.AfterDdlAmbiguousPrepare);
             var published = await _authority.CompareExchangeDdlRegistryAsync(
                 registry,
                 remote?.Version,
                 cancellationToken).ConfigureAwait(false);
             if (!published)
             {
+                // A rejected conditional write is a definite answer: it did not commit.
+                submitted = false;
                 throw new PantsFencedException(
                     "Cloud DDL registry publication lost its authority race.");
             }
@@ -152,6 +162,20 @@ sealed class CloudDdlCoordinator
                     new AggregateException(publicationError, readbackError));
             }
 
+            if (submitted)
+            {
+                // The CAS was sent and its outcome is unknown; absence now does not prove abort
+                // because the store may still apply it. Fence and keep the marker.
+                _authorityAmbiguous = true;
+                MarkPersistenceAnomaly(state);
+                throw new PantsFencedException(
+                    "Cloud DDL registry publication has an unknown outcome and may still commit.",
+                    publicationError);
+            }
+
+            // Proven not committed (never submitted, or definitively rejected).
+            prepare.RemoteCasAmbiguous = false;
+            TryWritePrepare(prepare);
             throw;
         }
 
@@ -171,7 +195,8 @@ sealed class CloudDdlCoordinator
 
     async ValueTask ReconcilePreparedAsync(
         RuntimeState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redriveAmbiguous = false)
     {
         var prepare = ReadPrepare();
         if (prepare is null)
@@ -217,6 +242,77 @@ sealed class CloudDdlCoordinator
                 "A local cloud DDL commit is absent from the remote registry.");
         }
 
+        if (prepare.RemoteCasAmbiguous)
+        {
+            if (!redriveAmbiguous)
+            {
+                // In process the submitted CAS may still land; keep fencing until it is resolved.
+                _authorityAmbiguous = true;
+                return;
+            }
+
+            await RedriveAmbiguousPrepareAsync(state, prepare, remote, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        ClearPrepare();
+        _authorityAmbiguous = false;
+    }
+
+    /// <summary>
+    ///     Re-submits an ambiguous DDL once at startup against the epoch it was prepared at. The same
+    ///     operation ID makes a duplicate harmless; a registry that has since advanced means the
+    ///     DDL's fate can no longer be decided here, so open fails rather than silently aborting.
+    /// </summary>
+    async ValueTask RedriveAmbiguousPrepareAsync(
+        RuntimeState state,
+        CloudDdlPrepare prepare,
+        CloudDdlRegistryObject remote,
+        CancellationToken cancellationToken)
+    {
+        if (remote.Registry.Epoch != prepare.ExpectedRemoteEpoch)
+        {
+            throw new PantsFencedException(
+                "A cloud DDL with an unknown outcome was prepared against registry epoch " +
+                $"{prepare.ExpectedRemoteEpoch}, but the registry is now at epoch " +
+                $"{remote.Registry.Epoch}.");
+        }
+
+        var registry = remote.Registry.Clone();
+        CloudDdlEdit.Apply(registry.ColumnFamilies, prepare.Edit);
+        registry.Epoch = registry.Epoch == ulong.MaxValue
+            ? ulong.MaxValue
+            : registry.Epoch + 1;
+        registry.Operations.Add(new CloudDdlOperation
+        {
+            OperationId = prepare.OperationId,
+            Edit = prepare.Edit.Clone()
+        });
+        if (!await _authority.CompareExchangeDdlRegistryAsync(
+                registry,
+                remote.Version,
+                cancellationToken).ConfigureAwait(false))
+        {
+            var current = await _authority.ReadDdlRegistryAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (current?.Registry.Operations.Any(operation =>
+                    StringComparer.Ordinal.Equals(operation.OperationId, prepare.OperationId)) != true)
+            {
+                throw new PantsFencedException(
+                    "Redriving a cloud DDL with an unknown outcome lost its authority race.");
+            }
+        }
+
+        if (!_diskStore.IsColumnFamilyEditApplied(prepare.Edit))
+        {
+            _diskStore.CommitColumnFamilyEdit(state, prepare.Edit);
+        }
+        else
+        {
+            _diskStore.ApplyColumnFamilyEditVisibility(state, prepare.Edit);
+        }
+
         ClearPrepare();
         _authorityAmbiguous = false;
     }
@@ -260,6 +356,22 @@ sealed class CloudDdlCoordinator
         _failpoints.Hit(Failpoint.BeforeDdlPrepare);
         AtomicStagedFile.Write(_preparePath, CloudDdlJson.SerializePrepare(prepare));
         _failpoints.Hit(Failpoint.AfterDdlPrepare);
+    }
+
+    void TryWritePrepare(CloudDdlPrepare prepare)
+    {
+        try
+        {
+            AtomicStagedFile.Write(_preparePath, CloudDdlJson.SerializePrepare(prepare));
+        }
+        catch (IOException)
+        {
+            // The marker stays set; startup reconciliation resolves it conservatively.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The marker stays set; startup reconciliation resolves it conservatively.
+        }
     }
 
     void TryClearPrepare()
