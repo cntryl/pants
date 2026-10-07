@@ -42,7 +42,7 @@ public sealed class PantsStreamingScanHardeningTests
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
         var emitted = 0;
-        StorageException? first = null;
+        PantsCorruptionException? first = null;
         while (first is null)
         {
             try
@@ -54,7 +54,7 @@ public sealed class PantsStreamingScanHardeningTests
 
                 emitted++;
             }
-            catch (StorageException exception)
+            catch (PantsCorruptionException exception)
             {
                 first = exception;
             }
@@ -62,7 +62,7 @@ public sealed class PantsStreamingScanHardeningTests
 
         Assert.True(emitted > 0);
         Assert.NotNull(first);
-        var second = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
+        var second = await Assert.ThrowsAsync<PantsCorruptionException>(() => enumerator.MoveNextAsync().AsTask());
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);
     }

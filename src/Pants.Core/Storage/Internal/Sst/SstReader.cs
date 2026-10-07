@@ -81,7 +81,7 @@ sealed class SstReader : IDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST block index is invalid.");
+            throw new PantsCorruptionException("SST block index is invalid.");
         }
 
         return _index[blockIndex].FirstKey.ToArray();
@@ -92,7 +92,7 @@ sealed class SstReader : IDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST block index is invalid.");
+            throw new PantsCorruptionException("SST block index is invalid.");
         }
 
         return _index[blockIndex].Handle;
@@ -220,7 +220,7 @@ sealed class SstReader : IDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST point-read block index is invalid.");
+            throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
 
         return SstCodec.ReadBlock(_file, _fileLength, _index[blockIndex].Handle);

@@ -124,7 +124,7 @@ sealed class AsyncSstReader : IAsyncDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST block index is invalid.");
+            throw new PantsCorruptionException("SST block index is invalid.");
         }
 
         return _index[blockIndex].FirstKey.ToArray();
@@ -243,7 +243,7 @@ sealed class AsyncSstReader : IAsyncDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST point-read block index is invalid.");
+            throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
 
         return await ReadBlockAsync(
@@ -265,7 +265,7 @@ sealed class AsyncSstReader : IAsyncDisposable
             handle.Size > int.MaxValue ||
             handle.Size > (ulong)fileLength - handle.Offset)
         {
-            throw new StorageException("SST block handle is outside the file.");
+            throw new PantsCorruptionException("SST block handle is outside the file.");
         }
 
         var encoded = await source.ReadExactlyAsync(
