@@ -40,6 +40,45 @@ public sealed class PantsCloudWalPruningTests
     }
 
     [Fact]
+    public async Task ShouldRetireWalWithoutReadingUnrelatedSsts()
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(cloudHttpClient: client));
+        for (var index = 0; index < 4; index++)
+        {
+            await CommitValueAsync(
+                database,
+                database.ColumnFamilies.DefaultFamily,
+                System.Text.Encoding.UTF8.GetBytes($"earlier-{index}"),
+                PantsWriteOptions.CloudStrict);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        handler.ResetSstReadMetrics();
+        var storedBefore = handler.SstStoredBytes;
+        await CommitValueAsync(
+            database,
+            database.ColumnFamilies.DefaultFamily,
+            "latest"u8.ToArray(),
+            PantsWriteOptions.CloudStrict);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+
+        var newSstBytes = handler.SstStoredBytes - storedBefore;
+        Assert.False(handler.ContainsObjectPath("/wal/epochs/"));
+        Assert.Equal(0, handler.SstFullReads);
+        Assert.True(
+            handler.SstRangeBytes <= newSstBytes,
+            $"Pruning read {handler.SstRangeBytes} SST bytes; only the {newSstBytes}-byte new " +
+            "output should have been read.");
+    }
+
+    [Fact]
     public async Task ShouldPreserveProviderWalWhenUnflushedColumnFamilyStillDependsOnItGivenPartialGc()
     {
         using var cache = new TemporaryDirectory();
