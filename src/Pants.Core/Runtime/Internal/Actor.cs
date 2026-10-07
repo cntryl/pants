@@ -4359,9 +4359,11 @@ sealed class Actor : IAsyncDisposable
         try
         {
             await MirrorCloudStorageCoreAsync(cancellationToken).ConfigureAwait(false);
-            if (_hybridCache is not null &&
-                _diskStore is not null &&
-                _cloudPersistence is { HasPersistenceAnomaly: false } persistence)
+            // Eviction depends only on each SST's own verified remote copy (checked per eviction),
+            // never on unrelated residue such as a failed retired-WAL delete or an unparseable
+            // garbage-collection key. Gating on the sticky anomaly flag turned that benign residue
+            // into a permanent write outage once the cache filled.
+            if (_hybridCache is not null && _diskStore is not null)
             {
                 await _hybridCache.EvictIfNeededAsync(
                         _diskStore,
