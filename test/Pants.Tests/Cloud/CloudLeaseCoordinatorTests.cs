@@ -296,19 +296,118 @@ public sealed class CloudLeaseCoordinatorTests
     [InlineData("")]
     [InlineData("epoch: 1\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\n")]
     [InlineData(
-        "epoch: 0\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
-    [InlineData(
         "epoch: nope\nholder_id: holder\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
     [InlineData(
-        "epoch: 1\nholder_id: holder\nholder_id: duplicate\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
-    public async Task ShouldRejectMalformedCloudLeaseDocument(string document)
+        "epoch: 1\nowner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: 2026-08-21T12:00:30.0000000Z\n")]
+    public async Task ShouldClassifyMalformedCloudLeaseDocumentAsIndeterminate(string document)
     {
         var objects = new TestCloudObjectStore();
         objects.Seed(PantsCloudObjectLayout.LeaseObjectKey, Encoding.UTF8.GetBytes(document));
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
             store.ReadAsync(CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ShouldKeepLastValueForDuplicateFieldsAndIgnoreUnknownLines()
+    {
+        var objects = new TestCloudObjectStore();
+        objects.Seed(
+            PantsCloudObjectLayout.LeaseObjectKey,
+            Encoding.UTF8.GetBytes(
+                "epoch: 1\nholder_id: old\nholder_id: holder\nfuture_field: whatever\nnot a field line\n" +
+                "owner_token: token\nacquired_at: 2026-08-21T12:00:00.0000000Z\n" +
+                "expires_at: 2026-08-21T12:00:30.0000000Z\n"));
+        var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
+
+        var snapshot = await store.ReadAsync(CancellationToken.None);
+
+        Assert.Equal("holder", snapshot!.Lease.HolderId);
+        Assert.Equal(1UL, snapshot.Lease.Epoch);
+    }
+
+    [Fact]
+    public async Task ShouldAcceptLegacyDocumentWithoutEpochOrOwnerToken()
+    {
+        var objects = new TestCloudObjectStore();
+        objects.Seed(
+            PantsCloudObjectLayout.LeaseObjectKey,
+            Encoding.UTF8.GetBytes(
+                "holder_id: legacy\nacquired_at: 2026-08-21T12:00:00.0000000Z\n" +
+                "expires_at: 2026-08-21T12:00:30.0000000Z\n"));
+        var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
+
+        var snapshot = await store.ReadAsync(CancellationToken.None);
+
+        Assert.Equal(0UL, snapshot!.Lease.Epoch);
+        Assert.Equal(string.Empty, snapshot.Lease.OwnerToken);
+    }
+
+    [Fact]
+    public async Task ShouldRespectActiveLegacyLeaseAndTakeItOverAfterExpiry()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        store.Seed(new CloudLeaseRecord(
+            "legacy",
+            0,
+            string.Empty,
+            clock.UtcNow,
+            clock.UtcNow + TimeSpan.FromSeconds(10)));
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+
+        await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
+            lease.AcquireAsync(CancellationToken.None).AsTask());
+        clock.UtcNow += TimeSpan.FromSeconds(11);
+
+        Assert.Equal(1UL, await lease.AcquireAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ShouldRefuseTakeoverGivenMalformedExpiryAsIndeterminate()
+    {
+        var objects = new TestCloudObjectStore();
+        objects.Seed(
+            PantsCloudObjectLayout.LeaseObjectKey,
+            Encoding.UTF8.GetBytes(
+                "epoch: 4\nholder_id: other\nowner_token: token\n" +
+                "acquired_at: 2026-08-21T12:00:00.0000000Z\nexpires_at: not-a-time\n"));
+        using var lease = new CloudLeaseCoordinator(
+            new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey),
+            new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(3650)),
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            lease.AcquireAsync(CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task ShouldRepairMalformedExpiryWhenTheCurrentOwnerRenews()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        await lease.AcquireAsync(CancellationToken.None);
+        store.Seed(Assert.IsType<CloudLeaseRecord>(store.Lease) with { ExpiryMalformed = true });
+        clock.UtcNow += TimeSpan.FromSeconds(1);
+
+        await lease.RenewAsync(CancellationToken.None);
+
+        Assert.True(lease.IsHealthy);
+        Assert.False(store.Lease!.ExpiryMalformed);
     }
 
     [Fact]
@@ -333,7 +432,7 @@ public sealed class CloudLeaseCoordinatorTests
         objects.Seed(PantsCloudObjectLayout.LeaseObjectKey, bytes);
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
 
-        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
             store.ReadAsync(CancellationToken.None).AsTask());
     }
 
