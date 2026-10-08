@@ -916,7 +916,12 @@ sealed class Actor : IAsyncDisposable
                 var generation = state.FamilyGeneration.TryGetValue(name, out var currentGeneration)
                     ? checked(currentGeneration + 1)
                     : 0;
-                var id = state.NextColumnFamilyId;
+                if (state.NextColumnFamilyId > uint.MaxValue)
+                {
+                    throw PantsException.ResourceLimit("Column family id space is exhausted.");
+                }
+
+                var id = (uint)state.NextColumnFamilyId;
                 var created = new ColumnFamilyIdentity(id, name, generation);
                 if (_diskStore is not null && _cloudDdlCoordinator is not null)
                 {
@@ -939,7 +944,7 @@ sealed class Actor : IAsyncDisposable
                             .ConfigureAwait(false);
                     }
 
-                    state.NextColumnFamilyId = checked(id + 1);
+                    state.NextColumnFamilyId = (ulong)id + 1;
                     state.FamilyGeneration[name] = generation;
                     state.ActiveFamilyVersions[name] = generation;
                     state.FamilyData[created] = RuntimeState.EmptyFamily;

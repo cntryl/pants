@@ -2204,7 +2204,7 @@ sealed class LocalDiskStore :
                 _familyIds[existing.Value] = id;
                 state.NextColumnFamilyId = Math.Max(
                     state.NextColumnFamilyId,
-                    checked(id + 1));
+                    (ulong)id + 1);
                 return;
             }
 
@@ -2217,7 +2217,7 @@ sealed class LocalDiskStore :
             state.FamilyData[identity] = RuntimeState.EmptyFamily;
             state.RangeTombstones[identity] = [];
             state.ActiveMemtableBytes[identity] = 0;
-            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, checked(id + 1));
+            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, (ulong)id + 1);
             _familyIds[identity] = id;
             return;
         }
@@ -4259,7 +4259,7 @@ sealed class LocalDiskStore :
 
         state.NextColumnFamilyId = _manifest.ColumnFamilies.Count == 0
             ? 1
-            : checked(_manifest.ColumnFamilies.Max(family => family.Id) + 1);
+            : (ulong)_manifest.ColumnFamilies.Max(family => family.Id) + 1;
     }
 
     void ApplyMutations(RuntimeState state, IEnumerable<WalMutation> mutations)
