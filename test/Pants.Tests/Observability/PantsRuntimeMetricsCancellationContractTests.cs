@@ -39,7 +39,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         await database.ShutdownAsync(TimeSpan.FromSeconds(2));
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsBusyException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]
