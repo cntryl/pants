@@ -36,6 +36,30 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
+    public async Task ShouldReportLossAtTheDeadlineWithoutAnyCallerCheckingHealth()
+    {
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            new TestCloudLeaseStore(),
+            SystemPantsClock.Instance,
+            "holder",
+            TimeSpan.FromMilliseconds(300),
+            TimeSpan.Zero,
+            () => Interlocked.Increment(ref losses));
+        await lease.AcquireAsync(CancellationToken.None);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (Volatile.Read(ref losses) == 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+        }
+
+        Assert.Equal(1, Volatile.Read(ref losses));
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, Volatile.Read(ref losses));
+    }
+
+    [Fact]
     public async Task ShouldAcquireAboveTheFloorWhenTheLeaseObjectWasDeleted()
     {
         var store = new TestCloudLeaseStore();
