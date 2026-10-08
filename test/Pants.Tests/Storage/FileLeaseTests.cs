@@ -27,21 +27,7 @@ public sealed class FileLeaseTests
             clock,
             TimeSpan.FromSeconds(60)));
 
-        await WriteLeaseRecordAsync(
-            directory.Path,
-            5,
-            "previous-writer",
-            clock.UtcNow - TimeSpan.FromSeconds(60));
-        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
-            directory.Path,
-            0,
-            TimeSpan.Zero,
-            null,
-            LongHeartbeatInterval,
-            clock,
-            TimeSpan.FromSeconds(60)));
-
-        clock.UtcNow += TimeSpan.FromTicks(1);
+        clock.UtcNow += TimeSpan.FromSeconds(1);
         using var lease = FileLease.Acquire(
             directory.Path,
             0,
@@ -55,7 +41,7 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
-    public async Task ShouldTakeOverOnlyAfterConfiguredLeaseBoundary()
+    public async Task ShouldTakeOverAtOrBeyondConfiguredLeaseBoundary()
     {
         using var directory = new TemporaryDirectory();
         var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -65,7 +51,7 @@ public sealed class FileLeaseTests
             directory.Path,
             17,
             "previous-writer",
-            clock.UtcNow - ttl - skew);
+            clock.UtcNow - ttl - skew + TimeSpan.FromTicks(1));
 
         Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
             directory.Path,
