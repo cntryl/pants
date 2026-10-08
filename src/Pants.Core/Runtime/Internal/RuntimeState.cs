@@ -48,7 +48,7 @@ sealed class RuntimeState
 
     public long TransactionCounter { get; set; }
 
-    public uint NextColumnFamilyId { get; set; } = 1;
+    public ulong NextColumnFamilyId { get; set; } = 1;
 
     public Dictionary<string, int> FamilyGeneration { get; }
 
