@@ -74,7 +74,7 @@ public sealed class ProviderSstPublisherTests
         var publisher = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
@@ -95,7 +95,7 @@ public sealed class ProviderSstPublisherTests
         var restarted = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
 
         await restarted.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
 
@@ -103,17 +103,19 @@ public sealed class ProviderSstPublisherTests
     }
 
     [Fact]
-    public async Task ShouldWaitForContendedMaintenanceBudgetInsteadOfFailingSstPublication()
+    public async Task ShouldWaitForInFlightCompactionRoundInsteadOfFailingSstPublication()
     {
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(16L * 1024 * 1024);
+        var gate = new MaintenanceMemoryGate();
         var store = new RangeCountingCloudObjectStore();
         var publisher = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.Gated(budget, gate));
         var path = WriteLocal(directory.Path, "a.sst", 100_000);
-        var held = budget.Reserve(budget.Limit);
+        var compactionRound = await gate.EnterAsync(CancellationToken.None);
+        var merge = budget.Reserve(budget.Limit);
 
         var publication = publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None)
             .AsTask();
@@ -121,10 +123,42 @@ public sealed class ProviderSstPublisherTests
 
         Assert.False(publication.IsCompleted);
         Assert.Equal(0, store.Puts);
-        held.Dispose();
+        merge.Dispose();
+        compactionRound.Dispose();
         await publication.WaitAsync(TestTimeouts.Expected);
         Assert.Equal(1, store.Puts);
         Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldLeaveSstPendingWhenAdmissionIsCanceledBehindCompactionRound()
+    {
+        using var directory = new TemporaryDirectory();
+        var budget = new ResourceBudget(16L * 1024 * 1024);
+        var gate = new MaintenanceMemoryGate();
+        var store = new RangeCountingCloudObjectStore();
+        var publisher = new ProviderSstPublisher(
+            store,
+            static () => { },
+            SstPublicationAdmission.Gated(budget, gate));
+        var path = WriteLocal(directory.Path, "a.sst", 200_000);
+        var original = File.ReadAllBytes(path);
+        using (await gate.EnterAsync(CancellationToken.None))
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await publisher.EnsurePublishedAsync("a.sst", path, [], cancellation.Token));
+        }
+
+        Assert.Equal(1, store.TotalCalls);
+        Assert.False(publisher.IsProven("a.sst"));
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Equal(0, budget.Current);
+
+        await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+
+        Assert.True(publisher.IsProven("a.sst"));
+        Assert.Equal(1, store.Puts);
     }
 
     [Fact]
@@ -136,7 +170,7 @@ public sealed class ProviderSstPublisherTests
         var publisher = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
@@ -144,29 +178,6 @@ public sealed class ProviderSstPublisherTests
         Assert.True(publisher.IsProven("a.sst"));
         Assert.Equal(budget.Limit, budget.Peak);
         Assert.Equal(0, budget.Current);
-    }
-
-    [Fact]
-    public async Task ShouldLeaveCompactionOutputUnpublishedWhenAdmissionIsCanceledWhileContended()
-    {
-        using var directory = new TemporaryDirectory();
-        var budget = new ResourceBudget(16L * 1024 * 1024);
-        var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
-            store,
-            static () => { },
-            new SstPublicationAdmission(budget));
-        var path = WriteLocal(directory.Path, "a.sst", 200_000);
-        var original = File.ReadAllBytes(path);
-        using var held = budget.Reserve(budget.Limit);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await publisher.PublishOutputAsync("a.sst", path, cancellation.Token));
-
-        Assert.Equal(0, store.TotalCalls);
-        Assert.Equal(original, File.ReadAllBytes(path));
-        Assert.Equal(budget.Limit, budget.Current);
     }
 
     [Fact]
@@ -178,7 +189,7 @@ public sealed class ProviderSstPublisherTests
         var publisher = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.WithinCompactionRound(budget));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await publisher.PublishOutputAsync("a.sst", path, CancellationToken.None);
@@ -197,7 +208,7 @@ public sealed class ProviderSstPublisherTests
         var publisher = new ProviderSstPublisher(
             store,
             static () => { },
-            new SstPublicationAdmission(budget));
+            SstPublicationAdmission.WithinCompactionRound(budget));
         var path = WriteLocal(directory.Path, "a.sst", 300_000);
 
         await publisher.PublishOutputAsync("a.sst", path, CancellationToken.None);

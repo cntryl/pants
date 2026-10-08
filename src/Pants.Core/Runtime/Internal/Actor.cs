@@ -80,8 +80,7 @@ sealed class Actor : IAsyncDisposable
     readonly RuntimeResponseRegistry _runtimeResponses;
     readonly TimeProvider _runtimeTimeProvider;
     readonly ResourceBudget _scanMemoryBudget;
-    readonly ResourceBudget _maintenanceMemoryBudget;
-    readonly long? _compactionOutputPartitionTargetBytes;
+    readonly CompactionMemory _compactionMemory;
     bool _shutdownPreparationCompleted;
     bool _shutdownRequested;
     int _snapshotReleaseCollectionRequired;
@@ -118,8 +117,7 @@ sealed class Actor : IAsyncDisposable
         TimeProvider runtimeTimeProvider,
         RuntimeResponseRegistry runtimeResponses,
         ResourceBudget scanMemoryBudget,
-        ResourceBudget maintenanceMemoryBudget,
-        long? compactionOutputPartitionTargetBytes,
+        CompactionMemory compactionMemory,
         RuntimeState state,
         bool cloudMode,
         LocalDiskStore? diskStore,
@@ -143,8 +141,7 @@ sealed class Actor : IAsyncDisposable
         _runtimeTimeProvider = runtimeTimeProvider;
         _runtimeResponses = runtimeResponses;
         _scanMemoryBudget = scanMemoryBudget;
-        _maintenanceMemoryBudget = maintenanceMemoryBudget;
-        _compactionOutputPartitionTargetBytes = compactionOutputPartitionTargetBytes;
+        _compactionMemory = compactionMemory;
         _state = state;
         _cloudMode = cloudMode;
         _diskStore = diskStore;
@@ -348,8 +345,10 @@ sealed class Actor : IAsyncDisposable
         var runtimeTimeProvider = dependencies.RuntimeTimeProvider;
         var runtimeResponses = new RuntimeResponseRegistry(telemetry, runtimeTimeProvider);
         var scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
-        // Compaction merges and SST publication draw from one maintenance pool.
+        // Compaction merges and SST publication draw from one maintenance pool, taking turns
+        // through one first-in, first-out gate.
         var maintenanceMemoryBudget = new ResourceBudget(options.CompactionMemoryPoolBytes);
+        var maintenanceMemoryGate = new MaintenanceMemoryGate();
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
@@ -546,7 +545,9 @@ sealed class Actor : IAsyncDisposable
                         options.LeaseTimeToLive,
                         remoteWalSegments: hydration.RemoteWalSegments,
                         recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
-                    var sstPublicationAdmission = new SstPublicationAdmission(maintenanceMemoryBudget);
+                    var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
+                        maintenanceMemoryBudget,
+                        maintenanceMemoryGate);
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,
@@ -554,7 +555,7 @@ sealed class Actor : IAsyncDisposable
                         objectStores.Control,
                         cloudLease,
                         dependencies.Failpoints,
-                        sstPublicationAdmission);
+                        mirrorPublicationAdmission);
                     cloudPersistence = providerPersistence;
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
@@ -562,8 +563,9 @@ sealed class Actor : IAsyncDisposable
                         objectStores.Control,
                         cloudLease,
                         dependencies.Failpoints,
-                        sstPublicationAdmission).PublishAsync;
-                    compactionOutputPartitionTargetBytes = sstPublicationAdmission.PartitionTargetBytes;
+                        SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget))
+                        .PublishAsync;
+                    compactionOutputPartitionTargetBytes = mirrorPublicationAdmission.PartitionTargetBytes;
                     await cloudStartupDeadline.RunMutationAsync(
                             providerPersistence.FenceWalCatalogAsync,
                             cancellationToken)
@@ -625,8 +627,10 @@ sealed class Actor : IAsyncDisposable
             runtimeTimeProvider,
             runtimeResponses,
             scanMemoryBudget,
-            maintenanceMemoryBudget,
-            compactionOutputPartitionTargetBytes,
+            new CompactionMemory(
+                maintenanceMemoryBudget,
+                maintenanceMemoryGate,
+                compactionOutputPartitionTargetBytes),
             state,
             cloudMode,
             diskStore,
@@ -746,8 +750,7 @@ sealed class Actor : IAsyncDisposable
                 options.CoordinatorQueueCapacity,
                 _diskStore,
                 telemetry,
-                _maintenanceMemoryBudget,
-                _compactionOutputPartitionTargetBytes);
+                _compactionMemory);
             _manifestWorker = new RuntimeWorker(
                 options.CoordinatorQueueCapacity,
                 dependencies.WorkerDisposalTimeout);

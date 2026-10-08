@@ -4,13 +4,12 @@ sealed class CompactionRuntimeService(
     int capacity,
     ILocalCompactionStore? compactionStore,
     RuntimeTelemetry telemetry,
-    ResourceBudget bufferBudget,
-    long? outputPartitionTargetBytes = null)
+    CompactionMemory memory)
     : ChannelRuntimeService<CompactionRuntimeRequest, CompactionResult>(capacity)
 {
     int _compactingSsts;
 
-    public ResourceBudget BufferBudget { get; } = bufferBudget;
+    public ResourceBudget BufferBudget => memory.Budget;
 
     public int CompactingSsts => Volatile.Read(ref _compactingSsts);
 
@@ -47,9 +46,8 @@ sealed class CompactionRuntimeService(
                     request.OutputPublisher,
                     request.FlushMutableOperations,
                     telemetry.RecordCompaction,
-                    BufferBudget,
+                    memory,
                     request.PrepareInputs,
-                    outputPartitionTargetBytes,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
