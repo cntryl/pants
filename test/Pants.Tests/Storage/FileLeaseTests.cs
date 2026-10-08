@@ -354,7 +354,7 @@ public sealed class FileLeaseTests
         var epoch = await ReadLeaseEpochAsync(directory.Path);
         // Another writer superseded this one and has since expired, so only the same-host LOCK
         // handle could still keep a successor out.
-        await WriteLeaseRecordAsync(
+        await SupersedeLeaseRecordAsync(
             directory.Path,
             epoch + 1,
             "superseding-writer",
@@ -561,6 +561,45 @@ public sealed class FileLeaseTests
         await File.WriteAllTextAsync(
             Path.Combine(path, ".midge_leader"),
             $"epoch: {epoch}\nholder_id: {holderId}\nacquired_at: {acquiredAt:O}\n");
+    }
+
+    /// <summary>
+    ///     Replaces the record the way a competing writer would: under the mutation lock, so a
+    ///     heartbeat renewal racing it cannot rename its own rewrite over the replacement.
+    /// </summary>
+    static async Task SupersedeLeaseRecordAsync(
+        string path,
+        ulong epoch,
+        string holderId,
+        DateTimeOffset acquiredAt)
+    {
+        var lockPath = Path.Combine(path, ".midge_leader.lock");
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+        while (true)
+        {
+            FileStream mutationLock;
+            try
+            {
+                mutationLock = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
+                continue;
+            }
+
+            try
+            {
+                await WriteLeaseRecordAsync(path, epoch, holderId, acquiredAt);
+            }
+            finally
+            {
+                await mutationLock.DisposeAsync();
+                File.Delete(lockPath);
+            }
+
+            return;
+        }
     }
 
     static async Task<ulong> ReadLeaseEpochAsync(string path)

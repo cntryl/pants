@@ -11,6 +11,17 @@ opens a writable directory handle with backup semantics and calls
 `FlushFileBuffers`. Both paths preserve Midge's file-sync, atomic-rename, and
 parent-directory-sync durability boundary.
 
+A rename over an existing target must succeed while another process reads it,
+as it does on POSIX. Windows `MoveFileEx` refuses with access denied whenever
+any handle is open on the target, so that refusal falls back to a
+POSIX-semantics rename (`FileRenameInfoEx` with
+`FILE_RENAME_FLAG_POSIX_SEMANTICS`), as Midge does: existing readers keep the
+old file and new opens see the replacement. When the fallback is unavailable
+the original refusal surfaces and the transient-sharing retry still applies.
+Readers of the `.midge_leader` record open it sharing read, write, and delete,
+so a lease check on one process never blocks a renewal or takeover on another.
+Lease I/O failures while acquiring surface as `LeaseUnavailable`.
+
 The lease mutation-lock file is intentionally the one exception to staged
 replacement. Its atomic `CreateNew` at the final path is the mutual-exclusion
 primitive itself; publishing it by rename would allow multiple contenders to

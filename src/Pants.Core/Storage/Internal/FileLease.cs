@@ -162,7 +162,39 @@ sealed class FileLease : IDisposable
                 "non-negative clock skew shorter than that TTL.");
         }
 
-        var effectiveClock = clock ?? SystemPantsClock.Instance;
+        try
+        {
+            return AcquireRecord(
+                root,
+                minimumEpoch,
+                clockSkewTolerance,
+                leaseLossCallback,
+                heartbeatInterval,
+                clock ?? SystemPantsClock.Instance,
+                effectiveTimeToLive,
+                time,
+                acquireStarted);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Lease I/O failures are LeaseUnavailable, as in Midge, never a generic storage error.
+            throw new PantsLeaseUnavailableException(
+                "The Midge leader record could not be read or written.",
+                exception);
+        }
+    }
+
+    static FileLease AcquireRecord(
+        string root,
+        ulong minimumEpoch,
+        TimeSpan clockSkewTolerance,
+        Action? leaseLossCallback,
+        TimeSpan heartbeatInterval,
+        IPantsClock effectiveClock,
+        TimeSpan effectiveTimeToLive,
+        TimeProvider time,
+        long acquireStarted)
+    {
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
         var holderId = $"{Environment.ProcessId}.{Guid.NewGuid():N}@{Environment.MachineName}";
@@ -454,7 +486,7 @@ sealed class FileLease : IDisposable
     }
 
     static LeaderRecord? ReadRecord(string path) =>
-        File.Exists(path) ? LeaderRecordCodec.Decode(File.ReadAllBytes(path)) : null;
+        SharedReadFile.TryReadAllBytes(path) is { } bytes ? LeaderRecordCodec.Decode(bytes) : null;
 
     static void WriteRecord(string target, LeaderRecord record) =>
         AtomicStagedFile.Write(target, LeaderRecordCodec.Encode(record));
