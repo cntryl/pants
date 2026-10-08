@@ -5447,22 +5447,14 @@ sealed class LocalDiskStore :
         var allOutputsPresent = added.All(output => manifest.Files.Any(file => file.Name == output.Name));
         var allOutputsAbsent = added.All(output => manifest.Files.All(file => file.Name != output.Name));
 
-        if (phase == "OutputDurable" && columnFamilyInactive && allOutputsAbsent)
+        // An output the manifest never published, beside inputs that are still authoritative (or a
+        // column family that is gone), carries no data, so it is disposable whatever state it is
+        // in: a corrupt unpublished output is a crash artifact, not a recovery failure.
+        if (phase == "OutputDurable" &&
+            allOutputsAbsent &&
+            (columnFamilyInactive || allInputsPresent))
         {
-            return added.All(output => DeleteUnpublishedIntentSst(
-                root,
-                output,
-                recoveryPolicy,
-                state));
-        }
-
-        if (phase == "OutputDurable" && allInputsPresent && allOutputsAbsent)
-        {
-            return added.All(output => DeleteUnpublishedIntentSst(
-                root,
-                output,
-                recoveryPolicy,
-                state));
+            return added.All(output => DeleteProvenUnpublishedIntentSst(root, output, recoveryPolicy, state));
         }
 
         if (phase is "OutputDurable" or "ManifestPublished" &&
@@ -5536,6 +5528,16 @@ sealed class LocalDiskStore :
 
         manifest.Files.Add(metadata);
         return true;
+    }
+
+    static bool DeleteProvenUnpublishedIntentSst(
+        string root,
+        FileMeta metadata,
+        PantsRecoveryPolicy recoveryPolicy,
+        RuntimeState state)
+    {
+        var path = Path.Combine(root, "sst", metadata.Name);
+        return !File.Exists(path) || DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state);
     }
 
     static bool DeleteUnpublishedIntentSst(

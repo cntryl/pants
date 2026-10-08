@@ -53,7 +53,7 @@ public sealed class PantsDatabaseLifecycleTests
 
         await transaction.RollbackAsync();
         await database.ShutdownAsync(TimeSpan.FromSeconds(1));
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Transactions.BeginAsync(
+        await Assert.ThrowsAsync<PantsBusyException>(() => database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly)
             .AsTask());

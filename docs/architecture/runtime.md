@@ -88,3 +88,18 @@ local takeover delay. The exact boundary remains held, and takeover becomes elig
 clock tick after `last renewal + TTL + skew`. Heartbeats run at one third of TTL, bounded between
 1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
 release still validates the writer epoch/owner token, so a resumed old owner remains fenced.
+
+## Shutdown lifecycle and error severity
+
+The database lifecycle is monotonic: Open, then Closing, then Closed. A shutdown attempt that fails
+because it was blocked (`Busy`) or timed out (`Timeout`) may be retried. Any other failure is
+permanent: the database stays closing, new work is rejected with `Busy`, and the same exception is
+replayed to every later `ShutdownAsync` or `DisposeAsync` caller without re-running shutdown. Calls
+after a completed close also return `Busy`. This matches the reference engine and keeps the writer
+lease and `LOCK` held, because a failed shutdown cannot prove its workers have stopped.
+
+`PantsException.Severity` (`PantsErrorSeverity`) is the single classification for hosts deciding
+whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
+succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost
+authority; defect errors (including `ResourceLimit`) are reported rather than retried; fatal errors
+mean durable state cannot be trusted.

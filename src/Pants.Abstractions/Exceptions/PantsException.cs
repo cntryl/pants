@@ -16,6 +16,9 @@ public abstract class PantsException : Exception
 
     public PantsErrorCode Code { get; }
 
+    /// <summary>How a host should act on this failure: retry, back off, step down or halt.</summary>
+    public PantsErrorSeverity Severity => Code.GetSeverity();
+
     internal static PantsException Create(
         PantsErrorCode code,
         string message,

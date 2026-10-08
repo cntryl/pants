@@ -99,7 +99,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        _lease.EnsureValid();
+        // One remote check per batch, before any upload or catalog publication: the catalog CAS
+        // only notices a successor that already fenced it, whereas this catches a successor that
+        // has taken the lease object but not yet written the catalog.
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var batchEpoch = segments[0].WriterEpoch;
         if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
         {
@@ -367,17 +370,32 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         Directory.CreateDirectory(root);
         var localManifest = CloudManifestReader.ReadManifest(root);
         var remoteMetadata = new Dictionary<string, CloudObject>(StringComparer.Ordinal);
+        var metadataSalvage = false;
         foreach (var fileName in MetadataFiles)
         {
-            var value = await controlStore.GetAsync(
-                PantsCloudObjectLayout.MetadataPrefix + fileName,
-                cancellationToken).ConfigureAwait(false);
+            CloudObject? value;
+            try
+            {
+                value = await controlStore.GetAsync(
+                    PantsCloudObjectLayout.MetadataPrefix + fileName,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (PantsException) when (
+                recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                !cancellationToken.IsCancellationRequested)
+            {
+                // Salvage tolerates one unreadable metadata object; Strict does not.
+                metadataSalvage = true;
+                continue;
+            }
+
             if (value is not null)
             {
                 remoteMetadata.Add(fileName, value);
             }
         }
 
+        metadataSalvage |= DropOlderManifestOfTornMetadataSet(remoteMetadata, recoveryPolicy);
         var remoteManifestObject = remoteMetadata.GetValueOrDefault("manifest.snapshot.json") ??
                                    remoteMetadata.GetValueOrDefault("manifest.json");
         var remoteManifest = remoteManifestObject is null
@@ -410,6 +428,14 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                                                 StringComparer.Ordinal.Equals(remoteFile.Name, file.Name)) == true;
                 if (isRemoteAuthoritative || !File.Exists(localPath))
                 {
+                    if (recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                        HasVerifiedLocalCopy(localPath, file))
+                    {
+                        // The only verified replica is the local one; serve it and say so.
+                        metadataSalvage = true;
+                        continue;
+                    }
+
                     throw new PantsRecoveryFailedException(
                         $"Authoritative cloud SST '{file.Name}' is missing.");
                 }
@@ -419,6 +445,13 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
             if (file.SizeBytes != 0 && remote.SizeBytes != file.SizeBytes)
             {
+                if (recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                    HasVerifiedLocalCopy(localPath, file))
+                {
+                    metadataSalvage = true;
+                    continue;
+                }
+
                 throw new PantsCorruptionException(
                     $"Cloud SST '{file.Name}' length differs from its manifest.");
             }
@@ -434,10 +467,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return new ProviderCloudHydrationResult(
                 new Dictionary<ulong, ProviderPublishedWalSegment>(),
                 0,
-                false);
+                metadataSalvage);
         }
 
-        var requiresSalvage = false;
+        var requiresSalvage = metadataSalvage;
         var cloudDurableSequence = 0UL;
         var remoteSegments = new List<IRemoteWalSegment>();
         foreach (var (segmentId, segment) in catalog.Segments)
@@ -520,6 +553,89 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     ///     permits, or the bytes may not match the catalog. The caller then takes the whole-object
     ///     path, which also carries the salvage handling for a mismatch.
     /// </remarks>
+    /// <summary>
+    ///     Without a journal to reconcile them, <c>manifest.snapshot.json</c> and
+    ///     <c>manifest.json</c> must describe the same sequence. Metadata objects are mirrored as
+    ///     independent writes, so a crash can leave them apart; Strict refuses to pick one, and
+    ///     Salvage keeps the newer and ignores the older.
+    /// </summary>
+    /// <summary>
+    ///     Whether a local SST can stand in for a lost or damaged remote one: it must match the
+    ///     manifest's length and, when recorded, its CRC32C. A copy that cannot be proven is not
+    ///     used.
+    /// </summary>
+    static bool HasVerifiedLocalCopy(string localPath, FileMeta file)
+    {
+        if (!File.Exists(localPath) || (file.SizeBytes == 0 && !file.ContentCrc32C.HasValue))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                localPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (file.SizeBytes != 0 && (ulong)stream.Length != file.SizeBytes)
+            {
+                return false;
+            }
+
+            if (file.ContentCrc32C is not { } expected)
+            {
+                return true;
+            }
+
+            var checksum = 0U;
+            var buffer = new byte[64 * 1024];
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                checksum = DiskFormat.Crc32CAppend(checksum, buffer.AsSpan(0, read));
+            }
+
+            return checksum == expected;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    static bool DropOlderManifestOfTornMetadataSet(
+        Dictionary<string, CloudObject> remoteMetadata,
+        PantsRecoveryPolicy recoveryPolicy)
+    {
+        if (remoteMetadata.ContainsKey("manifest.journal") ||
+            !remoteMetadata.TryGetValue("manifest.snapshot.json", out var snapshotObject) ||
+            !remoteMetadata.TryGetValue("manifest.json", out var manifestObject))
+        {
+            return false;
+        }
+
+        var snapshotSequence = CloudManifestReader.DecodeManifest(snapshotObject.Data.Span)
+            .LastPersistedSequence;
+        var manifestSequence = CloudManifestReader.DecodeManifest(manifestObject.Data.Span)
+            .LastPersistedSequence;
+        if (snapshotSequence == manifestSequence)
+        {
+            return false;
+        }
+
+        if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+        {
+            throw new PantsRecoveryFailedException(
+                "Cloud manifest snapshot and manifest.json carry different sequences " +
+                $"({snapshotSequence} and {manifestSequence}) and no journal reconciles them.");
+        }
+
+        _ = remoteMetadata.Remove(
+            snapshotSequence < manifestSequence ? "manifest.snapshot.json" : "manifest.json");
+        return true;
+    }
+
     static async ValueTask<bool> TryVerifySegmentInPagesAsync(
         ICloudObjectStore walStore,
         ProviderPublishedWalSegment segment,
