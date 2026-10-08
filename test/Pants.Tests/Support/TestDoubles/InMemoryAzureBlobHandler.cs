@@ -163,11 +163,30 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         }
     }
 
+    TaskCompletionSource? _leaseWriteGate;
+
+    /// <summary>Holds every write to the primary lease object until <see cref="ReleaseLeaseWrites" />.</summary>
+    public void BlockLeaseWrites() =>
+        Interlocked.CompareExchange(
+            ref _leaseWriteGate,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            null);
+
+    public void ReleaseLeaseWrites() =>
+        Interlocked.Exchange(ref _leaseWriteGate, null)?.TrySetResult();
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
         var key = request.RequestUri!.AbsolutePath;
+        if (request.Method == HttpMethod.Put &&
+            key.EndsWith("midge_primary_lease.json", StringComparison.Ordinal) &&
+            Volatile.Read(ref _leaseWriteGate) is { } leaseGate)
+        {
+            await leaseGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (request.Method == HttpMethod.Get &&
             StringComparer.Ordinal.Equals(
                 GetQueryParameter(request.RequestUri, "comp"),
@@ -298,7 +317,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 if (expected is not null &&
                     !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version)))
                 {
-                    return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                    return ProviderPreconditionResponses.Azure();
                 }
 
                 _objects.Remove(key);
@@ -313,14 +332,14 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             var exists = _objects.TryGetValue(key, out var current);
             if (request.Headers.IfNoneMatch.Any(static value => value.Tag == "*") && exists)
             {
-                return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                return ProviderPreconditionResponses.Azure();
             }
 
             var expected = request.Headers.IfMatch.SingleOrDefault()?.Tag;
             if (expected is not null &&
                 (!exists || !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version))))
             {
-                return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                return ProviderPreconditionResponses.Azure();
             }
 
             var next = (bytes, exists ? current.Version + 1 : 1);

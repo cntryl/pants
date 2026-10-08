@@ -31,6 +31,8 @@ sealed class CloudLeaseCoordinator : IDisposable
     int _gateDisposed;
     long _latestObservedUtcTicks;
     int _lost;
+    ITimer? _watchdog;
+    readonly object _watchdogLock = new();
 
     public CloudLeaseCoordinator(
         ICloudLeaseStore store,
@@ -88,6 +90,7 @@ sealed class CloudLeaseCoordinator : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            DisposeWatchdog();
             Volatile.Write(ref _lost, 1);
             if (Volatile.Read(ref _activeOperations) == 0)
             {
@@ -185,6 +188,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 ref _expiresAtUtcTicks,
                 AddSaturating(now, _leaseDuration).UtcTicks);
             Volatile.Write(ref _epoch, nextEpoch);
+            ArmWatchdog();
             return nextEpoch;
         }
         finally
@@ -393,7 +397,58 @@ sealed class CloudLeaseCoordinator : IDisposable
 
         Volatile.Write(ref _expiresAtTimestamp, Math.Max(currentDeadline, candidateTimestamp));
         Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentUtcDeadline, candidate.UtcTicks));
+        ArmWatchdog();
         return Volatile.Read(ref _lost) == 0;
+    }
+
+    /// <summary>
+    ///     Arms a timer at the monotonic deadline so loss is detected and reported even when no
+    ///     caller asks and a renewal is hung. Health stays authoritative: the timer only forces the
+    ///     lazy check to run, and re-arms itself if the deadline has since moved.
+    /// </summary>
+    void ArmWatchdog()
+    {
+        if (Volatile.Read(ref _lost) != 0 || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        var remaining = RemainingUntilDeadline();
+        lock (_watchdogLock)
+        {
+            if (_watchdog is null)
+            {
+                _watchdog = _timeProvider.CreateTimer(
+                    static state => ((CloudLeaseCoordinator)state!).OnWatchdog(),
+                    this,
+                    remaining,
+                    Timeout.InfiniteTimeSpan);
+            }
+            else
+            {
+                _ = _watchdog.Change(remaining, Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
+
+    void OnWatchdog()
+    {
+        var remaining = RemainingUntilDeadline();
+        if (remaining > TimeSpan.Zero)
+        {
+            ArmWatchdog();
+            return;
+        }
+
+        _ = IsHealthy;
+    }
+
+    TimeSpan RemainingUntilDeadline()
+    {
+        var ticks = Volatile.Read(ref _expiresAtTimestamp) - _timeProvider.GetTimestamp();
+        return ticks <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds((double)ticks / _timeProvider.TimestampFrequency) + TimeSpan.FromMilliseconds(1);
     }
 
     async ValueTask TryExpireLateRenewalAsync(
@@ -468,10 +523,23 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    void DisposeWatchdog()
+    {
+        ITimer? watchdog;
+        lock (_watchdogLock)
+        {
+            watchdog = _watchdog;
+            _watchdog = null;
+        }
+
+        watchdog?.Dispose();
+    }
+
     void LoseLease()
     {
         if (Interlocked.Exchange(ref _lost, 1) == 0)
         {
+            DisposeWatchdog();
             _leaseLossCallback?.Invoke();
         }
     }
