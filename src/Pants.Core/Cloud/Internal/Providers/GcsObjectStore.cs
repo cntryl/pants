@@ -158,7 +158,8 @@ sealed class GcsObjectStore : CloudObjectStore
                 condition,
                 token),
             cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+        if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
+            await HasGcsPredicateFailureAsync(response, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
@@ -866,7 +867,8 @@ sealed class GcsObjectStore : CloudObjectStore
             var requestId = response.Headers.TryGetValues("x-guploader-uploadid", out var values)
                 ? values.FirstOrDefault() ?? "unavailable"
                 : "unavailable";
-            throw new PantsIOException(
+            throw CloudHttpStatus.Failure(
+                response.StatusCode,
                 $"GCS request failed with HTTP {(int)response.StatusCode}; request ID {requestId}.");
         }
     }

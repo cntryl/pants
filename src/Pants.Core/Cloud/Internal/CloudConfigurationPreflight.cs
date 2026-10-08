@@ -364,20 +364,14 @@ static class CloudConfigurationPreflight
             };
         }
 
-        var message = exception.Message;
-        if (message.Contains("HTTP 401", StringComparison.OrdinalIgnoreCase))
+        switch (CloudHttpStatus.Of(exception))
         {
-            return PantsCloudFailureKind.Authentication;
-        }
-
-        if (message.Contains("HTTP 403", StringComparison.OrdinalIgnoreCase))
-        {
-            return PantsCloudFailureKind.Authorization;
-        }
-
-        if (message.Contains("HTTP 404", StringComparison.OrdinalIgnoreCase))
-        {
-            return PantsCloudFailureKind.NotFound;
+            case HttpStatusCode.Unauthorized:
+                return PantsCloudFailureKind.Authentication;
+            case HttpStatusCode.Forbidden:
+                return PantsCloudFailureKind.Authorization;
+            case HttpStatusCode.NotFound:
+                return PantsCloudFailureKind.NotFound;
         }
 
         return exception.InnerException is HttpRequestException or AuthenticationException

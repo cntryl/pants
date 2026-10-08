@@ -9,6 +9,7 @@ namespace Cntryl.Pants.Cloud.Internal.Providers;
 sealed class S3ObjectStore : CloudObjectStore
 {
     const int MaximumAttempts = 3;
+    const int ConditionalConflictAttempts = 4;
     static readonly string EmptyPayloadHash = Hex(SHA256.HashData([]));
     readonly string _bucket;
     readonly IS3CredentialProvider _credentialProvider;
@@ -210,21 +211,61 @@ sealed class S3ObjectStore : CloudObjectStore
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(condition);
-        using var response = await SendMutationAsync(
-            token => CreateObjectRequestAsync(
-                HttpMethod.Put,
-                objectKey,
-                data,
-                condition,
-                token),
-            cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+        for (var attempt = 1; ; attempt++)
         {
-            return false;
+            using var response = await SendMutationAsync(
+                token => CreateObjectRequestAsync(
+                    HttpMethod.Put,
+                    objectKey,
+                    data,
+                    condition,
+                    token),
+                cancellationToken).ConfigureAwait(false);
+            var code = await ReadS3ErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
+                StringComparer.OrdinalIgnoreCase.Equals(code, "PreconditionFailed"))
+            {
+                return false;
+            }
+
+            // A concurrent conditional write makes S3 answer 409 without applying this one, so it
+            // is safe to send again. Out of attempts, ConditionalRequestConflict is a lost
+            // condition; OperationAborted is a provider failure, not a conflict.
+            if (response.StatusCode == HttpStatusCode.Conflict &&
+                (StringComparer.OrdinalIgnoreCase.Equals(code, "ConditionalRequestConflict") ||
+                 StringComparer.OrdinalIgnoreCase.Equals(code, "OperationAborted")))
+            {
+                if (attempt < ConditionalConflictAttempts)
+                {
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(50 * (1 << (attempt - 1))),
+                        cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (StringComparer.OrdinalIgnoreCase.Equals(code, "ConditionalRequestConflict"))
+                {
+                    return false;
+                }
+            }
+
+            EnsureSuccess(response);
+            return true;
+        }
+    }
+
+    static async ValueTask<string?> ReadS3ErrorCodeAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return null;
         }
 
-        EnsureSuccess(response);
-        return true;
+        var body = await response.Content.ReadAsStringAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return CloudProviderXml.TryReadElementValue(body, "Code");
     }
 
     public override async ValueTask<CloudObjectListPage> ListPageAsync(
@@ -625,7 +666,8 @@ sealed class S3ObjectStore : CloudObjectStore
             var requestId = response.Headers.TryGetValues("x-amz-request-id", out var values)
                 ? values.FirstOrDefault() ?? "unavailable"
                 : "unavailable";
-            throw new PantsIOException(
+            throw CloudHttpStatus.Failure(
+                response.StatusCode,
                 $"S3 request failed with HTTP {(int)response.StatusCode}; request ID {requestId}.");
         }
     }
