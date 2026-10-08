@@ -8,14 +8,15 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 ///     Concurrent first opens of one SST share a single open. A failed open fails every waiter and
 ///     leaves nothing cached, so the next caller retries. Callers receive their own shared handle
 ///     and dispose it as before; evicting or removing a reader only drops the cache's own handle, so
-///     a reader in use stays valid until its holders release it.
+///     a reader in use stays valid until its holders release it. Readers are keyed by manifest
+///     identity, so a name reused for a different manifest entry never shares the old reader.
 /// </remarks>
 sealed class AsyncSstReaderCache : IDisposable
 {
     readonly long _budgetBytes;
     readonly object _gate = new();
     readonly LinkedList<Slot> _recency = [];
-    readonly Dictionary<string, Slot> _slots = new(StringComparer.Ordinal);
+    readonly Dictionary<SstFileIdentity, Slot> _slots = [];
     long _cachedBytes;
     bool _disposed;
 
@@ -90,22 +91,29 @@ sealed class AsyncSstReaderCache : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Drops every cached reader published under <paramref name="name" />, whatever its manifest
+    ///     identity.
+    /// </summary>
     public void RemoveFile(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        AsyncSstReader? reader = null;
+        var readers = new List<AsyncSstReader>();
         lock (_gate)
         {
-            if (_slots.Remove(name, out var slot))
+            var matches = _slots.Keys
+                .Where(identity => StringComparer.Ordinal.Equals(identity.Name, name))
+                .ToArray();
+            foreach (var identity in matches)
             {
-                reader = Detach(slot);
+                if (_slots.Remove(identity, out var slot) && Detach(slot) is { } reader)
+                {
+                    readers.Add(reader);
+                }
             }
         }
 
-        if (reader is not null)
-        {
-            DisposeAll([reader]);
-        }
+        DisposeAll(readers);
     }
 
     async Task OpenAndPublishAsync(
@@ -137,7 +145,7 @@ sealed class AsyncSstReaderCache : IDisposable
         {
             slot.Opening = null;
             if (_disposed ||
-                !_slots.TryGetValue(slot.Name, out var current) ||
+                !_slots.TryGetValue(slot.Identity, out var current) ||
                 !ReferenceEquals(current, slot))
             {
                 discard = true;
@@ -164,23 +172,13 @@ sealed class AsyncSstReaderCache : IDisposable
 
     Slot GetOrCreateSlot(FileMeta file)
     {
-        if (_slots.TryGetValue(file.Name, out var slot))
+        var identity = SstFileIdentity.Of(file);
+        if (!_slots.TryGetValue(identity, out var slot))
         {
-            if (slot.SizeBytes == file.SizeBytes)
-            {
-                return slot;
-            }
-
-            // The same name now describes a different object; never serve the old reader.
-            _slots.Remove(file.Name);
-            if (Detach(slot) is { } stale)
-            {
-                DisposeAll([stale]);
-            }
+            slot = new Slot(identity);
+            _slots.Add(identity, slot);
         }
 
-        slot = new Slot(file.Name, file.SizeBytes);
-        _slots.Add(file.Name, slot);
         return slot;
     }
 
@@ -203,7 +201,7 @@ sealed class AsyncSstReaderCache : IDisposable
             var slot = node.Value;
             if (!ReferenceEquals(slot, keep))
             {
-                _slots.Remove(slot.Name);
+                _slots.Remove(slot.Identity);
                 if (Detach(slot) is { } reader)
                 {
                     evicted.Add(reader);
@@ -247,10 +245,10 @@ sealed class AsyncSstReaderCache : IDisposable
     void RemoveEmptySlot(Slot slot)
     {
         if (slot.Reader is null &&
-            _slots.TryGetValue(slot.Name, out var current) &&
+            _slots.TryGetValue(slot.Identity, out var current) &&
             ReferenceEquals(current, slot))
         {
-            _slots.Remove(slot.Name);
+            _slots.Remove(slot.Identity);
         }
     }
 
@@ -262,11 +260,9 @@ sealed class AsyncSstReaderCache : IDisposable
         }
     }
 
-    sealed class Slot(string name, ulong sizeBytes)
+    sealed class Slot(SstFileIdentity identity)
     {
-        public string Name { get; } = name;
-
-        public ulong SizeBytes { get; } = sizeBytes;
+        public SstFileIdentity Identity { get; } = identity;
 
         public AsyncSstReader? Reader { get; set; }
 

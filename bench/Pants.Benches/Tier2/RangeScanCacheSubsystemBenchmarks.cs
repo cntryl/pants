@@ -17,7 +17,7 @@ public class RangeScanCacheSubsystemBenchmarks : Tier2Benchmark
     {
         _coldCache = new SstBlockCache(PantsBlockCachePolicy.Lru, 4 * 1024 * 1024);
         _warmCache = new SstBlockCache(PantsBlockCachePolicy.Lru, 4 * 1024 * 1024);
-        _keys = Enumerable.Range(0, BlockCount).Select(index => new SstBlockCacheKey("scan.sst", index)).ToArray();
+        _keys = Enumerable.Range(0, BlockCount).Select(index => new SstBlockCacheKey(new SstFileIdentity("scan.sst", 0, 0, 0, null), index)).ToArray();
         foreach (var key in _keys)
         {
             _warmCache.Add(key, _block);

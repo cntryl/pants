@@ -337,6 +337,46 @@ public sealed class PantsManifestSpecDriftTests
         Assert.True(subsequentId > 1);
     }
 
+    // Issue #268 ------------------------------------------------------------
+
+    [Fact]
+    public async Task ShouldOpenGivenMaximumColumnFamilyIdAndRejectCreatingAnotherFamily()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
+            (CreateColumnFamilyRecordType,
+                $$$"""{"CreateColumnFamily":{"id":{{{uint.MaxValue}}},"name":"last","created_at":2}}"""));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            var last = Assert.IsAssignableFrom<IPantsColumnFamily>(
+                await database.ColumnFamilies.GetAsync("last"));
+            Assert.Equal(uint.MaxValue, last.Id);
+            await using (var transaction = await database.Transactions.BeginAsync(
+                last,
+                PantsTransactionMode.ReadWrite))
+            {
+                transaction.Put("k"u8.ToArray(), "v"u8.ToArray());
+                await transaction.CommitAsync(PantsWriteOptions.Buffered);
+            }
+
+            var exception = await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+                await database.ColumnFamilies.CreateAsync("overflow"));
+            Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+        }
+
+        await using var reopened = await OpenAsync(directory.Path);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            await reopened.ColumnFamilies.GetAsync("last") ?? throw new InvalidOperationException(),
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("v", Encoding.UTF8.GetString((await reader.GetAsync("k"u8.ToArray()))!.Value.Span));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("overflow"));
+    }
+
     // Issues #142-#146 ------------------------------------------------------
 
     [Fact]
