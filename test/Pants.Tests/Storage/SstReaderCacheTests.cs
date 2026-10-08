@@ -13,8 +13,8 @@ public sealed class SstReaderCacheTests
         using var directory = new TemporaryDirectory();
         var (path, entries) = CreateSst(directory.Path);
         using var cache = new SstReaderCache();
-        using var firstLease = cache.GetOrAdd("reader.sst", path, out var firstHit);
-        using var secondLease = cache.GetOrAdd("reader.sst", path, out var secondHit);
+        using var firstLease = cache.GetOrAdd(Sst("reader.sst"), path, out var firstHit);
+        using var secondLease = cache.GetOrAdd(Sst("reader.sst"), path, out var secondHit);
         var first = firstLease.Reader;
         var second = secondLease.Reader;
         var decision = second.GetPointReadDecision(entries[64].Key);
@@ -42,7 +42,7 @@ public sealed class SstReaderCacheTests
         using var directory = new TemporaryDirectory();
         var (path, entries) = CreateSst(directory.Path);
         using var cache = new SstReaderCache();
-        using var lease = cache.GetOrAdd("reader.sst", path, out _);
+        using var lease = cache.GetOrAdd(Sst("reader.sst"), path, out _);
         var reader = lease.Reader;
         var decision = reader.GetPointReadDecision(entries[64].Key);
 
@@ -72,7 +72,7 @@ public sealed class SstReaderCacheTests
             return SstReader.Open(openPath);
         });
         var acquisitions = Enumerable.Range(0, callerCount)
-            .Select(callerIndex => Task.Run(() => cache.GetOrAdd("reader.sst", path, out _)))
+            .Select(callerIndex => Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _)))
             .ToArray();
 
         Assert.True(openStarted.Wait(AssertionTimeout));
@@ -109,10 +109,10 @@ public sealed class SstReaderCacheTests
 
             return SstReader.Open(path);
         });
-        var blocked = Task.Run(() => cache.GetOrAdd("slow.sst", "slow.sst", out _));
+        var blocked = Task.Run(() => cache.GetOrAdd(Sst("slow.sst"), "slow.sst", out _));
         Assert.True(blockedStarted.Wait(AssertionTimeout));
 
-        using var unrelated = await Task.Run(() => cache.GetOrAdd("cold.sst", "cold.sst", out _))
+        using var unrelated = await Task.Run(() => cache.GetOrAdd(Sst("cold.sst"), "cold.sst", out _))
             .WaitAsync(AssertionTimeout);
 
         releaseBlocked.Set();
@@ -131,8 +131,8 @@ public sealed class SstReaderCacheTests
                 ? throw new IOException("injected")
                 : SstReader.Open(openPath));
 
-        Assert.Throws<IOException>(() => cache.GetOrAdd("reader.sst", path, out _));
-        using var lease = cache.GetOrAdd("reader.sst", path, out var hit);
+        Assert.Throws<IOException>(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
+        using var lease = cache.GetOrAdd(Sst("reader.sst"), path, out var hit);
 
         Assert.False(hit);
         Assert.False(lease.Reader.IsDisposed);
@@ -152,7 +152,7 @@ public sealed class SstReaderCacheTests
         using var cache = new SstReaderCache(readerBytes * 3, SstReader.Open);
         for (var index = 0; index < 100; index++)
         {
-            using var lease = cache.GetOrAdd($"reader-{index}.sst", path, out _);
+            using var lease = cache.GetOrAdd(Sst($"reader-{index}.sst"), path, out _);
         }
 
         Assert.True(cache.SnapshotFiles().Count <= 3);
@@ -161,13 +161,35 @@ public sealed class SstReaderCacheTests
     }
 
     [Fact]
+    public void ShouldNotReuseReaderWhenSameNameHasDifferentManifestIdentity()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        using var cache = new SstReaderCache();
+        var original = new SstFileIdentity("reused.sst", 0, 7, 100, 1);
+        var replacement = original with { SizeBytes = 200, ContentCrc32C = 2 };
+        using var originalLease = cache.GetOrAdd(original, path, out _);
+
+        using var replacementLease = cache.GetOrAdd(replacement, path, out var replacementHit);
+
+        Assert.False(replacementHit);
+        Assert.NotSame(originalLease.Reader, replacementLease.Reader);
+
+        cache.RemoveFile("reused.sst");
+
+        Assert.Empty(cache.SnapshotFiles());
+        Assert.False(originalLease.Reader.IsDisposed);
+        Assert.False(replacementLease.Reader.IsDisposed);
+    }
+
+    [Fact]
     public void ShouldNeverEvictAReaderThatIsStillLeased()
     {
         using var directory = new TemporaryDirectory();
         var (path, _) = CreateSst(directory.Path);
         using var cache = new SstReaderCache(1, SstReader.Open);
-        using var held = cache.GetOrAdd("held.sst", path, out _);
-        using (cache.GetOrAdd("other.sst", path, out _))
+        using var held = cache.GetOrAdd(Sst("held.sst"), path, out _);
+        using (cache.GetOrAdd(Sst("other.sst"), path, out _))
         {
         }
 
@@ -191,7 +213,7 @@ public sealed class SstReaderCacheTests
             Assert.True(releaseOpening.Wait(AssertionTimeout));
             return created;
         });
-        var acquisition = Task.Run(() => cache.GetOrAdd("reader.sst", path, out _));
+        var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
         Assert.True(opening.Wait(AssertionTimeout));
 
         var firstDisposal = Task.Run(cache.Dispose);
@@ -223,7 +245,7 @@ public sealed class SstReaderCacheTests
             Assert.True(releaseOpening.Wait(AssertionTimeout));
             return created;
         });
-        var acquisition = Task.Run(() => cache.GetOrAdd("reader.sst", path, out _));
+        var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
         Assert.True(opening.Wait(AssertionTimeout));
 
         cache.RemoveFile("reader.sst");
@@ -234,6 +256,8 @@ public sealed class SstReaderCacheTests
         Assert.True(created.IsDisposed);
         Assert.Empty(cache.SnapshotFiles());
     }
+
+    static SstFileIdentity Sst(string name) => new(name, 0, 0, 0, null);
 
     static (string Path, SstEntry[] Entries) CreateSst(string directory)
     {

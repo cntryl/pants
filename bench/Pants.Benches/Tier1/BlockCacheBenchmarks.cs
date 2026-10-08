@@ -17,11 +17,11 @@ public class BlockCacheBenchmarks : Tier1Benchmark
     public void Setup()
     {
         _cache = new SstBlockCache(PantsBlockCachePolicy.Lru, 16 * 1024 * 1024);
-        _hitKey = new SstBlockCacheKey("hot.sst", 0);
-        _missKey = new SstBlockCacheKey("cold.sst", 0);
+        _hitKey = new SstBlockCacheKey(new SstFileIdentity("hot.sst", 0, 0, 0, null), 0);
+        _missKey = new SstBlockCacheKey(new SstFileIdentity("cold.sst", 0, 0, 0, null), 0);
         _cache.Add(_hitKey, _block);
         _writeKeys = Enumerable.Range(0, 1_024)
-            .Select(index => new SstBlockCacheKey("insert.sst", index))
+            .Select(index => new SstBlockCacheKey(new SstFileIdentity("insert.sst", 0, 0, 0, null), index))
             .ToArray();
     }
 
