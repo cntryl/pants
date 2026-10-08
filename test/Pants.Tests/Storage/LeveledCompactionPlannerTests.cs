@@ -296,7 +296,7 @@ public sealed class LeveledCompactionPlannerTests
             ColumnFamilyId = columnFamilyId,
             SstSequence = sequence,
             SizeBytes = sizeBytes,
-            SmallestKey = TestBytes.FromString(smallest).Select(static value => (int)value).ToArray(),
-            LargestKey = TestBytes.FromString(largest).Select(static value => (int)value).ToArray()
+            SmallestKey = TestBytes.FromString(smallest).ToArray(),
+            LargestKey = TestBytes.FromString(largest).ToArray()
         };
 }

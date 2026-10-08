@@ -284,8 +284,8 @@ public sealed class CloudWalCoverageValidatorTests
             {
                 Name = "00000000000000000001.sst",
                 ColumnFamilyId = 0,
-                SmallestKey = smallestKey.Select(static value => (int)value).ToArray(),
-                LargestKey = largestKey.Select(static value => (int)value).ToArray(),
+                SmallestKey = smallestKey.ToArray(),
+                LargestKey = largestKey.ToArray(),
                 KeyBoundsComplete = true,
                 SmallestSequence = 2,
                 LargestSequence = 2
