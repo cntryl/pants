@@ -32,4 +32,15 @@ public static class PantsDatabase
         string path,
         CancellationToken cancellationToken = default) =>
         StorageVerifier.VerifyPathAsync(path, cancellationToken);
+
+    /// <summary>
+    ///     Verifies a local storage directory like <see cref="VerifyPathAsync" />, but classifies
+    ///     every result into an operator outcome instead of throwing. A missing, inaccessible,
+    ///     non-directory or malformed path is reported through
+    ///     <see cref="PantsStorageVerificationOutcome.PathFailure" />. Only cancellation throws.
+    /// </summary>
+    public static ValueTask<PantsStorageVerificationOutcome> VerifyPathOutcomeAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        StorageVerificationOutcomeResolver.VerifyPathAsync(path, cancellationToken);
 }
