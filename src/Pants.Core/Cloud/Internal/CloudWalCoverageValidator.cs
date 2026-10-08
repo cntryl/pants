@@ -194,8 +194,8 @@ static class CloudWalCoverageValidator
             return false;
         }
 
-        var smallestKey = DecodeManifestKey(file.SmallestKey);
-        var largestKey = DecodeManifestKey(file.LargestKey);
+        var smallestKey = file.SmallestKey;
+        var largestKey = file.LargestKey;
         if (mutation.Key.AsSpan().SequenceCompareTo(smallestKey) < 0)
         {
             return false;
@@ -207,20 +207,4 @@ static class CloudWalCoverageValidator
             : mutation.Key.AsSpan().SequenceCompareTo(largestKey) <= 0;
     }
 
-    static byte[] DecodeManifestKey(int[] values)
-    {
-        var bytes = new byte[values.Length];
-        for (var index = 0; index < values.Length; index++)
-        {
-            if (values[index] is < byte.MinValue or > byte.MaxValue)
-            {
-                throw new PantsCorruptionException(
-                    "A cloud manifest contains a key byte outside the valid range.");
-            }
-
-            bytes[index] = (byte)values[index];
-        }
-
-        return bytes;
-    }
 }

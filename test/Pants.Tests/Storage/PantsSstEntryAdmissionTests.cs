@@ -138,13 +138,52 @@ public sealed class PantsSstEntryAdmissionTests
     }
 
     /// <summary>
+    ///     A key becomes both bounds of the file that flushes it, and each bound travels through the
+    ///     manifest journal, the intent log and every checkpoint as one JSON number per byte, so the
+    ///     cost of a large key is paid per byte on flush and again on reopen (#347). The largest
+    ///     admissible key still writes gigabytes of manifest, which no CI runner can finish in
+    ///     seconds even when the cost is linear; a key of a few megabytes drives the same paths.
+    /// </summary>
+    [Fact]
+    public async Task ShouldFlushAndReopenLargeDeleteKeyThroughManifestKeyBounds()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = CreateOptions(directory.Path, false);
+        var key = new byte[4 * 1024 * 1024];
+        for (var index = 0; index < key.Length; index++)
+        {
+            key[index] = unchecked((byte)index);
+        }
+
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            var family = database.ColumnFamilies.DefaultFamily;
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             family,
+                             PantsTransactionMode.ReadWrite))
+            {
+                transaction.Delete(key);
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await database.Maintenance.FlushAsync(family);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        var layout = await reopened.Diagnostics.GetStorageLayoutAsync();
+        var file = Assert.Single(layout.Levels.SelectMany(static level => level.Files));
+        Assert.True(file.SmallestKey!.Value.Span.SequenceEqual(key));
+        Assert.True(file.LargestKey!.Value.Span.SequenceEqual(key));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Null(await reader.GetAsync(key));
+    }
+
+    /// <summary>
     ///     Flush writes the same key into a data block, the index and the metadata key range; the
     ///     last two exceed the decoded block limit and must still decode.
     /// </summary>
-    /// <remarks>
-    ///     Exercised at the codec: flushing a maximal key through the engine is dominated by manifest
-    ///     key-bound serialization (#347), which is too slow and memory-hungry for CI.
-    /// </remarks>
     [Fact]
     public void ShouldEncodeAndDecodeSstHoldingLargestAdmissibleDeleteKey()
     {

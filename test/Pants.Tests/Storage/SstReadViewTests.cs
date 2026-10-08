@@ -247,20 +247,18 @@ public sealed class SstReadViewTests
                 ColumnFamilyId = columnFamilyId,
                 SstSequence = checked((ulong)index + 1),
                 SizeBytes = 1024,
-                SmallestKey = KeyValues(index),
-                LargestKey = KeyValues(index),
+                SmallestKey = Key(index),
+                LargestKey = Key(index),
                 KeyBoundsComplete = true
             })
             .ToArray();
 
-    static int[] KeyValues(int value) =>
+    static byte[] Key(int value) =>
     [
-        (value >> 16) & 0xFF,
-        (value >> 8) & 0xFF,
-        value & 0xFF
+        (byte)((value >> 16) & 0xFF),
+        (byte)((value >> 8) & 0xFF),
+        (byte)(value & 0xFF)
     ];
-
-    static byte[] Key(int value) => KeyValues(value).Select(static v => (byte)v).ToArray();
 
     static byte[] Key(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
@@ -277,10 +275,8 @@ public sealed class SstReadViewTests
             ColumnFamilyId = columnFamilyId,
             SstSequence = sequence,
             SizeBytes = 1024,
-            SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest)
-            .Select(static value => (int)value).ToArray(),
-            LargestKey = System.Text.Encoding.UTF8.GetBytes(largest)
-            .Select(static value => (int)value).ToArray(),
+            SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest),
+            LargestKey = System.Text.Encoding.UTF8.GetBytes(largest),
             KeyBoundsComplete = true
         };
 }

@@ -370,8 +370,8 @@ sealed class SstReadView
 
         public static IndexedFile Create(FileMeta file) => new(
             file,
-            LocalDiskStore.GetMetadataKey(file.SmallestKey!),
-            LocalDiskStore.GetMetadataKey(file.LargestKey!));
+            file.SmallestKey!,
+            file.LargestKey!);
 
         public bool Overlaps(byte[]? startInclusive, byte[]? endExclusive) =>
             (endExclusive is null || SmallestKey.AsSpan().SequenceCompareTo(endExclusive) < 0) &&

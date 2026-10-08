@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -1196,7 +1197,7 @@ sealed class LocalDiskStore :
             return collected;
         }
 
-        var edits = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
         var obsoleteNames = new List<string>();
         foreach (var family in droppedFamilies)
         {
@@ -1250,9 +1251,7 @@ sealed class LocalDiskStore :
             .Where(file =>
                 file.ColumnFamilyId == columnFamily.Id &&
                 (!file.HasTrustedKeyBounds() ||
-                 bounds.Overlaps(
-                     GetMetadataKey(file.SmallestKey!),
-                     GetMetadataKey(file.LargestKey!))))
+                 bounds.Overlaps(file.SmallestKey!, file.LargestKey!)))
             .Select(static file => file.Name)
             .ToArray();
 
@@ -1647,7 +1646,7 @@ sealed class LocalDiskStore :
             foreach (var file in GetManifestFilesSnapshot().Where(file =>
                          file.ColumnFamilyId == columnFamily.Id &&
                          (!file.HasTrustedKeyBounds() ||
-                          bounds.Overlaps(GetMetadataKey(file.SmallestKey!), GetMetadataKey(file.LargestKey!)))))
+                          bounds.Overlaps(file.SmallestKey!, file.LargestKey!))))
             {
                 var reader = SstReader.Open(Path.Combine(_sstDirectory, file.Name));
                 readers.Add(reader);
@@ -1677,9 +1676,6 @@ sealed class LocalDiskStore :
             throw;
         }
     }
-
-    internal static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
-        key.Select(static value => checked((byte)value)).ToArray();
 
     public static LocalDiskStore Open(
         string directory,
@@ -2110,13 +2106,14 @@ sealed class LocalDiskStore :
 
     public static JsonElement CreateColumnFamilyEdit(ColumnFamilyIdentity identity) =>
         CreateManifestEdit(
-            "CreateColumnFamily",
-            new
-            {
-                id = identity.Id,
-                name = identity.Name,
-                created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-            });
+                "CreateColumnFamily",
+                new
+                {
+                    id = identity.Id,
+                    name = identity.Name,
+                    created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                })
+            .ToElement(JsonOptions);
 
     public JsonElement CreateDropColumnFamilyEdit(
         RuntimeState state,
@@ -2139,13 +2136,14 @@ sealed class LocalDiskStore :
                 .Select(static file => file.Name)
                 .ToArray();
             return CreateManifestEdit(
-                "DropColumnFamilyAt",
-                new
-                {
-                    id,
-                    drop_sequence = checked((ulong)state.Sequence),
-                    dropped_sst_names = droppedSstNames
-                });
+                    "DropColumnFamilyAt",
+                    new
+                    {
+                        id,
+                        drop_sequence = checked((ulong)state.Sequence),
+                        dropped_sst_names = droppedSstNames
+                    })
+                .ToElement(JsonOptions);
         }
     }
 
@@ -2167,7 +2165,7 @@ sealed class LocalDiskStore :
         }
 
         _failpoints.Hit(Failpoint.BeforeDdlLocalCommit);
-        DurablyApplyManifestEdit(edit);
+        DurablyApplyManifestEdit(ManifestEdit.FromElement(edit));
         _failpoints.Hit(Failpoint.AfterDdlLocalJournalBeforeVisibility);
         ApplyColumnFamilyEditVisibility(state, edit);
         SaveManifestCheckpoint();
@@ -2183,7 +2181,7 @@ sealed class LocalDiskStore :
         CloudDdlEdit.Validate(edit);
         if (!IsColumnFamilyEditApplied(edit))
         {
-            DurablyApplyManifestEdit(edit);
+            DurablyApplyManifestEdit(ManifestEdit.FromElement(edit));
         }
 
         ApplyColumnFamilyEditVisibility(state, edit);
@@ -2922,8 +2920,8 @@ sealed class LocalDiskStore :
         ulong? flushFrontierSequence = null,
         string? stagingIdentity = null)
     {
-        var edits = new List<JsonElement>();
-        var intents = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
+        var intents = new List<IntentEntry>();
         var outputs = new List<StagedSstOutput>();
         foreach (var familyGroup in operations.GroupBy(static operation => operation.ColumnFamilyId))
         {
@@ -3284,12 +3282,10 @@ sealed class LocalDiskStore :
                         checked((long)file.SizeBytes),
                         file.SmallestKey is null
                             ? null
-                            : new ReadOnlyMemory<byte>(file.SmallestKey.Select(static value => checked((byte)value))
-                                .ToArray()),
+                            : new ReadOnlyMemory<byte>(file.SmallestKey.ToArray()),
                         file.LargestKey is null
                             ? null
-                            : new ReadOnlyMemory<byte>(file.LargestKey.Select(static value => checked((byte)value))
-                                .ToArray()),
+                            : new ReadOnlyMemory<byte>(file.LargestKey.ToArray()),
                         file.SmallestSequence is null ? null : checked((long)file.SmallestSequence.Value),
                         file.LargestSequence is null ? null : checked((long)file.LargestSequence.Value)))
                     .ToArray();
@@ -3382,8 +3378,8 @@ sealed class LocalDiskStore :
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var obsoleteNames = new List<string>();
-        var edits = new List<JsonElement>();
-        var intents = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
+        var intents = new List<IntentEntry>();
         var outputNames = new List<string>();
         var outputBytes = 0L;
         var hasCompactionPlan = false;
@@ -4366,8 +4362,8 @@ sealed class LocalDiskStore :
             ContentCrc32C = contentCrc32C,
             ColumnFamilyId = familyId,
             SstSequence = sequence,
-            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
-            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].Select(value => (int)value).ToArray(),
+            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].ToArray(),
+            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].ToArray(),
             KeyBoundsComplete = true,
             SmallestSequence = allSequences.Count == 0 ? null : allSequences.Min(),
             LargestSequence = allSequences.Count == 0 ? null : allSequences.Max(),
@@ -4476,7 +4472,7 @@ sealed class LocalDiskStore :
         HasSameKey(left.SmallestKey, right.SmallestKey) &&
         HasSameKey(left.LargestKey, right.LargestKey);
 
-    static bool HasSameKey(int[]? left, int[]? right) =>
+    static bool HasSameKey(byte[]? left, byte[]? right) =>
         left is null
             ? right is null
             : right is not null && left.AsSpan().SequenceEqual(right);
@@ -4488,25 +4484,44 @@ sealed class LocalDiskStore :
         ["size_bytes"] = metadata.SizeBytes,
         ["content_crc32c"] = metadata.ContentCrc32C,
         ["cf_id"] = metadata.ColumnFamilyId,
-        ["smallest_key"] = metadata.SmallestKey,
-        ["largest_key"] = metadata.LargestKey,
+        ["smallest_key"] = KeyBoundValue.From(metadata.SmallestKey),
+        ["largest_key"] = KeyBoundValue.From(metadata.LargestKey),
         ["key_bounds_complete"] = metadata.KeyBoundsComplete,
         ["smallest_seq"] = metadata.SmallestSequence,
         ["largest_seq"] = metadata.LargestSequence
     };
 
-    static JsonElement CreateIntentEntry(string variant, object value) =>
-        JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant] = value },
-            JsonOptions);
+    static IntentEntry CreateIntentEntry(string variant, object value) =>
+        IntentEntry.Create(variant, value, JsonOptions);
 
-    void SaveIntentLog(List<JsonElement> intents)
+    void SaveIntentLog(List<IntentEntry> intents)
     {
         lock (_manifestGate)
         {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(
+                       buffer,
+                       new JsonWriterOptions
+                       {
+                           Indented = JsonOptions.WriteIndented,
+                           IndentCharacter = JsonOptions.IndentCharacter,
+                           IndentSize = JsonOptions.IndentSize,
+                           NewLine = JsonOptions.NewLine,
+                           Encoder = JsonOptions.Encoder
+                       }))
+            {
+                writer.WriteStartArray();
+                foreach (var intent in intents)
+                {
+                    intent.WriteTo(writer);
+                }
+
+                writer.WriteEndArray();
+            }
+
             AtomicStagedFile.Write(
                 _intentPath,
-                JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions),
+                buffer.WrittenSpan,
                 beforePublish: () => _failpoints.Hit(Failpoint.BeforeIntentLogReplace));
             _failpoints.Hit(Failpoint.AfterIntentLogReplace);
         }
@@ -4539,7 +4554,7 @@ sealed class LocalDiskStore :
         }
     }
 
-    string[] UpsertCompactionIntents(List<JsonElement> intents)
+    string[] UpsertCompactionIntents(List<IntentEntry> intents)
     {
         if (intents.Count == 0)
         {
@@ -4613,7 +4628,7 @@ sealed class LocalDiskStore :
         _lease.EnsureValid();
     }
 
-    void RemoveCompactionIntents(List<JsonElement> intents)
+    void RemoveCompactionIntents(List<IntentEntry> intents)
     {
         if (intents.Count == 0)
         {
@@ -4635,7 +4650,7 @@ sealed class LocalDiskStore :
         }
     }
 
-    void TransitionCompactionIntents(List<JsonElement> intents, string phase)
+    void TransitionCompactionIntents(List<IntentEntry> intents, string phase)
     {
         if (intents.Count == 0)
         {
@@ -4659,7 +4674,7 @@ sealed class LocalDiskStore :
                     continue;
                 }
 
-                retained[index] = SetCompactionIntentPhase(retained[index], phase);
+                retained[index] = retained[index].WithPhase(phase);
                 transitioned = checked(transitioned + 1);
             }
 
@@ -4673,20 +4688,26 @@ sealed class LocalDiskStore :
         }
     }
 
-    List<JsonElement> LoadIntentLog()
+    List<IntentEntry> LoadIntentLog()
     {
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(_intentPath));
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            var bytes = File.ReadAllBytes(_intentPath);
+            var reader = new Utf8JsonReader(bytes);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray)
             {
                 throw new JsonException("The intent log root must be an array.");
             }
 
-            return document.RootElement
-                .EnumerateArray()
-                .Select(static intent => intent.Clone())
-                .ToList();
+            var entries = new List<IntentEntry>();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                var start = checked((int)reader.TokenStartIndex);
+                reader.Skip();
+                entries.Add(IntentEntry.FromJson(bytes.AsSpan(start, checked((int)reader.BytesConsumed) - start)));
+            }
+
+            return entries;
         }
         catch (Exception exception) when (exception is IOException or JsonException)
         {
@@ -4699,8 +4720,9 @@ sealed class LocalDiskStore :
     bool HasManifestPublishedCompactionIntent() => LoadIntentLog().Any(intent =>
         GetCompactionIntentPhase(intent) == "ManifestPublished");
 
-    static bool IsTargetFlushIntent(JsonElement intent, HashSet<string> targetNames)
+    static bool IsTargetFlushIntent(IntentEntry entry, HashSet<string> targetNames)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4728,8 +4750,9 @@ sealed class LocalDiskStore :
                targetNames.Contains(name.GetString()!);
     }
 
-    static CompactionIntentIdentity? GetCompactionIntentIdentity(JsonElement intent)
+    static CompactionIntentIdentity? GetCompactionIntentIdentity(IntentEntry entry)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4776,8 +4799,9 @@ sealed class LocalDiskStore :
         return CompactionIntentIdentity.Create(parsedFamilyId, removedNames, addedNames);
     }
 
-    static string? GetCompactionIntentPhase(JsonElement intent)
+    static string? GetCompactionIntentPhase(IntentEntry entry)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4798,21 +4822,6 @@ sealed class LocalDiskStore :
             : null;
     }
 
-    static JsonElement SetCompactionIntentPhase(JsonElement intent, string phase)
-    {
-        var variant = intent.EnumerateObject().Single();
-        var value = variant.Value.EnumerateObject().ToDictionary(
-            static property => property.Name,
-            property => property.Name == "phase"
-                ? JsonSerializer.SerializeToElement(phase)
-                : property.Value.Clone(),
-            StringComparer.Ordinal);
-        value["phase"] = JsonSerializer.SerializeToElement(phase);
-        return JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant.Name] = value },
-            JsonOptions);
-    }
-
     void ClearIntentLog()
     {
         lock (_manifestGate)
@@ -4821,12 +4830,9 @@ sealed class LocalDiskStore :
         }
     }
 
-    static JsonElement CreateManifestEdit(string variant, object value) =>
-        JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant] = value },
-            JsonOptions);
+    static ManifestEdit CreateManifestEdit(string variant, object value) => new(variant, value);
 
-    void DurablyApplyManifestBatch(List<JsonElement> edits)
+    void DurablyApplyManifestBatch(List<ManifestEdit> edits)
     {
         if (edits.Count == 0)
         {
@@ -4836,7 +4842,7 @@ sealed class LocalDiskStore :
         DurablyApplyManifestEdit(CreateManifestEdit("Batch", edits));
     }
 
-    void DurablyApplyManifestEdit(JsonElement edit)
+    void DurablyApplyManifestEdit(ManifestEdit edit)
     {
         lock (_manifestGate)
         {
@@ -4844,24 +4850,21 @@ sealed class LocalDiskStore :
         }
     }
 
-    void DurablyApplyManifestEditCore(JsonElement edit)
+    void DurablyApplyManifestEditCore(ManifestEdit edit)
     {
-        var recordType = GetManifestEditRecordType(edit);
+        var recordType = GetManifestEditRecordType(edit.Variant);
         var editId = checked(_manifest.EditCheckpointId + 1);
-        byte[] payload;
-        using (var buffer = new MemoryStream())
+        var payload = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(payload))
         {
-            using var writer = new Utf8JsonWriter(buffer);
             writer.WriteStartObject();
             writer.WriteNumber("edit_id", editId);
             writer.WritePropertyName("edit");
-            edit.WriteTo(writer);
+            edit.WriteTo(writer, JsonOptions);
             writer.WriteEndObject();
-            writer.Flush();
-            payload = buffer.ToArray();
         }
 
-        var record = EncodeManifestJournalRecord(recordType, payload);
+        var record = EncodeManifestJournalRecord(recordType, payload.WrittenSpan);
         var markerPayload = JsonSerializer.SerializeToUtf8Bytes(
             new
             {
@@ -4984,9 +4987,7 @@ sealed class LocalDiskStore :
             return true;
         }
 
-        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
-        return key.SequenceCompareTo(smallest) >= 0 && key.SequenceCompareTo(largest) <= 0;
+        return key.SequenceCompareTo(file.SmallestKey!) >= 0 && key.SequenceCompareTo(file.LargestKey!) <= 0;
     }
 
     static bool OverlapsFileRange(FileMeta file, ReadOnlySpan<byte> start, ReadOnlySpan<byte> end)
@@ -4996,10 +4997,8 @@ sealed class LocalDiskStore :
             return true;
         }
 
-        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
-        return largest.AsSpan().SequenceCompareTo(start) >= 0 &&
-               smallest.AsSpan().SequenceCompareTo(end) < 0;
+        return file.LargestKey.AsSpan().SequenceCompareTo(start) >= 0 &&
+               file.SmallestKey.AsSpan().SequenceCompareTo(end) < 0;
     }
 
     static bool RangesOverlap(
@@ -5122,8 +5121,8 @@ sealed class LocalDiskStore :
                     ContentCrc32C = DiskFormat.Crc32C(bytes),
                     ColumnFamilyId = familyId,
                     SstSequence = sstSequence,
-                    SmallestKey = keys.Count == 0 ? null : keys[0].Select(static value => (int)value).ToArray(),
-                    LargestKey = keys.Count == 0 ? null : keys[^1].Select(static value => (int)value).ToArray(),
+                    SmallestKey = keys.Count == 0 ? null : keys[0].ToArray(),
+                    LargestKey = keys.Count == 0 ? null : keys[^1].ToArray(),
                     KeyBoundsComplete = true,
                     SmallestSequence = sequences.Count == 0 ? null : sequences.Min(),
                     LargestSequence = sequences.Count == 0 ? null : sequences.Max(),
@@ -5638,25 +5637,25 @@ sealed class LocalDiskStore :
         var nextLegacyEditId = manifest.EditCheckpointId;
         foreach (var record in records)
         {
-            using var document = JsonDocument.Parse(record.Payload);
-            var edit = document.RootElement;
-            ulong editId;
-            if (edit.ValueKind == JsonValueKind.Object &&
-                edit.TryGetProperty("edit_id", out var editIdElement) &&
-                edit.TryGetProperty("edit", out var envelopedEdit))
-            {
-                editId = editIdElement.GetUInt64();
-                edit = envelopedEdit;
-            }
-            else
-            {
-                editId = checked(++nextLegacyEditId);
-            }
-
+            var editStart = ManifestJournalPayload.Locate(record.Payload, out var envelopedEditId);
+            var editId = envelopedEditId ?? checked(++nextLegacyEditId);
             nextLegacyEditId = Math.Max(nextLegacyEditId, editId);
             if (editId <= manifest.EditCheckpointId)
             {
                 continue;
+            }
+
+            ManifestEdit edit;
+            try
+            {
+                edit = ManifestJournalPayload.ReadEdit(record.Payload, editStart, JsonOptions);
+            }
+            catch (JsonException exception)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal payload cannot be decoded.",
+                    exception);
             }
 
             ApplyManifestEdit(manifest, edit, record.Type);
@@ -5713,7 +5712,7 @@ sealed class LocalDiskStore :
             var payloadCopy = payload.ToArray();
             try
             {
-                using var _ = JsonDocument.Parse(payloadCopy);
+                ManifestJournalPayload.Validate(payloadCopy);
             }
             catch (JsonException exception)
             {
@@ -5741,47 +5740,54 @@ sealed class LocalDiskStore :
 
     static void ApplyManifestEdit(
         ManifestState manifest,
-        JsonElement edit,
-        byte recordType)
+        ManifestEdit edit,
+        byte? recordType)
     {
-        if (recordType == 8 && edit.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var nested in edit.EnumerateArray())
-            {
-                ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
-            }
-
-            return;
-        }
-
-        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "The manifest journal edit shape is invalid.");
-        }
-
-        var variant = edit.EnumerateObject().Single();
-        var actualRecordType = GetManifestEditRecordType(variant.Name);
-        if (actualRecordType != recordType)
+        if (recordType.HasValue && GetManifestEditRecordType(edit.Variant) != recordType.Value)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "The manifest journal record type does not match its edit payload.");
         }
 
-        var value = variant.Value;
-        switch (variant.Name)
+        switch (edit.Value)
+        {
+            case FileMeta metadata when edit.Variant == "AddSst":
+                ApplyAddSst(manifest, metadata.Clone());
+                return;
+            case List<ManifestEdit> nested when edit.Variant == "Batch":
+                foreach (var nestedEdit in nested)
+                {
+                    ApplyManifestEdit(manifest, nestedEdit, null);
+                }
+
+                return;
+            case JsonElement element:
+                ApplyManifestEditValue(manifest, edit.Variant, element);
+                return;
+            default:
+                ApplyManifestEditValue(manifest, edit.Variant, edit.ToElement(JsonOptions).GetProperty(edit.Variant));
+                return;
+        }
+    }
+
+    static void ApplyAddSst(ManifestState manifest, FileMeta metadata)
+    {
+        ValidateSstName(metadata.Name);
+        manifest.Files.RemoveAll(file => file.Name == metadata.Name);
+        manifest.Files.Add(metadata);
+    }
+
+    static void ApplyManifestEditValue(ManifestState manifest, string variant, JsonElement value)
+    {
+        switch (variant)
         {
             case "AddSst":
-                {
-                    var metadata = value.Deserialize<FileMeta>(JsonOptions) ??
-                                   throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty.");
-                    ValidateSstName(metadata.Name);
-                    manifest.Files.RemoveAll(file => file.Name == metadata.Name);
-                    manifest.Files.Add(metadata);
-                    break;
-                }
+                ApplyAddSst(
+                    manifest,
+                    value.Deserialize<FileMeta>(JsonOptions) ??
+                    throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty."));
+                break;
             case "RemoveSst":
                 {
                     var name = ValidateSstName(GetRequiredString(value, "name"));
@@ -5871,14 +5877,14 @@ sealed class LocalDiskStore :
             case "Batch":
                 foreach (var nested in value.EnumerateArray())
                 {
-                    ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
+                    ApplyManifestEdit(manifest, ManifestEdit.FromElement(nested), null);
                 }
 
                 break;
             default:
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
-                    $"The manifest journal edit '{variant.Name}' is unsupported.");
+                    $"The manifest journal edit '{variant}' is unsupported.");
         }
     }
 
@@ -5903,16 +5909,6 @@ sealed class LocalDiskStore :
                 .ToList()
             : [.. droppedNames];
         family.Reclaimed = false;
-    }
-
-    static byte GetManifestEditRecordType(JsonElement edit)
-    {
-        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
-        {
-            throw PantsException.Create(PantsErrorCode.Corruption, "The manifest edit is malformed.");
-        }
-
-        return GetManifestEditRecordType(edit.EnumerateObject().Single().Name);
     }
 
     static byte GetManifestEditRecordType(string variant) => variant switch
@@ -5973,7 +5969,7 @@ sealed class LocalDiskStore :
                     $"Manifest edit field '{name}' is invalid.")
             };
 
-    static int[]? GetOptionalByteArray(JsonElement element, string name)
+    static byte[]? GetOptionalByteArray(JsonElement element, string name)
     {
         if (!element.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
         {
@@ -5985,7 +5981,14 @@ sealed class LocalDiskStore :
             throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
         }
 
-        return value.EnumerateArray().Select(static item => checked((int)item.GetByte())).ToArray();
+        var bytes = new byte[value.GetArrayLength()];
+        var index = 0;
+        foreach (var item in value.EnumerateArray())
+        {
+            bytes[index++] = item.GetByte();
+        }
+
+        return bytes;
     }
 
     static string[] GetStringArray(JsonElement element, string name)
@@ -6006,20 +6009,7 @@ sealed class LocalDiskStore :
     static string[] GetValidatedSstNameArray(JsonElement element, string name) =>
         GetStringArray(element, name).Select(ValidateSstName).ToArray();
 
-    static uint Crc32(ReadOnlySpan<byte> bytes)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in bytes)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
-            }
-        }
-
-        return ~crc;
-    }
+    static uint Crc32(ReadOnlySpan<byte> bytes) => System.IO.Hashing.Crc32.HashToUInt32(bytes);
 
     static void RetainCorruptFile(string path)
     {

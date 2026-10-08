@@ -164,8 +164,8 @@ public sealed class CompactionStreamsTests
         Level = level,
         SstSequence = sequence,
         SizeBytes = 1024,
-        SmallestKey = [.. System.Text.Encoding.UTF8.GetBytes(smallest).Select(static value => (int)value)],
-        LargestKey = [.. System.Text.Encoding.UTF8.GetBytes(largest).Select(static value => (int)value)],
+        SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest),
+        LargestKey = System.Text.Encoding.UTF8.GetBytes(largest),
         KeyBoundsComplete = true
     };
 

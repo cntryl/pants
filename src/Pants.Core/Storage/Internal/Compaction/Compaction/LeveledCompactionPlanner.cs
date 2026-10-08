@@ -192,10 +192,10 @@ static class LeveledCompactionPlanner
         value > ulong.MaxValue / multiplier ? ulong.MaxValue : value * multiplier;
 
     static byte[] GetSmallestKey(FileMeta file) =>
-        file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
+        file.SmallestKey!;
 
     static byte[] GetLargestKey(FileMeta file) =>
-        file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
+        file.LargestKey!;
 
     static bool Overlaps(byte[] leftSmallest, byte[] leftLargest, byte[] rightSmallest,
         byte[] rightLargest) =>
