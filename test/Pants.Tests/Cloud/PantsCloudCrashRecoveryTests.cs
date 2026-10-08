@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
@@ -89,14 +88,9 @@ public sealed class PantsCloudCrashRecoveryTests
     public async Task ShouldResumeCloudUploadFromRecoveredActiveWalAfterChildAbort()
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, ActiveWalScenario);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, ActiveWalScenario))
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-        }
-        finally
-        {
-            await TerminateCrashChildAsync(child, directory.Path);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
         await ExpireCrashedProcessLeaseAsync(directory.Path);
@@ -129,14 +123,9 @@ public sealed class PantsCloudCrashRecoveryTests
     public async Task ShouldKeepWalSegmentsEpochScopedWhenCloudStrictCommitFollowsRecoveredActiveWal()
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, ActiveWalScenario);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, ActiveWalScenario))
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-        }
-        finally
-        {
-            await TerminateCrashChildAsync(child, directory.Path);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
         await ExpireCrashedProcessLeaseAsync(directory.Path);
@@ -187,14 +176,9 @@ public sealed class PantsCloudCrashRecoveryTests
     public async Task ShouldRecoverLocalCloudAsyncWalWhenChildAbortsBeforeUpload()
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, LocalWalScenario);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, LocalWalScenario))
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-        }
-        finally
-        {
-            await TerminateCrashChildAsync(child, directory.Path);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
         await ExpireCrashedProcessLeaseAsync(directory.Path);
@@ -212,14 +196,9 @@ public sealed class PantsCloudCrashRecoveryTests
     public async Task ShouldRecoverCloudStrictWriteWhenCacheLostAfterChildAbort()
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, CloudStrictScenario);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, CloudStrictScenario))
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-        }
-        finally
-        {
-            await TerminateCrashChildAsync(child, directory.Path);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
         RemoveLocalCache(directory.Path);
@@ -239,14 +218,9 @@ public sealed class PantsCloudCrashRecoveryTests
     public async Task ShouldRestorePublishedCloudSstWhenCacheLostAfterChildAbort()
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, PublishedSstScenario);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, PublishedSstScenario))
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-        }
-        finally
-        {
-            await TerminateCrashChildAsync(child, directory.Path);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
         await ExpireCrashedProcessLeaseAsync(directory.Path);
@@ -305,40 +279,18 @@ public sealed class PantsCloudCrashRecoveryTests
         Assert.Equal(retainedBytes, await File.ReadAllBytesAsync(remoteWal));
     }
 
-    static Process StartCrashChild(string databasePath, string scenario)
+    static Task<CrashChildProcess> StartReadyCrashChildAsync(string databasePath, string scenario)
     {
-        var start = new ProcessStartInfo
-        {
-            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                       Environment.ProcessPath ??
-                       "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        start.ArgumentList.Add("vstest");
-        start.ArgumentList.Add(typeof(PantsCloudCrashRecoveryTests).Assembly.Location);
-        start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
-        start.ArgumentList.Add(
-            $"--Tests:{typeof(PantsCloudCrashRecoveryTests).FullName}.ShouldAbortGivenCloudCrashChildScenario");
+        var start = CrashChildProcess.CreateStartInfo(
+            typeof(PantsCloudCrashRecoveryTests),
+            nameof(ShouldAbortGivenCloudCrashChildScenario));
         start.Environment[ChildScenarioEnvironmentVariable] = scenario;
         start.Environment[DatabasePathEnvironmentVariable] = databasePath;
-        return Process.Start(start) ?? throw new InvalidOperationException("Could not start crash child.");
-    }
-
-    static async Task WaitForChildReadinessAsync(Process child, string databasePath)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var readyPath = Path.Combine(databasePath, ReadyFileName);
-        while (!File.Exists(readyPath))
-        {
-            if (child.HasExited)
-            {
-                throw new XunitException(
-                    $"Crash child exited with code {child.ExitCode} before readiness.");
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
-        }
+        return CrashChildProcess.StartAndWaitForReadinessAsync(
+            start,
+            "cloud crash child",
+            databasePath,
+            Path.Combine(databasePath, ReadyFileName));
     }
 
     static async Task TerminateCrashChildAsync(Process child, string databasePath)
