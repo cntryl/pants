@@ -547,6 +547,7 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted = null,
         ResourceBudget? compactionBudget = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        long? outputPartitionTargetBytes = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
             state,
@@ -557,6 +558,7 @@ sealed class LocalDiskStore :
             publicationCompleted,
             compactionBudget,
             prepareInputs,
+            outputPartitionTargetBytes,
             cancellationToken);
 
     public void Flush(RuntimeState state)
@@ -3333,6 +3335,7 @@ sealed class LocalDiskStore :
                 null,
                 null,
                 null,
+                null,
                 CancellationToken.None)
             .AsTask()
             .GetAwaiter()
@@ -3353,6 +3356,7 @@ sealed class LocalDiskStore :
             null,
             null,
             null,
+            null,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -3364,6 +3368,7 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted,
         ResourceBudget? compactionBudget,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        long? outputPartitionTargetBytes,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -3382,6 +3387,11 @@ sealed class LocalDiskStore :
         }
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        // A publisher with its own memory envelope (cloud upload and readback) can require
+        // outputs smaller than the plain target size.
+        var partitionTargetBytes = Math.Min(
+            _targetSstSizeBytes,
+            outputPartitionTargetBytes ?? long.MaxValue);
         var obsoleteNames = new List<string>();
         var edits = new List<ManifestEdit>();
         var intents = new List<IntentEntry>();
@@ -3436,7 +3446,7 @@ sealed class LocalDiskStore :
                              compactionStreams.Streams,
                              compactionStreams.RangeTombstones,
                              plan,
-                             _targetSstSizeBytes,
+                             partitionTargetBytes,
                              compactionBudget))
                 {
                     var outputSequence = checked(firstOutputSequence + outputIndex);
@@ -3592,6 +3602,7 @@ sealed class LocalDiskStore :
                 publicationCompleted,
                 compactionBudget,
                 prepareInputs,
+                outputPartitionTargetBytes,
                 cancellationToken).ConfigureAwait(false);
             outputBytes = checked(outputBytes + continued.BytesRewritten);
             publicationCount = checked(publicationCount + continued.PublicationCount);

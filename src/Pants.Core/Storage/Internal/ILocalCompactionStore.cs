@@ -12,5 +12,6 @@ interface ILocalCompactionStore
         Action<long>? publicationCompleted = null,
         ResourceBudget? compactionBudget = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        long? outputPartitionTargetBytes = null,
         CancellationToken cancellationToken = default);
 }
