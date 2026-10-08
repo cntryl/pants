@@ -6,7 +6,7 @@ sealed class CoalescedCommitCrashFailpointHandler(
     string sentinelPath,
     int expectedCommitCount) : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _runtimeBarrierEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);

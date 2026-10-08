@@ -28,13 +28,13 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         }
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(5));
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(5));
-        await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(5));
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         await using var reader = await database.Transactions.BeginAsync(
@@ -136,23 +136,23 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
             new RuntimeDependencies(failpoints));
         var transactions = await CreateTransactionsAsync(database, "apply-failure", 8);
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(5));
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(5));
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
         foreach (var commit in commits)
         {
             var failure = await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
-                commit.WaitAsync(TimeSpan.FromSeconds(5)));
+                commit.WaitAsync(TestTimeouts.Expected));
             Assert.Equal(PantsErrorCode.NoSpace, failure.Code);
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
             .AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(TestTimeouts.Expected);
         Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
         Assert.Equal(1, metrics.WalAppendCount);
         await DisposeTransactionsAsync(transactions);
@@ -198,13 +198,13 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
         PantsWriteOptions writeOptions)
     {
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(5));
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(writeOptions).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(5));
-        await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(5));
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
     }
 
     static async Task AssertKeysVisibleAsync(

@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class AsyncSstReaderCacheTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(10);
-
     [Fact]
     public async Task ShouldFetchMetadataOnceForRepeatedOpensOfOneSst()
     {
@@ -42,14 +40,14 @@ public sealed class AsyncSstReaderCacheTests
                 file,
                 async token =>
                 {
-                    await Task.Run(() => Assert.True(release.Wait(AssertionTimeout)), token);
+                    await Task.Run(() => Assert.True(release.Wait(TestTimeouts.Expected)), token);
                     return await OpenAsync(path, file, counter, token);
                 },
                 CancellationToken.None).AsTask())
             .ToArray();
 
         release.Set();
-        var readers = await Task.WhenAll(opens).WaitAsync(AssertionTimeout);
+        var readers = await Task.WhenAll(opens).WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(1, counter.Opens);
         foreach (var reader in readers)

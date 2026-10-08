@@ -2,8 +2,6 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class ChannelRuntimeServiceTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldBoundAdmissionWhilePreservingTypedDispatchOrder()
     {
@@ -14,7 +12,7 @@ public sealed class ChannelRuntimeServiceTests
         await using var service = new TestRuntimeService(1, started, release);
 
         var first = await service.ScheduleAsync(new TestRuntimeRequest(1, true));
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
         var second = await service.ScheduleAsync(new TestRuntimeRequest(2, false));
         var thirdAdmission = service
             .ScheduleAsync(new TestRuntimeRequest(3, false))
@@ -24,8 +22,8 @@ public sealed class ChannelRuntimeServiceTests
         Assert.Equal(3, service.Outstanding);
 
         release.SetResult();
-        var third = await thirdAdmission.WaitAsync(AssertionTimeout);
-        var results = await Task.WhenAll(first, second, third).WaitAsync(AssertionTimeout);
+        var third = await thirdAdmission.WaitAsync(TestTimeouts.Expected);
+        var results = await Task.WhenAll(first, second, third).WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal([1, 2, 3], results);
         Assert.Equal([1, 2, 3], service.ExecutedRequests);
@@ -54,14 +52,14 @@ public sealed class ChannelRuntimeServiceTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new TestRuntimeService(1, started, release);
         var first = await service.ScheduleAsync(new TestRuntimeRequest(1, true));
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
         var second = await service.ScheduleAsync(new TestRuntimeRequest(2, false));
 
         var shutdown = service.DisposeAsync().AsTask();
         Assert.False(shutdown.IsCompleted);
 
         release.SetResult();
-        await shutdown.WaitAsync(AssertionTimeout);
+        await shutdown.WaitAsync(TestTimeouts.Expected);
 
         var results = await Task.WhenAll(first, second);
         Assert.Equal([1, 2], results);

@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudRuntimeDeadlineTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldFinishAcceptedCloudStrictDurabilityAfterCallerAbandonsResponse()
     {
@@ -28,12 +26,12 @@ public sealed class PantsCloudRuntimeDeadlineTests
         {
             transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
             var commit = transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             try
             {
                 var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                    commit.WaitAsync(AssertionTimeout));
+                    commit.WaitAsync(TestTimeouts.Expected));
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain("accepted-key", exception.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("accepted-value", exception.Message, StringComparison.Ordinal);
@@ -44,7 +42,7 @@ public sealed class PantsCloudRuntimeDeadlineTests
             }
         }
 
-        await database.ShutdownAsync(AssertionTimeout);
+        await database.ShutdownAsync(TestTimeouts.Expected);
         await database.DisposeAsync();
 
         await using var reopened = await PantsDatabase.OpenAsync(options);

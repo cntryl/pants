@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsRuntimeLifecycleAdversarialTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldReleaseDiskStoreWhenRunLoopFaultsDuringDisposal()
     {
@@ -22,10 +20,10 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         _ = await actor.GetRecoveryMetricsAsync(CancellationToken.None);
         failpoint.Arm();
         _ = await actor.GetRecoveryMetricsAsync(CancellationToken.None);
-        await failpoint.WaitUntilFaultedAsync(AssertionTimeout);
+        await failpoint.WaitUntilFaultedAsync(TestTimeouts.Expected);
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            actor.DisposeAsync().AsTask().WaitAsync(AssertionTimeout));
+            actor.DisposeAsync().AsTask().WaitAsync(TestTimeouts.Expected));
         Assert.Contains(nameof(Failpoint.AfterRuntimeCommandExecution), failure.Message);
         Assert.True(actor.AreOwnedRuntimeResourcesDisposed);
 
@@ -51,7 +49,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
 
         directory.AbandonCleanup();
         var first = await Assert.ThrowsAsync<PantsIOException>(() =>
-            database.ShutdownAsync(AssertionTimeout).AsTask());
+            database.ShutdownAsync(TestTimeouts.Expected).AsTask());
 
         // Shutdown is monotonic: the failure is terminal, so no new work is admitted...
         await Assert.ThrowsAsync<PantsBusyException>(() => database.Transactions.BeginAsync(
@@ -61,7 +59,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
 
         // ...and every later caller sees the identical error without re-running shutdown.
         var second = await Assert.ThrowsAsync<PantsIOException>(() =>
-            database.ShutdownAsync(AssertionTimeout).AsTask());
+            database.ShutdownAsync(TestTimeouts.Expected).AsTask());
         Assert.Same(first, second);
         Assert.Equal(1, failpoint.HitCount);
     }
@@ -85,12 +83,12 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         }
 
         var shutdowns = Enumerable.Range(0, 8)
-            .Select(_ => database.ShutdownAsync(AssertionTimeout).AsTask())
+            .Select(_ => database.ShutdownAsync(TestTimeouts.Expected).AsTask())
             .ToArray();
         var deadlineShutdowns = Enumerable.Range(0, 8)
             .Select(_ => database.ShutdownAsync(TimeSpan.FromMilliseconds(250)).AsTask())
             .ToArray();
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
         Assert.Equal(1, failpoint.HitCount);
         Assert.All(shutdowns, static shutdown => Assert.False(shutdown.IsCompleted));
@@ -104,7 +102,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         Assert.Equal(1, failpoint.HitCount);
 
         failpoint.Release();
-        await Task.WhenAll(shutdowns).WaitAsync(AssertionTimeout);
+        await Task.WhenAll(shutdowns).WaitAsync(TestTimeouts.Expected);
         Assert.Equal(1, failpoint.HitCount);
     }
 
@@ -129,7 +127,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         }
 
         var blocker = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         var metrics = Enumerable.Range(0, 10)
             .Select(_ => database.Diagnostics.GetRuntimeMetricsAsync().AsTask())
             .ToArray();
@@ -142,9 +140,9 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         Assert.All(commits, static operation => Assert.False(operation.IsCompleted));
 
         failpoint.Release();
-        _ = await blocker.WaitAsync(AssertionTimeout);
-        await Task.WhenAll(metrics).WaitAsync(AssertionTimeout);
-        await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+        _ = await blocker.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(metrics).WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
         foreach (var transaction in transactions)
         {
             await transaction.DisposeAsync();
@@ -162,6 +160,6 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
         }
 
         await read.RollbackAsync();
-        await database.ShutdownAsync(AssertionTimeout);
+        await database.ShutdownAsync(TestTimeouts.Expected);
     }
 }

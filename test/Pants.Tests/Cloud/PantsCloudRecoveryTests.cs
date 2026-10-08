@@ -16,7 +16,7 @@ public sealed class PantsCloudRecoveryTests
             await WriteBatchAsync(database, family, 0, 100, "partial_upload_key", "value_before_upload");
             await database.Maintenance.FlushAsync(family);
             await Task.Delay(TimeSpan.FromMilliseconds(50));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using (var reopened = await PantsDatabase.OpenAsync(options))
@@ -48,7 +48,7 @@ public sealed class PantsCloudRecoveryTests
             await WriteBatchAsync(database, family, 50, 50, "manifest_fail_key", "v2");
             await database.Maintenance.FlushAsync(family);
             await database.Maintenance.CompactAllAsync();
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -73,7 +73,7 @@ public sealed class PantsCloudRecoveryTests
             var family = await database.ColumnFamilies.CreateAsync("test");
             await WriteBatchAsync(database, family, 0, 75, "retry_key", "retry_value");
             await database.Maintenance.FlushAsync(family);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -124,7 +124,7 @@ public sealed class PantsCloudRecoveryTests
             await database.Maintenance.FlushAsync(family);
             await database.Maintenance.CompactAllAsync();
             await Task.Delay(TimeSpan.FromMilliseconds(50));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -149,7 +149,7 @@ public sealed class PantsCloudRecoveryTests
             var family = await database.ColumnFamilies.CreateAsync("test");
             await WriteBatchAsync(database, family, 0, 50, "cloud_offline_key", "offline_value");
             await database.Maintenance.FlushAsync(family);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -177,7 +177,7 @@ public sealed class PantsCloudRecoveryTests
             await WriteBatchAsync(database, family, 50, 50, "resume_key", "batch2");
             await database.Maintenance.FlushAsync(family);
             await Task.Delay(TimeSpan.FromMilliseconds(50));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -204,7 +204,7 @@ public sealed class PantsCloudRecoveryTests
             await WriteBatchAsync(database, family, 0, 60, "dedup_key", "dedup_value");
             await database.Maintenance.FlushAsync(family);
             await Task.Delay(TimeSpan.FromMilliseconds(50));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);

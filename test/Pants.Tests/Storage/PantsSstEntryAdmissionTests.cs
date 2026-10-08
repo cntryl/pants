@@ -323,11 +323,11 @@ public sealed class PantsSstEntryAdmissionTests
         neighbour.Put(TestBytes.FromString("neighbour"), TestBytes.FromString("value"));
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var oversizedCommit = oversized.CommitAsync(PantsWriteOptions.Sync).AsTask();
         var neighbourCommit = neighbour.CommitAsync(PantsWriteOptions.Sync).AsTask();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(TimeSpan.FromSeconds(10));
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() => oversizedCommit);
         await neighbourCommit;

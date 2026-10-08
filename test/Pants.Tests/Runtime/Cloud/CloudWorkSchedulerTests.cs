@@ -2,8 +2,6 @@ namespace Cntryl.Pants.Runtime.Cloud;
 
 public sealed class CloudWorkSchedulerTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldCoalesceSignalsGivenCloudWorkIsAlreadyExecuting()
     {
@@ -32,14 +30,14 @@ public sealed class CloudWorkSchedulerTests
             });
 
         scheduler.Signal();
-        await firstStarted.Task.WaitAsync(AssertionTimeout);
+        await firstStarted.Task.WaitAsync(TestTimeouts.Expected);
         for (var index = 0; index < 100; index++)
         {
             scheduler.Signal();
         }
 
         releaseFirst.SetResult();
-        await secondCompleted.Task.WaitAsync(AssertionTimeout);
+        await secondCompleted.Task.WaitAsync(TestTimeouts.Expected);
         await WaitForIdleAsync(scheduler);
 
         Assert.Equal(2, Volatile.Read(ref executions));
@@ -69,8 +67,8 @@ public sealed class CloudWorkSchedulerTests
             });
 
         scheduler.Signal();
-        await firstAttempted.Task.WaitAsync(AssertionTimeout);
-        await secondCompleted.Task.WaitAsync(AssertionTimeout);
+        await firstAttempted.Task.WaitAsync(TestTimeouts.Expected);
+        await secondCompleted.Task.WaitAsync(TestTimeouts.Expected);
         await WaitForIdleAsync(scheduler);
 
         Assert.Equal(2, Volatile.Read(ref executions));
@@ -107,17 +105,17 @@ public sealed class CloudWorkSchedulerTests
             });
 
         scheduler.Signal();
-        await secondStarted.Task.WaitAsync(AssertionTimeout);
+        await secondStarted.Task.WaitAsync(TestTimeouts.Expected);
 
         await scheduler.DisposeAsync();
 
-        await secondCanceled.Task.WaitAsync(AssertionTimeout);
+        await secondCanceled.Task.WaitAsync(TestTimeouts.Expected);
         Assert.Equal(0, scheduler.Outstanding);
     }
 
     static async Task WaitForIdleAsync(CloudWorkScheduler scheduler)
     {
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (scheduler.Outstanding != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);

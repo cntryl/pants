@@ -243,7 +243,7 @@ public sealed class PantsDiskStorageTests
             }
 
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-            online = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
+            online = await database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected);
         }
 
         var offline = await PantsDatabase.VerifyPathAsync(directory.Path);
@@ -503,13 +503,13 @@ public sealed class PantsDiskStorageTests
         try
         {
             var compaction = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(TimeSpan.FromSeconds(10));
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             var pinned = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
 
             failpoint.Release();
-            await compaction.WaitAsync(TimeSpan.FromSeconds(10));
+            await compaction.WaitAsync(TestTimeouts.Expected);
 
             Assert.Equal("value-1", TestBytes.ToText((await pinned.GetAsync("key"u8.ToArray()))!.Value));
             Assert.All(inputPaths, static path => Assert.True(File.Exists(path)));
@@ -887,7 +887,7 @@ public sealed class PantsDiskStorageTests
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
-        var report = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
+        var report = await database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected);
 
         Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
         Assert.Equal(1, metrics.ObsoleteFileBacklog);

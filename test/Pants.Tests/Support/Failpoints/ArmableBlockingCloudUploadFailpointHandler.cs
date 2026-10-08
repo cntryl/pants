@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class ArmableBlockingCloudUploadFailpointHandler : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _entered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);

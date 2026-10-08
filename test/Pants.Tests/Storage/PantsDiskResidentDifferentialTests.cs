@@ -60,7 +60,7 @@ public sealed class PantsDiskResidentDifferentialTests
                 child.Kill(true);
             }
 
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await child.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
         }
 
         Assert.NotEqual(0, child.ExitCode);
@@ -308,7 +308,7 @@ public sealed class PantsDiskResidentDifferentialTests
 
     static async Task WaitForCrashChildAsync(Process child, string path)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         var readyPath = Path.Combine(path, CrashReadyFileName);
         while (!File.Exists(readyPath))
         {

@@ -4,8 +4,6 @@ namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsBufferedWalSyncWindowTests
 {
-    static readonly TimeSpan Deadline = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldFsyncBufferedCommitWithinTheMaximumDelayWithoutFurtherCallerActivity()
     {
@@ -44,7 +42,7 @@ public sealed class PantsBufferedWalSyncWindowTests
         failpoints.Arm();
 
         await CommitBufferedAsync(database, "key", new byte[16]);
-        await failpoints.WaitUntilFailedAsync(Deadline);
+        await failpoints.WaitUntilFailedAsync(TestTimeouts.Expected);
 
         await Assert.ThrowsAnyAsync<PantsException>(async () =>
             await CommitBufferedAsync(database, "after", new byte[16]));
@@ -61,7 +59,7 @@ public sealed class PantsBufferedWalSyncWindowTests
 
     static async Task WaitForNewSyncAsync(IPantsDatabase database, long before)
     {
-        using var timeout = new CancellationTokenSource(Deadline);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while ((await database.Diagnostics.GetRuntimeMetricsAsync()).WalLastSyncedSequence <= before)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

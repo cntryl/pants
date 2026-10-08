@@ -15,7 +15,7 @@ public sealed class PantsDurabilityParityTests
             var commits = Enumerable.Range(0, commitCount)
                 .Select(index => CommitAsync(database, index))
                 .ToArray();
-            await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(20));
+            await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
 
             var liveMetrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(liveMetrics.DurabilityWaitersFannedOutTotal > 0);
@@ -299,7 +299,7 @@ public sealed class PantsDurabilityParityTests
             await CommitValueAsync(database, $"key-{cycle}", $"value-{cycle}");
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             await database.Maintenance.CompactAllAsync();
-            await database.ShutdownAsync(TimeSpan.FromSeconds(10));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(

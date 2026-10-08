@@ -162,7 +162,7 @@ public sealed class PantsWalWriterFencingTests
     public async Task ShouldFenceWalGivenBufferedDurabilityBoundarySyncFails()
     {
         using var directory = new TemporaryDirectory();
-        var failpoints = new ArmableFailpointHandler();
+        var failpoints = new ShutdownBoundarySyncFailureFailpointHandler();
         var database = await OpenAsync(directory.Path, failpoints);
         try
         {
@@ -170,13 +170,12 @@ public sealed class PantsWalWriterFencingTests
                 transaction.Put(Key("buffered"), Value("pending")));
 
             directory.AbandonCleanup();
-            failpoints.Arm(Failpoint.BeforeWalSync);
             var failure = await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());
+                database.ShutdownAsync(TestTimeouts.Expected).AsTask());
 
             // The failure is terminal: it is replayed to later callers and new work is rejected.
             var replayed = await Assert.ThrowsAnyAsync<PantsException>(() =>
-                database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());
+                database.ShutdownAsync(TestTimeouts.Expected).AsTask());
             Assert.Same(failure, replayed);
             await Assert.ThrowsAsync<PantsBusyException>(() =>
                 CommitAsync(database, PantsWriteOptions.Sync, static transaction =>

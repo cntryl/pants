@@ -17,7 +17,7 @@ public sealed class PantsStartupPhaseDiagnosticsTests(ITestOutputHelper output)
             : PantsOpenOptions.Local(directory.Path);
         await using (var seed = await PantsDatabase.OpenAsync(options))
         {
-            await seed.ShutdownAsync(TimeSpan.FromSeconds(10));
+            await seed.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var database = await PantsDatabase.OpenForTestingAsync(

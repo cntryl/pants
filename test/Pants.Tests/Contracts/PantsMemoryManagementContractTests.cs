@@ -57,7 +57,7 @@ public sealed class PantsMemoryManagementContractTests
         var database = await PantsDatabase.OpenAsync(CreateOptions(mode, directory.Path));
         await StorageModeTestHarness.PutAsync(database, mode, "key", "value");
 
-        await database.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await database.DisposeAsync().AsTask().WaitAsync(TestTimeouts.Expected);
     }
 
     static PantsOpenOptions CreateOptions(string mode, string path) =>

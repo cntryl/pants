@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsRuntimeMetricActivityContractTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(2);
-
     [Fact]
     public async Task ShouldReportOldestSnapshotAgeGivenTtlClockAdvances()
     {
@@ -77,7 +75,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         try
         {
             await CommitAsync(database, family, new byte[] { 1 }, value);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(database, family, new byte[] { 2 }, value);
             _ = await Assert.ThrowsAsync<PantsWriteStallException>(() =>
                 CommitAsync(database, family, new byte[] { 3 }, value).AsTask());
@@ -97,7 +95,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
 
             clock.UtcNow -= TimeSpan.FromSeconds(2);
             failpoint.Release();
-            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, AssertionTimeout));
+            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, TestTimeouts.Expected));
             var completed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, completed.WriteStallActiveNanoseconds);
             Assert.Equal(3_000_000_000, completed.WriteStallNanosecondsTotal);
@@ -136,12 +134,12 @@ public sealed class PantsRuntimeMetricActivityContractTests
         {
             _ = await database.Diagnostics.GetRuntimeMetricsAsync();
             await CommitAsync(database, family, new byte[] { 1 }, value);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(database, family, new byte[] { 2 }, value);
 
             timeProvider.Advance(TimeSpan.FromSeconds(4));
             failpoint.Release();
-            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, AssertionTimeout));
+            Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(family, TestTimeouts.Expected));
 
             var completed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(4_000_000_000, completed.WriteStallNanosecondsTotal);
@@ -173,7 +171,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         try
         {
             firstCompaction = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             pendingCompaction = database.Maintenance.CompactAllAsync().AsTask();
 
             metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
@@ -189,17 +187,17 @@ public sealed class PantsRuntimeMetricActivityContractTests
             failpoint.Release();
             if (firstCompaction is not null)
             {
-                await firstCompaction.WaitAsync(AssertionTimeout);
+                await firstCompaction.WaitAsync(TestTimeouts.Expected);
             }
 
             if (pendingCompaction is not null)
             {
-                await pendingCompaction.WaitAsync(AssertionTimeout);
+                await pendingCompaction.WaitAsync(TestTimeouts.Expected);
             }
 
             if (metricsRequest is not null)
             {
-                _ = await metricsRequest.WaitAsync(AssertionTimeout);
+                _ = await metricsRequest.WaitAsync(TestTimeouts.Expected);
             }
         }
     }
@@ -228,7 +226,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         try
         {
             flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
@@ -240,12 +238,12 @@ public sealed class PantsRuntimeMetricActivityContractTests
             failpoint.Release();
             if (flush is not null)
             {
-                await flush.WaitAsync(AssertionTimeout);
+                await flush.WaitAsync(TestTimeouts.Expected);
             }
 
             if (metricsRequest is not null)
             {
-                _ = await metricsRequest.WaitAsync(AssertionTimeout);
+                _ = await metricsRequest.WaitAsync(TestTimeouts.Expected);
             }
         }
     }
@@ -268,7 +266,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             options,
             new RuntimeDependencies(failpoint));
         await CommitCloudAsync(database, "occupy-upload-queue");
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         await using var blocked = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
@@ -306,7 +304,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             options,
             new RuntimeDependencies(failpoint));
         await CommitCloudAsync(database, "first-upload");
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         try
         {
             await CommitCloudAsync(database, "second-upload");
@@ -317,7 +315,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             await Assert.ThrowsAsync<PantsWriteStallException>(() =>
                 CommitCloudAsync(database, "rejected-upload")
                     .AsTask()
-                    .WaitAsync(AssertionTimeout));
+                    .WaitAsync(TestTimeouts.Expected));
 
             var stalled = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(2, stalled.PendingCloudUploads);
@@ -329,7 +327,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             failpoint.Release();
         }
 
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics drained;
         do
         {
@@ -367,7 +365,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         Task? commit = null;
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             commit = blocked.CommitAsync(PantsWriteOptions.CloudAsync).AsTask();
 
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -377,7 +375,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         finally
         {
             failpoint.Release();
-            await compaction.WaitAsync(AssertionTimeout);
+            await compaction.WaitAsync(TestTimeouts.Expected);
         }
 
         Assert.NotNull(commit);
@@ -411,7 +409,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
         Task<PantsRuntimeMetrics>? metricsRequest = null;
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             metricsRequest = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
@@ -421,10 +419,10 @@ public sealed class PantsRuntimeMetricActivityContractTests
         finally
         {
             failpoint.Release();
-            await flush.WaitAsync(AssertionTimeout);
+            await flush.WaitAsync(TestTimeouts.Expected);
             if (metricsRequest is not null)
             {
-                _ = await metricsRequest.WaitAsync(AssertionTimeout);
+                _ = await metricsRequest.WaitAsync(TestTimeouts.Expected);
             }
         }
 

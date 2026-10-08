@@ -50,7 +50,7 @@ public sealed class PantsStorageIoTests
                 path,
                 "new-generation"u8,
                 beforePublish: publishing.Set));
-            Assert.True(publishing.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(publishing.Wait(TestTimeouts.Expected));
             Assert.False(replacement.IsCompleted);
 
             return RandomAccess.Read(handle, buffer, offset);

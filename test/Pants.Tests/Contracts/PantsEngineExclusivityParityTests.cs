@@ -16,7 +16,7 @@ public sealed class PantsEngineExclusivityParityTests
         Assert.Equal(PantsErrorCode.LeaseHeld, held.Code);
         Assert.Contains("writer", held.Message, StringComparison.OrdinalIgnoreCase);
 
-        await first.ShutdownAsync(TimeSpan.FromSeconds(5));
+        await first.ShutdownAsync(TestTimeouts.Expected);
         await using var second = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.True(second.PersistentStorage!.IsPrimaryLeaseHealthy);
@@ -32,7 +32,7 @@ public sealed class PantsEngineExclusivityParityTests
             .ToArray();
         start.SetResult();
 
-        var results = await Task.WhenAll(attempts).WaitAsync(TimeSpan.FromSeconds(10));
+        var results = await Task.WhenAll(attempts).WaitAsync(TestTimeouts.Expected);
 
         var winner = Assert.Single(results, static result => result.Database is not null);
         Assert.All(
@@ -50,7 +50,7 @@ public sealed class PantsEngineExclusivityParityTests
             await using var database = await PantsDatabase.OpenAsync(
                 PantsOpenOptions.Local(directory.Path));
             Assert.True(database.PersistentStorage!.IsPrimaryLeaseHealthy);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
     }
 
@@ -67,7 +67,7 @@ public sealed class PantsEngineExclusivityParityTests
         await using (var mutationLock = await AcquireLeaseMutationLockAsync(
                          Path.Combine(directory.Path, ".midge_leader.lock")))
         {
-            await leaseLost.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await leaseLost.Task.WaitAsync(TestTimeouts.Expected);
         }
 
         Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
@@ -108,7 +108,7 @@ public sealed class PantsEngineExclusivityParityTests
 
     static async Task<FileStream> AcquireLeaseMutationLockAsync(string path)
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             try

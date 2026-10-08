@@ -21,7 +21,7 @@ sealed class BlockingCloudWalUploadFailpointHandler : IFailpointHandler, IDispos
         }
 
         _entered.TrySetResult();
-        if (!_release.Wait(TimeSpan.FromSeconds(10)))
+        if (!_release.Wait(TestTimeouts.Expected))
         {
             throw new TimeoutException("Timed out waiting to release cloud WAL upload.");
         }

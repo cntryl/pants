@@ -32,7 +32,7 @@ public sealed class SstBlockCacheTests
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
-        Assert.True(policies[0].AccessEntered.Wait(TimeSpan.FromSeconds(2)));
+        Assert.True(policies[0].AccessEntered.Wait(TestTimeouts.Expected));
         try
         {
             var independentRead = Task.Factory.StartNew(
@@ -41,7 +41,7 @@ public sealed class SstBlockCacheTests
                 TaskCreationOptions.LongRunning,
                 TaskScheduler.Default);
 
-            Assert.True(await independentRead.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.True(await independentRead.WaitAsync(TestTimeouts.Expected));
         }
         finally
         {
@@ -206,7 +206,7 @@ public sealed class SstBlockCacheTests
         })).ToArray();
 
         start.SetResult();
-        await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(workers).WaitAsync(TestTimeouts.Expected);
 
         Assert.InRange(cache.UsedBytes, 0, capacity);
         Assert.Equal(cache.Count * entrySize, cache.UsedBytes);

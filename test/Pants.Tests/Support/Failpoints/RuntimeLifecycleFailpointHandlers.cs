@@ -50,7 +50,7 @@ sealed class GatedShutdownBoundaryFailpointHandler : IFailpointHandler, IDisposa
 
         Interlocked.Increment(ref _hits);
         _entered.TrySetResult();
-        if (!_release.Wait(TimeSpan.FromSeconds(10)))
+        if (!_release.Wait(TestTimeouts.Expected))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");
         }

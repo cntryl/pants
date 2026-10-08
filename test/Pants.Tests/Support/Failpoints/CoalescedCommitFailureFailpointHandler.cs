@@ -4,7 +4,7 @@ sealed class CoalescedCommitFailureFailpointHandler(
     Failpoint? failure = null,
     int failAtHit = 1) : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _runtimeBarrierEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);

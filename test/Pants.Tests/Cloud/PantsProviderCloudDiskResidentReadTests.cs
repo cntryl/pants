@@ -152,7 +152,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         var compaction = reopened.Maintenance.CompactAllAsync(cancellation.Token).AsTask();
         try
         {
-            await handler.WaitUntilRequestStartsAsync(TimeSpan.FromSeconds(5));
+            await handler.WaitUntilRequestStartsAsync(TestTimeouts.Expected);
             cancellation.Cancel();
             var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compaction);
             Assert.Equal(cancellation.Token, exception.CancellationToken);

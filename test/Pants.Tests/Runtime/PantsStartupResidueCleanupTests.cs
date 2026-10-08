@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsStartupResidueCleanupTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(2);
-
     [Fact]
     public async Task ShouldKeepHealthyWhenCloudRecoveryCleanupFails()
     {
@@ -115,7 +113,7 @@ public sealed class PantsStartupResidueCleanupTests
     static async Task CreateDatabaseAsync(PantsOpenOptions options)
     {
         await using var database = await PantsDatabase.OpenAsync(options);
-        await database.ShutdownAsync(AssertionTimeout);
+        await database.ShutdownAsync(TestTimeouts.Expected);
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(

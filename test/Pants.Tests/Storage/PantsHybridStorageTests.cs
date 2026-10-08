@@ -355,7 +355,7 @@ public sealed class PantsHybridStorageTests
             await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (LocalSsts(directory.Path).Length != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
@@ -383,7 +383,7 @@ public sealed class PantsHybridStorageTests
         var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
         try
         {
-            await failpoints.WaitUntilBlockedAsync(TimeSpan.FromSeconds(5));
+            await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
             var localSstCount = LocalSsts(directory.Path).Length;
             var pending = (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridPendingEvictions;
 

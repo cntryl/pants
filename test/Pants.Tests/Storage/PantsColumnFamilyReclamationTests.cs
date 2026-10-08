@@ -7,8 +7,6 @@ namespace Cntryl.Pants.Storage;
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsColumnFamilyReclamationTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -89,11 +87,11 @@ public sealed class PantsColumnFamilyReclamationTests
             family,
             PantsTransactionMode.ReadOnly);
         await database.ColumnFamilies.DropAsync(family);
-        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
 
         try
         {
-            await verifierStarted.Task.WaitAsync(AssertionTimeout);
+            await verifierStarted.Task.WaitAsync(TestTimeouts.Expected);
             await snapshot.RollbackAsync();
             Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
         }
@@ -144,11 +142,11 @@ public sealed class PantsColumnFamilyReclamationTests
             family,
             PantsTransactionMode.ReadOnly);
         await database.ColumnFamilies.DropAsync(family);
-        var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
 
         try
         {
-            await verifierStarted.Task.WaitAsync(AssertionTimeout);
+            await verifierStarted.Task.WaitAsync(TestTimeouts.Expected);
             await snapshot.RollbackAsync();
             failpoint.Arm(Failpoint.BeforeCloudSstGarbageCollectionDelete);
         }
@@ -158,7 +156,7 @@ public sealed class PantsColumnFamilyReclamationTests
         }
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while ((await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token)).Health ==
                PantsEngineHealth.Healthy)
         {
@@ -214,14 +212,14 @@ public sealed class PantsColumnFamilyReclamationTests
             family,
             PantsTransactionMode.ReadOnly);
         await database.ColumnFamilies.DropAsync(family);
-        var firstVerification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5)).AsTask();
+        var firstVerification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
 
         try
         {
-            await firstStarted.Task.WaitAsync(AssertionTimeout);
+            await firstStarted.Task.WaitAsync(TestTimeouts.Expected);
             await snapshot.RollbackAsync();
             var secondVerification = database.PersistentStorage!
-                .VerifyAsync(TimeSpan.FromSeconds(5))
+                .VerifyAsync(TestTimeouts.Expected)
                 .AsTask();
             releaseFirst.TrySetResult();
             _ = await firstVerification;
@@ -264,7 +262,7 @@ public sealed class PantsColumnFamilyReclamationTests
         uint familyId,
         bool simulatedCloud)
     {
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (FamilyFiles(path, familyId, simulatedCloud).Length != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
