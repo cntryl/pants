@@ -2810,7 +2810,9 @@ public sealed class PantsBackgroundFlushPipelineTests
     static void ExpireWriterLease(string path)
     {
         var leasePath = Path.Combine(path, ".midge_leader");
+        // Editing the record invalidates its checksum, so the edited copy carries none.
         var lines = File.ReadAllLines(leasePath)
+            .Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal))
             .Select(line => line.StartsWith("acquired_at: ", StringComparison.Ordinal)
                 ? "acquired_at: 1970-01-01T00:00:00Z"
                 : line)
