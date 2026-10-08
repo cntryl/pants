@@ -4,7 +4,7 @@ sealed class PublishedFlushRetryValidationFailpointHandler :
     IFailpointHandler,
     IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
     readonly ManualResetEventSlim _release = new(false);
 
     readonly TaskCompletionSource _retryValidationEntered = new(

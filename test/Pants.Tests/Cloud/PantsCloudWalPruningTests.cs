@@ -107,7 +107,7 @@ public sealed class PantsCloudWalPruningTests
                 "provider-default-last"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         ResetDirectory(Path.Combine(cache.Path, "wal"));
@@ -117,7 +117,7 @@ public sealed class PantsCloudWalPruningTests
         {
             await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
             Assert.NotEmpty(ReadProviderCatalogSegments(handler));
-            await reopened.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await reopened.ShutdownAsync(TestTimeouts.Expected);
         }
 
         ResetDirectory(Path.Combine(cache.Path, "wal"));
@@ -280,7 +280,7 @@ public sealed class PantsCloudWalPruningTests
                 "missing-sst"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         foreach (var path in Directory.EnumerateFiles(
@@ -320,7 +320,7 @@ public sealed class PantsCloudWalPruningTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
             Assert.NotEmpty(RemoteWalPaths(directory.Path));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         ResetDirectory(Path.Combine(directory.Path, "wal"));
@@ -367,7 +367,7 @@ public sealed class PantsCloudWalPruningTests
 
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             Assert.Empty(RemoteWalPaths(directory.Path));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         ResetDirectory(Path.Combine(directory.Path, "wal"));
@@ -404,7 +404,7 @@ public sealed class PantsCloudWalPruningTests
                 "retained"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             Assert.NotEmpty(RemoteWalPaths(directory.Path));
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         ResetDirectory(Path.Combine(directory.Path, "wal"));

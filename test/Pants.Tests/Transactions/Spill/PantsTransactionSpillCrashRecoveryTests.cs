@@ -171,7 +171,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
 
     static async Task WaitForChildReadinessAsync(Process child, string databasePath)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         var readyPath = Path.Combine(databasePath, ReadyFileName);
         try
         {
@@ -189,7 +189,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
             throw new XunitException(
-                "Transaction spill crash child did not become ready within 30 seconds.",
+                "Transaction spill crash child did not become ready within the test timeout.",
                 exception);
         }
     }
@@ -221,7 +221,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             return;
         }
 
-        using var exitTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var exitTimeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             await child.WaitForExitAsync(exitTimeout.Token);
@@ -229,7 +229,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         catch (OperationCanceledException exception) when (exitTimeout.IsCancellationRequested)
         {
             throw new XunitException(
-                "Transaction spill crash child did not exit within 10 seconds after readiness.",
+                "Transaction spill crash child did not exit within the test timeout after readiness.",
                 exception);
         }
     }
@@ -241,7 +241,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             return;
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             await child.WaitForExitAsync(timeout.Token);
@@ -262,7 +262,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             return;
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             while (true)
@@ -285,7 +285,7 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
             throw new XunitException(
-                "Transaction spill crash child did not release the writer lock within 30 seconds.",
+                "Transaction spill crash child did not release the writer lock within the test timeout.",
                 exception);
         }
     }

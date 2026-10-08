@@ -317,7 +317,7 @@ public sealed class PantsTransactionSpillBehaviorTests
             await foreground
                 .CommitAsync(TransactionSpillTestHarness.GetWriteOptions(mode))
                 .AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(5));
+                .WaitAsync(TestTimeouts.Expected);
         }
 
         await spilling.CommitAsync(TransactionSpillTestHarness.GetWriteOptions(mode));
@@ -356,7 +356,7 @@ public sealed class PantsTransactionSpillBehaviorTests
                 ready.TrySetResult();
             }
 
-            await start.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await start.Task.WaitAsync(TestTimeouts.Expected);
             for (var index = 0; index < 8; index++)
             {
                 transaction.Put(
@@ -369,15 +369,15 @@ public sealed class PantsTransactionSpillBehaviorTests
                 staged.TrySetResult();
             }
 
-            await staged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await staged.Task.WaitAsync(TestTimeouts.Expected);
             await transaction.CommitAsync(TransactionSpillTestHarness.GetWriteOptions(mode));
         }
 
         var first = WriteAsync("t1", (byte)'1');
         var second = WriteAsync("t2", (byte)'2');
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await ready.Task.WaitAsync(TestTimeouts.Expected);
         start.TrySetResult();
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(first, second).WaitAsync(TestTimeouts.Expected);
 
         Assert.NotNull(await TransactionSpillTestHarness.GetAsync(database, "t1-key-0000"u8.ToArray()));
         Assert.NotNull(await TransactionSpillTestHarness.GetAsync(database, "t2-key-0000"u8.ToArray()));

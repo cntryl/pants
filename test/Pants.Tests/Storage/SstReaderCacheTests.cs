@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class SstReaderCacheTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(10);
-
     [Fact]
     public void ShouldCacheParsedReaderAndOwnItsFileHandle()
     {
@@ -68,16 +66,16 @@ public sealed class SstReaderCacheTests
         {
             Interlocked.Increment(ref opens);
             openStarted.Set();
-            Assert.True(releaseOpening.Wait(AssertionTimeout));
+            Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
             return SstReader.Open(openPath);
         });
         var acquisitions = Enumerable.Range(0, callerCount)
             .Select(callerIndex => Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _)))
             .ToArray();
 
-        Assert.True(openStarted.Wait(AssertionTimeout));
+        Assert.True(openStarted.Wait(TestTimeouts.Expected));
         releaseOpening.Set();
-        var leases = await Task.WhenAll(acquisitions).WaitAsync(AssertionTimeout);
+        var leases = await Task.WhenAll(acquisitions).WaitAsync(TestTimeouts.Expected);
         try
         {
             Assert.Equal(1, Volatile.Read(ref opens));
@@ -104,19 +102,19 @@ public sealed class SstReaderCacheTests
             if (openPath.EndsWith("slow.sst", StringComparison.Ordinal))
             {
                 blockedStarted.Set();
-                Assert.True(releaseBlocked.Wait(AssertionTimeout));
+                Assert.True(releaseBlocked.Wait(TestTimeouts.Expected));
             }
 
             return SstReader.Open(path);
         });
         var blocked = Task.Run(() => cache.GetOrAdd(Sst("slow.sst"), "slow.sst", out _));
-        Assert.True(blockedStarted.Wait(AssertionTimeout));
+        Assert.True(blockedStarted.Wait(TestTimeouts.Expected));
 
         using var unrelated = await Task.Run(() => cache.GetOrAdd(Sst("cold.sst"), "cold.sst", out _))
-            .WaitAsync(AssertionTimeout);
+            .WaitAsync(TestTimeouts.Expected);
 
         releaseBlocked.Set();
-        using var slow = await blocked.WaitAsync(AssertionTimeout);
+        using var slow = await blocked.WaitAsync(TestTimeouts.Expected);
         Assert.NotSame(slow.Reader, unrelated.Reader);
     }
 
@@ -210,21 +208,21 @@ public sealed class SstReaderCacheTests
         {
             created = SstReader.Open(openPath);
             opening.Set();
-            Assert.True(releaseOpening.Wait(AssertionTimeout));
+            Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
             return created;
         });
         var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
-        Assert.True(opening.Wait(AssertionTimeout));
+        Assert.True(opening.Wait(TestTimeouts.Expected));
 
         var firstDisposal = Task.Run(cache.Dispose);
-        Assert.True(SpinWait.SpinUntil(() => cache.IsDisposed, AssertionTimeout));
+        Assert.True(SpinWait.SpinUntil(() => cache.IsDisposed, TestTimeouts.Expected));
         var secondDisposal = Task.Run(cache.Dispose);
         Assert.False(firstDisposal.IsCompleted);
         Assert.False(secondDisposal.IsCompleted);
         releaseOpening.Set();
 
         await Assert.ThrowsAsync<ObjectDisposedException>(async () => await acquisition);
-        await Task.WhenAll(firstDisposal, secondDisposal).WaitAsync(AssertionTimeout);
+        await Task.WhenAll(firstDisposal, secondDisposal).WaitAsync(TestTimeouts.Expected);
         Assert.NotNull(created);
         Assert.True(created.IsDisposed);
         Assert.Empty(cache.SnapshotFiles());
@@ -242,11 +240,11 @@ public sealed class SstReaderCacheTests
         {
             created = SstReader.Open(openPath);
             opening.Set();
-            Assert.True(releaseOpening.Wait(AssertionTimeout));
+            Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
             return created;
         });
         var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
-        Assert.True(opening.Wait(AssertionTimeout));
+        Assert.True(opening.Wait(TestTimeouts.Expected));
 
         cache.RemoveFile("reader.sst");
         releaseOpening.Set();

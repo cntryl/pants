@@ -7,8 +7,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudMirrorSnapshotConsistencyTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -65,7 +63,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         };
 
         var mirror = persistence.MirrorMetadataAndSstsAsync(CancellationToken.None).AsTask();
-        await snapshotRead.Task.WaitAsync(AssertionTimeout);
+        await snapshotRead.Task.WaitAsync(TestTimeouts.Expected);
         AddSstAndAdvanceManifest(cache.Path, first, second);
         releaseSnapshotRead.TrySetResult();
 
@@ -88,7 +86,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         failpoints.Arm();
 
         var mirror = Task.Run(persistence.MirrorMetadataAndSsts);
-        await failpoints.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
         AddSstAndAdvanceManifest(cache.Path, first, second);
         failpoints.Release();
 

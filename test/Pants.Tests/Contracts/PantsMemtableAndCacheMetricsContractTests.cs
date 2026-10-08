@@ -43,7 +43,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
         // this point, and stays there until the flush completes, so this actually observes an
         // in-flight immutable generation rather than sampling after it was already released.
         var flushTask = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
-        await handler.WaitUntilBlockedAsync(TimeSpan.FromSeconds(10));
+        await handler.WaitUntilBlockedAsync(TestTimeouts.Expected);
 
         var duringFlush = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, duringFlush.ActiveMemtableBytes);
@@ -117,7 +117,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
         }
 
         var compactTask = database.Maintenance.CompactAllAsync().AsTask();
-        await handler.WaitUntilBlockedAsync(TimeSpan.FromSeconds(10));
+        await handler.WaitUntilBlockedAsync(TestTimeouts.Expected);
         try
         {
             var beforeRead = await database.Diagnostics.GetRuntimeMetricsAsync();

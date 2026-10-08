@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class DropPipelineRaceFailpointHandler : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _dropAdmissionEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);

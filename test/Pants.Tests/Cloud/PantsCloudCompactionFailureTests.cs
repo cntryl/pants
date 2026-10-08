@@ -237,7 +237,7 @@ public sealed class PantsCloudCompactionFailureTests
 
     static async ValueTask WaitForAsync(Func<bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (!predicate())
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class DegradedWriteStallFailpointHandler : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _flushEntered = new(
         TaskCreationOptions.RunContinuationsAsynchronously);

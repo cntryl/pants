@@ -22,7 +22,7 @@ public sealed class PantsMemtableConcurrencyTests
             await Task.Yield();
         }
 
-        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+        await writer.WaitAsync(TestTimeouts.Expected);
         Assert.Equal(
             Enumerable.Range(0, 100).Select(static index => $"key-{index:000}:old"),
             observed);

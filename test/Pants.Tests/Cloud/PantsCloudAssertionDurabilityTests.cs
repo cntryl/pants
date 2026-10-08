@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudAssertionDurabilityTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -46,7 +44,7 @@ public sealed class PantsCloudAssertionDurabilityTests
 
         // Act
         var commit = confirming.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
-        var entered = failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        var entered = failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         try
         {
             Assert.Same(entered, await Task.WhenAny(commit, entered));
@@ -58,7 +56,7 @@ public sealed class PantsCloudAssertionDurabilityTests
             failpoint.Release();
         }
 
-        await commit.WaitAsync(AssertionTimeout);
+        await commit.WaitAsync(TestTimeouts.Expected);
 
         // Assert
         var after = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -138,7 +136,7 @@ public sealed class PantsCloudAssertionDurabilityTests
             await writer.CommitAsync(PantsWriteOptions.CloudAsync);
         }
 
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(before.CloudAsyncWalSegmentsSealed > 0);
         await using var confirming = await database.Transactions.BeginAsync(
@@ -158,7 +156,7 @@ public sealed class PantsCloudAssertionDurabilityTests
             failpoint.Release();
         }
 
-        await commit.WaitAsync(AssertionTimeout);
+        await commit.WaitAsync(TestTimeouts.Expected);
 
         // Assert
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -200,7 +198,7 @@ public sealed class PantsCloudAssertionDurabilityTests
             var failure = await Assert.ThrowsAsync<PantsIOException>(() =>
                 confirming.CommitAsync(PantsWriteOptions.CloudStrict)
                     .AsTask()
-                    .WaitAsync(AssertionTimeout));
+                    .WaitAsync(TestTimeouts.Expected));
 
             // Assert
             Assert.Contains("indeterminate", failure.Message, StringComparison.OrdinalIgnoreCase);

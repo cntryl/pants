@@ -677,7 +677,7 @@ public sealed class ProviderCloudPersistenceTests
             await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         await handler.WaitForFailedWalWriteAsync(timeout.Token);
 
         await using var reader = await database.Transactions.BeginAsync(
@@ -714,7 +714,7 @@ public sealed class ProviderCloudPersistenceTests
         {
             handler.FailWalWrites = true;
             await CommitCloudAsyncAsync(database, "first"u8.ToArray());
-            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var timeout = new CancellationTokenSource(TestTimeouts.Expected))
             {
                 await handler.WaitForFailedWalWriteAsync(timeout.Token);
             }
@@ -722,7 +722,7 @@ public sealed class ProviderCloudPersistenceTests
             handler.FailWalWrites = false;
             await CommitCloudAsyncAsync(database, "second"u8.ToArray());
             await WaitForCloudDurabilityAsync(database);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
@@ -763,7 +763,7 @@ public sealed class ProviderCloudPersistenceTests
             var metrics = await resumed.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
             Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
-            await resumed.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await resumed.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
@@ -796,7 +796,7 @@ public sealed class ProviderCloudPersistenceTests
                 PantsTransactionMode.ReadWrite);
             transaction.Put("key"u8.ToArray(), "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
@@ -991,7 +991,7 @@ public sealed class ProviderCloudPersistenceTests
 
     static async Task WaitForCloudDurabilityAsync(IPantsDatabase database)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
@@ -1008,7 +1008,7 @@ public sealed class ProviderCloudPersistenceTests
     static async Task<PantsRuntimeMetrics> WaitForPersistenceAnomalyAsync(
         IPantsDatabase database)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();

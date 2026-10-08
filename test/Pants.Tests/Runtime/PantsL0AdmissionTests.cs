@@ -25,7 +25,7 @@ public sealed class PantsL0AdmissionTests
             Assert.True(
                 await database.Maintenance.WaitForWriteStallClearAsync(
                     family,
-                    TimeSpan.FromSeconds(30)),
+                    TestTimeouts.Expected),
                 "A stalled write must clear without CompactAllAsync.");
             await CommitAsync(database, family, $"key-{attempt}");
             await database.Maintenance.FlushAsync(family);
@@ -59,7 +59,7 @@ public sealed class PantsL0AdmissionTests
         Assert.True(
             await reopened.Maintenance.WaitForWriteStallClearAsync(
                 reopened.ColumnFamilies.DefaultFamily,
-                TimeSpan.FromSeconds(30)));
+                TestTimeouts.Expected));
         Assert.True(await CountL0FilesAsync(reopened) < ceiling);
         await CommitAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "after-open");
     }

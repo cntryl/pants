@@ -7,8 +7,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudEventualFlushTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldBatchWritesWhenUsingCloudMode()
     {
@@ -57,7 +55,7 @@ public sealed class PantsCloudEventualFlushTests
             "*.wal",
             SearchOption.AllDirectories));
 
-        await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+        await database.ShutdownAsync(TestTimeouts.Expected);
 
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "cloud_store", "wal"),
@@ -107,8 +105,8 @@ public sealed class PantsCloudEventualFlushTests
             "deadline-retry",
             PantsWriteOptions.CloudAsync);
 
-        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
-        await failpoints.WaitUntilRetryAttemptedAsync(AssertionTimeout);
+        await failpoints.WaitUntilFailureInjectedAsync(TestTimeouts.Expected);
+        await failpoints.WaitUntilRetryAttemptedAsync(TestTimeouts.Expected);
         var published = await WaitForMetricsAsync(
             database,
             candidate =>
@@ -142,8 +140,8 @@ public sealed class PantsCloudEventualFlushTests
             database.ColumnFamilies.DefaultFamily,
             "immediate-retry",
             PantsWriteOptions.CloudAsync);
-        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
-        await failpoints.WaitUntilRetryAttemptedAsync(AssertionTimeout);
+        await failpoints.WaitUntilFailureInjectedAsync(TestTimeouts.Expected);
+        await failpoints.WaitUntilRetryAttemptedAsync(TestTimeouts.Expected);
         var published = await WaitForMetricsAsync(
             database,
             candidate =>
@@ -179,7 +177,7 @@ public sealed class PantsCloudEventualFlushTests
             database.ColumnFamilies.DefaultFamily,
             "post-rotation-retry",
             PantsWriteOptions.CloudAsync);
-        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        await failpoints.WaitUntilFailureInjectedAsync(TestTimeouts.Expected);
         var published = await WaitForMetricsAsync(
             database,
             candidate =>
@@ -216,7 +214,7 @@ public sealed class PantsCloudEventualFlushTests
             database.ColumnFamilies.DefaultFamily,
             "prune-directory-sync",
             PantsWriteOptions.CloudAsync);
-        await failpoints.WaitUntilFailureInjectedAsync(AssertionTimeout);
+        await failpoints.WaitUntilFailureInjectedAsync(TestTimeouts.Expected);
         var published = await WaitForMetricsAsync(
             database,
             static candidate =>
@@ -327,7 +325,7 @@ public sealed class PantsCloudEventualFlushTests
                 database.ColumnFamilies.DefaultFamily,
                 "strict-upload-failure",
                 PantsWriteOptions.CloudStrict).AsTask());
-            using var failureTimeout = new CancellationTokenSource(AssertionTimeout);
+            using var failureTimeout = new CancellationTokenSource(TestTimeouts.Expected);
             await failpoints.WaitForFailureAsync(failureTimeout.Token);
 
             await using var reader = await database.Transactions.BeginAsync(
@@ -459,7 +457,7 @@ public sealed class PantsCloudEventualFlushTests
             }
 
             Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId > 4);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -485,7 +483,7 @@ public sealed class PantsCloudEventualFlushTests
         IPantsDatabase database,
         Func<PantsRuntimeMetrics, bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics? last = null;
         try
         {

@@ -341,7 +341,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
         var exception =
             await Assert.ThrowsAsync<PantsCorruptionException>(() =>
-                database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(2)).AsTask());
+                database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask());
 
         Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }

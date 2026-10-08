@@ -4,8 +4,6 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsCoreCorrectnessContractTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldMapMissingVerificationFileToNotFound()
     {
@@ -16,7 +14,7 @@ public sealed class PantsCoreCorrectnessContractTests
                 throw new FileNotFoundException("Required SST is missing.")));
 
         var failure = await Assert.ThrowsAsync<PantsNotFoundException>(() =>
-            database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask());
+            database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask());
 
         Assert.Equal(PantsErrorCode.NotFound, failure.Code);
         Assert.IsType<FileNotFoundException>(failure.InnerException);

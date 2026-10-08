@@ -79,7 +79,7 @@ public sealed class PantsRuntimeOperationsTests
 
         Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(
             database.ColumnFamilies.DefaultFamily,
-            TimeSpan.FromSeconds(2)));
+            TestTimeouts.Expected));
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.False(metrics.WriteStalled);
         Assert.True(metrics.SstCount >= 2);
@@ -142,7 +142,7 @@ public sealed class PantsRuntimeOperationsTests
             {
                 Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(
                     database.ColumnFamilies.DefaultFamily,
-                    TimeSpan.FromSeconds(2)));
+                    TestTimeouts.Expected));
             }
         }
 

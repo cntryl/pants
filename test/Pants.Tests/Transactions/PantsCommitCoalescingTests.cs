@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Transactions;
 
 public sealed class PantsCommitCoalescingTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldFanOutOneDurableSyncGivenConcurrentCommitsAndRecoverAll()
     {
@@ -77,13 +75,13 @@ public sealed class PantsCommitCoalescingTests
             }
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var commits = transactions
                 .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask())
                 .ToArray();
             failpoints.ReleaseRuntimeBarrier();
-            var before = await barrier.WaitAsync(AssertionTimeout);
-            await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+            var before = await barrier.WaitAsync(TestTimeouts.Expected);
+            await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
 
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(before.WalAppendCount + 1, metrics.WalAppendCount);
@@ -150,13 +148,13 @@ public sealed class PantsCommitCoalescingTests
         }
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        var before = await barrier.WaitAsync(AssertionTimeout);
-        await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+        var before = await barrier.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.WalAppendCount + 1, metrics.WalAppendCount);
@@ -200,16 +198,16 @@ public sealed class PantsCommitCoalescingTests
             }
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var commits = transactions
                 .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask())
                 .ToArray();
             failpoints.ReleaseRuntimeBarrier();
-            var before = await barrier.WaitAsync(AssertionTimeout);
+            var before = await barrier.WaitAsync(TestTimeouts.Expected);
 
             foreach (var commit in commits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
             }
 
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -281,13 +279,13 @@ public sealed class PantsCommitCoalescingTests
         }
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(AssertionTimeout);
-        await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.WalAppendCount);
@@ -322,16 +320,16 @@ public sealed class PantsCommitCoalescingTests
         }
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(AssertionTimeout);
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -377,16 +375,16 @@ public sealed class PantsCommitCoalescingTests
         buffered.Put("buffered-suffix"u8.ToArray(), "accepted"u8.ToArray());
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var firstCommit = first.CommitAsync(PantsWriteOptions.Sync).AsTask();
         var secondCommit = second.CommitAsync(PantsWriteOptions.Sync).AsTask();
         var bufferedCommit = buffered.CommitAsync(PantsWriteOptions.Buffered).AsTask();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(AssertionTimeout);
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
-        await Assert.ThrowsAsync<PantsNoSpaceException>(() => firstCommit.WaitAsync(AssertionTimeout));
-        await Assert.ThrowsAsync<PantsNoSpaceException>(() => secondCommit.WaitAsync(AssertionTimeout));
-        await Assert.ThrowsAsync<PantsFencedException>(() => bufferedCommit.WaitAsync(AssertionTimeout));
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() => firstCommit.WaitAsync(TestTimeouts.Expected));
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() => secondCommit.WaitAsync(TestTimeouts.Expected));
+        await Assert.ThrowsAsync<PantsFencedException>(() => bufferedCommit.WaitAsync(TestTimeouts.Expected));
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.NoSpaceEvents);
@@ -422,16 +420,16 @@ public sealed class PantsCommitCoalescingTests
         }
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(AssertionTimeout);
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -477,16 +475,16 @@ public sealed class PantsCommitCoalescingTests
             }
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var failedCommits = transactions
                 .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
                 .ToArray();
             failpoints.ReleaseRuntimeBarrier();
-            _ = await barrier.WaitAsync(AssertionTimeout);
+            _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
             }
 
             await using var fenced = await database.Transactions.BeginAsync(
@@ -533,16 +531,16 @@ public sealed class PantsCommitCoalescingTests
             }
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var failedCommits = transactions
                 .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
                 .ToArray();
             failpoints.ReleaseRuntimeBarrier();
-            _ = await barrier.WaitAsync(AssertionTimeout);
+            _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
             }
 
             await using var fenced = await database.Transactions.BeginAsync(
@@ -595,14 +593,14 @@ public sealed class PantsCommitCoalescingTests
 
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
         failpoints.ReleaseRuntimeBarrier();
-        _ = await barrier.WaitAsync(AssertionTimeout);
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
-        await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(0, metrics.DurabilityWaitersFannedOutTotal);
@@ -634,16 +632,16 @@ public sealed class PantsCommitCoalescingTests
             later.Put("queued-suffix"u8.ToArray(), "later"u8.ToArray());
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var firstCommit = first.CommitAsync(PantsWriteOptions.Sync).AsTask();
             var staleCommit = stale.CommitAsync(PantsWriteOptions.Sync).AsTask();
             var laterCommit = later.CommitAsync(PantsWriteOptions.Sync).AsTask();
             failpoints.ReleaseRuntimeBarrier();
-            _ = await barrier.WaitAsync(AssertionTimeout);
+            _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
-            await firstCommit.WaitAsync(AssertionTimeout);
-            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => staleCommit.WaitAsync(AssertionTimeout));
-            await laterCommit.WaitAsync(AssertionTimeout);
+            await firstCommit.WaitAsync(TestTimeouts.Expected);
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => staleCommit.WaitAsync(TestTimeouts.Expected));
+            await laterCommit.WaitAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
@@ -683,14 +681,14 @@ public sealed class PantsCommitCoalescingTests
             }
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-            await failpoints.WaitForRuntimeBarrierAsync(AssertionTimeout);
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
             var commits = transactions
                 .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
                 .ToArray();
             failpoints.ReleaseRuntimeBarrier();
-            _ = await barrier.WaitAsync(AssertionTimeout);
+            _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
-            await Task.WhenAll(commits).WaitAsync(AssertionTimeout);
+            await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);

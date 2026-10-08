@@ -208,7 +208,7 @@ public sealed class PantsTransactionParityTests
         var disjointWriters = Enumerable.Range(0, writerCount)
             .Select(index => WriteDisjointAsync(database, index))
             .ToArray();
-        await Task.WhenAll(disjointWriters).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(disjointWriters).WaitAsync(TestTimeouts.Expected);
 
         await using var first = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -350,7 +350,7 @@ public sealed class PantsTransactionParityTests
                 $"Observed a partial transaction snapshot: {first}, {second}.");
         }
 
-        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+        await writer.WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]

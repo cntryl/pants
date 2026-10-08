@@ -4,8 +4,6 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsConcurrentTelemetryContractTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(10);
-
     [Fact]
     public async Task ShouldCountEveryReadExactlyUnderConcurrentContention()
     {
@@ -37,7 +35,7 @@ public sealed class PantsConcurrentTelemetryContractTests
             .ToArray();
 
         start.SetResult();
-        await Task.WhenAll(reads).WaitAsync(AssertionTimeout);
+        await Task.WhenAll(reads).WaitAsync(TestTimeouts.Expected);
         var after = await database.Diagnostics.GetReadAmplificationMetricsAsync();
 
         Assert.Equal(operationCount, after.ReadsTotal - baseline.ReadsTotal);

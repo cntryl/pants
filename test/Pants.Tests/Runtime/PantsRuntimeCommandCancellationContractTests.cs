@@ -6,8 +6,6 @@ namespace Cntryl.Pants.Runtime;
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeCommandCancellationContractTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldNotLeakTransactionWhenBeginCallerCancelsAfterAdmission()
     {
@@ -18,7 +16,7 @@ public sealed class PantsRuntimeCommandCancellationContractTests
             new RuntimeDependencies(failpoint));
         var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         using var cancellation = new CancellationTokenSource();
         var begin = database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -27,11 +25,11 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         cancellation.Cancel();
         failpoint.Release();
 
-        _ = await blockedMetrics.WaitAsync(AssertionTimeout);
+        _ = await blockedMetrics.WaitAsync(TestTimeouts.Expected);
         IPantsTransaction? transaction = null;
         try
         {
-            transaction = await begin.WaitAsync(AssertionTimeout);
+            transaction = await begin.WaitAsync(TestTimeouts.Expected);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -43,10 +41,10 @@ public sealed class PantsRuntimeCommandCancellationContractTests
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
-            .AsTask().WaitAsync(AssertionTimeout);
+            .AsTask().WaitAsync(TestTimeouts.Expected);
         Assert.Equal(0, metrics.ActiveSnapshots);
 
-        await database.ShutdownAsync(AssertionTimeout);
+        await database.ShutdownAsync(TestTimeouts.Expected);
     }
 
     [Fact]

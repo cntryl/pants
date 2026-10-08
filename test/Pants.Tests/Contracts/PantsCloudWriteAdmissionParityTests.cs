@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsCloudWriteAdmissionParityTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldAllowNonWritingCommitsGivenCloudUploadQueueIsFull()
     {
@@ -18,7 +16,7 @@ public sealed class PantsCloudWriteAdmissionParityTests
             options,
             new RuntimeDependencies(failpoint));
         await CommitWriteAsync(database, "occupy-upload-queue");
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
         try
         {
@@ -27,14 +25,14 @@ public sealed class PantsCloudWriteAdmissionParityTests
                 PantsTransactionMode.ReadOnly);
             await readOnly.CommitAsync(PantsWriteOptions.Sync)
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             await using var empty = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             await empty.CommitAsync(PantsWriteOptions.CloudAsync)
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -53,7 +51,7 @@ public sealed class PantsCloudWriteAdmissionParityTests
             options,
             new RuntimeDependencies(failpoint));
         await CommitWriteAsync(database, "occupy-upload-queue");
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
         try
         {
@@ -65,7 +63,7 @@ public sealed class PantsCloudWriteAdmissionParityTests
             await Assert.ThrowsAsync<PantsWriteStallException>(() =>
                 assertionOnly.CommitAsync(PantsWriteOptions.CloudAsync)
                     .AsTask()
-                    .WaitAsync(AssertionTimeout));
+                    .WaitAsync(TestTimeouts.Expected));
         }
         finally
         {

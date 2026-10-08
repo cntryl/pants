@@ -38,6 +38,7 @@ global using Cntryl.Pants.Storage.Internal.Sst.Compression;
 global using Cntryl.Pants.Storage.Internal.Sst.Index;
 global using Cntryl.Pants.Storage.Internal.Sst.Trie;
 global using Cntryl.Pants.Storage.Internal.Wal;
+global using Cntryl.Pants.Support;
 global using Cntryl.Pants.Time.Internal;
 global using Cntryl.Pants.Transactions;
 global using Cntryl.Pants.Transactions.Internal;

@@ -82,7 +82,7 @@ public sealed class PantsWalRotationCrashRecoveryTests
         var standardError = child.StandardError.ReadToEndAsync();
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
             await child.WaitForExitAsync(timeout.Token);
         }
         finally
@@ -143,7 +143,7 @@ public sealed class PantsWalRotationCrashRecoveryTests
 
     static async Task WaitForLockReleaseAsync(string path)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             try

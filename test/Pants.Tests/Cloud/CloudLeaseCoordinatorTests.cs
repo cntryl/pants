@@ -48,7 +48,7 @@ public sealed class CloudLeaseCoordinatorTests
             () => Interlocked.Increment(ref losses));
         await lease.AcquireAsync(CancellationToken.None);
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (Volatile.Read(ref losses) == 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
@@ -148,14 +148,14 @@ public sealed class CloudLeaseCoordinatorTests
             await allowRenewal.Task.WaitAsync(cancellationToken);
         };
         var renewal = lease.RenewAsync(CancellationToken.None).AsTask();
-        await renewalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await renewalStarted.Task.WaitAsync(TestTimeouts.Expected);
         var queuedRelease = lease.ReleaseAsync(CancellationToken.None).AsTask();
 
         lease.Dispose();
         allowRenewal.SetResult();
 
         await Assert.ThrowsAsync<PantsFencedException>(() => renewal);
-        await queuedRelease.WaitAsync(TimeSpan.FromSeconds(5));
+        await queuedRelease.WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public sealed class CloudLeaseCoordinatorTests
             await allowFirstCreate.Task.WaitAsync(cancellationToken);
         };
         var firstAcquire = first.AcquireAsync(CancellationToken.None).AsTask();
-        await firstCreateStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstCreateStarted.Task.WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(1UL, await second.AcquireAsync(CancellationToken.None));
         allowFirstCreate.SetResult();
@@ -228,7 +228,7 @@ public sealed class CloudLeaseCoordinatorTests
             await allowFirstReplace.Task.WaitAsync(cancellationToken);
         };
         var firstAcquire = first.AcquireAsync(CancellationToken.None).AsTask();
-        await firstReplaceStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstReplaceStarted.Task.WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(2UL, await second.AcquireAsync(CancellationToken.None));
         allowFirstReplace.SetResult();
@@ -518,7 +518,7 @@ public sealed class CloudLeaseCoordinatorTests
             await allowFirstPut.Task.WaitAsync(cancellationToken);
         };
         var firstAcquire = first.AcquireAsync(CancellationToken.None).AsTask();
-        await firstPutStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstPutStarted.Task.WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(1UL, await second.AcquireAsync(CancellationToken.None));
         allowFirstPut.SetResult();
@@ -636,7 +636,7 @@ public sealed class CloudLeaseCoordinatorTests
         };
 
         var renewal = lease.RenewAsync(CancellationToken.None).AsTask();
-        await renewalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await renewalStarted.Task.WaitAsync(TestTimeouts.Expected);
         clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
         Assert.False(lease.IsHealthy);
         allowRenewal.SetResult();

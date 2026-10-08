@@ -4,14 +4,12 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsRuntimeMetricsCancellationContractTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldReturnRuntimeMetricsGivenGenerousCallerDeadline()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token);
 
@@ -37,7 +35,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
-        await database.ShutdownAsync(TimeSpan.FromSeconds(2));
+        await database.ShutdownAsync(TestTimeouts.Expected);
 
         await Assert.ThrowsAsync<PantsBusyException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
     }
@@ -55,9 +53,9 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
 
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             deadline.CancelAfter(TimeSpan.FromMilliseconds(100));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TestTimeouts.Expected));
         }
         finally
         {
@@ -65,7 +63,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
-            .AsTask().WaitAsync(AssertionTimeout);
+            .AsTask().WaitAsync(TestTimeouts.Expected);
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
     }
 
@@ -77,16 +75,16 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path),
             new RuntimeDependencies(failpoint));
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
         var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
 
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await Task.Delay(TimeSpan.FromMilliseconds(50));
             failpoint.Release();
 
-            var metrics = await request.WaitAsync(AssertionTimeout);
+            var metrics = await request.WaitAsync(TestTimeouts.Expected);
 
             Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
         }
@@ -113,11 +111,11 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
                 var request = database.Diagnostics.GetRuntimeMetricsAsync(deadline.Token).AsTask();
                 if (attempt == 0)
                 {
-                    await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+                    await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
                 }
 
                 deadline.CancelAfter(TimeSpan.FromMilliseconds(100));
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TestTimeouts.Expected));
             }
         }
         finally
@@ -126,7 +124,7 @@ public sealed class PantsRuntimeMetricsCancellationContractTests
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
-            .AsTask().WaitAsync(AssertionTimeout);
+            .AsTask().WaitAsync(TestTimeouts.Expected);
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
     }
 }

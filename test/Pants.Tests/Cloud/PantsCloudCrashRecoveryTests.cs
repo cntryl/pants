@@ -279,7 +279,7 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             await CommitAsync(database, "prefix-key", "prefix-value", PantsWriteOptions.CloudStrict);
             await CommitAsync(database, "truncated-key", "truncated-value", PantsWriteOptions.CloudStrict);
-            await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         var remoteWal = Directory.EnumerateFiles(
@@ -327,7 +327,7 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task WaitForChildReadinessAsync(Process child, string databasePath)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         var readyPath = Path.Combine(databasePath, ReadyFileName);
         while (!File.Exists(readyPath))
         {
@@ -349,7 +349,7 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task WaitForCrashChildExitAsync(Process child)
     {
-        using var exitTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var exitTimeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             await child.WaitForExitAsync(exitTimeout.Token);
@@ -368,7 +368,7 @@ public sealed class PantsCloudCrashRecoveryTests
             }
 
             throw new XunitException(
-                "Crash child did not exit within 10 seconds after signaling readiness.",
+                "Crash child did not exit within the test timeout after signaling readiness.",
                 exception);
         }
     }
@@ -381,7 +381,7 @@ public sealed class PantsCloudCrashRecoveryTests
             return;
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             try
@@ -469,7 +469,7 @@ public sealed class PantsCloudCrashRecoveryTests
         IPantsDatabase database,
         Func<PantsRuntimeMetrics, bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics? last = null;
         try
         {
