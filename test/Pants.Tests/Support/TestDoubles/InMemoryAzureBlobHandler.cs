@@ -163,11 +163,30 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         }
     }
 
+    TaskCompletionSource? _leaseWriteGate;
+
+    /// <summary>Holds every write to the primary lease object until <see cref="ReleaseLeaseWrites" />.</summary>
+    public void BlockLeaseWrites() =>
+        Interlocked.CompareExchange(
+            ref _leaseWriteGate,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            null);
+
+    public void ReleaseLeaseWrites() =>
+        Interlocked.Exchange(ref _leaseWriteGate, null)?.TrySetResult();
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
         var key = request.RequestUri!.AbsolutePath;
+        if (request.Method == HttpMethod.Put &&
+            key.EndsWith("midge_primary_lease.json", StringComparison.Ordinal) &&
+            Volatile.Read(ref _leaseWriteGate) is { } leaseGate)
+        {
+            await leaseGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (request.Method == HttpMethod.Get &&
             StringComparer.Ordinal.Equals(
                 GetQueryParameter(request.RequestUri, "comp"),
