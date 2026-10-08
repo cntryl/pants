@@ -8,20 +8,21 @@ sealed class ProviderCloudCompactionPublisher
     readonly CloudLeaseCoordinator _lease;
 
     readonly string _localRoot;
-    readonly ICloudObjectStore _sstStore;
+    readonly ProviderSstPublisher _sstPublisher;
 
     public ProviderCloudCompactionPublisher(
         string localRoot,
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints,
+        SstPublicationAdmission? admission = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
-        _sstStore = sstStore;
         _controlStore = controlStore;
         _lease = lease;
         _failpoints = failpoints;
+        _sstPublisher = new ProviderSstPublisher(sstStore, lease.EnsureValid, admission);
     }
 
     public async ValueTask PublishAsync(
@@ -31,11 +32,16 @@ sealed class ProviderCloudCompactionPublisher
         ArgumentNullException.ThrowIfNull(outputNames);
         cancellationToken.ThrowIfCancellationRequested();
         _lease.EnsureValid();
+        var outputPaths = outputNames.Select(ResolveOutputPath).ToArray();
         await PublishIntentAsync(cancellationToken).ConfigureAwait(false);
         _failpoints.Hit(Failpoint.BeforeCloudUpload);
-        foreach (var name in outputNames)
+        for (var index = 0; index < outputNames.Count; index++)
         {
-            await PublishOutputAsync(name, cancellationToken).ConfigureAwait(false);
+            await _sstPublisher.PublishOutputAsync(
+                    outputNames[index],
+                    outputPaths[index],
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         _failpoints.Hit(Failpoint.AfterCloudUpload);
@@ -73,9 +79,7 @@ sealed class ProviderCloudCompactionPublisher
         }
     }
 
-    async ValueTask PublishOutputAsync(
-        string name,
-        CancellationToken cancellationToken)
+    string ResolveOutputPath(string name)
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + name;
         if (!CloudSstObjectKey.TryGetName(objectKey, out var validatedName) ||
@@ -85,24 +89,6 @@ sealed class ProviderCloudCompactionPublisher
                 $"Cloud compaction output name '{name}' is unsafe.");
         }
 
-        var data = File.ReadAllBytes(Path.Combine(_localRoot, "sst", validatedName));
-        _lease.EnsureValid();
-        var created = await _sstStore.PutAsync(
-            objectKey,
-            data,
-            new PantsCloudObjectWriteCondition.IfAbsent(),
-            cancellationToken).ConfigureAwait(false);
-        var readback = await _sstStore.GetAsync(objectKey, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
-            $"Cloud compaction output '{objectKey}' was acknowledged without an object.");
-        _lease.EnsureValid();
-        if (!readback.Data.Span.SequenceEqual(data))
-        {
-            throw created
-                ? new PantsCorruptionException(
-                    $"Cloud compaction output '{objectKey}' read back different bytes.")
-                : new PantsFencedException(
-                    $"Immutable cloud compaction output '{objectKey}' conflicts.");
-        }
+        return Path.Combine(_localRoot, "sst", validatedName);
     }
 }
