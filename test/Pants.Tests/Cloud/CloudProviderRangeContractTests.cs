@@ -84,17 +84,72 @@ public sealed class CloudProviderRangeContractTests
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task ShouldRejectTruncatedRangeBodiesAndDisposeThem(string provider)
+    public async Task ShouldRetryThenRejectPersistentlyTruncatedRangeBodiesAndDisposeThem(string provider)
     {
-        using var body = new ObservedStream(2);
-        using var handler = new RangeHandler(() => body);
+        var bodies = new List<ObservedStream>();
+        using var handler = new RangeHandler(() =>
+        {
+            var body = new ObservedStream(2);
+            bodies.Add(body);
+            return body;
+        });
         using var client = new HttpClient(handler);
         await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
 
         await Assert.ThrowsAsync<PantsIOException>(() => store.GetRangeAsync("value", 2, 3).AsTask());
 
-        Assert.Equal(2, body.BytesRead);
-        Assert.True(body.Disposed);
+        Assert.Equal(4, handler.Requests);
+        Assert.All(bodies, body =>
+        {
+            Assert.Equal(2, body.BytesRead);
+            Assert.True(body.Disposed);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ShouldRecoverFromTruncatedRangeBodyOnCleanSecondResponse(string provider)
+    {
+        var created = 0;
+        using var handler = new RangeHandler(() => new ObservedStream(++created == 1 ? 1 : 3));
+        using var client = new HttpClient(handler);
+        await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
+
+        var value = Assert.IsType<PantsCloudObject>(await store.GetRangeAsync("value", 2, 3));
+
+        Assert.Equal(2, handler.Requests);
+        Assert.Equal("ccc"u8.ToArray().Length, value.Data.Length);
+        Assert.Equal([(byte)'c', (byte)'d', (byte)'e'], value.Data.ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ShouldRecoverFromBodyResetOnCleanSecondResponse(string provider)
+    {
+        var created = 0;
+        using var handler = new RangeHandler(() => new ObservedStream(3) { ResetAfter = ++created == 1 ? 1 : null });
+        using var client = new HttpClient(handler);
+        await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
+
+        var value = Assert.IsType<PantsCloudObject>(await store.GetRangeAsync("value", 2, 3));
+
+        Assert.Equal(2, handler.Requests);
+        Assert.Equal(3, value.Data.Length);
+    }
+
+    [Theory]
+    [InlineData((HttpStatusCode)425, 4)]
+    [InlineData(HttpStatusCode.NotImplemented, 1)]
+    [InlineData(HttpStatusCode.HttpVersionNotSupported, 1)]
+    public async Task ShouldRetryOnlyTheDocumentedTransientStatuses(HttpStatusCode status, int expectedRequests)
+    {
+        using var handler = new RangeHandler(() => new ObservedStream(0), status, []);
+        using var client = new HttpClient(handler);
+        await using var store = await CloudProviderTestFactory.OpenAsync("s3", client);
+
+        await Assert.ThrowsAsync<PantsIOException>(() => store.GetRangeAsync("value", 2, 3).AsTask());
+
+        Assert.Equal(expectedRequests, handler.Requests);
     }
 
     [Theory]
@@ -172,7 +227,7 @@ public sealed class CloudProviderRangeContractTests
                 await Assert.ThrowsAsync<PantsIOException>(() => store.GetRangeAsync("value", 2, 3).AsTask());
             }
 
-            Assert.Equal(status == HttpStatusCode.ServiceUnavailable ? 3 : 1, handler.Requests);
+            Assert.Equal(status == HttpStatusCode.ServiceUnavailable ? 4 : 1, handler.Requests);
             Assert.All(bodies, body =>
             {
                 Assert.Equal(0, body.BytesRead);
@@ -242,6 +297,7 @@ public sealed class CloudProviderRangeContractTests
         public bool Disposed { get; private set; }
         public int MaximumRead { get; init; } = int.MaxValue;
         public bool StallAtEnd { get; init; }
+        public int? ResetAfter { get; init; }
         public TaskCompletionSource EndReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -258,7 +314,17 @@ public sealed class CloudProviderRangeContractTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
 
+            if (ResetAfter is { } resetAfter && BytesRead >= resetAfter)
+            {
+                throw new IOException("The connection was reset mid-body.");
+            }
+
             var count = Math.Min(Math.Min(buffer.Length, MaximumRead), length - BytesRead);
+            if (ResetAfter is { } limit)
+            {
+                count = Math.Min(count, limit - BytesRead);
+            }
+
             for (var index = 0; index < count; index++)
             {
                 buffer.Span[index] = (byte)('c' + (BytesRead + index) % 3);

@@ -163,19 +163,36 @@ public sealed class PantsWalWriterFencingTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new ArmableFailpointHandler();
-        await using var database = await OpenAsync(directory.Path, failpoints);
-        await CommitAsync(database, PantsWriteOptions.Buffered, static transaction =>
-            transaction.Put(Key("buffered"), Value("pending")));
+        var database = await OpenAsync(directory.Path, failpoints);
+        try
+        {
+            await CommitAsync(database, PantsWriteOptions.Buffered, static transaction =>
+                transaction.Put(Key("buffered"), Value("pending")));
 
-        failpoints.Arm(Failpoint.BeforeWalSync);
-        await Assert.ThrowsAnyAsync<PantsException>(() => database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());
+            directory.AbandonCleanup();
+            failpoints.Arm(Failpoint.BeforeWalSync);
+            var failure = await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());
 
-        Assert.Equal(
-            PantsEngineHealth.Degraded,
-            (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
-        await Assert.ThrowsAsync<PantsFencedException>(() =>
-            CommitAsync(database, PantsWriteOptions.Sync, static transaction =>
-                transaction.Put(Key("follow-up"), Value("rejected"))));
+            // The failure is terminal: it is replayed to later callers and new work is rejected.
+            var replayed = await Assert.ThrowsAnyAsync<PantsException>(() =>
+                database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());
+            Assert.Same(failure, replayed);
+            await Assert.ThrowsAsync<PantsBusyException>(() =>
+                CommitAsync(database, PantsWriteOptions.Sync, static transaction =>
+                    transaction.Put(Key("follow-up"), Value("rejected"))));
+        }
+        finally
+        {
+            try
+            {
+                await database.DisposeAsync();
+            }
+            catch (PantsException)
+            {
+                // Disposal replays the permanent shutdown failure by design.
+            }
+        }
     }
 
     static async Task AssertAcknowledgedRowsAsync(IPantsDatabase database)

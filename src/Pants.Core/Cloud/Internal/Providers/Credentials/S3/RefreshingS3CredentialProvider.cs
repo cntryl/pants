@@ -461,7 +461,8 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new PantsIOException(
+            throw CloudHttpStatus.Failure(
+                response.StatusCode,
                 $"{operation} failed with HTTP {(int)response.StatusCode}.");
         }
     }

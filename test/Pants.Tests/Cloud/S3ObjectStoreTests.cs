@@ -43,7 +43,7 @@ public sealed class S3ObjectStoreTests
                 Content = new ByteArrayContent("value"u8.ToArray()),
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             }
-            : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
+            : ProviderPreconditionResponses.S3());
         using var client = new HttpClient(handler);
         const string secret = "do-not-log-this-secret";
         var store = new S3ObjectStore(
@@ -114,7 +114,7 @@ public sealed class S3ObjectStoreTests
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             }
 
-            return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+            return ProviderPreconditionResponses.S3();
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, string.Empty);

@@ -420,17 +420,37 @@ sealed class FileLease : IDisposable
             }
         }
 
-        return fields.TryGetValue("epoch", out var epochRaw) && ulong.TryParse(epochRaw, out var epoch) &&
-               fields.TryGetValue("holder_id", out var holderId) &&
-               fields.TryGetValue("acquired_at", out var acquiredAt)
-            ? new LeaseRecord(epoch, holderId, acquiredAt)
-            : throw new PantsLeaseIndeterminateException(
+        if (!(fields.TryGetValue("epoch", out var epochRaw) && ulong.TryParse(epochRaw, out var epoch) &&
+              fields.TryGetValue("holder_id", out var holderId) &&
+              fields.TryGetValue("acquired_at", out var acquiredAt)))
+        {
+            throw new PantsLeaseIndeterminateException(
                 "Midge leader record is invalid; ownership is ambiguous.");
+        }
+
+        var record = new LeaseRecord(epoch, holderId, acquiredAt);
+
+        // A record may carry a CRC32C over its three-field body. One that is present but wrong or
+        // unparseable is a damaged record; one that is absent is an older, unchecked record.
+        if (fields.TryGetValue("checksum", out var checksumRaw) &&
+            (!uint.TryParse(checksumRaw, out var expected) || expected != Checksum(record)))
+        {
+            throw new PantsLeaseIndeterminateException(
+                "Midge leader record checksum does not verify; ownership is ambiguous.");
+        }
+
+        return record;
     }
+
+    static uint Checksum(LeaseRecord record) =>
+        DiskFormat.Crc32C(Encoding.UTF8.GetBytes(Body(record)));
+
+    static string Body(LeaseRecord record) =>
+        $"epoch: {record.Epoch}\nholder_id: {record.HolderId}\nacquired_at: {record.AcquiredAt}\n";
 
     static void WriteRecord(string target, LeaseRecord record)
     {
-        var content = $"epoch: {record.Epoch}\nholder_id: {record.HolderId}\nacquired_at: {record.AcquiredAt}\n";
+        var content = $"{Body(record)}checksum: {Checksum(record)}\n";
         AtomicStagedFile.Write(target, Encoding.UTF8.GetBytes(content));
     }
 

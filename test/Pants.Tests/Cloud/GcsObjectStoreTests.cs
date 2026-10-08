@@ -30,7 +30,7 @@ public sealed class GcsObjectStoreTests
     {
         var handler = new RecordingHandler(request => request.Method == HttpMethod.Get
             ? Response(HttpStatusCode.OK, "value", "7")
-            : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
+            : ProviderPreconditionResponses.GcsJson());
         using var client = new HttpClient(handler);
         var store = new GcsObjectStore(
             new PantsGcsProvider(
@@ -76,7 +76,7 @@ public sealed class GcsObjectStoreTests
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             }
 
-            return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+            return ProviderPreconditionResponses.GcsJson();
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, PantsGcsApiStyle.Json, string.Empty);
