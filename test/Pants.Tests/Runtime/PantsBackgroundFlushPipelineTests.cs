@@ -1137,6 +1137,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
+        directory.AbandonCleanup();
         var firstFailure = await Assert.ThrowsAsync<PantsIOException>(() =>
             database.ShutdownAsync(AssertionTimeout).AsTask());
         Assert.Equal(PantsErrorCode.Io, firstFailure.Code);

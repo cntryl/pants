@@ -169,6 +169,7 @@ public sealed class PantsWalWriterFencingTests
             await CommitAsync(database, PantsWriteOptions.Buffered, static transaction =>
                 transaction.Put(Key("buffered"), Value("pending")));
 
+            directory.AbandonCleanup();
             failpoints.Arm(Failpoint.BeforeWalSync);
             var failure = await Assert.ThrowsAnyAsync<PantsException>(() =>
                 database.ShutdownAsync(TimeSpan.FromSeconds(10)).AsTask());

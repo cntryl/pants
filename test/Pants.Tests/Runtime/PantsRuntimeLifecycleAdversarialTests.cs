@@ -49,6 +49,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
+        directory.AbandonCleanup();
         var first = await Assert.ThrowsAsync<PantsIOException>(() =>
             database.ShutdownAsync(AssertionTimeout).AsTask());
 
