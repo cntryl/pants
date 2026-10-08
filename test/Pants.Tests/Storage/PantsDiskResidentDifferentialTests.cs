@@ -50,7 +50,7 @@ public sealed class PantsDiskResidentDifferentialTests
         using (var child = await StartReadyCrashChildAsync(directory.Path, simulatedCloud))
         {
             child.TryKillProcessTree();
-            await child.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
             Assert.NotEqual(0, child.ExitCode);
         }
 

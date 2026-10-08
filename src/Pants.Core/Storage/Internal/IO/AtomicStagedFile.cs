@@ -51,7 +51,7 @@ static class AtomicStagedFile
 
             lock (GetPublishLock(fullPath))
             {
-                File.Move(temporary, fullPath, overwrite);
+                TransientSharingRetry.Move(temporary, fullPath, overwrite);
                 FlushParentDirectory(directory);
             }
         }
@@ -59,7 +59,7 @@ static class AtomicStagedFile
         {
             try
             {
-                File.Delete(temporary);
+                TransientSharingRetry.Delete(temporary);
             }
             catch (Exception exception) when (
                 exception is IOException or UnauthorizedAccessException)
@@ -114,7 +114,7 @@ static class AtomicStagedFile
             beforePublish?.Invoke();
             lock (GetPublishLock(fullPath))
             {
-                File.Move(temporary, fullPath, overwrite);
+                TransientSharingRetry.Move(temporary, fullPath, overwrite);
                 afterPublish?.Invoke();
                 FlushParentDirectory(directory);
             }
@@ -123,7 +123,7 @@ static class AtomicStagedFile
         {
             try
             {
-                (deleteTemporary ?? File.Delete)(temporary);
+                (deleteTemporary ?? TransientSharingRetry.Delete)(temporary);
             }
             catch (IOException exception)
             {

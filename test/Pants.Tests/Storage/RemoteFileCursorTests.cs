@@ -25,11 +25,11 @@ public sealed class RemoteFileCursorTests
         source.Gate = true;
 
         var advance = Task.Run(cursor.MoveNext);
-        await source.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await source.Blocked.Task.WaitAsync(TestTimeouts.Expected);
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            advance.WaitAsync(TimeSpan.FromSeconds(5)));
+            advance.WaitAsync(TestTimeouts.Expected));
     }
 
     sealed class GatedSource(IAsyncSstSource inner) : IAsyncSstSource

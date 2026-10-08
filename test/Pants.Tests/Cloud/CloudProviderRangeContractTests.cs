@@ -247,7 +247,7 @@ public sealed class CloudProviderRangeContractTests
         await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
 
         var read = store.GetRangeAsync("value", 2, 3, cancellation.Token).AsTask();
-        await body.EndReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await body.EndReadStarted.Task.WaitAsync(TestTimeouts.Expected);
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
@@ -265,7 +265,7 @@ public sealed class CloudProviderRangeContractTests
 
         var read = store.GetRangeAsync("value", 2, 3).AsTask();
 
-        await Assert.ThrowsAsync<PantsTimeoutException>(() => read.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAsync<PantsTimeoutException>(() => read.WaitAsync(TestTimeouts.Expected));
         Assert.True(body.EndReadStarted.Task.IsCompletedSuccessfully);
         Assert.True(body.Disposed);
     }

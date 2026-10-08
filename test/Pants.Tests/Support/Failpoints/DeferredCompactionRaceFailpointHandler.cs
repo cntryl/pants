@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class DeferredCompactionRaceFailpointHandler : IFailpointHandler, IDisposable
 {
-    static readonly TimeSpan MaximumBlockTime = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
     readonly TaskCompletionSource _compactionAdmission = CreateCompletion();
     readonly TaskCompletionSource _flushPublication = CreateCompletion();

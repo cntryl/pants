@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsWalDurabilityMetricsTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldClearPendingWritesAndAdvanceFrontiersGivenSyncCommit()
     {
@@ -241,7 +239,7 @@ public sealed class PantsWalDurabilityMetricsTests
             transaction.Put("strict-failure"u8.ToArray(), "value"u8.ToArray());
             await Assert.ThrowsAnyAsync<PantsException>(() =>
                 transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
-            await failpoints.WaitForFailureAsync(AssertionTimeout);
+            await failpoints.WaitForFailureAsync(TestTimeouts.Expected);
 
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
@@ -256,14 +254,14 @@ public sealed class PantsWalDurabilityMetricsTests
             Assert.Equal(before.WalFsyncCount, metrics.WalFsyncCount);
             Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
 
-            await failpoints.WaitForRetryAsync(AssertionTimeout);
+            await failpoints.WaitForRetryAsync(TestTimeouts.Expected);
         }
         finally
         {
             failpoints.AllowSuccess();
         }
 
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             var recovered = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);

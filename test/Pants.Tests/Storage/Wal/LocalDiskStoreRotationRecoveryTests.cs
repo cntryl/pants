@@ -206,6 +206,29 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     }
 
     [Fact]
+    public void ShouldKeepCloudPendingWritesGivenBufferedSyncRunsBeforeSealedSegmentIsAdmitted()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using var store = LocalDiskStore.Open(directory.Path, state);
+        _ = store.AppendCommit(
+            CreateCommitPayload(state),
+            state,
+            PantsDurability.Buffered);
+        var segment = Assert.IsType<SealedWalSegment>(store.SealActiveWalForCloud());
+
+        // The background Buffered sync can fire at any point after the append; once the segment
+        // is sealed it must not count the empty replacement WAL's fsync as admitting it.
+        store.SyncBufferedWalIfPending();
+
+        Assert.Equal(1, store.WalPendingWrites);
+        store.CompleteCloudWalSeal(segment);
+        Assert.Equal(0, store.WalPendingWrites);
+    }
+
+    [Fact]
     public void ShouldFenceCloudWalRotationGivenLeaseIsLostAfterFlush()
     {
         using var directory = new TemporaryDirectory();

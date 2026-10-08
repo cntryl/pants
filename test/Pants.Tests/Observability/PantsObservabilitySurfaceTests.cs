@@ -26,7 +26,7 @@ public sealed class PantsObservabilitySurfaceTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             layout = await database.Diagnostics.GetStorageLayoutAsync();
-            online = await database.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(5));
+            online = await database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected);
         }
 
         var offline = await PantsDatabase.VerifyPathAsync(directory.Path);

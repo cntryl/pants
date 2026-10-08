@@ -12,7 +12,7 @@ namespace Cntryl.Pants.Support.TestDoubles;
 /// </summary>
 sealed class CrashChildProcess : IDisposable
 {
-    static readonly TimeSpan DefaultReadinessTimeout = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan DefaultReadinessTimeout = TestTimeouts.Expected;
     static readonly TimeSpan OutputDrainTimeout = TimeSpan.FromSeconds(5);
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(25);
 

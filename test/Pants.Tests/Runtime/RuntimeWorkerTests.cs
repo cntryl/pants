@@ -3,8 +3,6 @@ namespace Cntryl.Pants.Runtime;
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class RuntimeWorkerTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldExposeLoopCompletionOnlyAfterABlockedCommandExitsWhenDisposalTimesOut()
     {
@@ -16,7 +14,7 @@ public sealed class RuntimeWorkerTests
             started.SetResult();
             await release.Task;
         });
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
 
         await Assert.ThrowsAsync<PantsTimeoutException>(() => worker.DisposeAsync().AsTask());
 
@@ -24,7 +22,7 @@ public sealed class RuntimeWorkerTests
         // anything the worker may still be using.
         Assert.False(worker.Completion.IsCompleted);
         release.SetResult();
-        await worker.Completion.WaitAsync(AssertionTimeout);
+        await worker.Completion.WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -45,7 +43,7 @@ public sealed class RuntimeWorkerTests
 
         try
         {
-            await started.Task.WaitAsync(AssertionTimeout);
+            await started.Task.WaitAsync(TestTimeouts.Expected);
             second = await worker.ScheduleAsync(static _ => ValueTask.CompletedTask);
             thirdAdmission = worker
                 .ScheduleAsync(static _ => ValueTask.CompletedTask)
@@ -60,7 +58,7 @@ public sealed class RuntimeWorkerTests
 
         var third = await thirdAdmission;
         await Task.WhenAll(first, second, third);
-        using var timeout = new CancellationTokenSource(AssertionTimeout);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (worker.Outstanding != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
@@ -88,11 +86,11 @@ public sealed class RuntimeWorkerTests
 
         try
         {
-            await started.Task.WaitAsync(AssertionTimeout);
+            await started.Task.WaitAsync(TestTimeouts.Expected);
             cancellation.Cancel();
 
             var exception =
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(AssertionTimeout));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TestTimeouts.Expected));
             Assert.Equal(cancellation.Token, exception.CancellationToken);
         }
         finally
@@ -118,11 +116,11 @@ public sealed class RuntimeWorkerTests
             },
             cancellation.Token);
 
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
         cancellation.Cancel();
         release.TrySetResult();
 
-        await execution.WaitAsync(AssertionTimeout);
+        await execution.WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -139,7 +137,7 @@ public sealed class RuntimeWorkerTests
             started.TrySetResult();
             await release.Task;
         });
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
         var second = await worker.ScheduleAsync(static _ => ValueTask.CompletedTask);
         var blocked = worker.ScheduleAsync(
                 static _ => ValueTask.CompletedTask,
@@ -153,7 +151,7 @@ public sealed class RuntimeWorkerTests
 
             cancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                blocked.WaitAsync(AssertionTimeout));
+                blocked.WaitAsync(TestTimeouts.Expected));
 
             Assert.Equal(2, worker.Outstanding);
             Assert.Equal(1, worker.QueueDepth);
@@ -163,7 +161,7 @@ public sealed class RuntimeWorkerTests
             release.TrySetResult();
         }
 
-        await Task.WhenAll(first, second).WaitAsync(AssertionTimeout);
+        await Task.WhenAll(first, second).WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -179,12 +177,12 @@ public sealed class RuntimeWorkerTests
             started.TrySetResult();
             await release.Task;
         });
-        await started.Task.WaitAsync(AssertionTimeout);
+        await started.Task.WaitAsync(TestTimeouts.Expected);
 
         try
         {
             var failure = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                worker.DisposeAsync().AsTask().WaitAsync(AssertionTimeout));
+                worker.DisposeAsync().AsTask().WaitAsync(TestTimeouts.Expected));
             Assert.Equal(PantsErrorCode.Timeout, failure.Code);
         }
         finally
@@ -192,6 +190,6 @@ public sealed class RuntimeWorkerTests
             release.TrySetResult();
         }
 
-        await operation.WaitAsync(AssertionTimeout);
+        await operation.WaitAsync(TestTimeouts.Expected);
     }
 }

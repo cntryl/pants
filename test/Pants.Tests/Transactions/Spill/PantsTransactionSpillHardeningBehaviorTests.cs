@@ -464,7 +464,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         TransactionSpillHardeningTestHarness.Fill(spilled, "isolation", 12);
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var commitDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var commitDeadline = new CancellationTokenSource(TestTimeouts.Expected);
 
         var directCommit = CommitAfterSignalAsync(direct, start.Task, commitDeadline.Token);
         var spilledCommit = CommitAfterSignalAsync(spilled, start.Task, commitDeadline.Token);
@@ -473,7 +473,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         try
         {
             start.TrySetResult();
-            await commits.WaitAsync(TimeSpan.FromSeconds(30));
+            await commits.WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -483,7 +483,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             {
                 try
                 {
-                    await commits.WaitAsync(TimeSpan.FromSeconds(10));
+                    await commits.WaitAsync(TestTimeouts.Expected);
                 }
                 catch (TimeoutException)
                 {

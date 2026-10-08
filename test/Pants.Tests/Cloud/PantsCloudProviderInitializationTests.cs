@@ -4,8 +4,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudProviderInitializationTests
 {
-    static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(5);
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -32,8 +30,8 @@ public sealed class PantsCloudProviderInitializationTests
             cancellation.Token).AsTask();
         try
         {
-            await pending.Started.Task.WaitAsync(Watchdog);
-            await Assert.ThrowsAsync<PantsTimeoutException>(() => opening.WaitAsync(Watchdog));
+            await pending.Started.Task.WaitAsync(TestTimeouts.Expected);
+            await Assert.ThrowsAsync<PantsTimeoutException>(() => opening.WaitAsync(TestTimeouts.Expected));
 
             Assert.True(pending.OpenToken.IsCancellationRequested);
             Assert.True(pending.Finished.Task.IsCompleted);
@@ -43,7 +41,7 @@ public sealed class PantsCloudProviderInitializationTests
         finally
         {
             await cancellation.CancelAsync();
-            _ = await Record.ExceptionAsync(() => opening.WaitAsync(Watchdog));
+            _ = await Record.ExceptionAsync(() => opening.WaitAsync(TestTimeouts.Expected));
         }
     }
 
@@ -66,28 +64,28 @@ public sealed class PantsCloudProviderInitializationTests
             : location.PreflightAsync(options, cancellation.Token).AsTask();
         try
         {
-            await provider.Started.Task.WaitAsync(Watchdog);
+            await provider.Started.Task.WaitAsync(TestTimeouts.Expected);
             if (callerCancels)
             {
                 await cancellation.CancelAsync();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preflight.WaitAsync(Watchdog));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preflight.WaitAsync(TestTimeouts.Expected));
             }
             else
             {
-                var report = await preflight.WaitAsync(Watchdog);
+                var report = await preflight.WaitAsync(TestTimeouts.Expected);
                 Assert.False(report.IsReady);
                 Assert.Contains(report.Findings, finding => finding.FailureKind == PantsCloudFailureKind.Timeout);
             }
 
             Assert.True(provider.OpenToken.CanBeCanceled);
             Assert.True(provider.OpenToken.IsCancellationRequested);
-            await provider.Finished.Task.WaitAsync(Watchdog);
+            await provider.Finished.Task.WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
             gate.TrySetCanceled();
-            await provider.Finished.Task.WaitAsync(Watchdog);
-            _ = await Record.ExceptionAsync(() => preflight.WaitAsync(Watchdog));
+            await provider.Finished.Task.WaitAsync(TestTimeouts.Expected);
+            _ = await Record.ExceptionAsync(() => preflight.WaitAsync(TestTimeouts.Expected));
         }
     }
 }

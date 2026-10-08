@@ -4,8 +4,6 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudLeaseEngineExpiryTests
 {
-    static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
-
     [Fact]
     public async Task ShouldFenceEveryWritePathAndFireLossOnceWhenRenewalBlocksPastTheDeadline()
     {
@@ -28,7 +26,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
 
         // Renewal now hangs; no caller does anything while the deadline passes.
         handler.BlockLeaseWrites();
-        using var timeout = new CancellationTokenSource(Deadline);
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (Volatile.Read(ref losses) == 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);

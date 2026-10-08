@@ -7,8 +7,6 @@ namespace Cntryl.Pants.Observability;
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsRuntimeMeterTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldEmitRepresentativeSignalsGivenRealEngineActivity()
     {
@@ -47,7 +45,7 @@ public sealed class PantsRuntimeMeterTests
 
         await reopened.Maintenance.CompactAllAsync();
 
-        await measurements.WaitForAsync(names, AssertionTimeout);
+        await measurements.WaitForAsync(names, TestTimeouts.Expected);
         Assert.All(names, name => Assert.True(measurements[name] > 0, name));
         Assert.False(measurements.HasTags);
     }
@@ -89,7 +87,7 @@ public sealed class PantsRuntimeMeterTests
         await using var cloud = await PantsDatabase.OpenAsync(cloudOptions);
         await CommitAsync(cloud, "cloud", PantsWriteOptions.CloudAsync);
 
-        await measurements.WaitForAsync(names, AssertionTimeout);
+        await measurements.WaitForAsync(names, TestTimeouts.Expected);
         Assert.True(measurements["pants.cloud.wal_uploads.completed"] > 0);
         Assert.False(measurements.HasTags);
         Assert.Equal(1, (await first.Diagnostics.GetRuntimeMetricsAsync()).WalAppendCount);
@@ -139,7 +137,7 @@ public sealed class PantsRuntimeMeterTests
         await Assert.ThrowsAsync<PantsIOException>(() =>
             cloud.Maintenance.FlushAsync(cloud.ColumnFamilies.DefaultFamily).AsTask());
 
-        await measurements.WaitForAsync(names, AssertionTimeout);
+        await measurements.WaitForAsync(names, TestTimeouts.Expected);
         Assert.True(measurements["pants.compactions.failed"] > 0);
         Assert.True(measurements["pants.cloud.flush_retries"] > 0);
         Assert.False(measurements.HasTags);

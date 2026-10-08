@@ -9,9 +9,6 @@ namespace Cntryl.Pants.Runtime;
 [Collection(RuntimeDiagnosticsTestGroup.Name)]
 public sealed class PantsBackgroundFlushPipelineTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(2);
-    static readonly TimeSpan BackgroundWorkTimeout = TimeSpan.FromSeconds(10);
-
     [Fact]
     public async Task ShouldKeepForegroundResponsiveWhileSstBuildIsBlocked()
     {
@@ -27,24 +24,24 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var rotation = RotateWithMixedOperationsAsync(database, family).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
-            await rotation.WaitAsync(AssertionTimeout);
-            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(AssertionTimeout);
+            await rotation.WaitAsync(TestTimeouts.Expected);
+            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(TestTimeouts.Expected);
             await AssertVisibilityWhileFlushIsBlockedAsync(database, family, oldSnapshot);
             await CommitAsync(
                     database,
                     family,
                     "foreground-followup"u8.ToArray(),
                     "committed"u8.ToArray())
-                .AsTask().WaitAsync(AssertionTimeout);
+                .AsTask().WaitAsync(TestTimeouts.Expected);
 
             Assert.Equal(1, blocked.FlushInFlight);
             Assert.True(blocked.ImmutableMemtables >= 1);
             Assert.Equal(0, blocked.FlushBuildCount);
 
             failpoint.Release();
-            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(finished.FlushBuildCount >= 1);
             Assert.True(finished.FlushPublishCount >= 1);
@@ -71,24 +68,24 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var rotation = RotateWithMixedOperationsAsync(database, family).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
-            await rotation.WaitAsync(AssertionTimeout);
-            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(AssertionTimeout);
+            await rotation.WaitAsync(TestTimeouts.Expected);
+            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(TestTimeouts.Expected);
             await AssertVisibilityWhileFlushIsBlockedAsync(database, family, oldSnapshot);
             await CommitAsync(
                     database,
                     family,
                     "foreground-followup"u8.ToArray(),
                     "committed"u8.ToArray())
-                .AsTask().WaitAsync(AssertionTimeout);
+                .AsTask().WaitAsync(TestTimeouts.Expected);
 
             Assert.True(blocked.FlushBuildCount >= 1);
             Assert.Equal(0, blocked.FlushPublishCount);
             Assert.Equal(1, blocked.FlushInFlight);
 
             failpoint.Release();
-            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(finished.FlushPublishCount >= 1);
             Assert.Equal(0, finished.FlushInFlight);
@@ -113,14 +110,14 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             await CommitAsync(database, family, new byte[] { 1 }, value);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(database, family, new byte[] { 2 }, value);
 
             var stalled = await Assert.ThrowsAsync<PantsWriteStallException>(() =>
                 CommitAsync(database, family, new byte[] { 3 }, value).AsTask());
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             Assert.Equal(PantsErrorCode.WriteStall, stalled.Code);
             Assert.Equal(2, blocked.ImmutableMemtables);
@@ -132,8 +129,8 @@ public sealed class PantsBackgroundFlushPipelineTests
             failpoint.Release();
             Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(
                 family,
-                AssertionTimeout));
-            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+                TestTimeouts.Expected));
+            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).TotalMemtableBytes);
         }
         finally
@@ -157,7 +154,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             await CommitAsync(database, saturated, new byte[] { 0 }, new byte[] { 0 });
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             for (var index = 1; index < MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily; index++)
             {
                 await CommitAsync(
@@ -180,8 +177,8 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.Equal(11, isolated.ImmutableMemtables);
 
             failpoint.Release();
-            await database.Maintenance.FlushAsync(saturated).AsTask().WaitAsync(BackgroundWorkTimeout);
-            await database.Maintenance.FlushAsync(healthy).AsTask().WaitAsync(BackgroundWorkTimeout);
+            await database.Maintenance.FlushAsync(saturated).AsTask().WaitAsync(TestTimeouts.Expected);
+            await database.Maintenance.FlushAsync(healthy).AsTask().WaitAsync(TestTimeouts.Expected);
             var drained = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, drained.ImmutableMemtables);
             Assert.False(drained.WriteStalled);
@@ -225,20 +222,20 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             await oldest.CommitAsync(PantsWriteOptions.Sync);
-            await failpoint.WaitForFlushAsync(AssertionTimeout);
+            await failpoint.WaitForFlushAsync(TestTimeouts.Expected);
             failpoint.ArmWalAppend();
 
             var fillsPipelineCommit = fillsPipeline
                 .CommitAsync(PantsWriteOptions.Sync)
                 .AsTask();
-            await failpoint.WaitForWalAsync(AssertionTimeout);
+            await failpoint.WaitForWalAsync(TestTimeouts.Expected);
             var racingCommit = racesHint
                 .CommitAsync(PantsWriteOptions.Sync)
                 .AsTask();
 
             failpoint.ReleaseWal();
-            await fillsPipelineCommit.WaitAsync(AssertionTimeout);
-            await racingCommit.WaitAsync(AssertionTimeout);
+            await fillsPipelineCommit.WaitAsync(TestTimeouts.Expected);
+            await racingCommit.WaitAsync(TestTimeouts.Expected);
             await using var afterHint = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadWrite);
@@ -280,7 +277,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "staged-key"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
             Assert.Single(Directory.GetFiles(
@@ -293,7 +290,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.FlushFailuresTotal >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
         }
         finally
         {
@@ -314,7 +311,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             PantsTransactionMode.ReadOnly);
         Assert.NotNull(await read.GetAsync("staged-key"u8.ToArray()));
         Assert.False(File.Exists(staleStagingPath));
-        await reopened.Maintenance.FlushAsync(reopenedFamily).AsTask().WaitAsync(AssertionTimeout);
+        await reopened.Maintenance.FlushAsync(reopenedFamily).AsTask().WaitAsync(TestTimeouts.Expected);
         Assert.Empty(Directory.GetFiles(
             Path.Combine(recoveryDirectory.Path, "sst", ".flush-staging"),
             "*.tmp"));
@@ -337,7 +334,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var flush = database.Maintenance.FlushAsync(family).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             Assert.DoesNotContain(
                 (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
@@ -351,7 +348,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             failpoint.Release();
         }
 
-        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
         Assert.Contains(
             (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
             file => file.ColumnFamilyId == family.Id);
@@ -431,15 +428,15 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "fenced-key"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             FenceWriterLease(directory.Path);
 
             failpoint.Release();
-            await leaseLost.Task.WaitAsync(AssertionTimeout);
+            await leaseLost.Task.WaitAsync(TestTimeouts.Expected);
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.FlushFailuresTotal >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
 
             Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
             Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
@@ -475,24 +472,24 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "rotation"u8.ToArray(),
                     "committed"u8.ToArray())
                 .AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
-            await rotation.WaitAsync(AssertionTimeout);
+            await rotation.WaitAsync(TestTimeouts.Expected);
             await CommitAsync(
                     database,
                     family,
                     "followup"u8.ToArray(),
                     "committed"u8.ToArray())
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
             Assert.True(blocked.ImmutableMemtables >= 1);
 
             failpoint.Release();
-            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -514,16 +511,16 @@ public sealed class PantsBackgroundFlushPipelineTests
             family,
             "failed-value"u8.ToArray(),
             new byte[160 * 1024]);
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         var failed = await WaitForMetricsAsync(
             database,
             static metrics => metrics.FlushFailuresTotal >= 1,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
         Assert.True(failed.ImmutableMemtables >= 1);
 
         failpoint.Release();
-        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
 
         var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(finished.FlushFailuresTotal >= 1);
@@ -544,11 +541,11 @@ public sealed class PantsBackgroundFlushPipelineTests
             database.ColumnFamilies.DefaultFamily,
             "no-space-flush"u8.ToArray(),
             new byte[160 * 1024]);
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         var failed = await WaitForMetricsAsync(
             database,
             static metrics => metrics.FlushFailuresTotal >= 1,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
         Assert.True(failed.NoSpaceEvents >= 1);
         Assert.True(failed.WriteStallsNoSpaceTotal >= 1);
@@ -556,7 +553,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         failpoint.Release();
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily)
             .AsTask()
-            .WaitAsync(AssertionTimeout);
+            .WaitAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -577,13 +574,13 @@ public sealed class PantsBackgroundFlushPipelineTests
         _ = await WaitForMetricsAsync(
             database,
             static metrics => metrics.FlushFailuresTotal >= 1,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
         var recovered = await WaitForMetricsAsync(
             database,
             static metrics =>
                 metrics.FlushRetriesTotal >= 1 && metrics.ImmutableMemtables == 0,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
         Assert.True(recovered.FlushPublishCount >= 1);
         Assert.Equal(1, recovered.FlushEnqueuedTotal);
@@ -612,7 +609,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 metrics.FlushFailuresTotal >= 1 &&
                 metrics.FlushRetriesTotal >= 1 &&
                 metrics.ImmutableMemtables == 0,
-            BackgroundWorkTimeout);
+            TestTimeouts.Expected);
 
         Assert.Equal(1, recovered.FlushEnqueuedTotal);
         Assert.Equal(1, recovered.FlushBuildCount);
@@ -636,7 +633,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "recovered-from-wal"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
             Assert.Empty(
                 (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files));
@@ -702,7 +699,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         var temporaryPaths = new[]
@@ -729,7 +726,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         var sstTemporary = Path.Combine(directory.Path, "sst", "orphan.sst.tmp");
@@ -764,7 +761,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         var recoveryDirectory = Path.Combine(directory.Path, "cloud_recovery", "nested");
@@ -793,7 +790,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 new byte[] { 1 },
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(
                 database,
                 family,
@@ -823,7 +820,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 metrics.ImmutableMemtables == 0 &&
                 metrics.TotalMemtableBytes == 0 &&
                 !metrics.WriteStalled,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
         Assert.True(drained.FlushPublishCount >= 1);
         await CommitAsync(
@@ -840,7 +837,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var options = CreateOptions(directory.Path);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         var residue = Path.Combine(directory.Path, "cloud_recovery", "nested", "stale.sst");
@@ -853,7 +850,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             new RuntimeDependencies(
                 failpoint,
                 leaseHeartbeatInterval: TimeSpan.FromHours(1))));
-        await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+        await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         FenceWriterLease(directory.Path);
         failpoint.Release();
 
@@ -861,7 +858,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var fenced = (PantsFencedException?)null;
         try
         {
-            opened = await opening.WaitAsync(AssertionTimeout);
+            opened = await opening.WaitAsync(TestTimeouts.Expected);
         }
         catch (PantsFencedException exception)
         {
@@ -898,7 +895,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "oldest"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitForFirstAsync(AssertionTimeout);
+            await failpoint.WaitForFirstAsync(TestTimeouts.Expected);
 
             await CommitAsync(
                 database,
@@ -906,7 +903,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 "younger"u8.ToArray(),
                 new byte[160 * 1024]);
             failpoint.ReleaseFirst();
-            await failpoint.WaitForSecondAsync(AssertionTimeout);
+            await failpoint.WaitForSecondAsync(TestTimeouts.Expected);
 
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(1, blocked.FlushInFlight);
@@ -926,7 +923,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             var recovered = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.SstCount == 2 && metrics.ImmutableMemtables == 0,
-                AssertionTimeout);
+                TestTimeouts.Expected);
             Assert.True(recovered.FlushRetriesTotal >= 1);
         }
         finally
@@ -955,12 +952,12 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "blocked"u8.ToArray(),
                     new byte[160 * 1024])
                 .AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
-            await rotation.WaitAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+            await rotation.WaitAsync(TestTimeouts.Expected);
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.FlushBuildCount >= 1 && metrics.FlushInFlight == 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
 
             var firstShutdown = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
                 database.ShutdownAsync(TimeSpan.FromMilliseconds(50)).AsTask());
@@ -971,9 +968,9 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.Equal(PantsErrorCode.LeaseHeld, contendingOpen.Code);
 
             failpoint.Release();
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
             await using var reopened = await PantsDatabase.OpenAsync(options);
-            await reopened.ShutdownAsync(AssertionTimeout);
+            await reopened.ShutdownAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -1000,14 +997,14 @@ public sealed class PantsBackgroundFlushPipelineTests
                 database.ColumnFamilies.DefaultFamily,
                 "failed-immutable"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics =>
                     metrics.FlushFailuresTotal >= 1 && metrics.FlushInFlight == 0,
-                AssertionTimeout);
+                TestTimeouts.Expected);
 
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
             shutdownCompleted = true;
         }
         finally
@@ -1052,7 +1049,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 blockedFamily,
                 "running"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(
                 database,
                 queuedFamily,
@@ -1072,13 +1069,13 @@ public sealed class PantsBackgroundFlushPipelineTests
             var firstShutdown = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
                 database.ShutdownAsync(TimeSpan.FromMilliseconds(50)).AsTask());
             var flushError = await Assert.ThrowsAsync<PantsBusyException>(() =>
-                flushWaiter.WaitAsync(AssertionTimeout));
+                flushWaiter.WaitAsync(TestTimeouts.Expected));
             var compactionError = await Assert.ThrowsAsync<PantsBusyException>(() =>
-                compactionWaiter.WaitAsync(AssertionTimeout));
+                compactionWaiter.WaitAsync(TestTimeouts.Expected));
             var dropError = await Assert.ThrowsAsync<PantsBusyException>(() =>
-                dropWaiter.WaitAsync(AssertionTimeout));
+                dropWaiter.WaitAsync(TestTimeouts.Expected));
             var stallError = await Assert.ThrowsAsync<PantsBusyException>(() =>
-                stallWaiter.WaitAsync(AssertionTimeout));
+                stallWaiter.WaitAsync(TestTimeouts.Expected));
 
             Assert.Equal(PantsErrorCode.Timeout, firstShutdown.Code);
             Assert.Equal(PantsErrorCode.Busy, flushError.Code);
@@ -1087,7 +1084,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.Equal(PantsErrorCode.Busy, stallError.Code);
 
             failpoint.Release();
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
             shutdownCompleted = true;
         }
         finally
@@ -1139,12 +1136,12 @@ public sealed class PantsBackgroundFlushPipelineTests
 
         directory.AbandonCleanup();
         var firstFailure = await Assert.ThrowsAsync<PantsIOException>(() =>
-            database.ShutdownAsync(AssertionTimeout).AsTask());
+            database.ShutdownAsync(TestTimeouts.Expected).AsTask());
         Assert.Equal(PantsErrorCode.Io, firstFailure.Code);
         Assert.Equal(1, failpoint.HitCount);
 
         var replayed = await Assert.ThrowsAsync<PantsIOException>(() =>
-            database.ShutdownAsync(AssertionTimeout).AsTask());
+            database.ShutdownAsync(TestTimeouts.Expected).AsTask());
         Assert.Same(firstFailure, replayed);
         Assert.Equal(1, failpoint.HitCount);
     }
@@ -1175,9 +1172,9 @@ public sealed class PantsBackgroundFlushPipelineTests
             firstShutdown = database
                 .ShutdownAsync(TimeSpan.FromMilliseconds(50))
                 .AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             var timeout = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                firstShutdown.WaitAsync(AssertionTimeout));
+                firstShutdown.WaitAsync(TestTimeouts.Expected));
             var contender = await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
                 PantsDatabase.OpenAsync(options).AsTask());
             Assert.Equal(PantsErrorCode.Timeout, timeout.Code);
@@ -1185,7 +1182,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromMilliseconds(500));
 
             failpoint.Release();
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
             shutdownCompleted = true;
         }
         finally
@@ -1234,7 +1231,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "oldest"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await CommitAsync(
                 database,
                 family,
@@ -1254,7 +1251,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 PantsDatabase.OpenAsync(options).AsTask());
 
             failpoint.Release();
-            await database.ShutdownAsync(AssertionTimeout);
+            await database.ShutdownAsync(TestTimeouts.Expected);
             shutdownCompleted = true;
         }
         finally
@@ -1284,7 +1281,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.NotNull(await read.GetAsync("younger"u8.ToArray()));
         }
 
-        await reopened.ShutdownAsync(AssertionTimeout);
+        await reopened.ShutdownAsync(TestTimeouts.Expected);
     }
 
     [Fact]
@@ -1303,18 +1300,18 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var flush = database.Maintenance.FlushAsync(family).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             var drop = database.ColumnFamilies.DropAsync(family).AsTask();
-            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(AssertionTimeout);
+            var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(TestTimeouts.Expected);
 
             Assert.False(drop.IsCompleted);
             Assert.Equal(1, blocked.FlushInFlight);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.Release();
-            await flush.WaitAsync(AssertionTimeout);
-            await drop.WaitAsync(AssertionTimeout);
+            await flush.WaitAsync(TestTimeouts.Expected);
+            await drop.WaitAsync(TestTimeouts.Expected);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, finished.FlushInFlight);
@@ -1346,20 +1343,20 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "compact-key"u8.ToArray(),
                     new byte[160 * 1024])
                 .AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
-            await rotation.WaitAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+            await rotation.WaitAsync(TestTimeouts.Expected);
 
             var compact = database.Maintenance.CompactAllAsync().AsTask();
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             Assert.False(compact.IsCompleted);
             Assert.Equal(1, blocked.FlushInFlight);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.Release();
-            await compact.WaitAsync(AssertionTimeout);
+            await compact.WaitAsync(TestTimeouts.Expected);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, finished.FlushInFlight);
@@ -1386,7 +1383,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var compact = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             await CommitAsync(
                     database,
@@ -1394,10 +1391,10 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "racing-commit"u8.ToArray(),
                     "committed"u8.ToArray())
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             failpoint.Release();
-            await compact.WaitAsync(AssertionTimeout);
+            await compact.WaitAsync(TestTimeouts.Expected);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(finished.FlushBuildCount >= 1);
@@ -1426,7 +1423,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var drop = database.ColumnFamilies.DropDiscardingUnflushedAsync(family).AsTask();
-            await failpoint.WaitForDropAdmissionAsync(AssertionTimeout);
+            await failpoint.WaitForDropAdmissionAsync(TestTimeouts.Expected);
 
             await CommitAsync(
                     database,
@@ -1434,19 +1431,19 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "late-flush"u8.ToArray(),
                     new byte[160 * 1024])
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
-            await failpoint.WaitForFlushPublicationAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
+            await failpoint.WaitForFlushPublicationAsync(TestTimeouts.Expected);
 
             failpoint.ReleaseDropAdmission();
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             Assert.False(drop.IsCompleted);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.ReleaseFlushPublication();
-            await drop.WaitAsync(AssertionTimeout);
+            await drop.WaitAsync(TestTimeouts.Expected);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, finished.ImmutableMemtables);
@@ -1481,7 +1478,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "compaction-input"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
             await CommitAsync(
                     database,
@@ -1489,13 +1486,13 @@ public sealed class PantsBackgroundFlushPipelineTests
                     "racing-active"u8.ToArray(),
                     "committed"u8.ToArray())
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             failpoint.Release();
             var compacted = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.CompactionsRun >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
 
             Assert.True(compacted.TotalMemtableBytes > 0);
             Assert.DoesNotContain(
@@ -1505,7 +1502,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 database.ColumnFamilies.DropAsync(family).AsTask());
             await database.ColumnFamilies.DropDiscardingUnflushedAsync(family)
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -1550,9 +1547,9 @@ public sealed class PantsBackgroundFlushPipelineTests
         _ = await WaitForMetricsAsync(
             database,
             static metrics => metrics.FlushFailuresTotal >= 1,
-            AssertionTimeout);
+            TestTimeouts.Expected);
 
-        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
 
         using var intent = JsonDocument.Parse(
             await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
@@ -1577,7 +1574,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "published-before-corruption"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitForRetryValidationAsync(AssertionTimeout);
+            await failpoint.WaitForRetryValidationAsync(TestTimeouts.Expected);
             var sstPath = Assert.Single(Directory.GetFiles(
                 Path.Combine(directory.Path, "sst"),
                 "*.sst"));
@@ -1591,7 +1588,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             await Assert.ThrowsAsync<PantsCorruptionException>(() => retry);
 
             await File.WriteAllBytesAsync(sstPath, expected);
-            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -1635,19 +1632,19 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "verify-key"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
-            var verification = database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask();
+            var verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
 
             Assert.False(verification.IsCompleted);
             Assert.False(verifierStarted.Task.IsCompleted);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.Release();
-            var report = await verification.WaitAsync(AssertionTimeout);
+            var report = await verification.WaitAsync(TestTimeouts.Expected);
             Assert.True(report.Authoritative);
         }
         finally
@@ -1675,29 +1672,29 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "first-generation"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitForCompactionAdmissionAsync(AssertionTimeout);
+            await failpoint.WaitForCompactionAdmissionAsync(TestTimeouts.Expected);
 
             await CommitAsync(
                 database,
                 family,
                 "second-generation"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitForFlushPublicationAsync(AssertionTimeout);
+            await failpoint.WaitForFlushPublicationAsync(TestTimeouts.Expected);
 
             failpoint.ReleaseCompactionAdmission();
-            await failpoint.WaitForSignalResetAsync(AssertionTimeout);
+            await failpoint.WaitForSignalResetAsync(TestTimeouts.Expected);
             failpoint.ReleaseFlushPublication();
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics =>
                     metrics.ImmutableMemtables == 0 && metrics.FlushPublishCount >= 2,
-                AssertionTimeout);
+                TestTimeouts.Expected);
 
             failpoint.ReleaseSignalReset();
             var compacted = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.CompactionsRun >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
             Assert.True(compacted.CompactionsRun >= 1);
         }
         finally
@@ -1738,23 +1735,23 @@ public sealed class PantsBackgroundFlushPipelineTests
                 family,
                 "compaction-input"u8.ToArray(),
                 new byte[160 * 1024]);
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
 
-            verification = database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask();
-            await verifierEntered.Task.WaitAsync(AssertionTimeout);
+            verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
+            await verifierEntered.Task.WaitAsync(TestTimeouts.Expected);
             failpoint.Release();
 
             var pinned = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
-                .WaitAsync(AssertionTimeout);
+                .WaitAsync(TestTimeouts.Expected);
             Assert.Equal(0, pinned.CompactionsRun);
 
             releaseVerifier.TrySetResult();
-            Assert.True((await verification.WaitAsync(AssertionTimeout)).Authoritative);
+            Assert.True((await verification.WaitAsync(TestTimeouts.Expected)).Authoritative);
             var compacted = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.CompactionsRun >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
             Assert.True(compacted.CompactionsRun >= 1);
         }
         finally
@@ -1763,7 +1760,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             releaseVerifier.TrySetResult();
             if (verification is not null)
             {
-                _ = await verification.WaitAsync(AssertionTimeout);
+                _ = await verification.WaitAsync(TestTimeouts.Expected);
             }
         }
     }
@@ -1799,22 +1796,22 @@ public sealed class PantsBackgroundFlushPipelineTests
                 "flush-input"u8.ToArray(),
                 "value"u8.ToArray());
             var flush = database.Maintenance.FlushAsync(family).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             await database.Maintenance.SetBackgroundCompactionAsync(true);
 
-            verification = database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask();
-            await verifierEntered.Task.WaitAsync(AssertionTimeout);
+            verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
+            await verifierEntered.Task.WaitAsync(TestTimeouts.Expected);
             failpoint.Release();
-            await flush.WaitAsync(AssertionTimeout);
+            await flush.WaitAsync(TestTimeouts.Expected);
 
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun);
 
             releaseVerifier.TrySetResult();
-            Assert.True((await verification.WaitAsync(AssertionTimeout)).Authoritative);
+            Assert.True((await verification.WaitAsync(TestTimeouts.Expected)).Authoritative);
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.CompactionsRun >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
         }
         finally
         {
@@ -1822,7 +1819,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             releaseVerifier.TrySetResult();
             if (verification is not null)
             {
-                _ = await verification.WaitAsync(AssertionTimeout);
+                _ = await verification.WaitAsync(TestTimeouts.Expected);
             }
         }
     }
@@ -1859,10 +1856,10 @@ public sealed class PantsBackgroundFlushPipelineTests
         }
 
         await database.Maintenance.SetBackgroundCompactionAsync(true);
-        var verification = database.PersistentStorage!.VerifyAsync(AssertionTimeout).AsTask();
+        var verification = database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask();
         try
         {
-            await verifierEntered.Task.WaitAsync(AssertionTimeout);
+            await verifierEntered.Task.WaitAsync(TestTimeouts.Expected);
             await using var read = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
@@ -1871,16 +1868,16 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun);
 
             releaseVerifier.TrySetResult();
-            Assert.True((await verification.WaitAsync(AssertionTimeout)).Authoritative);
+            Assert.True((await verification.WaitAsync(TestTimeouts.Expected)).Authoritative);
             _ = await WaitForMetricsAsync(
                 database,
                 static metrics => metrics.CompactionsRun >= 1,
-                AssertionTimeout);
+                TestTimeouts.Expected);
         }
         finally
         {
             releaseVerifier.TrySetResult();
-            _ = await verification.WaitAsync(AssertionTimeout);
+            _ = await verification.WaitAsync(TestTimeouts.Expected);
         }
     }
 
@@ -1952,7 +1949,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var compaction = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             FenceWriterLease(directory.Path);
             failpoint.Release();
 
@@ -2248,7 +2245,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var compaction = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             using (var intent = JsonDocument.Parse(
                        await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json"))))
             {
@@ -2265,7 +2262,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                     .Count(static file => file.GetProperty("level").GetUInt32() == 0));
 
             failpoint.Release();
-            await compaction.WaitAsync(AssertionTimeout);
+            await compaction.WaitAsync(TestTimeouts.Expected);
         }
         finally
         {
@@ -2300,7 +2297,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var compaction = database.Maintenance.CompactAllAsync().AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             FenceWriterLease(directory.Path);
             failpoint.Release();
 
@@ -2341,7 +2338,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 survivor,
                 "surviving-key"u8.ToArray(),
                 "surviving-value"u8.ToArray());
-            await database.Maintenance.FlushAsync(survivor).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(survivor).AsTask().WaitAsync(TestTimeouts.Expected);
 
             var reclaimed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, reclaimed.ImmutableMemtables);
@@ -2382,7 +2379,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 "pending-key"u8.ToArray(),
                 "pending-value"u8.ToArray());
 
-            await database.Maintenance.FlushAsync(flushed).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(flushed).AsTask().WaitAsync(TestTimeouts.Expected);
 
             var partial = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(partial.CurrentSequence, partial.ManifestLastPersistedSequence);
@@ -2424,11 +2421,11 @@ public sealed class PantsBackgroundFlushPipelineTests
         try
         {
             var firstFlush = database.Maintenance.FlushAsync(flushed).AsTask();
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             failpoint.Release();
             await Assert.ThrowsAsync<PantsIOException>(() => firstFlush);
 
-            await database.Maintenance.FlushAsync(flushed).AsTask().WaitAsync(AssertionTimeout);
+            await database.Maintenance.FlushAsync(flushed).AsTask().WaitAsync(TestTimeouts.Expected);
             var partial = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(partial.CurrentSequence, partial.ManifestLastPersistedSequence);
             Assert.Equal(0, partial.WalPendingWrites);
@@ -2521,7 +2518,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         {
             failpoint.BlockNextFlushPublication();
             await CommitAsync(database, family, new byte[] { 1 }, value);
-            await failpoint.WaitForFlushAsync(AssertionTimeout);
+            await failpoint.WaitForFlushAsync(TestTimeouts.Expected);
             await CommitAsync(database, family, new byte[] { 2 }, value);
 
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -2618,7 +2615,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                     {
                         Assert.True(await database.Maintenance.WaitForWriteStallClearAsync(
                             family,
-                            AssertionTimeout));
+                            TestTimeouts.Expected));
                     }
                 }
             }
@@ -2645,8 +2642,8 @@ public sealed class PantsBackgroundFlushPipelineTests
         // This is a deadlock watchdog, not a latency assertion. Windows hosted runners can
         // legitimately take longer than five seconds while eight 132 KiB writes are flushed
         // alongside repeated manifest reads.
-        await Task.WhenAll(work).WaitAsync(BackgroundWorkTimeout);
-        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(AssertionTimeout);
+        await Task.WhenAll(work).WaitAsync(TestTimeouts.Expected);
+        await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         var names = layout.Levels.SelectMany(static level => level.Files)

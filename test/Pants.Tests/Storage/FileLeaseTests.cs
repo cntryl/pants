@@ -322,7 +322,7 @@ public sealed class FileLeaseTests
 
         Assert.False(fenced.RenewForTesting());
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         FileLease? successor = null;
         while (successor is null)
         {
@@ -374,7 +374,7 @@ public sealed class FileLeaseTests
             "superseding-writer",
             DateTimeOffset.UnixEpoch);
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while ((await fenced.Diagnostics.GetRuntimeMetricsAsync()).Health != PantsEngineHealth.Degraded &&
                !await Task.Run(() => IsFenced(fenced), timeout.Token))
         {

@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Runtime.Flush;
 
 public sealed class ImmutableFlushPipelineTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public async Task ShouldSerializeAttemptsInFrontierOrder()
     {
@@ -50,17 +48,17 @@ public sealed class ImmutableFlushPipelineTests
         Assert.Equal([10], scheduled);
 
         workers[third.Frozen.Id].SetResult(SuccessfulResult());
-        await completed[third.Frozen.Id].Task.WaitAsync(AssertionTimeout);
+        await completed[third.Frozen.Id].Task.WaitAsync(TestTimeouts.Expected);
         await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10, 20], scheduled);
 
         workers[second.Frozen.Id].SetResult(SuccessfulResult());
-        await completed[second.Frozen.Id].Task.WaitAsync(AssertionTimeout);
+        await completed[second.Frozen.Id].Task.WaitAsync(TestTimeouts.Expected);
         await pipeline.ScheduleNextAsync(flushes, false);
         Assert.Equal([10, 20, 30], scheduled);
 
         workers[first.Frozen.Id].SetResult(SuccessfulResult());
-        await completed[first.Frozen.Id].Task.WaitAsync(AssertionTimeout);
+        await completed[first.Frozen.Id].Task.WaitAsync(TestTimeouts.Expected);
         Assert.Empty(flushes);
     }
 
@@ -103,8 +101,8 @@ public sealed class ImmutableFlushPipelineTests
         var firstAttempt = flush.AttemptTask;
 
         await pipeline.ScheduleNextAsync(flushes, false);
-        var firstFailure = await firstAttempt.WaitAsync(AssertionTimeout);
-        await succeeded.Task.WaitAsync(AssertionTimeout);
+        var firstFailure = await firstAttempt.WaitAsync(TestTimeouts.Expected);
+        await succeeded.Task.WaitAsync(TestTimeouts.Expected);
 
         Assert.IsType<PantsIOException>(firstFailure);
         Assert.Equal(2, scheduledAttempts);
@@ -203,7 +201,7 @@ public sealed class ImmutableFlushPipelineTests
             static () => false);
 
         await pipeline.ScheduleNextAsync(flushes, false);
-        await completed.Task.WaitAsync(AssertionTimeout);
+        await completed.Task.WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(6, flush.Attempts);
         Assert.Equal(5, telemetry.FlushFailuresTotal);

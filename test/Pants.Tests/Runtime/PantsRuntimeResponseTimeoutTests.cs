@@ -6,8 +6,6 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsRuntimeResponseTimeoutTests
 {
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
-
     [Fact]
     public void ShouldDeriveRuntimeResponseTimeoutFromStorageTimeout()
     {
@@ -65,9 +63,9 @@ public sealed class PantsRuntimeResponseTimeoutTests
 
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                request.WaitAsync(AssertionTimeout));
+                request.WaitAsync(TestTimeouts.Expected));
 
             Assert.InRange(Stopwatch.GetElapsedTime(started), TimeSpan.Zero, TimeSpan.FromSeconds(2));
             Assert.Contains("GetRuntimeMetricsAsync", exception.Message, StringComparison.Ordinal);
@@ -114,12 +112,12 @@ public sealed class PantsRuntimeResponseTimeoutTests
                 "*.run"));
             failpoint.ArmWalAppend();
             var commit = transaction.CommitAsync(PantsWriteOptions.Sync).AsTask();
-            await failpoint.WaitForWalAsync(AssertionTimeout);
+            await failpoint.WaitForWalAsync(TestTimeouts.Expected);
 
             try
             {
                 var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
-                    commit.WaitAsync(AssertionTimeout));
+                    commit.WaitAsync(TestTimeouts.Expected));
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -128,7 +126,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
             }
         }
 
-        await database.ShutdownAsync(AssertionTimeout);
+        await database.ShutdownAsync(TestTimeouts.Expected);
         await database.DisposeAsync();
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -142,7 +140,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
 
     static async Task<PantsRuntimeMetrics> WaitForLateResponseAsync(IPantsDatabase database)
     {
-        var deadline = Stopwatch.GetTimestamp() + (long)(AssertionTimeout.TotalSeconds * Stopwatch.Frequency);
+        var deadline = Stopwatch.GetTimestamp() + (long)(TestTimeouts.Expected.TotalSeconds * Stopwatch.Frequency);
         while (Stopwatch.GetTimestamp() < deadline)
         {
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();

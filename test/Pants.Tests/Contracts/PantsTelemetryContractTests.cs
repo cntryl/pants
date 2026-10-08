@@ -82,7 +82,7 @@ public sealed class PantsTelemetryContractTests
         try
         {
             await CommitAsync(database, "cloud-async-failure", PantsWriteOptions.CloudAsync);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
             await failpoints.WaitForFailureAsync(timeout.Token);
             var failed = await WaitForMetricsAsync(
                 database,
@@ -451,7 +451,7 @@ public sealed class PantsTelemetryContractTests
         IPantsDatabase database,
         Func<PantsRuntimeMetrics, bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
         {
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
@@ -466,7 +466,7 @@ public sealed class PantsTelemetryContractTests
 
     static async ValueTask WaitForAsync(Func<bool> predicate)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while (!predicate())
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);

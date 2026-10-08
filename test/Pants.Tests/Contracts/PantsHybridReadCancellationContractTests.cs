@@ -6,7 +6,6 @@ namespace Cntryl.Pants.Contracts;
 public sealed class PantsHybridReadCancellationContractTests
 {
     const long LocalBudgetBytes = 128 * 1024;
-    static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
     static readonly TimeSpan PromptCancellationTimeout = TimeSpan.FromSeconds(1);
 
     [Fact]
@@ -27,7 +26,7 @@ public sealed class PantsHybridReadCancellationContractTests
         var read = reader.GetAsync("hybrid-key"u8.ToArray(), cancellation.Token).AsTask();
         try
         {
-            await handler.WaitUntilRequestStartsAsync(AssertionTimeout);
+            await handler.WaitUntilRequestStartsAsync(TestTimeouts.Expected);
             cancellation.Cancel();
 
             var exception =
@@ -61,7 +60,7 @@ public sealed class PantsHybridReadCancellationContractTests
             cancellation.Token).AsTask();
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             cancellation.Cancel();
         }
         finally
@@ -69,7 +68,7 @@ public sealed class PantsHybridReadCancellationContractTests
             failpoint.Release();
         }
 
-        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(AssertionTimeout));
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
     }
 
@@ -91,7 +90,7 @@ public sealed class PantsHybridReadCancellationContractTests
         var moveNext = enumerator.MoveNextAsync().AsTask();
         try
         {
-            await failpoint.WaitUntilEnteredAsync(AssertionTimeout);
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
             cancellation.Cancel();
         }
         finally
@@ -100,7 +99,7 @@ public sealed class PantsHybridReadCancellationContractTests
         }
 
         var exception =
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(AssertionTimeout));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
         await enumerator.DisposeAsync();
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();

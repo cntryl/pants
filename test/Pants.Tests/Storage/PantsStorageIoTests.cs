@@ -50,7 +50,7 @@ public sealed class PantsStorageIoTests
                 path,
                 "new-generation"u8,
                 beforePublish: publishing.Set));
-            Assert.True(publishing.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(publishing.Wait(TestTimeouts.Expected));
             Assert.False(replacement.IsCompleted);
 
             return RandomAccess.Read(handle, buffer, offset);
@@ -218,5 +218,105 @@ public sealed class PantsStorageIoTests
             File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
         Assert.Throws<EndOfStreamException>(() => PositionalFile.ReadExactly(handle, 0, 10));
+    }
+
+    [Fact]
+    public void ShouldRetryOperationGivenTransientWindowsSharingFailures()
+    {
+        var attempts = 0;
+        var delays = new List<TimeSpan>();
+
+        TransientSharingRetry.Run(
+            () =>
+            {
+                attempts++;
+                switch (attempts)
+                {
+                    case 1:
+                        throw new UnauthorizedAccessException("Injected access denied.");
+                    case 2:
+                        throw new IOException("Injected sharing violation.", unchecked((int)0x80070020));
+                    case 3:
+                        throw new IOException("Injected lock violation.", unchecked((int)0x80070021));
+                }
+            },
+            true,
+            delays.Add);
+
+        Assert.Equal(4, attempts);
+        Assert.Equal(3, delays.Count);
+        Assert.All(delays, delay => Assert.True(delay > TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void ShouldNotRetryGivenNonTransientFailureOrNonWindowsPlatform()
+    {
+        var existsAttempts = 0;
+        Assert.Throws<IOException>(() => TransientSharingRetry.Run(
+            () =>
+            {
+                existsAttempts++;
+                throw new IOException("Injected file exists.", unchecked((int)0x80070050));
+            },
+            true,
+            static _ => { }));
+
+        var deniedAttempts = 0;
+        Assert.Throws<UnauthorizedAccessException>(() => TransientSharingRetry.Run(
+            () =>
+            {
+                deniedAttempts++;
+                throw new UnauthorizedAccessException("Injected access denied.");
+            },
+            false,
+            static _ => { }));
+
+        Assert.Equal(1, existsAttempts);
+        Assert.Equal(1, deniedAttempts);
+    }
+
+    [Fact]
+    public void ShouldSurfaceSharingFailureGivenItPersistsPastTheRetryBound()
+    {
+        var attempts = 0;
+
+        Assert.Throws<UnauthorizedAccessException>(() => TransientSharingRetry.Run(
+            () =>
+            {
+                attempts++;
+                throw new UnauthorizedAccessException("Injected access denied.");
+            },
+            true,
+            static _ => { }));
+
+        Assert.Equal(TransientSharingRetry.MaximumAttempts, attempts);
+    }
+
+    [Fact]
+    public async Task ShouldPublishGivenTargetIsBrieflyHeldOpenWithoutDeleteSharing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "manifest.json");
+        AtomicStagedFile.Write(path, "old"u8);
+        using var opened = new ManualResetEventSlim();
+        var holder = Task.Run(() =>
+        {
+            // Stands in for an antivirus or indexing scan of the freshly published file.
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            opened.Set();
+            Thread.Sleep(TimeSpan.FromMilliseconds(150));
+        });
+        opened.Wait(TimeSpan.FromSeconds(5));
+
+        AtomicStagedFile.Write(path, "new"u8);
+
+        await holder;
+        Assert.Equal("new"u8.ToArray(), File.ReadAllBytes(path));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
     }
 }

@@ -50,7 +50,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
 
         var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await handler.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
+        await handler.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
 
         var commits = new Task[transactions.Length];
         for (var index = 0; index < transactions.Length; index++)
@@ -65,7 +65,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             CommitCount.ToString(CultureInfo.InvariantCulture));
         handler.ReleaseRuntimeBarrier();
 
-        await Task.WhenAll(commits).WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
         _ = await blockedMetrics;
         throw new XunitException(
             "The child completed every commit without aborting after the shared WAL sync.");
@@ -143,7 +143,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
 
         var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
-        await handler.WaitForRuntimeBarrierAsync(TimeSpan.FromSeconds(10));
+        await handler.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
@@ -155,7 +155,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsAbortedException>(() => commit.WaitAsync(TimeSpan.FromSeconds(10)));
+            await Assert.ThrowsAsync<PantsAbortedException>(() => commit.WaitAsync(TestTimeouts.Expected));
         }
 
         await using (var suffix = await database.Transactions.BeginAsync(
@@ -174,7 +174,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         // A fenced WAL can make nothing further durable, so shutdown skips the final boundary and
         // completes, releasing what restart recovery needs.
-        await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+        await database.ShutdownAsync(TestTimeouts.Expected);
 
         WriteDurableSignal(
             Path.Combine(databasePath, RollbackFailureSentinelFileName),
@@ -216,7 +216,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         await Assert.ThrowsAsync<PantsFencedException>(() =>
             database.ColumnFamilies.CreateAsync("fenced-single-family").AsTask());
-        await database.ShutdownAsync(TimeSpan.FromSeconds(5));
+        await database.ShutdownAsync(TestTimeouts.Expected);
 
         WriteDurableSignal(
             Path.Combine(databasePath, SingleRollbackFailureSentinelFileName),
@@ -346,7 +346,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
     static async Task WaitForCrashChildExitAsync(Process child)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             await child.WaitForExitAsync(timeout.Token);
@@ -354,7 +354,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
             throw new XunitException(
-                "Coalesced-commit crash child did not exit within 15 seconds after readiness.",
+                "Coalesced-commit crash child did not exit within the test timeout after readiness.",
                 exception);
         }
     }
@@ -388,7 +388,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             return;
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         try
         {
             while (true)
@@ -411,7 +411,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
         {
             throw new XunitException(
-                "Coalesced-commit crash child did not release the writer lock within 30 seconds.",
+                "Coalesced-commit crash child did not release the writer lock within the test timeout.",
                 exception);
         }
     }
