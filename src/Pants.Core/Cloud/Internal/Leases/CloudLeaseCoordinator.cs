@@ -31,6 +31,8 @@ sealed class CloudLeaseCoordinator : IDisposable
     int _gateDisposed;
     long _latestObservedUtcTicks;
     int _lost;
+    ITimer? _watchdog;
+    readonly object _watchdogLock = new();
 
     public CloudLeaseCoordinator(
         ICloudLeaseStore store,
@@ -88,6 +90,7 @@ sealed class CloudLeaseCoordinator : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            DisposeWatchdog();
             Volatile.Write(ref _lost, 1);
             if (Volatile.Read(ref _activeOperations) == 0)
             {
@@ -96,7 +99,15 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
-    public async ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken)
+    public ValueTask<ulong> AcquireAsync(CancellationToken cancellationToken) =>
+        AcquireAsync(0, cancellationToken);
+
+    /// <summary>
+    ///     Acquires the lease at an epoch strictly above both the stored lease and
+    ///     <paramref name="minimumEpoch" />, so a deleted or reset lease object can never hand out
+    ///     an epoch the catalog or WAL already used.
+    /// </summary>
+    public async ValueTask<ulong> AcquireAsync(ulong minimumEpoch, CancellationToken cancellationToken)
     {
         await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -114,9 +125,15 @@ sealed class CloudLeaseCoordinator : IDisposable
                 .ConfigureAwait(false);
             ulong nextEpoch;
             bool acquired;
+            if (minimumEpoch == ulong.MaxValue)
+            {
+                throw new PantsLeaseEpochExhaustedException(
+                    "The cloud primary lease epoch is exhausted.");
+            }
+
             if (current is null)
             {
-                nextEpoch = 1;
+                nextEpoch = Math.Max(1, checked(minimumEpoch + 1));
                 acquired = await _store.TryCreateAsync(
                     new CloudLeaseRecord(
                         _holderId,
@@ -128,6 +145,13 @@ sealed class CloudLeaseCoordinator : IDisposable
             }
             else
             {
+                if (current.Lease.ExpiryMalformed)
+                {
+                    throw new PantsLeaseIndeterminateException(
+                        $"Cloud primary lease expiry is invalid; ownership is ambiguous " +
+                        $"(holder: {current.Lease.HolderId}, epoch: {current.Lease.Epoch}).");
+                }
+
                 if (now <= AddSaturating(current.Lease.ExpiresAtUtc, _clockSkewTolerance))
                 {
                     throw new PantsLeaseHeldException(
@@ -142,7 +166,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                         "The cloud primary lease epoch is exhausted.");
                 }
 
-                nextEpoch = checked(current.Lease.Epoch + 1);
+                nextEpoch = Math.Max(checked(current.Lease.Epoch + 1), checked(minimumEpoch + 1));
                 acquired = await _store.TryReplaceAsync(
                     current.Version,
                     new CloudLeaseRecord(
@@ -164,6 +188,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 ref _expiresAtUtcTicks,
                 AddSaturating(now, _leaseDuration).UtcTicks);
             Volatile.Write(ref _epoch, nextEpoch);
+            ArmWatchdog();
             return nextEpoch;
         }
         finally
@@ -189,7 +214,7 @@ sealed class CloudLeaseCoordinator : IDisposable
 
             var renewedAt = _timeProvider.GetTimestamp();
             var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
-            var proposed = current.Lease with { ExpiresAtUtc = expiresAt };
+            var proposed = current.Lease with { ExpiresAtUtc = expiresAt, ExpiryMalformed = false };
             EnsureValid();
             CloudLeaseSnapshot? confirmed = null;
             try
@@ -238,6 +263,25 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Re-reads the stored lease and confirms this process still owns it, so a successor that
+    ///     took the lease object before the local deadline passed is caught at a publication
+    ///     boundary instead of up to a renewal interval later. Losing the lease fires the loss
+    ///     callback once.
+    /// </summary>
+    public async ValueTask ValidateRemoteAsync(CancellationToken cancellationToken)
+    {
+        EnsureValid();
+        var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+        EnsureValid();
+        if (current is null || !Owns(current.Lease, Epoch))
+        {
+            LoseLease();
+            throw new PantsFencedException(
+                "The cloud primary lease is owned by another writer or no longer exists.");
+        }
+    }
+
     public void EnsureValid()
     {
         if (!IsHealthy)
@@ -271,7 +315,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                 current.Version,
                 current.Lease with
                 {
-                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1),
+                    ExpiryMalformed = false
                 },
                 cancellationToken).ConfigureAwait(false);
             if (released)
@@ -352,7 +397,58 @@ sealed class CloudLeaseCoordinator : IDisposable
 
         Volatile.Write(ref _expiresAtTimestamp, Math.Max(currentDeadline, candidateTimestamp));
         Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentUtcDeadline, candidate.UtcTicks));
+        ArmWatchdog();
         return Volatile.Read(ref _lost) == 0;
+    }
+
+    /// <summary>
+    ///     Arms a timer at the monotonic deadline so loss is detected and reported even when no
+    ///     caller asks and a renewal is hung. Health stays authoritative: the timer only forces the
+    ///     lazy check to run, and re-arms itself if the deadline has since moved.
+    /// </summary>
+    void ArmWatchdog()
+    {
+        if (Volatile.Read(ref _lost) != 0 || Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        var remaining = RemainingUntilDeadline();
+        lock (_watchdogLock)
+        {
+            if (_watchdog is null)
+            {
+                _watchdog = _timeProvider.CreateTimer(
+                    static state => ((CloudLeaseCoordinator)state!).OnWatchdog(),
+                    this,
+                    remaining,
+                    Timeout.InfiniteTimeSpan);
+            }
+            else
+            {
+                _ = _watchdog.Change(remaining, Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
+
+    void OnWatchdog()
+    {
+        var remaining = RemainingUntilDeadline();
+        if (remaining > TimeSpan.Zero)
+        {
+            ArmWatchdog();
+            return;
+        }
+
+        _ = IsHealthy;
+    }
+
+    TimeSpan RemainingUntilDeadline()
+    {
+        var ticks = Volatile.Read(ref _expiresAtTimestamp) - _timeProvider.GetTimestamp();
+        return ticks <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds((double)ticks / _timeProvider.TimestampFrequency) + TimeSpan.FromMilliseconds(1);
     }
 
     async ValueTask TryExpireLateRenewalAsync(
@@ -373,7 +469,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                 current.Version,
                 current.Lease with
                 {
-                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1),
+                    ExpiryMalformed = false
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -426,10 +523,23 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    void DisposeWatchdog()
+    {
+        ITimer? watchdog;
+        lock (_watchdogLock)
+        {
+            watchdog = _watchdog;
+            _watchdog = null;
+        }
+
+        watchdog?.Dispose();
+    }
+
     void LoseLease()
     {
         if (Interlocked.Exchange(ref _lost, 1) == 0)
         {
+            DisposeWatchdog();
             _leaseLossCallback?.Invoke();
         }
     }

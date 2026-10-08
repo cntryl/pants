@@ -44,6 +44,11 @@ static class SnapshotReadPath
         byte[]? endExclusive)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.ReadView is { } index)
+        {
+            return index.SelectRangeCandidates(family.Id, startInclusive, endExclusive, out _);
+        }
+
         return snapshot.GetVisibleFiles(family.Id)
             .Where(file => Overlaps(file, startInclusive, endExclusive))
             .ToArray();
@@ -56,8 +61,8 @@ static class SnapshotReadPath
             return true;
         }
 
-        var smallest = LocalDiskStore.GetMetadataKey(file.SmallestKey!);
-        var largest = LocalDiskStore.GetMetadataKey(file.LargestKey!);
+        var smallest = file.SmallestKey!;
+        var largest = file.LargestKey!;
         return (endExclusive is null || smallest.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
                (startInclusive is null || largest.AsSpan().SequenceCompareTo(startInclusive) >= 0);
     }

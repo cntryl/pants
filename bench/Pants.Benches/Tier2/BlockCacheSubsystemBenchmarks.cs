@@ -15,7 +15,7 @@ public class BlockCacheSubsystemBenchmarks : Tier2Benchmark
     public void Setup()
     {
         _cache = new SstBlockCache(PantsBlockCachePolicy.Lru, 2 * 1024 * 1024);
-        _keys = Enumerable.Range(0, Operations).Select(index => new SstBlockCacheKey("cache.sst", index)).ToArray();
+        _keys = Enumerable.Range(0, Operations).Select(index => new SstBlockCacheKey(new SstFileIdentity("cache.sst", 0, 0, 0, null), index)).ToArray();
         for (var index = 0; index < 500; index++)
         {
             _cache.Add(_keys[index], _block);

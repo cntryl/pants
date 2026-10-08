@@ -56,6 +56,15 @@ sealed class CloudObjectLeaseStore(
         return Encoding.UTF8.GetBytes(value);
     }
 
+    /// <summary>
+    ///     Parses a lease document the way the reference engine does: the last value of a repeated
+    ///     field wins, unknown and unrecognizable lines are ignored, and a document that is not valid
+    ///     UTF-8, lacks a holder, acquisition time or expiry, or carries an unparseable epoch is
+    ///     indeterminate. The epoch and owner token are optional so a legacy document written before
+    ///     they existed still reads: it parses as epoch 0 with no owner token, nobody owns it, and it
+    ///     is respected until its expiry and then taken over like any other. A present but
+    ///     unparseable expiry is kept as such, because it makes takeover indeterminate.
+    /// </summary>
     static CloudLeaseRecord Parse(ReadOnlySpan<byte> bytes)
     {
         string text;
@@ -65,7 +74,7 @@ sealed class CloudObjectLeaseStore(
         }
         catch (DecoderFallbackException exception)
         {
-            throw new PantsCorruptionException(
+            throw new PantsLeaseIndeterminateException(
                 "The cloud primary lease document is not valid UTF-8.",
                 exception);
         }
@@ -74,36 +83,46 @@ sealed class CloudObjectLeaseStore(
         foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = line.IndexOf(": ", StringComparison.Ordinal);
-            if (separator <= 0 || !fields.TryAdd(line[..separator], line[(separator + 2)..]))
+            if (separator > 0)
             {
-                throw new PantsCorruptionException("The cloud primary lease document is malformed.");
+                fields[line[..separator]] = line[(separator + 2)..];
             }
         }
 
-        if (!fields.TryGetValue("epoch", out var epochText) ||
-            !ulong.TryParse(epochText, NumberStyles.None, CultureInfo.InvariantCulture, out var epoch) ||
-            epoch == 0 ||
-            !fields.TryGetValue("holder_id", out var holderId) ||
-            !fields.TryGetValue("owner_token", out var ownerToken) ||
+        if (!fields.TryGetValue("holder_id", out var holderId) ||
             !fields.TryGetValue("acquired_at", out var acquiredText) ||
-            !DateTimeOffset.TryParse(
-                acquiredText,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind,
-                out var acquiredAt) ||
-            !fields.TryGetValue("expires_at", out var expiresText) ||
-            !DateTimeOffset.TryParse(
-                expiresText,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.RoundtripKind,
-                out var expiresAt))
+            !fields.TryGetValue("expires_at", out var expiresText))
         {
-            throw new PantsCorruptionException("The cloud primary lease document is invalid.");
+            throw new PantsLeaseIndeterminateException(
+                "The cloud primary lease document is missing a required field; ownership is ambiguous.");
         }
 
-        ValidateSingleLine(holderId, nameof(holderId));
-        ValidateSingleLine(ownerToken, nameof(ownerToken));
-        return new CloudLeaseRecord(holderId, epoch, ownerToken, acquiredAt, expiresAt);
+        ulong epoch = 0;
+        if (fields.TryGetValue("epoch", out var epochText) &&
+            !ulong.TryParse(epochText, NumberStyles.None, CultureInfo.InvariantCulture, out epoch))
+        {
+            throw new PantsLeaseIndeterminateException(
+                "The cloud primary lease epoch is unparseable; ownership is ambiguous.");
+        }
+
+        var ownerToken = fields.GetValueOrDefault("owner_token", string.Empty);
+        _ = DateTimeOffset.TryParse(
+            acquiredText,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var acquiredAt);
+        var expiryParsed = DateTimeOffset.TryParse(
+            expiresText,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var expiresAt);
+        return new CloudLeaseRecord(
+            holderId,
+            epoch,
+            ownerToken,
+            acquiredAt,
+            expiresAt,
+            !expiryParsed);
     }
 
     static void ValidateSingleLine(string value, string description)

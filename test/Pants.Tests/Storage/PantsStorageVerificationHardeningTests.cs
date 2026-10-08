@@ -107,9 +107,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         await WriteSingleSstFixtureAsync(
             directory.Path,
-            file => file.SmallestKey = "different"u8.ToArray()
-                .Select(static value => (int)value)
-                .ToArray());
+            file => file.SmallestKey = "different"u8.ToArray());
 
         await Assert.ThrowsAsync<PantsCorruptionException>(() =>
             PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
@@ -637,8 +635,8 @@ public sealed class PantsStorageVerificationHardeningTests
             ContentCrc32C = DiskFormat.Crc32C(bytes),
             ColumnFamilyId = 0,
             SstSequence = 1,
-            SmallestKey = key.Select(static value => (int)value).ToArray(),
-            LargestKey = key.Select(static value => (int)value).ToArray(),
+            SmallestKey = key.ToArray(),
+            LargestKey = key.ToArray(),
             KeyBoundsComplete = true,
             SmallestSequence = 7,
             LargestSequence = 7

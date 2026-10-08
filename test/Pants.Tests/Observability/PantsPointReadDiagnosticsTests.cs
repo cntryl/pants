@@ -69,9 +69,8 @@ public sealed class PantsPointReadDiagnosticsTests
         var cold = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
         var warm = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
 
-        // GetWithDiagnosticsAsync's trace comes from the exhaustive diagnostic pass. The real
-        // value is resolved first by comparing write sequences across every candidate SST, so
-        // every candidate is already warm when the diagnostic pass records this query.
+        // The trace comes from the same pass that resolves the value, so the first read of a
+        // key reports the cold reader and block caches it actually hit.
         Assert.Equal("second", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(cold.Value)));
         Assert.Equal(1, cold.Trace.KeyRangeRejects);
         Assert.Equal(2, cold.Trace.Ssts.Count);
@@ -85,13 +84,12 @@ public sealed class PantsPointReadDiagnosticsTests
         });
         Assert.All(cold.Trace.Ssts, static sst =>
         {
-            Assert.Equal(PantsCacheReadOutcome.Hit, sst.ReaderCacheOutcome);
-            Assert.Equal(PantsCacheReadOutcome.Hit, sst.BlockCacheOutcome);
-            Assert.Equal(0, sst.DataBlocksRead);
+            Assert.Equal(PantsCacheReadOutcome.Miss, sst.ReaderCacheOutcome);
+            Assert.Equal(PantsCacheReadOutcome.Miss, sst.BlockCacheOutcome);
+            Assert.Equal(1, sst.DataBlocksRead);
         });
 
-        // By the time `warm` runs, both candidates' caches are warm (the earlier resolution plus
-        // `cold`'s exhaustive pass already touched both).
+        // By the time `warm` runs, `cold` has warmed both candidates' reader and block caches.
         Assert.Equal("second", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(warm.Value)));
         Assert.Equal(1, warm.Trace.KeyRangeRejects);
         Assert.Equal(
@@ -107,11 +105,11 @@ public sealed class PantsPointReadDiagnosticsTests
         });
 
         var aggregate = await database.Diagnostics.GetReadPathDiagnosticsAsync();
-        Assert.Equal(0, aggregate.SstReaderCacheMisses);
-        Assert.Equal(4, aggregate.SstReaderCacheHits);
-        Assert.Equal(0, aggregate.SstBlockCacheMisses);
-        Assert.Equal(4, aggregate.SstBlockCacheHits);
-        Assert.Equal(0, aggregate.DataBlocksRead);
+        Assert.Equal(2, aggregate.SstReaderCacheMisses);
+        Assert.Equal(2, aggregate.SstReaderCacheHits);
+        Assert.Equal(2, aggregate.SstBlockCacheMisses);
+        Assert.Equal(2, aggregate.SstBlockCacheHits);
+        Assert.Equal(2, aggregate.DataBlocksRead);
     }
 
     [Fact]
@@ -138,10 +136,9 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
         Assert.Equal(PantsBloomFilterOutcome.TruePositive, hydratedSst.BloomFilterOutcome);
         Assert.Equal(PantsCacheReadOutcome.Miss, hydratedSst.ReaderCacheOutcome);
-        // Value resolution performs the ranged read before the exhaustive diagnostics pass,
-        // so that pass observes the block admitted by the same query.
-        Assert.Equal(PantsCacheReadOutcome.Hit, hydratedSst.BlockCacheOutcome);
-        Assert.Equal(0, hydratedSst.DataBlocksRead);
+        // The same pass performs the ranged read, so the first query reports the block miss.
+        Assert.Equal(PantsCacheReadOutcome.Miss, hydratedSst.BlockCacheOutcome);
+        Assert.Equal(1, hydratedSst.DataBlocksRead);
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(resident.Value).ToArray());
         Assert.Equal(0, resident.Trace.KeyRangeRejects);
@@ -152,9 +149,6 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(PantsCacheReadOutcome.Hit, residentSst.BlockCacheOutcome);
         Assert.Equal(0, residentSst.DataBlocksRead);
         Assert.Empty(LocalSsts(directory.Path));
-
-        Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
-        Assert.Equal(0, hydratedSst.DataBlocksRead);
     }
 
     [Fact]
@@ -210,9 +204,7 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(0, result.Trace.KeyRangeRejects);
         var sst = Assert.Single(result.Trace.Ssts);
         Assert.Equal(PantsBloomFilterOutcome.Rejected, sst.BloomFilterOutcome);
-        // The diagnostic pass's reader-cache touch is already a hit: real value resolution
-        // (which also checks this candidate and is bloom-rejected the same way) opened it first.
-        Assert.Equal(PantsCacheReadOutcome.Hit, sst.ReaderCacheOutcome);
+        Assert.Equal(PantsCacheReadOutcome.Miss, sst.ReaderCacheOutcome);
         Assert.Equal(PantsCacheReadOutcome.NotChecked, sst.BlockCacheOutcome);
         Assert.Equal(0, sst.DataBlocksRead);
     }

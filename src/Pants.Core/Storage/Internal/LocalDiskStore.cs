@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -37,14 +38,22 @@ sealed class LocalDiskStore :
     readonly string _intentPath;
     readonly FileLease _lease;
     readonly FileStream _lockStream;
+    IDisposable? _rootTrust;
+    bool _localWalPruningEnabled = true;
+    IReadOnlyList<IRemoteWalSegment> _remoteWalSegments = [];
+    long? _recoveryCheckpointBytes;
+    const long RecoveryTransactionLimitMultiple = 8;
     readonly ManifestState _manifest;
+    const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
+
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
     readonly string _manifestPath;
     readonly string _manifestSnapshotPath;
     readonly MutableMemtableOperations _mutableOperations = new();
     readonly PantsPerformanceGoal _performanceGoal;
-    readonly SstReaderCache _readerCache = new();
+    readonly SstReaderCache _readerCache;
+    readonly AsyncSstReaderCache _asyncReaderCache;
     readonly PantsRecoveryPolicy _recoveryPolicy;
     readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
     readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
@@ -71,6 +80,8 @@ sealed class LocalDiskStore :
     long _walBytesWrittenTotal;
     long _walLastAppendedSequence;
     long _walLastSyncedSequence;
+    long _walBytesAtLastSync;
+    readonly BufferedWalSyncScheduler _bufferedSync;
     long _walLocalDurableSequence;
     int _walPendingWrites;
     int _walRecords;
@@ -109,9 +120,16 @@ sealed class LocalDiskStore :
         _compaction = compaction;
         _targetSstSizeBytes = targetSstSizeBytes;
         _blockCache = new SstBlockCache(blockCachePolicy, blockCacheBytes);
+        var readerCacheBytes = blockCacheBytes > 0 ? blockCacheBytes / 4 : DefaultReaderCacheBytes;
+        _readerCache = new SstReaderCache(readerCacheBytes);
+        _asyncReaderCache = new AsyncSstReaderCache(readerCacheBytes);
         _remoteSstSourceFactory = remoteSstSourceFactory;
         BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
+        _bufferedSync = new BufferedWalSyncScheduler(
+            BufferedWalSyncScheduler.DefaultMaximumDelay,
+            BufferedWalSyncScheduler.DefaultMaximumBytes,
+            SyncBufferedWalIfPending);
         _manifest = manifest;
         var visibleSequenceFloor = GetManifestVisibleSequenceFloor(manifest);
         _manifest.LastPersistedSequence = Math.Max(
@@ -320,10 +338,13 @@ sealed class LocalDiskStore :
         }
 
         IsDisposed = true;
+        _bufferedSync.Dispose();
         _readerCache.Dispose();
+        _asyncReaderCache.Dispose();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
+        _rootTrust?.Dispose();
     }
 
     public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
@@ -917,7 +938,8 @@ sealed class LocalDiskStore :
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PointReadObservation? observation = null)
     {
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
@@ -925,12 +947,16 @@ sealed class LocalDiskStore :
         SstEntry? best = null;
         foreach (var candidate in candidatesNewestFirst)
         {
+            var tier = IsSstLocal(candidate.Name)
+                ? PantsSstReadTier.Local
+                : PantsSstReadTier.HydratedFromCloud;
             await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
                 .ConfigureAwait(false);
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
+                observation?.RecordCandidate(candidate, decision, tier, false, false, false);
                 continue;
             }
 
@@ -941,12 +967,21 @@ sealed class LocalDiskStore :
                 firstCandidateBlock--;
             }
 
+            var blockCacheHit = false;
+            var candidateBlockContainsKey = false;
             for (var blockIndex = firstCandidateBlock;
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
+                var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(candidate), blockIndex);
+                var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
+                if (isCandidateBlock)
+                {
+                    blockCacheHit = _blockCache.TryGet(cacheKey, out var probe) && probe is not null;
+                }
+
                 var blockContent = await ReadPointBlockAsync(
-                        candidate.Name,
+                        candidate,
                         reader,
                         blockIndex,
                         cancellationToken)
@@ -958,12 +993,21 @@ sealed class LocalDiskStore :
                         continue;
                     }
 
+                    candidateBlockContainsKey |= isCandidateBlock;
                     if (best is null || entry.Sequence > best.Sequence)
                     {
                         best = entry;
                     }
                 }
             }
+
+            observation?.RecordCandidate(
+                candidate,
+                decision,
+                tier,
+                false,
+                blockCacheHit,
+                candidateBlockContainsKey);
         }
 
         return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
@@ -1153,7 +1197,7 @@ sealed class LocalDiskStore :
             return collected;
         }
 
-        var edits = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
         var obsoleteNames = new List<string>();
         foreach (var family in droppedFamilies)
         {
@@ -1207,9 +1251,7 @@ sealed class LocalDiskStore :
             .Where(file =>
                 file.ColumnFamilyId == columnFamily.Id &&
                 (!file.HasTrustedKeyBounds() ||
-                 bounds.Overlaps(
-                     GetMetadataKey(file.SmallestKey!),
-                     GetMetadataKey(file.LargestKey!))))
+                 bounds.Overlaps(file.SmallestKey!, file.LargestKey!)))
             .Select(static file => file.Name)
             .ToArray();
 
@@ -1264,7 +1306,8 @@ sealed class LocalDiskStore :
     /// </summary>
     public SstEntry? TryReadPointValue(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
-        ReadOnlySpan<byte> key)
+        ReadOnlySpan<byte> key,
+        PointReadObservation? observation = null)
     {
         ThrowIfDisposed();
         var keyCopy = key.ToArray();
@@ -1273,12 +1316,22 @@ sealed class LocalDiskStore :
         foreach (var candidate in candidatesNewestFirst)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(
+                SstFileIdentity.Of(candidate),
+                path,
+                out var readerCacheHit);
             var reader = readerLease.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
+                observation?.RecordCandidate(
+                    candidate,
+                    decision,
+                    PantsSstReadTier.Local,
+                    readerCacheHit,
+                    false,
+                    false);
                 continue;
             }
 
@@ -1294,11 +1347,23 @@ sealed class LocalDiskStore :
                 firstCandidateBlock--;
             }
 
+            var blockCacheHit = false;
+            var candidateBlockContainsKey = false;
             for (var blockIndex = firstCandidateBlock;
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
-                var blockContent = ReadPointBlock(candidate.Name, reader, blockIndex);
+                var blockContent = ReadPointBlock(
+                    candidate,
+                    reader,
+                    blockIndex,
+                    out var cacheHit);
+                var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
+                if (isCandidateBlock)
+                {
+                    blockCacheHit = cacheHit;
+                }
+
                 foreach (var entry in SstCodec.DecodeDataBlock(blockContent))
                 {
                     if (!entry.Key.AsSpan().SequenceEqual(keyCopy))
@@ -1306,12 +1371,21 @@ sealed class LocalDiskStore :
                         continue;
                     }
 
+                    candidateBlockContainsKey |= isCandidateBlock;
                     if (best is null || entry.Sequence > best.Sequence)
                     {
                         best = entry;
                     }
                 }
             }
+
+            observation?.RecordCandidate(
+                candidate,
+                decision,
+                PantsSstReadTier.Local,
+                readerCacheHit,
+                blockCacheHit,
+                candidateBlockContainsKey);
         }
 
         return best is null || SstRangeTombstoneMask.Covers(tombstonesSeen, keyCopy, best.Sequence)
@@ -1330,7 +1404,7 @@ sealed class LocalDiskStore :
         foreach (var candidate in available)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             foreach (var tombstone in readerLease.Reader.RangeTombstones)
             {
                 if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
@@ -1370,7 +1444,7 @@ sealed class LocalDiskStore :
             }
 
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             var reader = readerLease.Reader;
             if (reader.RangeTombstones.Any(tombstone =>
                     tombstone.Sequence > afterSequence &&
@@ -1396,26 +1470,28 @@ sealed class LocalDiskStore :
         return false;
     }
 
-    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex)
+    byte[] ReadPointBlock(FileMeta file, SstReader reader, int blockIndex, out bool cacheHit)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
+            cacheHit = true;
             return cachedBlock.Content.ToArray();
         }
 
+        cacheHit = false;
         var blockContent = reader.ReadDataBlock(blockIndex);
         _ = _blockCache.Add(cacheKey, blockContent);
         return blockContent;
     }
 
     async ValueTask<byte[]> ReadPointBlockAsync(
-        string fileName,
+        FileMeta file,
         AsyncSstReader reader,
         int blockIndex,
         CancellationToken cancellationToken)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
             return cachedBlock.Content.ToArray();
@@ -1450,7 +1526,7 @@ sealed class LocalDiskStore :
             foreach (var candidate in candidates)
             {
                 var path = Path.Combine(_sstDirectory, candidate.Name);
-                var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+                var lease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
                 sources.Add(new SstScanSource(
                     lease,
                     SstBlockIterator.Create(
@@ -1490,25 +1566,15 @@ sealed class LocalDiskStore :
             {
                 var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
                     .ConfigureAwait(false);
-                try
-                {
-                    sources.Add(new AsyncSstScanSource(
+                sources.Add(await AsyncSstScanSource.CreateAsync(
                         candidate,
                         reader,
-                        new AsyncSstBlockIterator(
-                            reader,
-                            direction,
-                            startInclusive,
-                            endExclusive,
-                            resourceBudget),
+                        reopenToken => OpenAsyncSstReaderAsync(candidate, reopenToken),
+                        direction,
                         startInclusive,
-                        endExclusive));
-                }
-                catch
-                {
-                    await reader.DisposeAsync().ConfigureAwait(false);
-                    throw;
-                }
+                        endExclusive,
+                        resourceBudget)
+                    .ConfigureAwait(false));
             }
 
             return sources;
@@ -1524,7 +1590,15 @@ sealed class LocalDiskStore :
         }
     }
 
-    async ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+    ValueTask<AsyncSstReader> OpenAsyncSstReaderAsync(
+        FileMeta file,
+        CancellationToken cancellationToken) =>
+        _asyncReaderCache.GetOrOpenAsync(
+            file,
+            openToken => OpenUncachedAsyncSstReaderAsync(file, openToken),
+            cancellationToken);
+
+    async ValueTask<AsyncSstReader> OpenUncachedAsyncSstReaderAsync(
         FileMeta file,
         CancellationToken cancellationToken)
     {
@@ -1560,264 +1634,6 @@ sealed class LocalDiskStore :
             .ConfigureAwait(false);
     }
 
-    public bool RecordPointRead(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key) =>
-        RecordPointReadCore(
-            telemetry,
-            columnFamily,
-            key,
-            null,
-            null,
-            out _);
-
-    public bool RecordPointRead(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key,
-        IReadOnlySet<string>? hydratedFromCloud,
-        out PantsPointReadTrace trace)
-    {
-        var sstTraces = new List<PantsSstReadTrace>();
-        var exceedsBudget = RecordPointReadCore(
-            telemetry,
-            columnFamily,
-            key,
-            hydratedFromCloud,
-            sstTraces,
-            out var keyRangeRejects);
-        trace = new PantsPointReadTrace(keyRangeRejects, [.. sstTraces]);
-        return exceedsBudget;
-    }
-
-    public async ValueTask<(bool ExceedsBudget, PantsPointReadTrace Trace)> RecordPointReadAsync(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        var keyCopy = key.ToArray();
-        var familyFiles = GetManifestFilesSnapshot()
-            .Where(file => file.ColumnFamilyId == columnFamily.Id)
-            .ToArray();
-        var candidates = familyFiles
-            .Where(file => IsWithinFileRange(file, keyCopy))
-            .ToArray();
-        var bloomChecks = 0;
-        var candidateBlocks = 0;
-        var amplificationBlocksRead = 0;
-        var dataBlocksRead = 0;
-        var bloomTruePositives = 0;
-        var bloomFalsePositives = 0;
-        var bloomTrueNegatives = 0;
-        var blockCacheHits = 0;
-        var blockCacheMisses = 0;
-        var traces = new List<PantsSstReadTrace>();
-        foreach (var candidate in candidates)
-        {
-            var local = IsSstLocal(candidate.Name);
-            await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
-                .ConfigureAwait(false);
-            var decision = reader.GetPointReadDecision(keyCopy);
-            bloomChecks = checked(bloomChecks + decision.BloomChecks);
-            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
-            amplificationBlocksRead = checked(amplificationBlocksRead + 1 + decision.BlocksRead);
-            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
-            var bloomFilterOutcome = decision.Rejected
-                ? PantsBloomFilterOutcome.Rejected
-                : PantsBloomFilterOutcome.NotChecked;
-            var sstDataBlocksRead = 0;
-            if (decision.BlocksRead != 0)
-            {
-                var cacheKey = new SstBlockCacheKey(candidate.Name, decision.CandidateBlockIndex);
-                bool containsKey;
-                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
-                {
-                    blockCacheHits++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
-                    containsKey = cachedBlock.ContainsKey(keyCopy);
-                }
-                else
-                {
-                    blockCacheMisses++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
-                    var blockContent = await reader.ReadDataBlockAsync(
-                            decision.CandidateBlockIndex,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    dataBlocksRead++;
-                    sstDataBlocksRead = 1;
-                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
-                    _ = _blockCache.Add(cacheKey, blockContent);
-                }
-
-                if (containsKey)
-                {
-                    bloomTruePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
-                }
-                else
-                {
-                    bloomFalsePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
-                }
-            }
-
-            traces.Add(new PantsSstReadTrace(
-                candidate.Name,
-                candidate.Level,
-                local ? PantsSstReadTier.Local : PantsSstReadTier.HydratedFromCloud,
-                bloomFilterOutcome,
-                PantsCacheReadOutcome.Miss,
-                blockCacheOutcome,
-                sstDataBlocksRead));
-        }
-
-        var keyRangeRejects = familyFiles.Length - candidates.Length;
-        var exceedsBudget = telemetry.RecordSstRead(new SstReadSample
-        {
-            SstsTouched = candidates.Length,
-            L0SstsTouched = candidates.Count(static file => file.Level == 0),
-            AmplificationBlocksRead = amplificationBlocksRead,
-            DataBlocksRead = dataBlocksRead,
-            ReaderCacheMisses = candidates.Length,
-            BlockCacheHits = blockCacheHits,
-            BlockCacheMisses = blockCacheMisses,
-            CandidateBlocks = candidateBlocks,
-            KeyRangeRejects = keyRangeRejects,
-            BloomChecks = bloomChecks,
-            BloomTruePositives = bloomTruePositives,
-            BloomFalsePositives = bloomFalsePositives,
-            BloomTrueNegatives = bloomTrueNegatives
-        });
-        return (exceedsBudget, new PantsPointReadTrace(keyRangeRejects, [.. traces]));
-    }
-
-    bool RecordPointReadCore(
-        RuntimeTelemetry telemetry,
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlySpan<byte> key,
-        IReadOnlySet<string>? hydratedFromCloud,
-        List<PantsSstReadTrace>? traces,
-        out int keyRangeRejects)
-    {
-        var keyCopy = key.ToArray();
-        var familyFiles = GetManifestFilesSnapshot()
-            .Where(file => file.ColumnFamilyId == columnFamily.Id)
-            .ToArray();
-        var candidates = familyFiles
-            .Where(file => IsWithinFileRange(file, keyCopy))
-            .ToArray();
-        var bloomChecks = 0;
-        var candidateBlocks = 0;
-        var amplificationBlocksRead = 0;
-        var dataBlocksRead = 0;
-        var bloomTruePositives = 0;
-        var bloomFalsePositives = 0;
-        var bloomTrueNegatives = 0;
-        var blockCacheHits = 0;
-        var blockCacheMisses = 0;
-        var readerCacheHits = 0;
-        var readerCacheMisses = 0;
-        foreach (var candidate in candidates)
-        {
-            var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(
-                candidate.Name,
-                path,
-                out var readerCacheHit);
-            var reader = readerLease.Reader;
-            if (readerCacheHit)
-            {
-                readerCacheHits++;
-            }
-            else
-            {
-                readerCacheMisses++;
-            }
-
-            var decision = reader.GetPointReadDecision(keyCopy);
-            bloomChecks = checked(bloomChecks + decision.BloomChecks);
-            candidateBlocks = checked(candidateBlocks + decision.CandidateBlocks);
-            bloomTrueNegatives = checked(bloomTrueNegatives + (decision.Rejected ? 1 : 0));
-            amplificationBlocksRead = checked(
-                amplificationBlocksRead + 1 + decision.BlocksRead);
-            var blockCacheOutcome = PantsCacheReadOutcome.NotChecked;
-            var bloomFilterOutcome = decision.Rejected
-                ? PantsBloomFilterOutcome.Rejected
-                : PantsBloomFilterOutcome.NotChecked;
-            var sstDataBlocksRead = 0;
-            if (decision.BlocksRead != 0)
-            {
-                var cacheKey = new SstBlockCacheKey(
-                    candidate.Name,
-                    decision.CandidateBlockIndex);
-                bool containsKey;
-                if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
-                {
-                    blockCacheHits++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Hit;
-                    containsKey = cachedBlock.ContainsKey(keyCopy);
-                }
-                else
-                {
-                    blockCacheMisses++;
-                    blockCacheOutcome = PantsCacheReadOutcome.Miss;
-                    var blockContent = reader.ReadDataBlock(decision.CandidateBlockIndex);
-                    dataBlocksRead = checked(dataBlocksRead + 1);
-                    sstDataBlocksRead = 1;
-                    containsKey = SstCodec.DataBlockContainsKey(blockContent, keyCopy);
-                    _ = _blockCache.Add(cacheKey, blockContent);
-                }
-
-                if (containsKey)
-                {
-                    bloomTruePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.TruePositive;
-                }
-                else
-                {
-                    bloomFalsePositives++;
-                    bloomFilterOutcome = PantsBloomFilterOutcome.FalsePositive;
-                }
-            }
-
-            traces?.Add(new PantsSstReadTrace(
-                candidate.Name,
-                candidate.Level,
-                hydratedFromCloud?.Contains(candidate.Name) is true
-                    ? PantsSstReadTier.HydratedFromCloud
-                    : PantsSstReadTier.Local,
-                bloomFilterOutcome,
-                readerCacheHit
-                    ? PantsCacheReadOutcome.Hit
-                    : PantsCacheReadOutcome.Miss,
-                blockCacheOutcome,
-                sstDataBlocksRead));
-        }
-
-        keyRangeRejects = familyFiles.Length - candidates.Length;
-        return telemetry.RecordSstRead(new SstReadSample
-        {
-            SstsTouched = candidates.Length,
-            L0SstsTouched = candidates.Count(static file => file.Level == 0),
-            AmplificationBlocksRead = amplificationBlocksRead,
-            DataBlocksRead = dataBlocksRead,
-            ReaderCacheHits = readerCacheHits,
-            ReaderCacheMisses = readerCacheMisses,
-            BlockCacheHits = blockCacheHits,
-            BlockCacheMisses = blockCacheMisses,
-            CandidateBlocks = candidateBlocks,
-            KeyRangeRejects = keyRangeRejects,
-            BloomChecks = bloomChecks,
-            BloomTruePositives = bloomTruePositives,
-            BloomFalsePositives = bloomFalsePositives,
-            BloomTrueNegatives = bloomTrueNegatives
-        });
-    }
-
     public IScanReadValidator CreateScanReadValidator(
         RuntimeTelemetry telemetry,
         ColumnFamilyIdentity columnFamily,
@@ -1830,7 +1646,7 @@ sealed class LocalDiskStore :
             foreach (var file in GetManifestFilesSnapshot().Where(file =>
                          file.ColumnFamilyId == columnFamily.Id &&
                          (!file.HasTrustedKeyBounds() ||
-                          bounds.Overlaps(GetMetadataKey(file.SmallestKey!), GetMetadataKey(file.LargestKey!)))))
+                          bounds.Overlaps(file.SmallestKey!, file.LargestKey!))))
             {
                 var reader = SstReader.Open(Path.Combine(_sstDirectory, file.Name));
                 readers.Add(reader);
@@ -1861,9 +1677,6 @@ sealed class LocalDiskStore :
         }
     }
 
-    internal static byte[] GetMetadataKey(IReadOnlyList<int> key) =>
-        key.Select(static value => checked((byte)value)).ToArray();
-
     public static LocalDiskStore Open(
         string directory,
         RuntimeState state,
@@ -1881,7 +1694,10 @@ sealed class LocalDiskStore :
         IAsyncSstSourceFactory? remoteSstSourceFactory = null,
         StartupPhaseRecorder? startupPhases = null,
         IPantsClock? leaseClock = null,
-        TimeSpan? leaseTimeToLive = null)
+        TimeSpan? leaseTimeToLive = null,
+        TimeProvider? leaseTimeProvider = null,
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null,
+        long? recoveryCheckpointBytes = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1892,11 +1708,14 @@ sealed class LocalDiskStore :
         FileStream? lockStream = null;
         FileStream? walStream = null;
         FileLease? lease = null;
+        IDisposable? rootTrust = null;
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         startupPhases ??= new StartupPhaseRecorder(null);
         try
         {
             Directory.CreateDirectory(root);
+            StoragePathGuard.EnsureTreeHasNoLinks(root);
+            rootTrust = StoragePathGuard.TrustRoot(root);
             try
             {
                 lockStream = new FileStream(
@@ -1912,6 +1731,9 @@ sealed class LocalDiskStore :
                     exception);
             }
 
+            // lease.md section 4 step 4: the floor must cover every epoch the WAL already holds, so
+            // a lost or reset leader record can never grant an epoch a recovered write predates.
+            minimumWriterEpoch = Math.Max(minimumWriterEpoch, ScanMaximumWriterEpoch(root));
             using (startupPhases.Measure(StartupPhase.Lease))
             {
                 lease = FileLease.Acquire(
@@ -1921,7 +1743,9 @@ sealed class LocalDiskStore :
                     leaseLossCallback,
                     leaseHeartbeatInterval ?? TimeSpan.FromSeconds(10),
                     leaseClock,
-                    leaseTimeToLive);
+                    leaseTimeToLive,
+                    leaseTimeProvider);
+                lease.FencedRelease = lockStream.Dispose;
             }
 
             lease.EnsureValid();
@@ -1980,7 +1804,8 @@ sealed class LocalDiskStore :
             Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
             AdvanceNextWalSequencePastSealedSegments(
                 Path.Combine(root, "wal"),
-                manifest);
+                manifest,
+                remoteWalSegments);
             lease.EnsureValid();
             walStream = new FileStream(Path.Combine(root, "wal", "wal.log"), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.Read);
@@ -1997,7 +1822,13 @@ sealed class LocalDiskStore :
                 targetSstSizeBytes,
                 blockCachePolicy,
                 blockCacheBytes,
-                remoteSstSourceFactory);
+                remoteSstSourceFactory)
+            {
+                _rootTrust = rootTrust,
+                _remoteWalSegments = remoteWalSegments ?? [],
+                _recoveryCheckpointBytes = recoveryCheckpointBytes
+            };
+            rootTrust = null;
             lease.EnsureValid();
             store.Recover(state, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
@@ -2019,6 +1850,7 @@ sealed class LocalDiskStore :
             walStream?.Dispose();
             lease?.Dispose();
             lockStream?.Dispose();
+            rootTrust?.Dispose();
             throw;
         }
         catch (Exception ex)
@@ -2026,6 +1858,7 @@ sealed class LocalDiskStore :
             walStream?.Dispose();
             lease?.Dispose();
             lockStream?.Dispose();
+            rootTrust?.Dispose();
             throw new StorageException($"Could not open Pants database at '{root}'.", ex);
         }
     }
@@ -2190,15 +2023,57 @@ sealed class LocalDiskStore :
         }
     }
 
+    /// <summary>
+    ///     The highest writer epoch recorded in any WAL file. A damaged file is not this scan's
+    ///     concern: recovery classifies it, so whatever readable prefix it has still counts.
+    /// </summary>
+    static ulong ScanMaximumWriterEpoch(string root)
+    {
+        var walDirectory = Path.Combine(root, "wal");
+        if (!Directory.Exists(walDirectory))
+        {
+            return 0;
+        }
+
+        var maximum = 0UL;
+        foreach (var path in Directory.EnumerateFiles(walDirectory)
+                     .Where(static path =>
+                         Path.GetFileName(path) == "wal.log" ||
+                         path.EndsWith(".wal", StringComparison.Ordinal) ||
+                         LegacyWalSegmentFileNameRegex.IsMatch(Path.GetFileName(path))))
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                WalFrameReader.Visit(
+                    stream,
+                    (record, frameBytes) => maximum = Math.Max(maximum, record.WriterEpoch),
+                    WalTailPolicy.AllowIncompleteFinalTail);
+            }
+            catch (Exception exception) when (exception is PantsException or IOException)
+            {
+                // Recovery reports the damage; the epochs read before it still count.
+            }
+        }
+
+        return maximum;
+    }
+
     static void AdvanceNextWalSequencePastSealedSegments(
         string walDirectory,
-        ManifestState manifest)
+        ManifestState manifest,
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments)
     {
         var maximumSegmentId = EnumerateSealedWalSegmentPaths(walDirectory)
             .Select(static path =>
                 TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
                     ? segmentId
                     : 0)
+            .Concat((remoteWalSegments ?? []).Select(static segment => segment.SegmentId))
             .DefaultIfEmpty()
             .Max();
         if (maximumSegmentId == ulong.MaxValue)
@@ -2231,13 +2106,14 @@ sealed class LocalDiskStore :
 
     public static JsonElement CreateColumnFamilyEdit(ColumnFamilyIdentity identity) =>
         CreateManifestEdit(
-            "CreateColumnFamily",
-            new
-            {
-                id = identity.Id,
-                name = identity.Name,
-                created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-            });
+                "CreateColumnFamily",
+                new
+                {
+                    id = identity.Id,
+                    name = identity.Name,
+                    created_at = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                })
+            .ToElement(JsonOptions);
 
     public JsonElement CreateDropColumnFamilyEdit(
         RuntimeState state,
@@ -2260,13 +2136,14 @@ sealed class LocalDiskStore :
                 .Select(static file => file.Name)
                 .ToArray();
             return CreateManifestEdit(
-                "DropColumnFamilyAt",
-                new
-                {
-                    id,
-                    drop_sequence = checked((ulong)state.Sequence),
-                    dropped_sst_names = droppedSstNames
-                });
+                    "DropColumnFamilyAt",
+                    new
+                    {
+                        id,
+                        drop_sequence = checked((ulong)state.Sequence),
+                        dropped_sst_names = droppedSstNames
+                    })
+                .ToElement(JsonOptions);
         }
     }
 
@@ -2288,7 +2165,7 @@ sealed class LocalDiskStore :
         }
 
         _failpoints.Hit(Failpoint.BeforeDdlLocalCommit);
-        DurablyApplyManifestEdit(edit);
+        DurablyApplyManifestEdit(ManifestEdit.FromElement(edit));
         _failpoints.Hit(Failpoint.AfterDdlLocalJournalBeforeVisibility);
         ApplyColumnFamilyEditVisibility(state, edit);
         SaveManifestCheckpoint();
@@ -2304,7 +2181,7 @@ sealed class LocalDiskStore :
         CloudDdlEdit.Validate(edit);
         if (!IsColumnFamilyEditApplied(edit))
         {
-            DurablyApplyManifestEdit(edit);
+            DurablyApplyManifestEdit(ManifestEdit.FromElement(edit));
         }
 
         ApplyColumnFamilyEditVisibility(state, edit);
@@ -2328,7 +2205,7 @@ sealed class LocalDiskStore :
                 _familyIds[existing.Value] = id;
                 state.NextColumnFamilyId = Math.Max(
                     state.NextColumnFamilyId,
-                    checked(id + 1));
+                    (ulong)id + 1);
                 return;
             }
 
@@ -2341,7 +2218,7 @@ sealed class LocalDiskStore :
             state.FamilyData[identity] = RuntimeState.EmptyFamily;
             state.RangeTombstones[identity] = [];
             state.ActiveMemtableBytes[identity] = 0;
-            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, checked(id + 1));
+            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, (ulong)id + 1);
             _familyIds[identity] = id;
             return;
         }
@@ -2444,17 +2321,9 @@ sealed class LocalDiskStore :
         CommitPayload payload,
         RuntimeState state)
     {
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == 0 ||
-            payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        var sequence = checked((long)commitSequence);
-        _nextSequence = commitSequence;
+        var beginSequence = _nextSequence + 1;
+        var sequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        _nextSequence = (ulong)sequence;
         state.Sequence = sequence;
         return (beginSequence, sequence);
     }
@@ -2477,15 +2346,9 @@ sealed class LocalDiskStore :
         }
 
         payload.Operations.Validate();
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        reservedSequence = checked((long)commitSequence);
+        var beginSequence = _nextSequence + 1;
+        reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        var commitSequence = (ulong)reservedSequence;
         _nextSequence = commitSequence;
         state.Sequence = reservedSequence;
         List<WalMutation>? residentMutations = null;
@@ -2684,10 +2547,38 @@ sealed class LocalDiskStore :
     {
         _walPendingWrites = checked(_walPendingWrites + physicalRecordCount);
         _walLastAppendedSequence = Math.Max(_walLastAppendedSequence, sequence);
+        _bufferedSync.NotifyAppend(
+            Interlocked.Read(ref _walBytesWrittenTotal) - _walBytesAtLastSync);
+    }
+
+    /// <summary>
+    ///     Background half of the Buffered contract. A failed fsync fences the WAL inside
+    ///     <see cref="SyncWal" />, so there is nothing further to do with the failure here.
+    /// </summary>
+    void SyncBufferedWalIfPending()
+    {
+        lock (_walStateGate)
+        {
+            if (IsDisposed || _walPendingWrites == 0 || _walIo.IsFenced)
+            {
+                return;
+            }
+
+            try
+            {
+                SyncWal();
+                RecordWalSync(_walLastAppendedSequence);
+            }
+            catch (Exception)
+            {
+                // The WAL is fenced; later commits fail with the original cause.
+            }
+        }
     }
 
     void RecordWalSync(long sequence)
     {
+        _walBytesAtLastSync = Interlocked.Read(ref _walBytesWrittenTotal);
         _walPendingWrites = 0;
         _walLastSyncedSequence = Math.Max(_walLastSyncedSequence, sequence);
         _walLocalDurableSequence = Math.Max(_walLocalDurableSequence, sequence);
@@ -2887,6 +2778,92 @@ sealed class LocalDiskStore :
 
         FlushOperations(familyOperations, null);
         _unflushedCommitSequence = checked(_mutableOperations.LastSequence + 1);
+        PruneCoveredWalSegments();
+    }
+
+    /// <summary>
+    ///     Cloud mode retires WAL segments through remote acknowledgement instead, so the runtime
+    ///     turns local pruning off there.
+    /// </summary>
+    public void DisableLocalWalPruning() => _localWalPruningEnabled = false;
+
+    void PruneCoveredWalSegments()
+    {
+        if (!_localWalPruningEnabled)
+        {
+            return;
+        }
+
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            ThrowIfWalFenced();
+            _lease.EnsureValid();
+            _ = SealActiveWalCore(false, null, null);
+            Dictionary<uint, ulong> persistedFamilySequences;
+            HashSet<uint> activeFamilyIds;
+            lock (_manifestGate)
+            {
+                persistedFamilySequences = _manifest.Files
+                    .Where(static file => file.LargestSequence.HasValue)
+                    .GroupBy(static file => file.ColumnFamilyId)
+                    .ToDictionary(
+                        static group => group.Key,
+                        static group => group.Max(file => file.LargestSequence!.Value));
+                activeFamilyIds = _familyIds.Values.ToHashSet();
+            }
+
+            var segments = EnumerateSealedWalSegmentPaths(_walDirectory)
+                .Where(static path => TryParseSealedWalSegmentId(Path.GetFileName(path), out _))
+                .OrderBy(static path =>
+                {
+                    _ = TryParseSealedWalSegmentId(Path.GetFileName(path), out var id);
+                    return id;
+                })
+                .ToArray();
+            var results = new List<WalSegmentCoverageResult>(segments.Length);
+            var scratchDirectory = Path.Combine(RootPath, "recovery");
+            try
+            {
+                foreach (var segment in segments)
+                {
+                    results.Add(WalSegmentCoverage.Evaluate(
+                        File.ReadAllBytes(segment),
+                        persistedFamilySequences,
+                        activeFamilyIds,
+                        scratchDirectory));
+                }
+            }
+            catch (PantsException)
+            {
+                // A segment recovery cannot decode is for recovery to judge; keep everything.
+                return;
+            }
+
+            var prunable = WalSegmentCoverage.SelectPrunable(results);
+            var deleted = false;
+            try
+            {
+                for (var index = 0; index < segments.Length; index++)
+                {
+                    if (prunable[index])
+                    {
+                        File.Delete(segments[index]);
+                        deleted = true;
+                    }
+                }
+            }
+            catch
+            {
+                Volatile.Write(ref _walDirectoryPersistenceAnomaly, true);
+                throw;
+            }
+
+            if (deleted)
+            {
+                SyncWalDirectoryAfterPrune();
+            }
+        }
     }
 
     void CompleteFrozenFlush(FrozenMemtableFlush frozen)
@@ -2915,9 +2892,12 @@ sealed class LocalDiskStore :
             {
                 _lease.EnsureValid();
                 RotateWal();
+                _frozenFlushIds.Remove(frozen.Id);
+                return;
             }
 
             _frozenFlushIds.Remove(frozen.Id);
+            PruneCoveredWalSegments();
         }
     }
 
@@ -2940,8 +2920,8 @@ sealed class LocalDiskStore :
         ulong? flushFrontierSequence = null,
         string? stagingIdentity = null)
     {
-        var edits = new List<JsonElement>();
-        var intents = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
+        var intents = new List<IntentEntry>();
         var outputs = new List<StagedSstOutput>();
         foreach (var familyGroup in operations.GroupBy(static operation => operation.ColumnFamilyId))
         {
@@ -3302,12 +3282,10 @@ sealed class LocalDiskStore :
                         checked((long)file.SizeBytes),
                         file.SmallestKey is null
                             ? null
-                            : new ReadOnlyMemory<byte>(file.SmallestKey.Select(static value => checked((byte)value))
-                                .ToArray()),
+                            : new ReadOnlyMemory<byte>(file.SmallestKey.ToArray()),
                         file.LargestKey is null
                             ? null
-                            : new ReadOnlyMemory<byte>(file.LargestKey.Select(static value => checked((byte)value))
-                                .ToArray()),
+                            : new ReadOnlyMemory<byte>(file.LargestKey.ToArray()),
                         file.SmallestSequence is null ? null : checked((long)file.SmallestSequence.Value),
                         file.LargestSequence is null ? null : checked((long)file.LargestSequence.Value)))
                     .ToArray();
@@ -3400,8 +3378,8 @@ sealed class LocalDiskStore :
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var obsoleteNames = new List<string>();
-        var edits = new List<JsonElement>();
-        var intents = new List<JsonElement>();
+        var edits = new List<ManifestEdit>();
+        var intents = new List<IntentEntry>();
         var outputNames = new List<string>();
         var outputBytes = 0L;
         var hasCompactionPlan = false;
@@ -3432,54 +3410,45 @@ sealed class LocalDiskStore :
                         .ConfigureAwait(false);
                 }
 
-                // StreamingCompactionMerger opens each input via SstReader (bounded: footer/meta/
-                // index/bloom + the small resident range-tombstone list) and walks its entries one
-                // block at a time through the k-way merge — the same version-retention/tombstone-
-                // masking/GC-eligibility rules as CompactionMerger.Merge +
-                // CompactionOutputPartitioner.Partition (see its doc comment), just driven
-                // incrementally instead of over one materialized array per input plus one
-                // materialized merged/partitioned result.
-                var inputReaders = plan.Inputs
-                    .Select(input => SstReader.Open(Path.Combine(_sstDirectory, input.Name)))
-                    .ToArray();
+                // The merge walks level-0 sources one stream per file and each sorted, disjoint
+                // set (an inner-level source set, the target span) as one chained stream, so open
+                // readers never exceed the source stream count plus one however wide the span is.
+                // Same version-retention/tombstone-masking/GC-eligibility rules as
+                // CompactionMerger + CompactionOutputPartitioner (see StreamingCompactionMerger).
+                using var compactionStreams = CompactionStreams.Create(
+                    plan,
+                    input => OpenCompactionFile(input, compactionBudget, cancellationToken),
+                    _compaction.MaximumInputFiles,
+                    compactionBudget);
                 var outputs = new List<FileMeta>();
                 var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
                     familyId,
                     out var nextOutputSequence)
                     ? nextOutputSequence
                     : 1UL;
-                try
+                var outputIndex = 0UL;
+                foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
+                             compactionStreams.Streams,
+                             compactionStreams.RangeTombstones,
+                             plan,
+                             _targetSstSizeBytes,
+                             compactionBudget))
                 {
-                    var outputIndex = 0UL;
-                    foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
-                                 inputReaders,
-                                 plan,
-                                 _targetSstSizeBytes,
-                                 compactionBudget))
-                    {
-                        var outputSequence = checked(firstOutputSequence + outputIndex);
-                        outputNames.Add(CreateSstFileName(
-                            familyId,
-                            plan.TargetLevel,
-                            outputSequence));
-                        var output = CreateSst(
-                            familyId,
-                            plan.TargetLevel,
-                            partition.Entries,
-                            partition.RangeTombstones,
-                            Failpoint.AfterCompactionOutputDurable,
-                            outputSequence);
-                        outputs.Add(output);
-                        edits.Add(CreateManifestEdit("AddSst", output));
-                        outputIndex = checked(outputIndex + 1);
-                    }
-                }
-                finally
-                {
-                    foreach (var inputReader in inputReaders)
-                    {
-                        inputReader.Dispose();
-                    }
+                    var outputSequence = checked(firstOutputSequence + outputIndex);
+                    outputNames.Add(CreateSstFileName(
+                        familyId,
+                        plan.TargetLevel,
+                        outputSequence));
+                    var output = CreateSst(
+                        familyId,
+                        plan.TargetLevel,
+                        partition.Entries,
+                        partition.RangeTombstones,
+                        Failpoint.AfterCompactionOutputDurable,
+                        outputSequence);
+                    outputs.Add(output);
+                    edits.Add(CreateManifestEdit("AddSst", output));
+                    outputIndex = checked(outputIndex + 1);
                 }
 
                 if (outputs.Count > 0)
@@ -3630,7 +3599,42 @@ sealed class LocalDiskStore :
     void RemoveSstFromCaches(string name)
     {
         _readerCache.RemoveFile(name);
+        _asyncReaderCache.RemoveFile(name);
         _blockCache.RemoveFile(name);
+    }
+
+    /// <summary>
+    ///     Opens a compaction input from local disk, or through bounded remote ranges when the SST
+    ///     is cloud-only, so a cold input is never hydrated just to be merged.
+    /// </summary>
+    ICompactionFileCursor OpenCompactionFile(
+        FileMeta input,
+        ResourceBudget? budget,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_sstDirectory, ValidateSstName(input.Name));
+        if (File.Exists(path))
+        {
+            try
+            {
+                return new LocalFileCursor(SstReader.Open(path), budget);
+            }
+            catch (Exception exception) when (
+                _remoteSstSourceFactory is not null &&
+                exception is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // A verified cache eviction won the race; the remote copy is still authoritative.
+            }
+        }
+
+        if (_remoteSstSourceFactory is null)
+        {
+            throw new PantsRecoveryFailedException($"Manifest-owned SST '{input.Name}' is missing.");
+        }
+
+        var reader = OpenAsyncSstReaderAsync(input, cancellationToken)
+            .AsTask().GetAwaiter().GetResult();
+        return new RemoteFileCursor(reader, budget, cancellationToken);
     }
 
     static string CreateSstFileName(uint familyId, uint level, ulong sequence) =>
@@ -3689,7 +3693,7 @@ sealed class LocalDiskStore :
                         throw new StorageException($"Manifest SST '{file.Name}' is missing.");
                     }
 
-                    var remoteReader = OpenAsyncSstReaderAsync(file, CancellationToken.None)
+                    var remoteReader = OpenUncachedAsyncSstReaderAsync(file, CancellationToken.None)
                         .AsTask().GetAwaiter().GetResult();
                     remoteReader.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 }
@@ -3727,31 +3731,21 @@ sealed class LocalDiskStore :
                 static group => group.Key,
                 static group => group.Max(file => file.LargestSequence!.Value));
         var activeFamilyIds = _familyIds.Values.ToHashSet();
-        var sealedSegments = EnumerateSealedWalSegmentPaths(_walDirectory)
-            .Where(static path => Path.GetFileName(path) != "wal.log")
-            .OrderBy(static path =>
-                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
-                    ? segmentId
-                    : ulong.MaxValue)
-            .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .ToArray();
+        var sealedSegments = CollectWalReplaySources();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
         using var recovery = new WalRecoveryStateMachine(Path.Combine(RootPath, "recovery"));
         var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
-        for (var index = 0; index < sealedSegments.Length; index++)
+        for (var index = 0; index < sealedSegments.Count; index++)
         {
             var sealedSegment = sealedSegments[index];
             WalReplayOutcome outcome;
-            using (var stream = new FileStream(
-                       sealedSegment,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.Read))
+            using (var stream = sealedSegment.Open())
             {
                 outcome = ReplayWalStream(
                     state,
                     stream,
+                    sealedSegment.Name,
                     false,
                     recovery,
                     recoveredVersions,
@@ -3763,10 +3757,13 @@ sealed class LocalDiskStore :
 
             if (outcome == WalReplayOutcome.Salvaged)
             {
-                RetainCorruptFile(sealedSegment);
-                for (var laterIndex = index + 1; laterIndex < sealedSegments.Length; laterIndex++)
+                for (var retainIndex = index; retainIndex < sealedSegments.Count; retainIndex++)
                 {
-                    RetainCorruptFile(sealedSegments[laterIndex]);
+                    // A remote segment has no local file to keep; its bytes stay in the cloud.
+                    if (sealedSegments[retainIndex].Path is { } retainedPath)
+                    {
+                        RetainCorruptFile(retainedPath);
+                    }
                 }
 
                 ResetActiveWalAfterSalvage();
@@ -3778,6 +3775,7 @@ sealed class LocalDiskStore :
         if (ReplayWalStream(
                 state,
                 _walStream,
+                "wal.log",
                 true,
                 recovery,
                 recoveredVersions,
@@ -3790,19 +3788,98 @@ sealed class LocalDiskStore :
         }
     }
 
+    /// <summary>
+    ///     Sealed local segments plus catalog-authorized remote segments, in segment order. A
+    ///     segment present both ways must match byte for byte and is replayed once, locally; a
+    ///     divergence is corruption, never something salvage may paper over.
+    /// </summary>
+    List<WalReplaySource> CollectWalReplaySources()
+    {
+        var sources = new List<WalReplaySource>();
+        var localIds = new HashSet<ulong>();
+        foreach (var path in EnumerateSealedWalSegmentPaths(_walDirectory)
+                     .Where(static path => Path.GetFileName(path) != "wal.log"))
+        {
+            var parsed = TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId);
+            sources.Add(new WalReplaySource(
+                Path.GetFileName(path),
+                parsed ? segmentId : ulong.MaxValue,
+                path,
+                null));
+            if (parsed)
+            {
+                localIds.Add(segmentId);
+            }
+        }
+
+        foreach (var remote in _remoteWalSegments)
+        {
+            if (!localIds.Contains(remote.SegmentId))
+            {
+                sources.Add(new WalReplaySource(remote.Name, remote.SegmentId, null, remote));
+                continue;
+            }
+
+            var local = sources.First(source => source.Path is not null && source.SegmentId == remote.SegmentId);
+            RequireLocalMatchesRemote(local.Path!, remote);
+        }
+
+        return
+        [
+            .. sources
+                .OrderBy(static source => source.SegmentId)
+                .ThenBy(static source => source.Name, StringComparer.Ordinal)
+        ];
+    }
+
+    static void RequireLocalMatchesRemote(string localPath, IRemoteWalSegment remote)
+    {
+        using var local = new FileStream(
+            localPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+        using var remoteStream = remote.OpenRead();
+        if ((ulong)local.Length != remote.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Local WAL segment '{Path.GetFileName(localPath)}' differs in length from its published cloud object.");
+        }
+
+        var localBuffer = new byte[64 * 1024];
+        var remoteBuffer = new byte[localBuffer.Length];
+        int read;
+        while ((read = local.Read(localBuffer, 0, localBuffer.Length)) > 0)
+        {
+            if (!DiskFormat.ReadExactly(remoteStream, remoteBuffer.AsSpan(0, read)) ||
+                !localBuffer.AsSpan(0, read).SequenceEqual(remoteBuffer.AsSpan(0, read)))
+            {
+                throw new PantsCorruptionException(
+                    $"Local WAL segment '{Path.GetFileName(localPath)}' differs from its published cloud object.");
+            }
+        }
+    }
+
+    sealed record WalReplaySource(
+        string Name,
+        ulong SegmentId,
+        string? Path,
+        IRemoteWalSegment? Remote)
+    {
+        public Stream Open() => Remote is not null
+            ? Remote.OpenRead()
+            : new FileStream(Path!, FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
+
     WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
         RuntimeState state,
-        IReadOnlyList<string> sealedSegments)
+        IReadOnlyList<WalReplaySource> sealedSegments)
     {
         var frontiers = new WalWriterEpochFrontiers();
         var ordinal = 0UL;
         foreach (var sealedSegment in sealedSegments)
         {
-            using var stream = new FileStream(
-                sealedSegment,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read);
+            using var stream = sealedSegment.Open();
             if (VisitWalStream(
                     state,
                     stream,
@@ -3834,7 +3911,8 @@ sealed class LocalDiskStore :
 
     WalReplayOutcome ReplayWalStream(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
+        string sourceName,
         bool allowIncompleteTail,
         WalRecoveryStateMachine recovery,
         WalRecoveredVersionTracker recoveredVersions,
@@ -3864,17 +3942,21 @@ sealed class LocalDiskStore :
                         record,
                         (mutation, commitSequence) =>
                             recoveredMutations.Add((mutation, commitSequence)));
-                    recoveredVersions.ValidateAndRecord(
-                        recoveredMutations.Select(static item => item.Mutation).ToArray());
+                    var firstSeen = recoveredVersions.ValidateAndRecord(
+                            recoveredMutations.Select(static item => item.Mutation).ToArray(),
+                            sourceName)
+                        .ToHashSet(ReferenceEqualityComparer.Instance);
                     var applicableMutations = recoveredMutations
                         .Where(item =>
                         {
                             var mutation = item.Mutation;
-                            return activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
+                            return firstSeen.Contains(mutation) &&
+                                   activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
                                    mutation.Sequence > persistedFamilySequences.GetValueOrDefault(
                                        mutation.ColumnFamilyId);
                         })
                         .ToArray();
+                    RequireTransactionFitsRecoveryWorkingSet(applicableMutations);
                     foreach (var (mutation, commitSequence) in applicableMutations)
                     {
                         ApplyMutations(state, [mutation]);
@@ -3885,6 +3967,12 @@ sealed class LocalDiskStore :
                             commitSequence);
                     }
                 }
+                catch (PantsResourceLimitException)
+                {
+                    // A transaction too large to recover is a resource failure, never corruption:
+                    // salvage would truncate acknowledged data.
+                    throw;
+                }
                 catch (PantsException exception)
                 {
                     return HandleWalCorruption(
@@ -3893,13 +3981,78 @@ sealed class LocalDiskStore :
                         exception) != WalReplayOutcome.Salvaged;
                 }
 
+                CheckpointRecoveredMemtableIfOverTarget(state, recoveredVersions);
                 _walRecords++;
                 return true;
             });
 
+    static long EstimateRecoveredBytes(WalMutation mutation) =>
+        (long)mutation.Key.Length +
+        (mutation.Value?.Length ?? 0) +
+        (mutation.RangeEnd?.Length ?? 0) +
+        64;
+
+    /// <summary>
+    ///     One transaction is applied atomically, so it cannot be split across checkpoints. Beyond a
+    ///     generous multiple of the working-set target it cannot be recovered in bounded memory.
+    /// </summary>
+    void RequireTransactionFitsRecoveryWorkingSet(
+        IReadOnlyList<(WalMutation Mutation, ulong CommitSequence)> mutations)
+    {
+        if (_recoveryCheckpointBytes is not { } target)
+        {
+            return;
+        }
+
+        var limit = target > long.MaxValue / RecoveryTransactionLimitMultiple
+            ? long.MaxValue
+            : target * RecoveryTransactionLimitMultiple;
+        long bytes = 0;
+        foreach (var (mutation, _) in mutations)
+        {
+            bytes = checked(bytes + EstimateRecoveredBytes(mutation));
+            if (bytes > limit)
+            {
+                throw PantsException.ResourceLimit(
+                    $"A WAL transaction needs more than {limit} bytes to recover, above the " +
+                    $"{target}-byte recovery working-set target; the WAL was left untouched.");
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Publishes the recovered memtable as an SST and manifest entry once it reaches the
+    ///     working-set target, then releases its memory. Checkpoints never retire WAL: a crash at
+    ///     any point replays the WAL again, and per-family SST coverage skips what was published.
+    ///     Running between records keeps every transaction, including cross-family ones, whole.
+    /// </summary>
+    void CheckpointRecoveredMemtableIfOverTarget(
+        RuntimeState state,
+        WalRecoveredVersionTracker recoveredVersions)
+    {
+        if (_recoveryCheckpointBytes is not { } target ||
+            state.ActiveMemtableBytes.Values.Sum() < target ||
+            _mutableOperations.Count == 0)
+        {
+            return;
+        }
+
+        _lease.EnsureValid();
+        FlushOperations(_mutableOperations.SnapshotAll(), null);
+        _mutableOperations.Clear();
+        foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
+        {
+            state.ActiveMemtableBytes[identity] = 0;
+            state.FamilyData[identity] = RuntimeState.EmptyFamily;
+        }
+
+        state.UnflushedFamilies.Clear();
+        recoveredVersions.Clear();
+    }
+
     WalReplayOutcome VisitWalStream(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
         bool allowIncompleteTail,
         ref ulong recordOrdinal,
         Func<WalRecord, int, ulong, bool> visitor)
@@ -4002,7 +4155,7 @@ sealed class LocalDiskStore :
 
     WalReplayOutcome HandleIncompleteWalTail(
         RuntimeState state,
-        FileStream stream,
+        Stream stream,
         long validLength,
         bool allowIncompleteTail)
     {
@@ -4091,7 +4244,7 @@ sealed class LocalDiskStore :
 
         state.NextColumnFamilyId = _manifest.ColumnFamilies.Count == 0
             ? 1
-            : checked(_manifest.ColumnFamilies.Max(family => family.Id) + 1);
+            : (ulong)_manifest.ColumnFamilies.Max(family => family.Id) + 1;
     }
 
     void ApplyMutations(RuntimeState state, IEnumerable<WalMutation> mutations)
@@ -4209,8 +4362,8 @@ sealed class LocalDiskStore :
             ContentCrc32C = contentCrc32C,
             ColumnFamilyId = familyId,
             SstSequence = sequence,
-            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].Select(value => (int)value).ToArray(),
-            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].Select(value => (int)value).ToArray(),
+            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].ToArray(),
+            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].ToArray(),
             KeyBoundsComplete = true,
             SmallestSequence = allSequences.Count == 0 ? null : allSequences.Min(),
             LargestSequence = allSequences.Count == 0 ? null : allSequences.Max(),
@@ -4319,7 +4472,7 @@ sealed class LocalDiskStore :
         HasSameKey(left.SmallestKey, right.SmallestKey) &&
         HasSameKey(left.LargestKey, right.LargestKey);
 
-    static bool HasSameKey(int[]? left, int[]? right) =>
+    static bool HasSameKey(byte[]? left, byte[]? right) =>
         left is null
             ? right is null
             : right is not null && left.AsSpan().SequenceEqual(right);
@@ -4331,25 +4484,44 @@ sealed class LocalDiskStore :
         ["size_bytes"] = metadata.SizeBytes,
         ["content_crc32c"] = metadata.ContentCrc32C,
         ["cf_id"] = metadata.ColumnFamilyId,
-        ["smallest_key"] = metadata.SmallestKey,
-        ["largest_key"] = metadata.LargestKey,
+        ["smallest_key"] = KeyBoundValue.From(metadata.SmallestKey),
+        ["largest_key"] = KeyBoundValue.From(metadata.LargestKey),
         ["key_bounds_complete"] = metadata.KeyBoundsComplete,
         ["smallest_seq"] = metadata.SmallestSequence,
         ["largest_seq"] = metadata.LargestSequence
     };
 
-    static JsonElement CreateIntentEntry(string variant, object value) =>
-        JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant] = value },
-            JsonOptions);
+    static IntentEntry CreateIntentEntry(string variant, object value) =>
+        IntentEntry.Create(variant, value, JsonOptions);
 
-    void SaveIntentLog(List<JsonElement> intents)
+    void SaveIntentLog(List<IntentEntry> intents)
     {
         lock (_manifestGate)
         {
+            var buffer = new ArrayBufferWriter<byte>();
+            using (var writer = new Utf8JsonWriter(
+                       buffer,
+                       new JsonWriterOptions
+                       {
+                           Indented = JsonOptions.WriteIndented,
+                           IndentCharacter = JsonOptions.IndentCharacter,
+                           IndentSize = JsonOptions.IndentSize,
+                           NewLine = JsonOptions.NewLine,
+                           Encoder = JsonOptions.Encoder
+                       }))
+            {
+                writer.WriteStartArray();
+                foreach (var intent in intents)
+                {
+                    intent.WriteTo(writer);
+                }
+
+                writer.WriteEndArray();
+            }
+
             AtomicStagedFile.Write(
                 _intentPath,
-                JsonSerializer.SerializeToUtf8Bytes(intents, JsonOptions),
+                buffer.WrittenSpan,
                 beforePublish: () => _failpoints.Hit(Failpoint.BeforeIntentLogReplace));
             _failpoints.Hit(Failpoint.AfterIntentLogReplace);
         }
@@ -4382,7 +4554,7 @@ sealed class LocalDiskStore :
         }
     }
 
-    string[] UpsertCompactionIntents(List<JsonElement> intents)
+    string[] UpsertCompactionIntents(List<IntentEntry> intents)
     {
         if (intents.Count == 0)
         {
@@ -4456,7 +4628,7 @@ sealed class LocalDiskStore :
         _lease.EnsureValid();
     }
 
-    void RemoveCompactionIntents(List<JsonElement> intents)
+    void RemoveCompactionIntents(List<IntentEntry> intents)
     {
         if (intents.Count == 0)
         {
@@ -4478,7 +4650,7 @@ sealed class LocalDiskStore :
         }
     }
 
-    void TransitionCompactionIntents(List<JsonElement> intents, string phase)
+    void TransitionCompactionIntents(List<IntentEntry> intents, string phase)
     {
         if (intents.Count == 0)
         {
@@ -4502,7 +4674,7 @@ sealed class LocalDiskStore :
                     continue;
                 }
 
-                retained[index] = SetCompactionIntentPhase(retained[index], phase);
+                retained[index] = retained[index].WithPhase(phase);
                 transitioned = checked(transitioned + 1);
             }
 
@@ -4516,20 +4688,26 @@ sealed class LocalDiskStore :
         }
     }
 
-    List<JsonElement> LoadIntentLog()
+    List<IntentEntry> LoadIntentLog()
     {
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(_intentPath));
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            var bytes = File.ReadAllBytes(_intentPath);
+            var reader = new Utf8JsonReader(bytes);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray)
             {
                 throw new JsonException("The intent log root must be an array.");
             }
 
-            return document.RootElement
-                .EnumerateArray()
-                .Select(static intent => intent.Clone())
-                .ToList();
+            var entries = new List<IntentEntry>();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                var start = checked((int)reader.TokenStartIndex);
+                reader.Skip();
+                entries.Add(IntentEntry.FromJson(bytes.AsSpan(start, checked((int)reader.BytesConsumed) - start)));
+            }
+
+            return entries;
         }
         catch (Exception exception) when (exception is IOException or JsonException)
         {
@@ -4542,8 +4720,9 @@ sealed class LocalDiskStore :
     bool HasManifestPublishedCompactionIntent() => LoadIntentLog().Any(intent =>
         GetCompactionIntentPhase(intent) == "ManifestPublished");
 
-    static bool IsTargetFlushIntent(JsonElement intent, HashSet<string> targetNames)
+    static bool IsTargetFlushIntent(IntentEntry entry, HashSet<string> targetNames)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4571,8 +4750,9 @@ sealed class LocalDiskStore :
                targetNames.Contains(name.GetString()!);
     }
 
-    static CompactionIntentIdentity? GetCompactionIntentIdentity(JsonElement intent)
+    static CompactionIntentIdentity? GetCompactionIntentIdentity(IntentEntry entry)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4619,8 +4799,9 @@ sealed class LocalDiskStore :
         return CompactionIntentIdentity.Create(parsedFamilyId, removedNames, addedNames);
     }
 
-    static string? GetCompactionIntentPhase(JsonElement intent)
+    static string? GetCompactionIntentPhase(IntentEntry entry)
     {
+        var intent = entry.Summary;
         if (intent.ValueKind != JsonValueKind.Object ||
             intent.EnumerateObject().Count() != 1)
         {
@@ -4641,21 +4822,6 @@ sealed class LocalDiskStore :
             : null;
     }
 
-    static JsonElement SetCompactionIntentPhase(JsonElement intent, string phase)
-    {
-        var variant = intent.EnumerateObject().Single();
-        var value = variant.Value.EnumerateObject().ToDictionary(
-            static property => property.Name,
-            property => property.Name == "phase"
-                ? JsonSerializer.SerializeToElement(phase)
-                : property.Value.Clone(),
-            StringComparer.Ordinal);
-        value["phase"] = JsonSerializer.SerializeToElement(phase);
-        return JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant.Name] = value },
-            JsonOptions);
-    }
-
     void ClearIntentLog()
     {
         lock (_manifestGate)
@@ -4664,12 +4830,9 @@ sealed class LocalDiskStore :
         }
     }
 
-    static JsonElement CreateManifestEdit(string variant, object value) =>
-        JsonSerializer.SerializeToElement(
-            new Dictionary<string, object?> { [variant] = value },
-            JsonOptions);
+    static ManifestEdit CreateManifestEdit(string variant, object value) => new(variant, value);
 
-    void DurablyApplyManifestBatch(List<JsonElement> edits)
+    void DurablyApplyManifestBatch(List<ManifestEdit> edits)
     {
         if (edits.Count == 0)
         {
@@ -4679,7 +4842,7 @@ sealed class LocalDiskStore :
         DurablyApplyManifestEdit(CreateManifestEdit("Batch", edits));
     }
 
-    void DurablyApplyManifestEdit(JsonElement edit)
+    void DurablyApplyManifestEdit(ManifestEdit edit)
     {
         lock (_manifestGate)
         {
@@ -4687,24 +4850,21 @@ sealed class LocalDiskStore :
         }
     }
 
-    void DurablyApplyManifestEditCore(JsonElement edit)
+    void DurablyApplyManifestEditCore(ManifestEdit edit)
     {
-        var recordType = GetManifestEditRecordType(edit);
+        var recordType = GetManifestEditRecordType(edit.Variant);
         var editId = checked(_manifest.EditCheckpointId + 1);
-        byte[] payload;
-        using (var buffer = new MemoryStream())
+        var payload = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(payload))
         {
-            using var writer = new Utf8JsonWriter(buffer);
             writer.WriteStartObject();
             writer.WriteNumber("edit_id", editId);
             writer.WritePropertyName("edit");
-            edit.WriteTo(writer);
+            edit.WriteTo(writer, JsonOptions);
             writer.WriteEndObject();
-            writer.Flush();
-            payload = buffer.ToArray();
         }
 
-        var record = EncodeManifestJournalRecord(recordType, payload);
+        var record = EncodeManifestJournalRecord(recordType, payload.WrittenSpan);
         var markerPayload = JsonSerializer.SerializeToUtf8Bytes(
             new
             {
@@ -4827,9 +4987,7 @@ sealed class LocalDiskStore :
             return true;
         }
 
-        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
-        return key.SequenceCompareTo(smallest) >= 0 && key.SequenceCompareTo(largest) <= 0;
+        return key.SequenceCompareTo(file.SmallestKey!) >= 0 && key.SequenceCompareTo(file.LargestKey!) <= 0;
     }
 
     static bool OverlapsFileRange(FileMeta file, ReadOnlySpan<byte> start, ReadOnlySpan<byte> end)
@@ -4839,10 +4997,8 @@ sealed class LocalDiskStore :
             return true;
         }
 
-        var smallest = file.SmallestKey!.Select(static value => checked((byte)value)).ToArray();
-        var largest = file.LargestKey!.Select(static value => checked((byte)value)).ToArray();
-        return largest.AsSpan().SequenceCompareTo(start) >= 0 &&
-               smallest.AsSpan().SequenceCompareTo(end) < 0;
+        return file.LargestKey.AsSpan().SequenceCompareTo(start) >= 0 &&
+               file.SmallestKey.AsSpan().SequenceCompareTo(end) < 0;
     }
 
     static bool RangesOverlap(
@@ -4965,8 +5121,8 @@ sealed class LocalDiskStore :
                     ContentCrc32C = DiskFormat.Crc32C(bytes),
                     ColumnFamilyId = familyId,
                     SstSequence = sstSequence,
-                    SmallestKey = keys.Count == 0 ? null : keys[0].Select(static value => (int)value).ToArray(),
-                    LargestKey = keys.Count == 0 ? null : keys[^1].Select(static value => (int)value).ToArray(),
+                    SmallestKey = keys.Count == 0 ? null : keys[0].ToArray(),
+                    LargestKey = keys.Count == 0 ? null : keys[^1].ToArray(),
                     KeyBoundsComplete = true,
                     SmallestSequence = sequences.Count == 0 ? null : sequences.Min(),
                     LargestSequence = sequences.Count == 0 ? null : sequences.Max(),
@@ -5279,22 +5435,14 @@ sealed class LocalDiskStore :
         var allOutputsPresent = added.All(output => manifest.Files.Any(file => file.Name == output.Name));
         var allOutputsAbsent = added.All(output => manifest.Files.All(file => file.Name != output.Name));
 
-        if (phase == "OutputDurable" && columnFamilyInactive && allOutputsAbsent)
+        // An output the manifest never published, beside inputs that are still authoritative (or a
+        // column family that is gone), carries no data, so it is disposable whatever state it is
+        // in: a corrupt unpublished output is a crash artifact, not a recovery failure.
+        if (phase == "OutputDurable" &&
+            allOutputsAbsent &&
+            (columnFamilyInactive || allInputsPresent))
         {
-            return added.All(output => DeleteUnpublishedIntentSst(
-                root,
-                output,
-                recoveryPolicy,
-                state));
-        }
-
-        if (phase == "OutputDurable" && allInputsPresent && allOutputsAbsent)
-        {
-            return added.All(output => DeleteUnpublishedIntentSst(
-                root,
-                output,
-                recoveryPolicy,
-                state));
+            return added.All(output => DeleteProvenUnpublishedIntentSst(root, output, recoveryPolicy, state));
         }
 
         if (phase is "OutputDurable" or "ManifestPublished" &&
@@ -5368,6 +5516,16 @@ sealed class LocalDiskStore :
 
         manifest.Files.Add(metadata);
         return true;
+    }
+
+    static bool DeleteProvenUnpublishedIntentSst(
+        string root,
+        FileMeta metadata,
+        PantsRecoveryPolicy recoveryPolicy,
+        RuntimeState state)
+    {
+        var path = Path.Combine(root, "sst", metadata.Name);
+        return !File.Exists(path) || DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state);
     }
 
     static bool DeleteUnpublishedIntentSst(
@@ -5479,25 +5637,25 @@ sealed class LocalDiskStore :
         var nextLegacyEditId = manifest.EditCheckpointId;
         foreach (var record in records)
         {
-            using var document = JsonDocument.Parse(record.Payload);
-            var edit = document.RootElement;
-            ulong editId;
-            if (edit.ValueKind == JsonValueKind.Object &&
-                edit.TryGetProperty("edit_id", out var editIdElement) &&
-                edit.TryGetProperty("edit", out var envelopedEdit))
-            {
-                editId = editIdElement.GetUInt64();
-                edit = envelopedEdit;
-            }
-            else
-            {
-                editId = checked(++nextLegacyEditId);
-            }
-
+            var editStart = ManifestJournalPayload.Locate(record.Payload, out var envelopedEditId);
+            var editId = envelopedEditId ?? checked(++nextLegacyEditId);
             nextLegacyEditId = Math.Max(nextLegacyEditId, editId);
             if (editId <= manifest.EditCheckpointId)
             {
                 continue;
+            }
+
+            ManifestEdit edit;
+            try
+            {
+                edit = ManifestJournalPayload.ReadEdit(record.Payload, editStart, JsonOptions);
+            }
+            catch (JsonException exception)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    "The manifest journal payload cannot be decoded.",
+                    exception);
             }
 
             ApplyManifestEdit(manifest, edit, record.Type);
@@ -5554,7 +5712,7 @@ sealed class LocalDiskStore :
             var payloadCopy = payload.ToArray();
             try
             {
-                using var _ = JsonDocument.Parse(payloadCopy);
+                ManifestJournalPayload.Validate(payloadCopy);
             }
             catch (JsonException exception)
             {
@@ -5582,47 +5740,54 @@ sealed class LocalDiskStore :
 
     static void ApplyManifestEdit(
         ManifestState manifest,
-        JsonElement edit,
-        byte recordType)
+        ManifestEdit edit,
+        byte? recordType)
     {
-        if (recordType == 8 && edit.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var nested in edit.EnumerateArray())
-            {
-                ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
-            }
-
-            return;
-        }
-
-        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "The manifest journal edit shape is invalid.");
-        }
-
-        var variant = edit.EnumerateObject().Single();
-        var actualRecordType = GetManifestEditRecordType(variant.Name);
-        if (actualRecordType != recordType)
+        if (recordType.HasValue && GetManifestEditRecordType(edit.Variant) != recordType.Value)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "The manifest journal record type does not match its edit payload.");
         }
 
-        var value = variant.Value;
-        switch (variant.Name)
+        switch (edit.Value)
+        {
+            case FileMeta metadata when edit.Variant == "AddSst":
+                ApplyAddSst(manifest, metadata.Clone());
+                return;
+            case List<ManifestEdit> nested when edit.Variant == "Batch":
+                foreach (var nestedEdit in nested)
+                {
+                    ApplyManifestEdit(manifest, nestedEdit, null);
+                }
+
+                return;
+            case JsonElement element:
+                ApplyManifestEditValue(manifest, edit.Variant, element);
+                return;
+            default:
+                ApplyManifestEditValue(manifest, edit.Variant, edit.ToElement(JsonOptions).GetProperty(edit.Variant));
+                return;
+        }
+    }
+
+    static void ApplyAddSst(ManifestState manifest, FileMeta metadata)
+    {
+        ValidateSstName(metadata.Name);
+        manifest.Files.RemoveAll(file => file.Name == metadata.Name);
+        manifest.Files.Add(metadata);
+    }
+
+    static void ApplyManifestEditValue(ManifestState manifest, string variant, JsonElement value)
+    {
+        switch (variant)
         {
             case "AddSst":
-                {
-                    var metadata = value.Deserialize<FileMeta>(JsonOptions) ??
-                                   throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty.");
-                    ValidateSstName(metadata.Name);
-                    manifest.Files.RemoveAll(file => file.Name == metadata.Name);
-                    manifest.Files.Add(metadata);
-                    break;
-                }
+                ApplyAddSst(
+                    manifest,
+                    value.Deserialize<FileMeta>(JsonOptions) ??
+                    throw PantsException.Create(PantsErrorCode.Corruption, "An AddSst edit is empty."));
+                break;
             case "RemoveSst":
                 {
                     var name = ValidateSstName(GetRequiredString(value, "name"));
@@ -5712,14 +5877,14 @@ sealed class LocalDiskStore :
             case "Batch":
                 foreach (var nested in value.EnumerateArray())
                 {
-                    ApplyManifestEdit(manifest, nested, GetManifestEditRecordType(nested));
+                    ApplyManifestEdit(manifest, ManifestEdit.FromElement(nested), null);
                 }
 
                 break;
             default:
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
-                    $"The manifest journal edit '{variant.Name}' is unsupported.");
+                    $"The manifest journal edit '{variant}' is unsupported.");
         }
     }
 
@@ -5744,16 +5909,6 @@ sealed class LocalDiskStore :
                 .ToList()
             : [.. droppedNames];
         family.Reclaimed = false;
-    }
-
-    static byte GetManifestEditRecordType(JsonElement edit)
-    {
-        if (edit.ValueKind != JsonValueKind.Object || edit.EnumerateObject().Count() != 1)
-        {
-            throw PantsException.Create(PantsErrorCode.Corruption, "The manifest edit is malformed.");
-        }
-
-        return GetManifestEditRecordType(edit.EnumerateObject().Single().Name);
     }
 
     static byte GetManifestEditRecordType(string variant) => variant switch
@@ -5814,7 +5969,7 @@ sealed class LocalDiskStore :
                     $"Manifest edit field '{name}' is invalid.")
             };
 
-    static int[]? GetOptionalByteArray(JsonElement element, string name)
+    static byte[]? GetOptionalByteArray(JsonElement element, string name)
     {
         if (!element.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
         {
@@ -5826,7 +5981,14 @@ sealed class LocalDiskStore :
             throw PantsException.Create(PantsErrorCode.Corruption, $"Manifest edit field '{name}' is invalid.");
         }
 
-        return value.EnumerateArray().Select(static item => checked((int)item.GetByte())).ToArray();
+        var bytes = new byte[value.GetArrayLength()];
+        var index = 0;
+        foreach (var item in value.EnumerateArray())
+        {
+            bytes[index++] = item.GetByte();
+        }
+
+        return bytes;
     }
 
     static string[] GetStringArray(JsonElement element, string name)
@@ -5847,20 +6009,7 @@ sealed class LocalDiskStore :
     static string[] GetValidatedSstNameArray(JsonElement element, string name) =>
         GetStringArray(element, name).Select(ValidateSstName).ToArray();
 
-    static uint Crc32(ReadOnlySpan<byte> bytes)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in bytes)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
-            }
-        }
-
-        return ~crc;
-    }
+    static uint Crc32(ReadOnlySpan<byte> bytes) => System.IO.Hashing.Crc32.HashToUInt32(bytes);
 
     static void RetainCorruptFile(string path)
     {

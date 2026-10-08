@@ -297,21 +297,25 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
-    public async Task ShouldKeepLocalSstGivenMirrorCycleReportsPersistenceAnomaly()
+    public async Task ShouldKeepEvictingAndAcceptingWritesGivenUnrelatedCloudResidue()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
         var cloudSstDirectory = Path.Combine(directory.Path, "cloud_store", "sst");
         Directory.CreateDirectory(cloudSstDirectory);
         File.WriteAllBytes(Path.Combine(cloudSstDirectory, "malformed.txt"), [1]);
-        await PutAsync(database, "retained", CreateValue(256 * 1024, 61));
 
-        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        for (var index = 0; index < 6; index++)
+        {
+            await PutAsync(database, $"key-{index}", CreateValue(256 * 1024, (byte)(61 + index)));
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
 
-        Assert.Single(LocalSsts(directory.Path));
-        Assert.Equal(
-            PantsEngineHealth.Degraded,
-            (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.Empty(LocalSsts(directory.Path));
+        Assert.Equal(6, CloudSsts(directory.Path).Length);
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(metrics.HybridUsagePercent < 90);
+        Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
     }
 
     [Fact]

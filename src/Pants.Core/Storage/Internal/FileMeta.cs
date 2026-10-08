@@ -16,9 +16,15 @@ sealed class FileMeta
 
     [JsonPropertyName("sst_seq")] public ulong SstSequence { get; set; }
 
-    public int[]? SmallestKey { get; set; }
+    /// <summary>
+    ///     Held as bytes and persisted as the manifest's JSON number array. Bounds are never mutated in
+    ///     place, so copies of this metadata share them.
+    /// </summary>
+    [JsonConverter(typeof(KeyBoundJsonConverter))]
+    public byte[]? SmallestKey { get; set; }
 
-    public int[]? LargestKey { get; set; }
+    [JsonConverter(typeof(KeyBoundJsonConverter))]
+    public byte[]? LargestKey { get; set; }
 
     [JsonPropertyName("key_bounds_complete")] public bool KeyBoundsComplete { get; set; }
 
@@ -42,8 +48,8 @@ sealed class FileMeta
         ContentCrc32C = ContentCrc32C,
         ColumnFamilyId = ColumnFamilyId,
         SstSequence = SstSequence,
-        SmallestKey = SmallestKey?.ToArray(),
-        LargestKey = LargestKey?.ToArray(),
+        SmallestKey = SmallestKey,
+        LargestKey = LargestKey,
         KeyBoundsComplete = KeyBoundsComplete,
         SmallestSequence = SmallestSequence,
         LargestSequence = LargestSequence,

@@ -12,6 +12,7 @@ static class PositionalFile
     static byte[] ReadAllBytesCore(string path, ReadOperation? readOperation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        StoragePathGuard.EnsureNotLink(path);
         using var handle = File.OpenHandle(
             path,
             FileMode.Open,
@@ -87,6 +88,7 @@ static class PositionalFile
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
                         throw new ArgumentException("An append target must have a parent directory.", nameof(path));
+        StoragePathGuard.EnsureNotLink(fullPath);
         var created = !File.Exists(fullPath);
         using (var handle = File.OpenHandle(
                    fullPath,

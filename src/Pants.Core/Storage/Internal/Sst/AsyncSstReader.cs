@@ -6,6 +6,7 @@ sealed class AsyncSstReader : IAsyncDisposable
     readonly long _fileLength;
     readonly (byte[] FirstKey, SstBlockHandle Handle)[] _index;
     readonly IAsyncSstSource _source;
+    readonly SharedSource _shared;
     readonly TrieIndex? _trieIndex;
     int _disposed;
 
@@ -17,8 +18,10 @@ sealed class AsyncSstReader : IAsyncDisposable
         TrieIndex? trieIndex,
         IReadOnlyList<RangeTombstone> rangeTombstones,
         byte[]? smallestKey,
-        byte[]? largestKey)
+        byte[]? largestKey,
+        SharedSource? shared = null)
     {
+        _shared = shared ?? new SharedSource(source);
         _source = source;
         _fileLength = fileLength;
         _index = index;
@@ -39,10 +42,60 @@ sealed class AsyncSstReader : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        if (Interlocked.Exchange(ref _disposed, 1) == 0 &&
+            Interlocked.Decrement(ref _shared.References) == 0)
         {
             await _source.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    ///     Approximate heap bytes of the parsed index, blooms, trie and range tombstones.
+    /// </summary>
+    public long EstimatedMetadataBytes
+    {
+        get
+        {
+            const int fixedOverhead = 512;
+            const int perIndexEntryOverhead = 56;
+            long bytes = fixedOverhead + (_blockBlooms?.Length ?? 0);
+            foreach (var (firstKey, _) in _index)
+            {
+                bytes += firstKey.Length + perIndexEntryOverhead;
+            }
+
+            if (_trieIndex is not null)
+            {
+                bytes += (long)_index.Length * 32;
+            }
+
+            foreach (var tombstone in RangeTombstones)
+            {
+                bytes += tombstone.Start.Length + tombstone.End.Length + 48;
+            }
+
+            return bytes;
+        }
+    }
+
+    /// <summary>
+    ///     Returns another handle onto the same parsed metadata and source. Each handle is
+    ///     disposed on its own; the source closes when the last one is.
+    /// </summary>
+    public AsyncSstReader Share()
+    {
+        ThrowIfDisposed();
+        Interlocked.Increment(ref _shared.References);
+        return new AsyncSstReader(
+            _source,
+            _fileLength,
+            _index,
+            _blockBlooms,
+            _trieIndex,
+            RangeTombstones,
+            SmallestKey,
+            LargestKey,
+            _shared);
     }
 
     public int CountOverlappingDataBlocks(byte[]? startInclusive, byte[]? endExclusive)
@@ -71,7 +124,7 @@ sealed class AsyncSstReader : IAsyncDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST block index is invalid.");
+            throw new PantsCorruptionException("SST block index is invalid.");
         }
 
         return _index[blockIndex].FirstKey.ToArray();
@@ -190,7 +243,7 @@ sealed class AsyncSstReader : IAsyncDisposable
         ThrowIfDisposed();
         if ((uint)blockIndex >= (uint)_index.Length)
         {
-            throw new StorageException("SST point-read block index is invalid.");
+            throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
 
         return await ReadBlockAsync(
@@ -212,7 +265,7 @@ sealed class AsyncSstReader : IAsyncDisposable
             handle.Size > int.MaxValue ||
             handle.Size > (ulong)fileLength - handle.Offset)
         {
-            throw new StorageException("SST block handle is outside the file.");
+            throw new PantsCorruptionException("SST block handle is outside the file.");
         }
 
         var encoded = await source.ReadExactlyAsync(
@@ -225,4 +278,11 @@ sealed class AsyncSstReader : IAsyncDisposable
 
     void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    sealed class SharedSource(IAsyncSstSource source)
+    {
+        public IAsyncSstSource Source { get; } = source;
+
+        public int References = 1;
+    }
 }

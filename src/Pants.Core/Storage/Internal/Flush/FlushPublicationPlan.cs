@@ -1,8 +1,9 @@
-using System.Text.Json;
+using Cntryl.Pants.Storage.Internal.Manifest;
+using Cntryl.Pants.Storage.Internal.Recovery;
 
 namespace Cntryl.Pants.Storage.Internal.Flush;
 
 sealed record FlushPublicationPlan(
-    List<JsonElement> Edits,
-    List<JsonElement> Intents,
+    List<ManifestEdit> Edits,
+    List<IntentEntry> Intents,
     List<StagedSstOutput> Outputs);

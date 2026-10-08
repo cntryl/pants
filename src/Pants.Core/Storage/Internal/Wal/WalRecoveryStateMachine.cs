@@ -9,6 +9,8 @@ sealed class WalRecoveryStateMachine : IDisposable
 
     bool _disposed;
 
+    public bool HasOpenTransactions => _openTransactions.Count != 0;
+
     /// <summary>
     ///     <paramref name="scratchDirectory" /> holds the per-transaction spools. It belongs under
     ///     the database so the bytes land on the volume the operator sized for it, and so the

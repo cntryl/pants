@@ -1,3 +1,5 @@
+using System.Diagnostics.Metrics;
+
 namespace Cntryl.Pants.Storage.Internal.Sst;
 
 /// <summary>
@@ -17,12 +19,26 @@ sealed class SstReadView
 {
     static readonly SstReadView EmptyView = new(new Dictionary<uint, FamilyView>());
 
+    static readonly Meter Meter = new("Cntryl.Pants");
+
+    static readonly Counter<long> LinearScanLevels = Meter.CreateCounter<long>(
+        "pants.sst.linear_scan_levels",
+        description: "Lower levels whose files overlap and so are scanned instead of binary searched.");
+
     readonly IReadOnlyDictionary<uint, FamilyView> _families;
 
     SstReadView(IReadOnlyDictionary<uint, FamilyView> families)
     {
         _families = families;
+        LinearScanLevelCount = families.Values.Sum(static family => family.LinearScanLevelCount);
+        if (LinearScanLevelCount > 0)
+        {
+            LinearScanLevels.Add(LinearScanLevelCount);
+        }
     }
+
+    /// <summary>Lower levels that overlap and fall back to a linear scan.</summary>
+    public int LinearScanLevelCount { get; }
 
     public static SstReadView Empty => EmptyView;
 
@@ -64,14 +80,39 @@ sealed class SstReadView
         return family.SelectPointCandidates(key, ref filesExamined);
     }
 
+    /// <summary>
+    ///     Files whose key range overlaps <c>[startInclusive, endExclusive)</c>, where a null bound
+    ///     is unbounded. Order is unspecified; a merge decides priority by sequence.
+    /// </summary>
+    /// <param name="filesExamined">
+    ///     Key comparisons against file bounds, exposed so the work bound can be asserted: a
+    ///     searchable level costs a binary search plus the files it returns, not its file count.
+    /// </param>
+    public IReadOnlyList<FileMeta> SelectRangeCandidates(
+        uint columnFamilyId,
+        byte[]? startInclusive,
+        byte[]? endExclusive,
+        out int filesExamined)
+    {
+        filesExamined = 0;
+        if (!_families.TryGetValue(columnFamilyId, out var family))
+        {
+            return [];
+        }
+
+        return family.SelectRangeCandidates(startInclusive, endExclusive, ref filesExamined);
+    }
+
     /// <summary>One level's files for one column family.</summary>
     sealed class LevelView
     {
         readonly IndexedFile[] _files;
         readonly FileMeta[] _fallback;
+        readonly bool _searchAllowed;
 
-        LevelView(IndexedFile[] files, FileMeta[] fallback, bool searchable)
+        LevelView(IndexedFile[] files, FileMeta[] fallback, bool searchable, bool searchAllowed)
         {
+            _searchAllowed = searchAllowed;
             _files = files;
             _fallback = fallback;
             Searchable = searchable;
@@ -94,7 +135,7 @@ sealed class SstReadView
                 .ThenBy(static file => file.File.Name, StringComparer.Ordinal)
                 .ToArray();
             var fallback = candidates.Where(static file => !file.HasTrustedKeyBounds()).ToArray();
-            return new LevelView(indexed, fallback, allowSearch && IsNonOverlapping(indexed));
+            return new LevelView(indexed, fallback, allowSearch && IsNonOverlapping(indexed), allowSearch);
         }
 
         public void AddPointCandidates(
@@ -140,18 +181,108 @@ sealed class SstReadView
                 else
                 {
                     candidates.Add(indexed.File);
+
+                    // Adjacent files may share exactly one boundary key, so a neighbor can hold it too.
+                    if (middle > 0 && key.SequenceCompareTo(indexed.SmallestKey) == 0)
+                    {
+                        filesExamined++;
+                        if (_files[middle - 1].Contains(key))
+                        {
+                            candidates.Add(_files[middle - 1].File);
+                        }
+                    }
+
+                    if (middle + 1 < _files.Length && key.SequenceCompareTo(indexed.LargestKey) == 0)
+                    {
+                        filesExamined++;
+                        if (_files[middle + 1].Contains(key))
+                        {
+                            candidates.Add(_files[middle + 1].File);
+                        }
+                    }
+
                     return;
                 }
             }
         }
 
+        public void AddRangeCandidates(
+            byte[]? startInclusive,
+            byte[]? endExclusive,
+            List<FileMeta> candidates,
+            ref int filesExamined)
+        {
+            foreach (var file in _fallback)
+            {
+                filesExamined++;
+                candidates.Add(file);
+            }
+
+            if (!Searchable)
+            {
+                foreach (var indexed in _files)
+                {
+                    filesExamined++;
+                    if (indexed.Overlaps(startInclusive, endExclusive))
+                    {
+                        candidates.Add(indexed.File);
+                    }
+                }
+
+                return;
+            }
+
+            // Non-overlapping and sorted, so largest keys ascend too: find the first file that
+            // can reach the start, then take files until one begins at or past the end.
+            var low = 0;
+            var high = _files.Length;
+            while (startInclusive is not null && low < high)
+            {
+                var middle = low + ((high - low) / 2);
+                filesExamined++;
+                if (_files[middle].LargestKey.AsSpan().SequenceCompareTo(startInclusive) < 0)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            for (var index = startInclusive is null ? 0 : low; index < _files.Length; index++)
+            {
+                filesExamined++;
+                if (endExclusive is not null &&
+                    _files[index].SmallestKey.AsSpan().SequenceCompareTo(endExclusive) >= 0)
+                {
+                    return;
+                }
+
+                candidates.Add(_files[index].File);
+            }
+        }
+
+        /// <summary>
+        ///     Adjacent files may share one boundary key (compaction clips range tombstones at the
+        ///     next partition's first key), but a true overlap or three files meeting at one key
+        ///     cannot be binary searched.
+        /// </summary>
         static bool IsNonOverlapping(IndexedFile[] files)
         {
             for (var index = 1; index < files.Length; index++)
             {
                 if (ByteArrayComparer.Instance.Compare(
                         files[index].SmallestKey,
-                        files[index - 1].LargestKey) <= 0)
+                        files[index - 1].LargestKey) < 0)
+                {
+                    return false;
+                }
+
+                if (index >= 2 &&
+                    ByteArrayComparer.Instance.Compare(
+                        files[index].SmallestKey,
+                        files[index - 2].LargestKey) <= 0)
                 {
                     return false;
                 }
@@ -159,6 +290,8 @@ sealed class SstReadView
 
             return true;
         }
+
+        public bool IsLinearScan => _searchAllowed && !Searchable;
     }
 
     sealed class FamilyView
@@ -169,6 +302,8 @@ sealed class SstReadView
         {
             _levels = levels;
         }
+
+        public int LinearScanLevelCount => _levels.Count(static level => level.IsLinearScan);
 
         public static FamilyView Create(IEnumerable<FileMeta> files)
         {
@@ -186,6 +321,20 @@ sealed class SstReadView
             }
 
             return new FamilyView(levels);
+        }
+
+        public List<FileMeta> SelectRangeCandidates(
+            byte[]? startInclusive,
+            byte[]? endExclusive,
+            ref int filesExamined)
+        {
+            var candidates = new List<FileMeta>();
+            foreach (var level in _levels)
+            {
+                level.AddRangeCandidates(startInclusive, endExclusive, candidates, ref filesExamined);
+            }
+
+            return candidates;
         }
 
         public List<FileMeta> SelectPointCandidates(
@@ -221,8 +370,12 @@ sealed class SstReadView
 
         public static IndexedFile Create(FileMeta file) => new(
             file,
-            LocalDiskStore.GetMetadataKey(file.SmallestKey!),
-            LocalDiskStore.GetMetadataKey(file.LargestKey!));
+            file.SmallestKey!,
+            file.LargestKey!);
+
+        public bool Overlaps(byte[]? startInclusive, byte[]? endExclusive) =>
+            (endExclusive is null || SmallestKey.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
+            (startInclusive is null || LargestKey.AsSpan().SequenceCompareTo(startInclusive) >= 0);
 
         public bool Contains(ReadOnlySpan<byte> key) =>
             key.SequenceCompareTo(SmallestKey) >= 0 &&

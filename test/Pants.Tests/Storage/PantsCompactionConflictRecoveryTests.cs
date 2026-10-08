@@ -44,7 +44,7 @@ public sealed class PantsCompactionConflictRecoveryTests
                 SizeBytes = (ulong)bytes.Length,
                 ContentCrc32C = DiskFormat.Crc32C(bytes),
                 SmallestKey = [97],
-                LargestKey = key.Select(static value => (int)value).ToArray(),
+                LargestKey = key.ToArray(),
                 SmallestSequence = 1,
                 LargestSequence = 7
             });

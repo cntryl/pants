@@ -159,6 +159,282 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
+    public async Task LocalOpenGrantsEpochAboveWalWriterEpochWhenLeaderRecordIsMissing()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var seed = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+        }
+
+        var wal = WalCodec.EncodeRecord(new WalRecord(
+            0,
+            WalOperation.Put,
+            "key"u8.ToArray(),
+            "value"u8.ToArray(),
+            7,
+            null,
+            null,
+            null,
+            9));
+        using (var frame = new MemoryStream())
+        {
+            DiskFormat.WriteUInt32(frame, checked((uint)wal.Length));
+            DiskFormat.WriteUInt32(frame, DiskFormat.Crc32C(wal));
+            frame.Write(wal);
+            await File.WriteAllBytesAsync(
+                Path.Combine(directory.Path, "wal", "wal.log"),
+                frame.ToArray());
+        }
+
+        File.Delete(Path.Combine(directory.Path, ".midge_leader"));
+
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+
+        Assert.True(await ReadLeaseEpochAsync(directory.Path) > 9UL);
+    }
+
+    [Fact]
+    public async Task ShouldWriteChecksumMidgeVerifiesAndSurviveRenewalAndRelease()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using (var lease = FileLease.Acquire(
+                   directory.Path,
+                   0,
+                   TimeSpan.Zero,
+                   null,
+                   LongHeartbeatInterval,
+                   clock,
+                   TimeSpan.FromSeconds(60)))
+        {
+            Assert.True(lease.RenewForTesting());
+            AssertChecksumVerifies(await File.ReadAllTextAsync(Path.Combine(directory.Path, ".midge_leader")));
+        }
+
+        // Release rewrites the record; it must still carry a valid checksum.
+        AssertChecksumVerifies(await File.ReadAllTextAsync(Path.Combine(directory.Path, ".midge_leader")));
+    }
+
+    [Fact]
+    public async Task ShouldAcceptRecordWithoutChecksumForBackwardCompatibility()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteLeaseRecordAsync(directory.Path, 5, "previous-writer", DateTimeOffset.UnixEpoch);
+
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1)),
+            TimeSpan.FromSeconds(60));
+
+        Assert.Equal(6UL, lease.Epoch);
+    }
+
+    [Theory]
+    [InlineData("checksum: not-a-number")]
+    [InlineData("checksum: 12345")]
+    public async Task ShouldTreatPresentButWrongChecksumAsIndeterminate(string checksumLine)
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: 5\nholder_id: previous-writer\nacquired_at: {DateTimeOffset.UnixEpoch:O}\n{checksumLine}\n");
+
+        Assert.Throws<PantsLeaseIndeterminateException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1)),
+            TimeSpan.FromSeconds(60)));
+    }
+
+    [Fact]
+    public async Task ShouldRejectBitFlippedEpochInChecksummedRecord()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using (FileLease.Acquire(
+                   directory.Path,
+                   0,
+                   TimeSpan.Zero,
+                   null,
+                   LongHeartbeatInterval,
+                   clock,
+                   TimeSpan.FromSeconds(60)))
+        {
+        }
+
+        var path = Path.Combine(directory.Path, ".midge_leader");
+        var text = await File.ReadAllTextAsync(path);
+        await File.WriteAllTextAsync(path, text.Replace("epoch: 1\n", "epoch: 3\n", StringComparison.Ordinal));
+        clock.UtcNow += TimeSpan.FromDays(1);
+
+        Assert.Throws<PantsLeaseIndeterminateException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60)));
+    }
+
+    static void AssertChecksumVerifies(string content)
+    {
+        var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(4, lines.Length);
+        var body = string.Join('\n', lines.Take(3)) + "\n";
+        var expected = uint.Parse(
+            lines[3]["checksum: ".Length..],
+            CultureInfo.InvariantCulture);
+        Assert.Equal(DiskFormat.Crc32C(System.Text.Encoding.UTF8.GetBytes(body)), expected);
+    }
+
+    [Fact]
+    public async Task ShouldLetSuccessorTakeOverImmediatelyAfterTheLeaseFencesItselfWithoutDisposal()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        var released = 0;
+        using var fenced = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+        fenced.FencedRelease = () => Interlocked.Increment(ref released);
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60)));
+        fenced.RenewWriteInterferenceHookForTesting = () => throw new IOException("injected");
+
+        Assert.False(fenced.RenewForTesting());
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        FileLease? successor = null;
+        while (successor is null)
+        {
+            try
+            {
+                successor = FileLease.Acquire(
+                    directory.Path,
+                    0,
+                    TimeSpan.Zero,
+                    null,
+                    LongHeartbeatInterval,
+                    clock,
+                    TimeSpan.FromSeconds(60));
+            }
+            catch (Exception exception) when (
+                exception is PantsLeaseHeldException or PantsLeaseUnavailableException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+
+        using (successor)
+        {
+            Assert.Equal(fenced.Epoch + 1, successor.Epoch);
+        }
+
+        while (Volatile.Read(ref released) == 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseSameHostLockWhenTheEngineFencesItselfSoASuccessorCanOpen()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        await using var fenced = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromMilliseconds(50)));
+        var epoch = await ReadLeaseEpochAsync(directory.Path);
+        // Another writer superseded this one and has since expired, so only the same-host LOCK
+        // handle could still keep a successor out.
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            epoch + 1,
+            "superseding-writer",
+            DateTimeOffset.UnixEpoch);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while ((await fenced.Diagnostics.GetRuntimeMetricsAsync()).Health != PantsEngineHealth.Degraded &&
+               !await Task.Run(() => IsFenced(fenced), timeout.Token))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+        }
+
+        // The successor must get past the lease and LOCK. On Windows the undisposed instance
+        // still holds the WAL file open, so reaching that file (a storage error) is also proof
+        // the LOCK handle is gone; being refused as lease-held is the failure.
+        IPantsDatabase? successor = null;
+        while (true)
+        {
+            try
+            {
+                successor = await PantsDatabase.OpenAsync(options);
+                break;
+            }
+            catch (Exception exception) when (
+                exception is PantsLeaseHeldException or PantsLeaseUnavailableException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+            catch (PantsIOException) when (OperatingSystem.IsWindows())
+            {
+                return;
+            }
+        }
+
+        await using (successor)
+        {
+            Assert.True(await ReadLeaseEpochAsync(directory.Path) > epoch + 1);
+        }
+    }
+
+    static bool IsFenced(IPantsDatabase database) => !database.PersistentStorage!.IsPrimaryLeaseHealthy;
+
+    [Fact]
+    public async Task ShouldNotOverwriteARecordAnotherWriterOwnsWhenFencing()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using var fenced = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+        var path = Path.Combine(directory.Path, ".midge_leader");
+        var foreign = $"epoch: 9\nholder_id: someone-else\nacquired_at: {clock.UtcNow:O}\n";
+        File.WriteAllText(path, foreign);
+
+        Assert.False(fenced.RenewForTesting());
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(foreign, await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
     public async Task LocalOpenDefaultMinimumEpochLeavesBehaviorUnchanged()
     {
         using var directory = new TemporaryDirectory();
@@ -315,4 +591,99 @@ public sealed class FileLeaseTests
 
         throw new InvalidOperationException("No epoch field found in leader record.");
     }
+
+    [Fact]
+    public void ShouldFenceAtMonotonicDeadlineWhenRenewalNeverRuns()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var losses = 0;
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, () => losses++);
+        lease.EnsureValid();
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+        Assert.Equal(1, losses);
+    }
+
+    [Fact]
+    public void ShouldReportLossAtDeadlineWithoutCallerActivity()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var losses = 0;
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, () => losses++);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+        lease.CheckExpiryForTesting();
+        lease.CheckExpiryForTesting();
+
+        Assert.Equal(1, losses);
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    [Fact]
+    public void ShouldStayValidPastOriginalDeadlineWhenRenewalAdvancesInTime()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, null);
+
+        time.Advance(TimeSpan.FromSeconds(40));
+        Assert.True(lease.RenewForTesting());
+        time.Advance(TimeSpan.FromSeconds(40));
+
+        lease.EnsureValid();
+    }
+
+    [Fact]
+    public void ShouldNotRestoreLeaseWhenRenewalArrivesAfterDeadline()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        using var lease = AcquireWithMonotonicTime(directory.Path, time, null);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.False(lease.RenewForTesting());
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    [Fact]
+    public void ShouldNotExtendDeadlineWhenWallClockStepsBackward()
+    {
+        using var directory = new TemporaryDirectory();
+        var time = new ManualTimeProvider();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60),
+            time);
+
+        clock.UtcNow -= TimeSpan.FromHours(1);
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.Throws<PantsFencedException>(lease.EnsureValid);
+    }
+
+    static FileLease AcquireWithMonotonicTime(
+        string root,
+        ManualTimeProvider time,
+        Action? leaseLossCallback) =>
+        FileLease.Acquire(
+            root,
+            0,
+            TimeSpan.Zero,
+            leaseLossCallback,
+            LongHeartbeatInterval,
+            new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            TimeSpan.FromSeconds(60),
+            time);
 }

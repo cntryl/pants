@@ -53,33 +53,10 @@ static class SstManifestMetadataValidator
         string storageKind,
         string fileName,
         string boundary,
-        int[]? expected,
+        byte[]? expected,
         byte[]? actual)
     {
-        if (expected is null)
-        {
-            if (actual is null)
-            {
-                return;
-            }
-
-            throw new PantsCorruptionException(
-                $"{storageKind} '{fileName}' {boundary} key differs from its manifest.");
-        }
-
-        var expectedBytes = new byte[expected.Length];
-        for (var index = 0; index < expected.Length; index++)
-        {
-            if (expected[index] is < byte.MinValue or > byte.MaxValue)
-            {
-                throw new PantsCorruptionException(
-                    $"{storageKind} '{fileName}' has an invalid manifest key byte.");
-            }
-
-            expectedBytes[index] = (byte)expected[index];
-        }
-
-        if (actual is null || !actual.AsSpan().SequenceEqual(expectedBytes))
+        if (expected is null ? actual is not null : actual is null || !actual.AsSpan().SequenceEqual(expected))
         {
             throw new PantsCorruptionException(
                 $"{storageKind} '{fileName}' {boundary} key differs from its manifest.");

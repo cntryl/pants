@@ -58,9 +58,9 @@ public sealed class SstBlockCacheTests
             PantsBlockCachePolicy.Lru,
             2,
             1);
-        SstBlockCacheKey hot = new("sst", 0);
-        SstBlockCacheKey recent = new("sst", 1);
-        SstBlockCacheKey incoming = new("sst", 2);
+        SstBlockCacheKey hot = new(Sst("sst"), 0);
+        SstBlockCacheKey recent = new(Sst("sst"), 1);
+        SstBlockCacheKey incoming = new(Sst("sst"), 2);
         Assert.True(cache.Add(hot, [1]));
         Assert.True(cache.Add(recent, [2]));
         Assert.True(cache.TryGet(hot, out _));
@@ -89,11 +89,11 @@ public sealed class SstBlockCacheTests
     public void ShouldSelectTinyLfuVictimOutsideTheRecentSampleWindow()
     {
         var policy = new TinyLfuSstBlockCachePolicy();
-        SstBlockCacheKey oldest = new("oldest", 0);
+        SstBlockCacheKey oldest = new(Sst("oldest"), 0);
         policy.RecordAccess(oldest);
         for (var index = 0; index < TinyLfuSstBlockCachePolicy.WindowSize; index++)
         {
-            policy.RecordAccess(new SstBlockCacheKey("recent", index));
+            policy.RecordAccess(new SstBlockCacheKey(Sst("recent"), index));
         }
 
         Assert.True(policy.TrySelectVictim(out var victim));
@@ -106,17 +106,17 @@ public sealed class SstBlockCacheTests
         var cache = new SstBlockCache(PantsBlockCachePolicy.TinyLfu, 128, 1);
         for (var index = 0; index < 128; index++)
         {
-            Assert.True(cache.Add(new SstBlockCacheKey("resident", index), [1]));
+            Assert.True(cache.Add(new SstBlockCacheKey(Sst("resident"), index), [1]));
         }
 
         for (var hotIndex = 0; hotIndex < 10; hotIndex++)
         {
-            Assert.True(cache.TryGet(new SstBlockCacheKey("resident", hotIndex), out _));
+            Assert.True(cache.TryGet(new SstBlockCacheKey(Sst("resident"), hotIndex), out _));
         }
 
         for (var index = 0; index < 256; index++)
         {
-            Assert.True(cache.Add(new SstBlockCacheKey("incoming", index), [1]));
+            Assert.True(cache.Add(new SstBlockCacheKey(Sst("incoming"), index), [1]));
         }
 
         Assert.Equal(128, cache.Count);
@@ -129,14 +129,14 @@ public sealed class SstBlockCacheTests
         var cache = new SstBlockCache(PantsBlockCachePolicy.ClockPro, 16, 1);
         for (var index = 0; index < 16; index++)
         {
-            var key = new SstBlockCacheKey("resident", index);
+            var key = new SstBlockCacheKey(Sst("resident"), index);
             Assert.True(cache.Add(key, [1]));
             Assert.True(cache.TryGet(key, out _));
         }
 
         for (var index = 0; index < 64; index++)
         {
-            Assert.True(cache.Add(new SstBlockCacheKey("incoming", index), [1]));
+            Assert.True(cache.Add(new SstBlockCacheKey(Sst("incoming"), index), [1]));
         }
 
         Assert.Equal(16, cache.Count);
@@ -150,11 +150,11 @@ public sealed class SstBlockCacheTests
         PantsBlockCachePolicy policy)
     {
         var cache = new SstBlockCache(policy, 4, 1);
-        SstBlockCacheKey[] hot = [new("hot", 0), new("hot", 1)];
+        SstBlockCacheKey[] hot = [new(Sst("hot"), 0), new(Sst("hot"), 1)];
         Assert.True(cache.Add(hot[0], [1]));
         Assert.True(cache.Add(hot[1], [1]));
-        Assert.True(cache.Add(new SstBlockCacheKey("cold", 0), [1]));
-        Assert.True(cache.Add(new SstBlockCacheKey("cold", 1), [1]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 0), [1]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 1), [1]));
         for (var access = 0; access < 50; access++)
         {
             Assert.True(cache.TryGet(hot[0], out _));
@@ -165,7 +165,7 @@ public sealed class SstBlockCacheTests
              scanBlock < TinyLfuSstBlockCachePolicy.WindowSize * 5;
              scanBlock++)
         {
-            Assert.True(cache.Add(new SstBlockCacheKey("scan", scanBlock), [1]));
+            Assert.True(cache.Add(new SstBlockCacheKey(Sst("scan"), scanBlock), [1]));
         }
 
         Assert.All(hot, key => Assert.True(cache.TryGet(key, out _)));
@@ -189,7 +189,7 @@ public sealed class SstBlockCacheTests
             for (var operation = 0; operation < operationsPerWorker; operation++)
             {
                 var fileName = $"worker-{worker}-batch-{operation / 10}";
-                var key = new SstBlockCacheKey(fileName, operation);
+                var key = new SstBlockCacheKey(Sst(fileName), operation);
                 _ = cache.Add(key, new byte[entrySize]);
                 if (operation % 3 == 0)
                 {
@@ -219,15 +219,35 @@ public sealed class SstBlockCacheTests
             PantsBlockCachePolicy.Lru,
             3,
             1);
-        Assert.True(cache.Add(new SstBlockCacheKey("obsolete.sst", 0), [1]));
-        Assert.True(cache.Add(new SstBlockCacheKey("obsolete.sst", 1), [2]));
-        Assert.True(cache.Add(new SstBlockCacheKey("live.sst", 0), [3]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("obsolete.sst"), 0), [1]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("obsolete.sst"), 1), [2]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("live.sst"), 0), [3]));
 
         cache.RemoveFile("obsolete.sst");
 
         Assert.Equal(1, cache.Count);
-        Assert.False(cache.TryGet(new SstBlockCacheKey("obsolete.sst", 0), out _));
-        Assert.True(cache.TryGet(new SstBlockCacheKey("live.sst", 0), out _));
+        Assert.False(cache.TryGet(new SstBlockCacheKey(Sst("obsolete.sst"), 0), out _));
+        Assert.True(cache.TryGet(new SstBlockCacheKey(Sst("live.sst"), 0), out _));
+    }
+
+    [Fact]
+    public void ShouldIsolateBlocksOfSameNameByManifestIdentityAndRemoveEveryIdentityByName()
+    {
+        var cache = new SstBlockCache(PantsBlockCachePolicy.Lru, 1024, 1);
+        var original = new SstFileIdentity("reused.sst", 0, 7, 100, 1);
+        var replacement = original with { SizeBytes = 200, ContentCrc32C = 2 };
+        Assert.True(cache.Add(new SstBlockCacheKey(original, 0), [1]));
+
+        Assert.False(cache.TryGet(new SstBlockCacheKey(replacement, 0), out _));
+        Assert.True(cache.Add(new SstBlockCacheKey(replacement, 0), [2]));
+        Assert.True(cache.TryGet(new SstBlockCacheKey(original, 0), out var originalBlock));
+        Assert.True(cache.TryGet(new SstBlockCacheKey(replacement, 0), out var replacementBlock));
+        Assert.Equal(new byte[] { 1 }, originalBlock!.Content.ToArray());
+        Assert.Equal(new byte[] { 2 }, replacementBlock!.Content.ToArray());
+
+        cache.RemoveFile("reused.sst");
+
+        Assert.Equal(0, cache.Count);
     }
 
     [Fact]
@@ -237,7 +257,7 @@ public sealed class SstBlockCacheTests
             PantsBlockCachePolicy.Lru,
             4,
             1);
-        SstBlockCacheKey key = new("sst", 0);
+        SstBlockCacheKey key = new(Sst("sst"), 0);
         byte[] source = [1, 2, 3, 4];
         Assert.True(cache.Add(key, source));
 
@@ -256,7 +276,7 @@ public sealed class SstBlockCacheTests
                 PantsBlockCachePolicy.Lru,
                 0,
                 1);
-            Assert.False(cache.Add(new SstBlockCacheKey("sst", iteration), [1]));
+            Assert.False(cache.Add(new SstBlockCacheKey(Sst("sst"), iteration), [1]));
             Assert.Equal(0, cache.Count);
             Assert.Equal(0, cache.UsedBytes);
         }
@@ -265,11 +285,11 @@ public sealed class SstBlockCacheTests
     static int CountHotSurvivors(PantsBlockCachePolicy policy)
     {
         var cache = new SstBlockCache(policy, 4, 1);
-        SstBlockCacheKey[] hot = [new("hot", 0), new("hot", 1)];
+        SstBlockCacheKey[] hot = [new(Sst("hot"), 0), new(Sst("hot"), 1)];
         Assert.True(cache.Add(hot[0], [0]));
         Assert.True(cache.Add(hot[1], [1]));
-        Assert.True(cache.Add(new SstBlockCacheKey("cold", 0), [2]));
-        Assert.True(cache.Add(new SstBlockCacheKey("cold", 1), [3]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 0), [2]));
+        Assert.True(cache.Add(new SstBlockCacheKey(Sst("cold"), 1), [3]));
         for (var access = 0; access < 50; access++)
         {
             Assert.True(cache.TryGet(hot[0], out _));
@@ -281,7 +301,7 @@ public sealed class SstBlockCacheTests
 
         for (var scanBlock = 0; scanBlock < 8; scanBlock++)
         {
-            _ = cache.Add(new SstBlockCacheKey("scan", scanBlock), [checked((byte)scanBlock)]);
+            _ = cache.Add(new SstBlockCacheKey(Sst("scan"), scanBlock), [checked((byte)scanBlock)]);
         }
 
         return hot.Count(key => cache.TryGet(key, out _));
@@ -291,7 +311,7 @@ public sealed class SstBlockCacheTests
     {
         for (var index = 0; index < 10_000; index++)
         {
-            var key = new SstBlockCacheKey($"sst-{index}", index);
+            var key = new SstBlockCacheKey(Sst($"sst-{index}"), index);
             if (cache.GetShardIndex(key) == shard)
             {
                 return key;
@@ -300,4 +320,6 @@ public sealed class SstBlockCacheTests
 
         throw new InvalidOperationException($"Could not find a key for shard {shard}.");
     }
+
+    static SstFileIdentity Sst(string name) => new(name, 0, 0, 0, null);
 }

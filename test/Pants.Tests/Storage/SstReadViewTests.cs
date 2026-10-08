@@ -20,6 +20,42 @@ public sealed class SstReadViewTests
             "non-overlapping, so the search should be logarithmic.");
     }
 
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(100_000)]
+    [InlineData(1_000_000)]
+    public void ShouldBoundRangeCandidateWorkAsLevelCardinalityGrows(int fileCount)
+    {
+        var view = SstReadView.Create(BuildLevel(0, fileCount));
+        var middle = fileCount / 2;
+
+        var candidates = view.SelectRangeCandidates(0, Key(middle), Key(middle + 4), out var filesExamined);
+
+        Assert.Equal(
+            Enumerable.Range(middle, 4).Select(static index => $"l1-{index}.sst"),
+            candidates.Select(static file => file.Name));
+        Assert.True(
+            filesExamined < 64,
+            $"A range read inspected {filesExamined} of {fileCount} files; the level is sorted " +
+            "and non-overlapping, so the search should be logarithmic plus the files returned.");
+    }
+
+    [Fact]
+    public void ShouldSelectRangeCandidatesExactlyWhenBoundsAreOpenOrOutsideTheLevel()
+    {
+        var files = BuildLevel(0, 64);
+        var view = SstReadView.Create(files);
+
+        Assert.Equal(64, view.SelectRangeCandidates(0, null, null, out _).Count);
+        Assert.Equal(
+            Enumerable.Range(0, 3).Select(static index => $"l1-{index}.sst"),
+            view.SelectRangeCandidates(0, null, Key(3), out _).Select(static file => file.Name));
+        Assert.Equal(
+            Enumerable.Range(60, 4).Select(static index => $"l1-{index}.sst"),
+            view.SelectRangeCandidates(0, Key(60), null, out _).Select(static file => file.Name));
+        Assert.Empty(view.SelectRangeCandidates(0, Key(200), Key(300), out _));
+    }
+
     [Fact]
     public void ShouldReturnEveryLevelZeroCandidateNewestFirst()
     {
@@ -88,6 +124,72 @@ public sealed class SstReadViewTests
     }
 
     [Fact]
+    public void ShouldKeepLevelIndexedGivenAdjacentFilesSharingOneBoundaryKey()
+    {
+        FileMeta[] files =
+        [
+            File("l1-a.sst", 1, 1, "a", "f"),
+            File("l1-b.sst", 1, 2, "f", "m"),
+            File("l1-c.sst", 1, 3, "n", "z")
+        ];
+        var view = SstReadView.Create(files);
+
+        var shared = view.SelectPointCandidates(0, Key("f"), out var sharedExamined);
+        var inside = view.SelectPointCandidates(0, Key("p"), out var insideExamined);
+
+        Assert.Equal(0, view.LinearScanLevelCount);
+        Assert.Equal(["l1-b.sst", "l1-a.sst"], shared.Select(static file => file.Name));
+        Assert.True(sharedExamined < files.Length + 1, $"Examined {sharedExamined} files.");
+        Assert.Equal("l1-c.sst", Assert.Single(inside).Name);
+        Assert.True(insideExamined <= 2, $"Examined {insideExamined} files.");
+        Assert.Equal(
+            ["l1-a.sst", "l1-b.sst"],
+            view.SelectRangeCandidates(0, Key("a"), Key("g"), out _)
+                .Select(static file => file.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void ShouldReportLevelThatFallsBackToLinearScanGivenRealOverlap()
+    {
+        var measured = 0L;
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = static (instrument, meterListener) =>
+        {
+            if (instrument.Name == "pants.sst.linear_scan_levels")
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (_, value, _, _) => Interlocked.Add(ref measured, value));
+        listener.Start();
+
+        var view = SstReadView.Create(
+        [
+            File("l1-a.sst", 1, 1, "a", "m"),
+            File("l1-b.sst", 1, 2, "f", "z")
+        ]);
+
+        Assert.Equal(1, view.LinearScanLevelCount);
+        Assert.True(Interlocked.Read(ref measured) >= 1);
+    }
+
+    [Fact]
+    public void ShouldFallBackToLinearScanGivenThreeFilesSharingOneBoundaryKey()
+    {
+        var view = SstReadView.Create(
+        [
+            File("l1-a.sst", 1, 1, "a", "f"),
+            File("l1-b.sst", 1, 2, "f", "f"),
+            File("l1-c.sst", 1, 3, "f", "z")
+        ]);
+
+        Assert.Equal(1, view.LinearScanLevelCount);
+        Assert.Equal(3, view.SelectPointCandidates(0, Key("f"), out _).Count);
+    }
+
+    [Fact]
     public void ShouldIsolateColumnFamilies()
     {
         FileMeta[] files =
@@ -145,20 +247,18 @@ public sealed class SstReadViewTests
                 ColumnFamilyId = columnFamilyId,
                 SstSequence = checked((ulong)index + 1),
                 SizeBytes = 1024,
-                SmallestKey = KeyValues(index),
-                LargestKey = KeyValues(index),
+                SmallestKey = Key(index),
+                LargestKey = Key(index),
                 KeyBoundsComplete = true
             })
             .ToArray();
 
-    static int[] KeyValues(int value) =>
+    static byte[] Key(int value) =>
     [
-        (value >> 16) & 0xFF,
-        (value >> 8) & 0xFF,
-        value & 0xFF
+        (byte)((value >> 16) & 0xFF),
+        (byte)((value >> 8) & 0xFF),
+        (byte)(value & 0xFF)
     ];
-
-    static byte[] Key(int value) => KeyValues(value).Select(static v => (byte)v).ToArray();
 
     static byte[] Key(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
@@ -175,10 +275,8 @@ public sealed class SstReadViewTests
             ColumnFamilyId = columnFamilyId,
             SstSequence = sequence,
             SizeBytes = 1024,
-            SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest)
-            .Select(static value => (int)value).ToArray(),
-            LargestKey = System.Text.Encoding.UTF8.GetBytes(largest)
-            .Select(static value => (int)value).ToArray(),
+            SmallestKey = System.Text.Encoding.UTF8.GetBytes(smallest),
+            LargestKey = System.Text.Encoding.UTF8.GetBytes(largest),
             KeyBoundsComplete = true
         };
 }
