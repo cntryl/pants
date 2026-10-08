@@ -99,7 +99,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        _lease.EnsureValid();
+        // One remote check per batch, before any upload or catalog publication: the catalog CAS
+        // only notices a successor that already fenced it, whereas this catches a successor that
+        // has taken the lease object but not yet written the catalog.
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var batchEpoch = segments[0].WriterEpoch;
         if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
         {
