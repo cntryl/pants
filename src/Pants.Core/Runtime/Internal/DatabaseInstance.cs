@@ -340,13 +340,14 @@ sealed class DatabaseInstance :
         {
             lock (_shutdownGate)
             {
-                if (ReferenceEquals(_shutdownTask, completion.Task))
+                // Lifecycle is monotonic: Open, then Closing, then Closed. Only an attempt that
+                // was merely blocked (busy, or timed out waiting) may be retried; any other
+                // failure is permanent, so the faulted attempt stays the shared outcome and is
+                // replayed identically to every later caller while new work stays rejected.
+                if (ReferenceEquals(_shutdownTask, completion.Task) &&
+                    exception is PantsBusyException or PantsTimeoutException)
                 {
                     _shutdownTask = null;
-                    if (exception is not PantsBusyException)
-                    {
-                        Volatile.Write(ref _lifecycleState, 0);
-                    }
                 }
             }
 
@@ -373,7 +374,7 @@ sealed class DatabaseInstance :
         {
             throw state == 1
                 ? new PantsBusyException("Pants database is shutting down.")
-                : new PantsAbortedException("Pants database is disposed.");
+                : new PantsBusyException("Pants database is closed.");
         }
     }
 
@@ -410,17 +411,21 @@ sealed class DatabaseInstance :
     internal ValueTask ReleaseScanSnapshotAsync(long snapshotId) =>
         _runtime.Coordinator.ReleaseScanSnapshotAsync(snapshotId, CancellationToken.None);
 
-    internal ValueTask RecordPointReadAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken) =>
-        _runtime.Coordinator.RecordPointReadAsync(columnFamily, key, cancellationToken);
-
     internal ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
+        PointReadObservation observation,
         CancellationToken cancellationToken) =>
-        _runtime.Coordinator.TryReadPointValueAsync(candidatesNewestFirst, key, cancellationToken);
+        _runtime.Coordinator.TryReadPointValueAsync(
+            candidatesNewestFirst,
+            key,
+            cancellationToken,
+            observation);
+
+    internal ValueTask ReportPointReadAsync(
+        PointReadObservation observation,
+        CancellationToken cancellationToken) =>
+        _runtime.Coordinator.ReportPointReadAsync(observation, cancellationToken);
 
     internal ValueTask<IReadOnlyList<AsyncSstScanSource>> CreateScanSourcesAsync(
         IReadOnlyList<FileMeta> candidates,
@@ -434,12 +439,6 @@ sealed class DatabaseInstance :
             startInclusive,
             endExclusive,
             cancellationToken);
-
-    internal ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken) =>
-        _runtime.Coordinator.RecordPointReadWithDiagnosticsAsync(columnFamily, key, cancellationToken);
 
     internal IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>

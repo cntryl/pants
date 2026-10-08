@@ -438,7 +438,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     {
         if (!response.IsSuccessStatusCode)
         {
-            throw new PantsIOException(
+            throw CloudHttpStatus.Failure(
+                response.StatusCode,
                 $"{operation} failed with HTTP {(int)response.StatusCode}.");
         }
     }

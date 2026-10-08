@@ -114,8 +114,8 @@ public sealed class SnapshotReadPathTests
         {
             Name = name,
             ColumnFamilyId = family.Id,
-            SmallestKey = smallest.Select(value => (int)value).ToArray(),
-            LargestKey = largest.Select(value => (int)value).ToArray(),
+            SmallestKey = smallest.ToArray(),
+            LargestKey = largest.ToArray(),
             KeyBoundsComplete = true,
             SstSequence = sstSequence
         };

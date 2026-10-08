@@ -16,11 +16,15 @@ public sealed class PantsSstRangeHandleTests
     }
 
     [Fact]
-    public void ShouldRejectRangeHandleGivenOffsetZeroAndSizePositive()
+    public void ShouldDecodePresentRangeHandleGivenOffsetZeroAndSizePositive()
     {
+        // A tombstone-only SST written by the reference engine places its range block first.
         var metadata = BuildMetadataBytes(0, 16);
 
-        Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeMetadata(metadata));
+        var decoded = SstCodec.DecodeMetadata(metadata);
+
+        Assert.Equal(0UL, decoded.RangeHandle!.Value.Offset);
+        Assert.Equal(16UL, decoded.RangeHandle!.Value.Size);
     }
 
     [Fact]

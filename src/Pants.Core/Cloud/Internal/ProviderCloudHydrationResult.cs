@@ -3,7 +3,8 @@ namespace Cntryl.Pants.Cloud.Internal;
 sealed record ProviderCloudHydrationResult(
     IReadOnlyDictionary<ulong, ProviderPublishedWalSegment> PublishedWalSegments,
     ulong CloudDurableSequence,
-    bool RequiresSalvage)
+    bool RequiresSalvage,
+    IReadOnlyList<IRemoteWalSegment>? RemoteWalSegments = null)
 {
     public static ProviderCloudHydrationResult Empty { get; } =
         new(

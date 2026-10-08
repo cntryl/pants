@@ -30,7 +30,9 @@ static class AtomicStagedFile
                         throw new ArgumentException(
                             "A staged file path must have a parent directory.",
                             nameof(path));
+        StoragePathGuard.EnsureNotLink(fullPath);
         Directory.CreateDirectory(directory);
+        StoragePathGuard.EnsureNotLink(fullPath);
         var temporary = Path.Combine(
             directory,
             $".{Path.GetFileName(fullPath)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
@@ -81,6 +83,7 @@ static class AtomicStagedFile
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
                         throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
+        StoragePathGuard.EnsureNotLink(fullPath);
         Directory.CreateDirectory(directory);
         if (temporaryFileName is not null &&
             (!string.Equals(Path.GetFileName(temporaryFileName), temporaryFileName, StringComparison.Ordinal) ||
@@ -179,6 +182,7 @@ static class AtomicStagedFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
+        StoragePathGuard.EnsureNotLink(fullPath);
         if (!File.Exists(fullPath))
         {
             return;

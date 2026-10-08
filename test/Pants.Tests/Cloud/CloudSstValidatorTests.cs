@@ -15,8 +15,8 @@ public sealed class CloudSstValidatorTests
             SizeBytes = checked((ulong)bytes.Length),
             ContentCrc32C = DiskFormat.Crc32C(bytes),
             ColumnFamilyId = 0,
-            SmallestKey = "alpha"u8.ToArray().Select(static value => (int)value).ToArray(),
-            LargestKey = "zulu"u8.ToArray().Select(static value => (int)value).ToArray(),
+            SmallestKey = "alpha"u8.ToArray().ToArray(),
+            LargestKey = "zulu"u8.ToArray().ToArray(),
             KeyBoundsComplete = true,
             SmallestSequence = 4,
             LargestSequence = 4

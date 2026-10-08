@@ -49,7 +49,7 @@ public sealed class AzureBlobObjectStoreTests
                 Content = new ByteArrayContent("lease"u8.ToArray()),
                 Headers = { ETag = new EntityTagHeaderValue("\"v1\"") }
             }
-            : new HttpResponseMessage(HttpStatusCode.PreconditionFailed));
+            : ProviderPreconditionResponses.Azure());
         using var client = new HttpClient(handler);
         var store = new AzureBlobObjectStore(
             new PantsAzureBlobProvider(
@@ -246,7 +246,7 @@ public sealed class AzureBlobObjectStoreTests
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             }
 
-            return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+            return ProviderPreconditionResponses.Azure();
         });
         using var client = new HttpClient(handler);
         var store = CreateStore(client, string.Empty);

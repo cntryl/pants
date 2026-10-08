@@ -59,7 +59,7 @@ public sealed class PantsDependencyInjectionTests
 
         await serviceProvider.DisposeAsync();
 
-        await Assert.ThrowsAsync<PantsAbortedException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
+        await Assert.ThrowsAsync<PantsBusyException>(() => database.Diagnostics.GetRuntimeMetricsAsync().AsTask());
     }
 
     [Fact]

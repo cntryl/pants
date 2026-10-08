@@ -19,6 +19,29 @@ public sealed class PantsSstFooterCorruptionTests
     }
 
     [Fact]
+    public void ShouldRejectFooterAsCorruptGivenFlippedHandleByteWithIntactMagic()
+    {
+        var footer = BuildValidFooter();
+
+        // The handle is damaged but the magic field (bytes 72..80) is untouched.
+        footer[3] ^= 0x01;
+
+        Assert.Throws<PantsCorruptionException>(() => SstCodec.ValidateFooter(footer));
+    }
+
+    [Fact]
+    public void ShouldReportCompatibilityGivenFullSizedFileEndingInBareLegacyMagic()
+    {
+        var footer = new byte[DiskFormat.SstFooterSize];
+        Random.Shared.NextBytes(footer);
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            footer.AsSpan(footer.Length - sizeof(ulong)),
+            DiskFormat.SstFooterMagic);
+
+        Assert.Throws<PantsCompatibilityException>(() => SstCodec.ValidateFooter(footer));
+    }
+
+    [Fact]
     public void ShouldRejectFooterAsIncompatibleGivenUnsupportedFormatVersion()
     {
         var footer = BuildValidFooter();

@@ -157,7 +157,7 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new StorageException("SST is shorter than its V4 footer.");
+            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
         }
 
         var footerOffset = bytes.Length - DiskFormat.SstFooterSize;
@@ -197,7 +197,7 @@ static class SstCodec
             if (entries.Count == firstEntryIndex ||
                 !entries[firstEntryIndex].Key.AsSpan().SequenceEqual(firstKey))
             {
-                throw new StorageException("SST index first key does not match its data block.");
+                throw new PantsCorruptionException("SST index first key does not match its data block.");
             }
         }
 
@@ -213,7 +213,7 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new StorageException("SST is shorter than its V4 footer.");
+            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
         }
 
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
@@ -254,7 +254,7 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new StorageException("SST is shorter than its V4 footer.");
+            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
         }
 
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
@@ -355,7 +355,7 @@ static class SstCodec
         {
             if (block.Length - cursor < EntryHeaderSize)
             {
-                throw new StorageException("SST data entry header is truncated.");
+                throw new PantsCorruptionException("SST data entry header is truncated.");
             }
 
             var shared = BinaryPrimitives.ReadUInt16LittleEndian(block.AsSpan(cursor, 2));
@@ -372,7 +372,7 @@ static class SstCodec
             {
                 if (block.Length - cursor < 2 * sizeof(uint))
                 {
-                    throw new StorageException("SST extended entry lengths are truncated.");
+                    throw new PantsCorruptionException("SST extended entry lengths are truncated.");
                 }
 
                 keyLength = DecodeInt32(
@@ -394,13 +394,13 @@ static class SstCodec
                 keyLength > block.Length - cursor ||
                 valueLength > block.Length - cursor - keyLength)
             {
-                throw new StorageException("SST data entry key or value is truncated.");
+                throw new PantsCorruptionException("SST data entry key or value is truncated.");
             }
 
             if (entryType is not (0 or 1 or 2 or 3) || expirationPresent > 1 ||
                 (expirationPresent == 0 && expirationRaw != 0))
             {
-                throw new StorageException("SST data entry metadata is invalid.");
+                throw new PantsCorruptionException("SST data entry metadata is invalid.");
             }
 
             var key = new byte[shared + keyLength];
@@ -430,7 +430,7 @@ static class SstCodec
     {
         if (handle.Offset > (ulong)file.Length || handle.Size < 9 || handle.Size > (ulong)file.Length - handle.Offset)
         {
-            throw new StorageException("SST block handle is outside the file.");
+            throw new PantsCorruptionException("SST block handle is outside the file.");
         }
 
         var offset = DecodeInt32(handle.Offset, "block offset");
@@ -439,18 +439,11 @@ static class SstCodec
             "encoded block length");
         if ((ulong)encodedLength + 4 != handle.Size || encodedLength < 5)
         {
-            throw new StorageException("SST block length does not match its handle.");
+            throw new PantsCorruptionException("SST block length does not match its handle.");
         }
 
         var encoded = file.AsSpan(offset + 4, encodedLength);
-        try
-        {
-            return SstBlockCodec.DecompressWithTrailer(encoded);
-        }
-        catch (PantsCorruptionException exception)
-        {
-            throw new StorageException(exception.Message, exception);
-        }
+        return SstBlockCodec.DecompressWithTrailer(encoded);
     }
 
     internal static byte[] ReadBlock(
@@ -464,7 +457,7 @@ static class SstCodec
             handle.Size > int.MaxValue ||
             handle.Size > (ulong)fileLength - handle.Offset)
         {
-            throw new StorageException("SST block handle is outside the file.");
+            throw new PantsCorruptionException("SST block handle is outside the file.");
         }
 
         var encoded = PositionalFile.ReadExactly(
@@ -503,7 +496,7 @@ static class SstCodec
     {
         if (metadata.Length < 24)
         {
-            throw new StorageException("SST metadata block is truncated.");
+            throw new PantsCorruptionException("SST metadata block is truncated.");
         }
 
         var version = BinaryPrimitives.ReadUInt32LittleEndian(metadata);
@@ -517,16 +510,18 @@ static class SstCodec
         var flags = metadata[5];
         if (rawIndexKind is not (0 or 1) || (flags & ~1) != 0 || metadata[6] != 0 || metadata[7] != 0)
         {
-            throw new StorageException("SST metadata flags, index kind, or reserved bytes are invalid.");
+            throw new PantsCorruptionException("SST metadata flags, index kind, or reserved bytes are invalid.");
         }
 
+        // A handle is present exactly when its size is nonzero (sst.md section 5.1). Offset 0 is a
+        // valid location: a tombstone-only SST has its range block first in the file.
         var rawRangeHandle = ReadHandle(metadata, 8);
-        if (rawRangeHandle.Offset == 0 != (rawRangeHandle.Size == 0))
+        if (rawRangeHandle.Size == 0 && rawRangeHandle.Offset != 0)
         {
             throw new PantsCorruptionException("SST range-tombstone handle is only partially present.");
         }
 
-        SstBlockHandle? rangeHandle = rawRangeHandle.Offset == 0 && rawRangeHandle.Size == 0
+        SstBlockHandle? rangeHandle = rawRangeHandle.Size == 0
             ? null
             : rawRangeHandle;
         var cursor = 24;
@@ -536,7 +531,7 @@ static class SstCodec
         {
             if (cursor != metadata.Length)
             {
-                throw new StorageException("SST metadata without a key range has trailing bytes.");
+                throw new PantsCorruptionException("SST metadata without a key range has trailing bytes.");
             }
         }
         else
@@ -546,7 +541,7 @@ static class SstCodec
             if (cursor != metadata.Length ||
                 ByteArrayComparer.Instance.Compare(smallestKey, largestKey) > 0)
             {
-                throw new StorageException("SST metadata key range is malformed or inverted.");
+                throw new PantsCorruptionException("SST metadata key range is malformed or inverted.");
             }
         }
 
@@ -557,7 +552,7 @@ static class SstCodec
     {
         if (bytes.Length < sizeof(uint))
         {
-            throw new StorageException("SST block-bloom header is truncated.");
+            throw new PantsCorruptionException("SST block-bloom header is truncated.");
         }
 
         var blockCount = DecodeInt32(
@@ -565,7 +560,7 @@ static class SstCodec
             "block-bloom count");
         if (blockCount != expectedBlockCount || blockCount > (bytes.Length - sizeof(uint)) / sizeof(uint))
         {
-            throw new StorageException("SST block-bloom count or offset table is invalid.");
+            throw new PantsCorruptionException("SST block-bloom count or offset table is invalid.");
         }
 
         var headerLength = sizeof(uint) + blockCount * sizeof(uint);
@@ -580,7 +575,7 @@ static class SstCodec
                 "block-bloom offset");
             if ((index == 0 && offset != 0) || offset <= previousOffset || offset > bloomData.Length)
             {
-                throw new StorageException("SST block-bloom offset table is invalid.");
+                throw new PantsCorruptionException("SST block-bloom offset table is invalid.");
             }
 
             previousOffset = offset;
@@ -606,7 +601,7 @@ static class SstCodec
     {
         if (bytes.Length < 9)
         {
-            throw new StorageException("SST bloom filter is truncated.");
+            throw new PantsCorruptionException("SST bloom filter is truncated.");
         }
 
         var numberOfBits = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
@@ -614,7 +609,7 @@ static class SstCodec
         var expectedBytes = checked(((long)numberOfBits + 7) / 8);
         if (numberOfBits == 0 || hashFunctions is < 1 or > 8 || bytes.Length - 9 != expectedBytes)
         {
-            throw new StorageException("SST bloom filter parameters are invalid.");
+            throw new PantsCorruptionException("SST bloom filter parameters are invalid.");
         }
     }
 
@@ -651,7 +646,7 @@ static class SstCodec
         handles.Sort(static (left, right) => left.Offset.CompareTo(right.Offset));
         if (handles[0].Offset != 0)
         {
-            throw new StorageException("SST block references leave unreferenced leading bytes.");
+            throw new PantsCorruptionException("SST block references leave unreferenced leading bytes.");
         }
 
         for (var position = 1; position < handles.Count; position++)
@@ -659,7 +654,7 @@ static class SstCodec
             var previousEnd = checked(handles[position - 1].Offset + handles[position - 1].Size);
             if (previousEnd != handles[position].Offset)
             {
-                throw new StorageException(
+                throw new PantsCorruptionException(
                     previousEnd > handles[position].Offset
                         ? "SST block references overlap."
                         : "SST block references leave unreferenced bytes.");
@@ -669,7 +664,7 @@ static class SstCodec
         var last = handles[^1];
         if (checked(last.Offset + last.Size) != checked((ulong)footerOffset))
         {
-            throw new StorageException("SST block references do not exactly reach the footer.");
+            throw new PantsCorruptionException("SST block references do not exactly reach the footer.");
         }
     }
 
@@ -681,7 +676,7 @@ static class SstCodec
             if (comparison > 0 ||
                 (comparison == 0 && entries[index - 1].Sequence < entries[index].Sequence))
             {
-                throw new StorageException("SST data entries are not in canonical key and sequence order.");
+                throw new PantsCorruptionException("SST data entries are not in canonical key and sequence order.");
             }
         }
     }
@@ -699,7 +694,7 @@ static class SstCodec
         {
             if (metadata.SmallestKey is not null || metadata.LargestKey is not null)
             {
-                throw new StorageException("Empty SST metadata unexpectedly declares a key range.");
+                throw new PantsCorruptionException("Empty SST metadata unexpectedly declares a key range.");
             }
 
             return;
@@ -710,7 +705,7 @@ static class SstCodec
             !metadata.SmallestKey.AsSpan().SequenceEqual(keys[0]) ||
             !metadata.LargestKey.AsSpan().SequenceEqual(keys[^1]))
         {
-            throw new StorageException("SST metadata key range does not match its contents.");
+            throw new PantsCorruptionException("SST metadata key range does not match its contents.");
         }
     }
 
@@ -734,7 +729,7 @@ static class SstCodec
         {
             if (bytes.Length - cursor < 4)
             {
-                throw new StorageException("SST index key length is truncated.");
+                throw new PantsCorruptionException("SST index key length is truncated.");
             }
 
             var length = DecodeInt32(
@@ -743,7 +738,7 @@ static class SstCodec
             cursor += 4;
             if (length > bytes.Length - cursor - 16)
             {
-                throw new StorageException("SST index entry is truncated.");
+                throw new PantsCorruptionException("SST index entry is truncated.");
             }
 
             var key = bytes.AsSpan(cursor, length).ToArray();
@@ -752,7 +747,7 @@ static class SstCodec
             cursor += 16;
             if (output.Count > 0 && output[^1].Item1.AsSpan().SequenceCompareTo(key) > 0)
             {
-                throw new StorageException("SST index first keys are not sorted in ascending order.");
+                throw new PantsCorruptionException("SST index first keys are not sorted in ascending order.");
             }
 
             output.Add((key, handle));
@@ -781,12 +776,12 @@ static class SstCodec
             (SstIndexKind.Trie, { } bytes) => TrieIndex.Decode(
                 bytes,
                 blockIndex.Select(static entry => entry.FirstKey).ToArray()),
-            (SstIndexKind.Trie, null) => throw new StorageException(
+            (SstIndexKind.Trie, null) => throw new PantsCorruptionException(
                 "Trie-selected SST metadata is missing its trie footer handle."),
-            (SstIndexKind.Sparse, not null) => throw new StorageException(
+            (SstIndexKind.Sparse, not null) => throw new PantsCorruptionException(
                 "Sparse-selected SST metadata unexpectedly carries a trie footer handle."),
             (SstIndexKind.Sparse, null) => null,
-            _ => throw new StorageException("SST metadata selects an unsupported index kind.")
+            _ => throw new PantsCorruptionException("SST metadata selects an unsupported index kind.")
         };
     }
 
@@ -868,7 +863,7 @@ static class SstCodec
     {
         if (serializedBlooms.Length < sizeof(uint))
         {
-            throw new StorageException("SST block-bloom header is truncated.");
+            throw new PantsCorruptionException("SST block-bloom header is truncated.");
         }
 
         var blockCount = DecodeInt32(
@@ -881,7 +876,7 @@ static class SstCodec
 
         if (blockIndex < 0 || blockCount > (serializedBlooms.Length - sizeof(uint)) / sizeof(uint))
         {
-            throw new StorageException("SST block-bloom count or offset table is invalid.");
+            throw new PantsCorruptionException("SST block-bloom count or offset table is invalid.");
         }
 
         var headerLength = sizeof(uint) + blockCount * sizeof(uint);
@@ -903,7 +898,7 @@ static class SstCodec
                 serializedBlooms.Length);
         if (end < start)
         {
-            throw new StorageException("SST block-bloom offset table is invalid.");
+            throw new PantsCorruptionException("SST block-bloom offset table is invalid.");
         }
 
         var bloom = serializedBlooms[start..end];
@@ -967,7 +962,7 @@ static class SstCodec
     {
         if (bytes.Length < 4)
         {
-            throw new StorageException("SST range tombstone block is truncated.");
+            throw new PantsCorruptionException("SST range tombstone block is truncated.");
         }
 
         var count = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
@@ -979,7 +974,7 @@ static class SstCodec
             var end = ReadLengthPrefixed(bytes, ref cursor);
             if (bytes.Length - cursor < 8)
             {
-                throw new StorageException("SST range tombstone sequence is truncated.");
+                throw new PantsCorruptionException("SST range tombstone sequence is truncated.");
             }
 
             var sequence = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(cursor, 8));
@@ -989,7 +984,7 @@ static class SstCodec
 
         if (cursor != bytes.Length)
         {
-            throw new StorageException("SST range tombstone block has trailing bytes.");
+            throw new PantsCorruptionException("SST range tombstone block has trailing bytes.");
         }
 
         return output;
@@ -1028,10 +1023,14 @@ static class SstCodec
         var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(footer[80..84]);
         if (DiskFormat.Crc32C(footer[..80]) != storedCrc)
         {
-            if (magic == DiskFormat.SstFooterMagic)
+            // sst.md section 7.1 step 3b: only the file's own last eight bytes can be a legacy
+            // footer magic. The V4 magic field sits before the checksum, so an intact magic with a
+            // damaged handle is corruption, not an older format.
+            if (BinaryPrimitives.ReadUInt64LittleEndian(footer[^sizeof(ulong)..]) ==
+                DiskFormat.SstFooterMagic)
             {
                 throw new PantsCompatibilityException(
-                    "SST V4 footer checksum mismatch, but the footer matches a legacy magic value.");
+                    "SST V4 footer checksum mismatch, but the file ends with a legacy magic value.");
             }
 
             throw new PantsCorruptionException("SST V4 footer checksum mismatch.");
@@ -1068,7 +1067,7 @@ static class SstCodec
 
         if (handle.Size == 0)
         {
-            throw new StorageException($"SST footer {description} handle is only partially present.");
+            throw new PantsCorruptionException($"SST footer {description} handle is only partially present.");
         }
 
         return handle;
@@ -1096,7 +1095,7 @@ static class SstCodec
     {
         if (bytes.Length - cursor < 4)
         {
-            throw new StorageException("SST length-prefixed field is truncated.");
+            throw new PantsCorruptionException("SST length-prefixed field is truncated.");
         }
 
         var length = DecodeInt32(
@@ -1105,7 +1104,7 @@ static class SstCodec
         cursor += 4;
         if (length > bytes.Length - cursor)
         {
-            throw new StorageException("SST length-prefixed value is truncated.");
+            throw new PantsCorruptionException("SST length-prefixed value is truncated.");
         }
 
         var value = bytes.AsSpan(cursor, length).ToArray();
@@ -1117,7 +1116,7 @@ static class SstCodec
     {
         if (offset > totalLength - headerLength)
         {
-            throw new StorageException("SST block-bloom offset table is invalid.");
+            throw new PantsCorruptionException("SST block-bloom offset table is invalid.");
         }
 
         return headerLength + offset;
@@ -1127,7 +1126,7 @@ static class SstCodec
     {
         if (value > int.MaxValue)
         {
-            throw new StorageException($"SST {field} exceeds the supported size.");
+            throw new PantsCorruptionException($"SST {field} exceeds the supported size.");
         }
 
         return (int)value;
@@ -1137,7 +1136,7 @@ static class SstCodec
     {
         if (value > int.MaxValue)
         {
-            throw new StorageException($"SST {field} exceeds the supported size.");
+            throw new PantsCorruptionException($"SST {field} exceeds the supported size.");
         }
 
         return (int)value;

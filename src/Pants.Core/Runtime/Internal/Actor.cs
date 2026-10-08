@@ -142,6 +142,11 @@ sealed class Actor : IAsyncDisposable
         _state = state;
         _cloudMode = cloudMode;
         _diskStore = diskStore;
+        if (cloudMode)
+        {
+            diskStore?.DisableLocalWalPruning();
+        }
+
         _cloudPersistence = cloudPersistence;
         _cloudCompactionOutputPublisher = cloudCompactionOutputPublisher;
         _cloudDdlCoordinator = cloudDdlCoordinator;
@@ -233,12 +238,14 @@ sealed class Actor : IAsyncDisposable
 
         await CaptureCleanupAsync(_cloudWalDrainScheduler.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_cloudMaintenanceScheduler.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_cloudWorker.DisposeAsync).ConfigureAwait(false);
+        var stuckWorkers = new List<Task>();
+        await DisposeWorkerAsync(_cloudWorker).ConfigureAwait(false);
+
         await CaptureCleanupAsync(_walRuntime.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_flushRuntime.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_compactionRuntime.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_manifestWorker.DisposeAsync).ConfigureAwait(false);
-        await CaptureCleanupAsync(_garbageCollectionWorker.DisposeAsync).ConfigureAwait(false);
+        await DisposeWorkerAsync(_manifestWorker).ConfigureAwait(false);
+        await DisposeWorkerAsync(_garbageCollectionWorker).ConfigureAwait(false);
         if (_cloudLeaseCancellation is not null)
         {
             await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
@@ -251,28 +258,64 @@ sealed class Actor : IAsyncDisposable
                 .ConfigureAwait(false);
         }
 
-        if (_cloudLease is not null)
+        if (stuckWorkers.Count != 0)
+        {
+            // A worker loop that outlived its disposal deadline may still be mid-operation. The
+            // lease, the LOCK and the store stay held until it has actually exited, so a
+            // successor cannot take over while it runs.
+            _ = Task.WhenAll(stuckWorkers).ContinueWith(
+                _ => ReleaseOwnedResourcesAsync(),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default).Unwrap();
+        }
+        else
+        {
+            await ReleaseOwnedResourcesAsync().ConfigureAwait(false);
+        }
+
+        async Task DisposeWorkerAsync(RuntimeWorker worker)
         {
             try
             {
-                await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                await worker.DisposeAsync().ConfigureAwait(false);
             }
-            catch (PantsException)
+            catch (PantsTimeoutException exception)
             {
-                // A failed release leaves the bounded lease to expire naturally.
+                stuckWorkers.Add(worker.Completion);
+                cleanupFailure ??= exception;
+            }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
             }
         }
 
-        CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
-        CaptureCleanup(() => _cloudLease?.Dispose());
-        if (_cloudPersistence is not null)
+        async Task ReleaseOwnedResourcesAsync()
         {
-            await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
-        }
+            if (_cloudLease is not null)
+            {
+                try
+                {
+                    await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (PantsException)
+                {
+                    // A failed release leaves the bounded lease to expire naturally.
+                }
+            }
 
-        CaptureCleanup(() => _hybridCache?.Dispose());
-        CaptureCleanup(() => _diskStore?.Dispose());
-        CaptureCleanup(_loopCancellation.Dispose);
+            CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
+            CaptureCleanup(() => _cloudLease?.Dispose());
+            if (_cloudPersistence is not null)
+            {
+                await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
+            }
+
+            CaptureCleanup(() => _hybridCache?.Dispose());
+            CaptureCleanup(() => _diskStore?.Dispose());
+            CaptureCleanup(_loopCancellation.Dispose);
+        }
 
         var failure = loopFailure ?? cleanupFailure;
         if (failure is not null)
@@ -302,7 +345,10 @@ sealed class Actor : IAsyncDisposable
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
-        var state = new RuntimeState(ttlClock, telemetry);
+        var state = new RuntimeState(ttlClock, telemetry)
+        {
+            Sequence = dependencies.InitialMemorySequence ?? 0
+        };
         var startupPhases = dependencies.StartupPhases;
 
         var cloudMode = false;
@@ -337,7 +383,9 @@ sealed class Actor : IAsyncDisposable
                     leaseHeartbeatInterval,
                     startupPhases: startupPhases,
                     leaseClock: leaseClock,
-                    leaseTimeToLive: options.LeaseTimeToLive);
+                    leaseTimeToLive: options.LeaseTimeToLive,
+                    leaseTimeProvider: runtimeTimeProvider,
+                    recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -359,7 +407,7 @@ sealed class Actor : IAsyncDisposable
                     diskStore = LocalDiskStore.Open(
                         simulated.LocalCachePath,
                         state,
-                        simulatedHydration.MinimumWriterEpoch,
+                        Math.Max(simulatedHydration.MinimumWriterEpoch, options.MinimumEpoch),
                         options.RecoveryPolicy,
                         options.PerformanceGoal,
                         options.LeaseClockSkewTolerance,
@@ -373,7 +421,8 @@ sealed class Actor : IAsyncDisposable
                         new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
                         startupPhases,
                         leaseClock,
-                        options.LeaseTimeToLive);
+                        options.LeaseTimeToLive,
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         diskStore.WriterEpoch,
@@ -431,8 +480,19 @@ sealed class Actor : IAsyncDisposable
                     ulong cloudEpoch;
                     using (startupPhases.Measure(StartupPhase.Lease))
                     {
+                        // The floor covers the catalog's fencing epoch and any caller-supplied
+                        // minimum, so a deleted lease object cannot regress below recovered state.
+                        var catalogFloor = await cloudStartupDeadline.RunAsync(
+                                token => new ProviderWalCatalogStore(
+                                        objectStores.Wal,
+                                        static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+                                        static () => { })
+                                    .ReadFencingEpochAsync(token),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        var leaseFloor = Math.Max(options.MinimumEpoch, catalogFloor);
                         cloudEpoch = await cloudStartupDeadline.RunMutationAsync(
-                                cloudLease.AcquireAsync,
+                                token => cloudLease.AcquireAsync(leaseFloor, token),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -474,7 +534,9 @@ sealed class Actor : IAsyncDisposable
                         new ProviderCloudSstSourceFactory(objectStores.Sst),
                         startupPhases,
                         leaseClock,
-                        options.LeaseTimeToLive);
+                        options.LeaseTimeToLive,
+                        remoteWalSegments: hydration.RemoteWalSegments,
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,
@@ -670,9 +732,15 @@ sealed class Actor : IAsyncDisposable
                 _diskStore,
                 telemetry,
                 options.CompactionMemoryPoolBytes);
-            _manifestWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
-            _garbageCollectionWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
-            _cloudWorker = new RuntimeWorker(options.CoordinatorQueueCapacity);
+            _manifestWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
+            _garbageCollectionWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
+            _cloudWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
             _cloudWalDrainScheduler = new CloudWorkScheduler(
                 _cloudWorker,
                 DrainCloudWalBacklogWithFailureTrackingAsync,
@@ -712,6 +780,11 @@ sealed class Actor : IAsyncDisposable
             if (UsesBackgroundImmutableFlushes)
             {
                 _ = ScheduleRecoveredMemtableFlushesAsync();
+            }
+
+            if (!_backgroundCompactionEnabled && _diskStore is not null)
+            {
+                _ = ScheduleStartupL0RecoveryAsync();
             }
         }
         catch
@@ -846,7 +919,12 @@ sealed class Actor : IAsyncDisposable
                 var generation = state.FamilyGeneration.TryGetValue(name, out var currentGeneration)
                     ? checked(currentGeneration + 1)
                     : 0;
-                var id = state.NextColumnFamilyId;
+                if (state.NextColumnFamilyId > uint.MaxValue)
+                {
+                    throw PantsException.ResourceLimit("Column family id space is exhausted.");
+                }
+
+                var id = (uint)state.NextColumnFamilyId;
                 var created = new ColumnFamilyIdentity(id, name, generation);
                 if (_diskStore is not null && _cloudDdlCoordinator is not null)
                 {
@@ -869,7 +947,7 @@ sealed class Actor : IAsyncDisposable
                             .ConfigureAwait(false);
                     }
 
-                    state.NextColumnFamilyId = checked(id + 1);
+                    state.NextColumnFamilyId = (ulong)id + 1;
                     state.FamilyGeneration[name] = generation;
                     state.ActiveFamilyVersions[name] = generation;
                     state.FamilyData[created] = RuntimeState.EmptyFamily;
@@ -1617,7 +1695,8 @@ sealed class Actor : IAsyncDisposable
     public async ValueTask<SstEntry?> TryReadPointValueAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PointReadObservation? observation = null)
     {
         if (_diskStore is null)
         {
@@ -1626,7 +1705,7 @@ sealed class Actor : IAsyncDisposable
 
         if (_hybridCache is null)
         {
-            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span);
+            return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span, observation);
         }
 
         if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocal(file.Name)))
@@ -1641,8 +1720,33 @@ sealed class Actor : IAsyncDisposable
         return await _diskStore.TryReadPointValueAsync(
                 candidatesNewestFirst,
                 key,
-                cancellationToken)
+                cancellationToken,
+                observation)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Records the telemetry a point read gathered while resolving its value and starts
+    ///     read-amplification compaction when the read exceeded the budget.
+    /// </summary>
+    public async ValueTask ReportPointReadAsync(
+        PointReadObservation observation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        var exceedsBudget = _telemetry.RecordSstRead(observation.ToSample());
+        if (!exceedsBudget || !_backgroundCompactionEnabled || _diskStore is null)
+        {
+            return;
+        }
+
+        _ = await SendAsync(
+            async state =>
+            {
+                await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1677,111 +1781,6 @@ sealed class Actor : IAsyncDisposable
                 cancellationToken)
             .ConfigureAwait(false);
     }
-
-    public async ValueTask RecordPointReadAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (_hybridCache is null)
-        {
-            var exceedsBudget = _diskStore is null
-                ? _telemetry.RecordSstRead(default)
-                : _diskStore.RecordPointRead(_telemetry, columnFamily, key.Span);
-            if (!exceedsBudget || !_backgroundCompactionEnabled || _diskStore is null)
-            {
-                return;
-            }
-
-            _ = await SendAsync(
-                async state =>
-                {
-                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
-                    return true;
-                },
-                cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        _ = await RecordPointReadCoreAsync(
-            columnFamily,
-            key,
-            false,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public async ValueTask<PantsPointReadTrace> RecordPointReadWithDiagnosticsAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken) =>
-        await RecordPointReadCoreAsync(
-            columnFamily,
-            key,
-            true,
-            cancellationToken).ConfigureAwait(false) ??
-        throw new PantsInternalException("Point-read diagnostics were not captured.");
-
-    async ValueTask<PantsPointReadTrace?> RecordPointReadCoreAsync(
-        ColumnFamilyIdentity columnFamily,
-        ReadOnlyMemory<byte> key,
-        bool captureDiagnostics,
-        CancellationToken cancellationToken) =>
-        await SendAsync(
-            async state =>
-            {
-                bool exceedsBudget;
-                PantsPointReadTrace? trace = null;
-                if (_diskStore is null)
-                {
-                    exceedsBudget = _telemetry.RecordSstRead(default);
-                    if (captureDiagnostics)
-                    {
-                        trace = new PantsPointReadTrace(0, []);
-                    }
-                }
-                else if (_hybridCache is not null)
-                {
-                    var result = await _diskStore.RecordPointReadAsync(
-                            _telemetry,
-                            columnFamily,
-                            key,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    exceedsBudget = result.ExceedsBudget;
-                    if (captureDiagnostics)
-                    {
-                        trace = result.Trace;
-                    }
-                }
-                else
-                {
-                    if (captureDiagnostics)
-                    {
-                        exceedsBudget = _diskStore.RecordPointRead(
-                            _telemetry,
-                            columnFamily,
-                            key.Span,
-                            null,
-                            out trace);
-                    }
-                    else
-                    {
-                        exceedsBudget = _diskStore.RecordPointRead(
-                            _telemetry,
-                            columnFamily,
-                            key.Span);
-                    }
-                }
-
-                if (exceedsBudget && _backgroundCompactionEnabled && _diskStore is not null)
-                {
-                    await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
-                }
-
-                return trace;
-            },
-            cancellationToken).ConfigureAwait(false);
 
     public IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>
@@ -2861,7 +2860,7 @@ sealed class Actor : IAsyncDisposable
             ulong? writtenWalSegmentId = null;
             if (_diskStore is null)
             {
-                state.Sequence++;
+                state.Sequence = SequenceSpace.NextMemorySequence(state.Sequence);
             }
             else
             {
@@ -4066,9 +4065,32 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    ///     Publishes the recovered layout once so a database reopened over the L0 ceiling starts
+    ///     recovery compaction instead of staying write-stalled.
+    /// </summary>
+    async Task ScheduleStartupL0RecoveryAsync()
+    {
+        try
+        {
+            _ = await SendAsync(
+                state =>
+                {
+                    PublishSnapshot(state);
+                    return ValueTask.FromResult(true);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException)
+        {
+        }
+    }
+
     async ValueTask RunBackgroundCompactionAsync(RuntimeState state)
     {
-        if (!_backgroundCompactionEnabled || _diskStore is null)
+        if (_diskStore is null ||
+            (!_backgroundCompactionEnabled &&
+             !MemtableWritePressure.HasAnyCriticalL0Debt(_options, state)))
         {
             _backgroundCompactionPending = false;
             return;
@@ -4404,9 +4426,11 @@ sealed class Actor : IAsyncDisposable
         try
         {
             await MirrorCloudStorageCoreAsync(cancellationToken).ConfigureAwait(false);
-            if (_hybridCache is not null &&
-                _diskStore is not null &&
-                _cloudPersistence is { HasPersistenceAnomaly: false } persistence)
+            // Eviction depends only on each SST's own verified remote copy (checked per eviction),
+            // never on unrelated residue such as a failed retired-WAL delete or an unparseable
+            // garbage-collection key. Gating on the sticky anomaly flag turned that benign residue
+            // into a permanent write outage once the cache filled.
+            if (_hybridCache is not null && _diskStore is not null)
             {
                 await _hybridCache.EvictIfNeededAsync(
                         _diskStore,
@@ -4470,11 +4494,9 @@ sealed class Actor : IAsyncDisposable
             _failpoints.Hit(Failpoint.BeforeHybridSstHydration);
         }
 
-        await _hybridCache.EnsureLocalSstsForMaintenanceAsync(
-                _diskStore,
-                names,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // Cold inputs are merged through bounded ranged reads; hydrating them first would double
+        // the local footprint of a compaction, so nothing is staged here.
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     ValueTask<IDisposable?> ProtectCompactionInputsAsync(
@@ -4647,6 +4669,16 @@ sealed class Actor : IAsyncDisposable
         var wasStalled = MemtableWritePressure.IsStalled(_options, state);
         state.SetPublishedL0FileCounts(visibleFiles);
         _l0AdmissionWatchlist = BuildL0AdmissionWatchlist(state);
+        if (!_backgroundCompactionEnabled &&
+            _diskStore is not null &&
+            !state.IsShuttingDown &&
+            MemtableWritePressure.HasAnyCriticalL0Debt(_options, state))
+        {
+            // With background compaction off nothing else drains L0, so a family that has used
+            // every slot would stay write-stalled forever. Compact only while the debt is critical.
+            _backgroundCompactionPending = true;
+            ScheduleDeferredCompaction();
+        }
 
         // Compaction publishing its outputs is what drains L0 debt, and nothing else touches write
         // pressure on that path. Without this signal a caller parked in WaitForWriteStallClearAsync

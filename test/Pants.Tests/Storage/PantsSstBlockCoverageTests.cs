@@ -7,7 +7,7 @@ public sealed class PantsSstBlockCoverageTests
     [Fact]
     public void ShouldRejectUnreferencedBytesBetweenSstBlocks()
     {
-        var exception = Assert.Throws<StorageException>(() => Validate(
+        var exception = Assert.Throws<PantsCorruptionException>(() => Validate(
             21,
             new SstBlockHandle(0, 10),
             new SstBlockHandle(11, 10)));
@@ -18,7 +18,7 @@ public sealed class PantsSstBlockCoverageTests
     [Fact]
     public void ShouldRejectOverlappingSstBlocks()
     {
-        var exception = Assert.Throws<StorageException>(() => Validate(
+        var exception = Assert.Throws<PantsCorruptionException>(() => Validate(
             19,
             new SstBlockHandle(0, 10),
             new SstBlockHandle(9, 10)));
@@ -29,7 +29,7 @@ public sealed class PantsSstBlockCoverageTests
     [Fact]
     public void ShouldRejectSstBlocksThatDoNotExactlyReachFooter()
     {
-        var exception = Assert.Throws<StorageException>(() => Validate(
+        var exception = Assert.Throws<PantsCorruptionException>(() => Validate(
             20,
             new SstBlockHandle(0, 10),
             new SstBlockHandle(10, 9)));
@@ -44,7 +44,7 @@ public sealed class PantsSstBlockCoverageTests
             .Concat(EncodeIndexEntry("first"u8, new SstBlockHandle(0, 10)))
             .ToArray();
 
-        var exception = Assert.Throws<StorageException>(() => SstCodec.DecodeIndex(index));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeIndex(index));
 
         Assert.Equal("SST index first keys are not sorted in ascending order.", exception.Message);
     }

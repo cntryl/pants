@@ -8,7 +8,7 @@ namespace Cntryl.Pants.Cloud.Internal.Providers;
 
 sealed class AzureBlobObjectStore : CloudObjectStore
 {
-    const int MaximumAttempts = 3;
+    const int MaximumAttempts = CloudRetryPolicy.MaximumAttempts;
     const string ServiceVersion = "2024-11-04";
     readonly string _account;
     readonly Uri _containerEndpoint;
@@ -148,9 +148,21 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 token => CreatePutRequestAsync(objectKey, data, condition, token),
                 cancellationToken)
             .ConfigureAwait(false);
-        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+        // Only the provider's own condition codes mean the write lost its condition. Other 412s
+        // (LeaseIdMissing) and 409s (SnapshotsPresent) are failures, not conflicts. Create-if-absent
+        // is the one case where Azure answers an existing blob with 409 BlobAlreadyExists.
+        if (!response.IsSuccessStatusCode)
         {
-            return false;
+            var code = await ReadAzureErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+            if ((response.StatusCode == HttpStatusCode.PreconditionFailed &&
+                 (StringComparer.OrdinalIgnoreCase.Equals(code, "ConditionNotMet") ||
+                  StringComparer.OrdinalIgnoreCase.Equals(code, "TargetConditionNotMet"))) ||
+                (response.StatusCode == HttpStatusCode.Conflict &&
+                 condition is PantsCloudObjectWriteCondition.IfAbsent &&
+                 StringComparer.OrdinalIgnoreCase.Equals(code, "BlobAlreadyExists")))
+            {
+                return false;
+            }
         }
 
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
@@ -356,7 +368,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 }
 
                 if (!retryTransientFailures ||
-                    !IsRetryable(response.StatusCode) ||
+                    !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
                     attempt >= MaximumAttempts)
                 {
                     return response;
@@ -390,8 +402,21 @@ sealed class AzureBlobObjectStore : CloudObjectStore
             catch (HttpRequestException)
             {
             }
+            catch (CloudBodyReadException) when (retryTransientFailures && attempt < MaximumAttempts)
+            {
+            }
+            catch (CloudBodyReadException exception)
+            {
+                throw new PantsIOException(
+                    "Azure Blob response body failed after bounded retries.",
+                    exception);
+            }
 
-            await Task.Yield();
+            await CloudRetryPolicy.DelayAsync(
+                attempt,
+                "Azure Blob",
+                linked.Token,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -546,17 +571,24 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
+        var code = await ReadAzureErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+        return code is not null &&
+               (code.Equals("ConditionNotMet", StringComparison.OrdinalIgnoreCase) ||
+                code.Equals("TargetConditionNotMet", StringComparison.OrdinalIgnoreCase));
+    }
+
+    static async ValueTask<string?> ReadAzureErrorCodeAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
         var headerCode = response.Headers.TryGetValues("x-ms-error-code", out var values)
             ? values.FirstOrDefault()
             : null;
         var body = await response.Content.ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false);
-        var code = string.IsNullOrWhiteSpace(headerCode)
+        return string.IsNullOrWhiteSpace(headerCode)
             ? CloudProviderXml.TryReadElementValue(body, "Code")
             : headerCode;
-        return code is not null &&
-               (code.Equals("ConditionNotMet", StringComparison.OrdinalIgnoreCase) ||
-                code.Equals("TargetConditionNotMet", StringComparison.OrdinalIgnoreCase));
     }
 
     static string RequireVersion(string version) =>
@@ -623,7 +655,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
             ? values.FirstOrDefault() ?? "unavailable"
             : "unavailable";
         _ = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        throw new PantsIOException(
+        throw CloudHttpStatus.Failure(
+            response.StatusCode,
             $"Azure Blob request failed with HTTP {(int)response.StatusCode}; request ID {providerRequestId}.");
     }
 }

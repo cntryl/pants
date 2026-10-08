@@ -6,6 +6,28 @@ public sealed class RuntimeWorkerTests
     static readonly TimeSpan AssertionTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public async Task ShouldExposeLoopCompletionOnlyAfterABlockedCommandExitsWhenDisposalTimesOut()
+    {
+        var worker = new RuntimeWorker(1, TimeSpan.FromMilliseconds(50));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = await worker.ScheduleAsync(async _ =>
+        {
+            started.SetResult();
+            await release.Task;
+        });
+        await started.Task.WaitAsync(AssertionTimeout);
+
+        await Assert.ThrowsAsync<PantsTimeoutException>(() => worker.DisposeAsync().AsTask());
+
+        // Disposal gave up, but the loop is still running; owners must wait on it before releasing
+        // anything the worker may still be using.
+        Assert.False(worker.Completion.IsCompleted);
+        release.SetResult();
+        await worker.Completion.WaitAsync(AssertionTimeout);
+    }
+
+    [Fact]
     public async Task ShouldTrackOutstandingWorkFromAdmissionThroughCompletion()
     {
         await using var worker = new RuntimeWorker(1);

@@ -113,8 +113,8 @@ public sealed class CloudMirrorSnapshotConsistencyTests
                 ContentCrc32C = DiskFormat.Crc32C(bytes),
                 ColumnFamilyId = 0,
                 SstSequence = sequence,
-                SmallestKey = key.Select(static value => (int)value).ToArray(),
-                LargestKey = key.Select(static value => (int)value).ToArray(),
+                SmallestKey = key.ToArray(),
+                LargestKey = key.ToArray(),
                 SmallestSequence = sequence,
                 LargestSequence = sequence
             },

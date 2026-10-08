@@ -103,8 +103,8 @@ public sealed class PantsScanFailureTests
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var enumerator = scan.GetAsyncEnumerator();
 
-        var first = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
-        var second = await Assert.ThrowsAsync<StorageException>(() => enumerator.MoveNextAsync().AsTask());
+        var first = await Assert.ThrowsAsync<PantsCorruptionException>(() => enumerator.MoveNextAsync().AsTask());
+        var second = await Assert.ThrowsAsync<PantsCorruptionException>(() => enumerator.MoveNextAsync().AsTask());
 
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);

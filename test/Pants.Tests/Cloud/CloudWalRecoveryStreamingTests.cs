@@ -59,6 +59,59 @@ public sealed class CloudWalRecoveryStreamingTests
         Assert.Single(hydrated.PublishedWalSegments);
     }
 
+    [Fact]
+    public async Task ShouldReplayRemoteOnlySegmentsWithoutCreatingLocalWalCopies()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new RangeTrackingCloudObjectStore();
+        var payload = new byte[(ProviderCloudPersistence.WalRecoveryPageBytes * 3) + 17];
+        Random.Shared.NextBytes(payload);
+        await PublishSegmentAsync(cache.Path, walStore, payload);
+        walStore.ResetReadTracking();
+
+        var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            PantsRecoveryPolicy.Strict,
+            CancellationToken.None);
+
+        var remote = Assert.Single(hydrated.RemoteWalSegments!);
+        var walDirectory = Path.Combine(cache.Path, "wal");
+        Assert.True(
+            !Directory.Exists(walDirectory) || Directory.GetFiles(walDirectory).Length == 0,
+            "Recovery staged a local copy of a remote-only WAL segment.");
+        using var stream = remote.OpenRead();
+        var read = new byte[payload.Length];
+        stream.Position = 5;
+        Assert.True(DiskFormat.ReadExactly(stream, read.AsSpan(5)));
+        Assert.Equal(payload.AsSpan(5).ToArray(), read.AsSpan(5).ToArray());
+        Assert.True(walStore.LargestSingleReadBytes <= ProviderCloudPersistence.WalRecoveryPageBytes);
+    }
+
+    [Fact]
+    public async Task ShouldRefuseWholeObjectRecoveryBeforeAnyGetWhenSegmentExceedsTheLimit()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new RangeTrackingCloudObjectStore { SupportsRanges = false };
+        await PublishSegmentAsync(cache.Path, walStore, new byte[4096]);
+        walStore.ResetReadTracking();
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await ProviderCloudPersistence.HydrateLocalCacheAsync(
+                cache.Path,
+                walStore,
+                new TestCloudObjectStore(),
+                new TestCloudObjectStore(),
+                PantsRecoveryPolicy.Strict,
+                CancellationToken.None,
+                maximumWholeObjectBytes: 1024));
+
+        // Only the small catalog objects were read; the 4096-byte segment never was.
+        Assert.True(walStore.LargestSingleReadBytes < 4096);
+    }
+
     static async Task PublishSegmentAsync(
         string cachePath,
         ICloudObjectStore walStore,

@@ -16,7 +16,17 @@ static class CloudObjectStoreFactory
         Timeout = Timeout.InfiniteTimeSpan
     };
 
-    internal static SocketsHttpHandler CreateStorageHandler() => CreateHandler(null);
+    /// <summary>
+    ///     Storage requests never follow redirects. Following one would replay a conditional
+    ///     mutation, with its provider signing and session-token headers, against whichever origin
+    ///     the response named; a 3xx is an error the provider layer reports instead.
+    /// </summary>
+    internal static SocketsHttpHandler CreateStorageHandler()
+    {
+        var handler = CreateHandler(null);
+        handler.AllowAutoRedirect = false;
+        return handler;
+    }
 
     internal static SocketsHttpHandler CreateCredentialHandler() =>
         CreateHandler(CredentialConnectTimeout);

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -277,6 +278,57 @@ public sealed class PantsCloudDiskResidentReadTests
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.InRange(metrics.CompactionBufferPeakBytes, 1, metrics.CompactionBufferCapacityBytes);
         Assert.Equal(0, metrics.CompactionBufferUsedBytes);
+    }
+
+    [Fact]
+    public async Task ShouldCompactColdCloudInputsThroughRangedReadsWithoutHydratingAnyOfThem()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "compaction-streamed-inputs/")
+            .WithBackgroundCompaction(false)
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            for (var batch = 0; batch < 4; batch++)
+            {
+                await using var writer = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
+                    PantsTransactionMode.ReadWrite);
+                writer.Put(TestBytes.FromString($"batch:{batch}"), Value(batch));
+                await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            }
+        }
+
+        RemoveLocalSsts(directory.Path);
+        var sampler = new LocalSstSamplingFailpointHandler(directory.Path);
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(sampler));
+        var inputNames = (await reopened.Diagnostics.GetStorageLayoutAsync())
+            .Levels.SelectMany(static level => level.Files)
+            .Select(static file => file.Name)
+            .ToArray();
+        Assert.Equal(4, inputNames.Length);
+
+        await reopened.Maintenance.CompactAllAsync();
+
+        // Sampled while the first output was being written, when hydrated inputs would be local.
+        Assert.NotEmpty(sampler.Samples);
+        Assert.All(
+            sampler.Samples,
+            sample => Assert.Empty(inputNames.Intersect(sample, StringComparer.Ordinal)));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        for (var batch = 0; batch < 4; batch++)
+        {
+            Assert.Equal(Value(batch), (await reader.GetAsync(
+                TestBytes.FromString($"batch:{batch}")))?.ToArray());
+        }
     }
 
     [Theory]

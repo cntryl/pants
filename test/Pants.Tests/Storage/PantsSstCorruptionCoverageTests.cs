@@ -15,7 +15,7 @@ public sealed class PantsSstCorruptionCoverageTests
             0, 1, (byte)'a', 1, 1, (byte)'a', 0
         ];
 
-        var exception = Assert.Throws<StorageException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
+        var exception = Assert.Throws<PantsCorruptionException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
 
         Assert.Contains("cyclic", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -30,7 +30,7 @@ public sealed class PantsSstCorruptionCoverageTests
             0, 1, (byte)'a', 1, 0
         ];
 
-        var exception = Assert.Throws<StorageException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
+        var exception = Assert.Throws<PantsCorruptionException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
 
         Assert.Contains("disconnected", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -48,7 +48,7 @@ public sealed class PantsSstCorruptionCoverageTests
             0, 1, second, 2, 0
         ];
 
-        var exception = Assert.Throws<StorageException>(() => TrieIndex.Decode(trie, [[first], [second]]));
+        var exception = Assert.Throws<PantsCorruptionException>(() => TrieIndex.Decode(trie, [[first], [second]]));
 
         Assert.Contains("duplicated or unsorted", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -63,7 +63,7 @@ public sealed class PantsSstCorruptionCoverageTests
             0, 0, 1, 0
         ];
 
-        var exception = Assert.Throws<StorageException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
+        var exception = Assert.Throws<PantsCorruptionException>(() => TrieIndex.Decode(trie, ["a"u8.ToArray()]));
 
         Assert.Contains("empty non-root", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -76,7 +76,7 @@ public sealed class PantsSstCorruptionCoverageTests
         var block = BuildDataEntry();
         block[offset] = value;
 
-        var exception = Assert.Throws<StorageException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
 
         Assert.Contains("metadata is invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -87,7 +87,7 @@ public sealed class PantsSstCorruptionCoverageTests
         var block = BuildDataEntry();
         block[18] = 1;
 
-        var exception = Assert.Throws<StorageException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
 
         Assert.Contains("metadata is invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -113,7 +113,7 @@ public sealed class PantsSstCorruptionCoverageTests
         var metadata = BuildMetadata();
         metadata[5] = 0b0000_0010;
 
-        var exception = Assert.Throws<StorageException>(() => SstCodec.DecodeMetadata(metadata));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeMetadata(metadata));
 
         Assert.Contains("flags", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -123,7 +123,7 @@ public sealed class PantsSstCorruptionCoverageTests
     {
         var metadata = BuildMetadata().Append((byte)0).ToArray();
 
-        var exception = Assert.Throws<StorageException>(() => SstCodec.DecodeMetadata(metadata));
+        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeMetadata(metadata));
 
         Assert.Contains("trailing bytes", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -177,12 +177,12 @@ public sealed class PantsSstCorruptionCoverageTests
         [],
         PantsPerformanceGoal.Latency);
 
-    static StorageException OpenMalformedSst(byte[] bytes)
+    static PantsCorruptionException OpenMalformedSst(byte[] bytes)
     {
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "malformed.sst");
         File.WriteAllBytes(path, bytes);
-        return Assert.Throws<StorageException>(() => SstReader.Open(path));
+        return Assert.Throws<PantsCorruptionException>(() => SstReader.Open(path));
     }
 
     static void RecomputeFooterCrc(Span<byte> footer) =>
