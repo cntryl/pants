@@ -2323,17 +2323,9 @@ sealed class LocalDiskStore :
         CommitPayload payload,
         RuntimeState state)
     {
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == 0 ||
-            payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        var sequence = checked((long)commitSequence);
-        _nextSequence = commitSequence;
+        var beginSequence = _nextSequence + 1;
+        var sequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        _nextSequence = (ulong)sequence;
         state.Sequence = sequence;
         return (beginSequence, sequence);
     }
@@ -2356,15 +2348,9 @@ sealed class LocalDiskStore :
         }
 
         payload.Operations.Validate();
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        reservedSequence = checked((long)commitSequence);
+        var beginSequence = _nextSequence + 1;
+        reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        var commitSequence = (ulong)reservedSequence;
         _nextSequence = commitSequence;
         state.Sequence = reservedSequence;
         List<WalMutation>? residentMutations = null;
