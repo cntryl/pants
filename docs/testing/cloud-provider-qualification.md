@@ -57,3 +57,11 @@ precedence over `SQRZL_API_PORT`.
 The Ubuntu CI matrix job starts Sqrzl, waits for its health endpoint, and runs the complete test
 suite, including every `Sqrzl` test. It always removes the Compose volume afterward. The macOS
 and Windows jobs run the non-Sqrzl suite because those runners do not start the emulator.
+
+## CI platform coverage
+
+Sqrzl runs as a Linux Docker Compose service, so CI executes `Category=Sqrzl` tests only on
+`ubuntu-latest`. The macOS and Windows jobs run the suite with `--filter "Category!=Sqrzl"` because
+GitHub-hosted runners there cannot run the Linux emulator container. This is a documented gap, not
+an oversight: provider behavior is platform-independent HTTP, and platform-specific storage behavior
+is covered by the non-Sqrzl tests on all three operating systems.
