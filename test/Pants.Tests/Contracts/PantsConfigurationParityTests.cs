@@ -150,20 +150,44 @@ public sealed class PantsConfigurationParityTests
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(2)]
-    public void ShouldRejectLeaseTimeToLiveBelowSupportedMinimum(int milliseconds)
+    public void ShouldRejectNonPositiveLeaseTimeToLive(int milliseconds)
     {
         var error = Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions
             .InMemory()
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero)
             .WithLeaseTimeToLive(TimeSpan.FromMilliseconds(milliseconds)));
 
         Assert.Contains("LeaseTimeToLive", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ShouldAcceptAnyPositiveLeaseTimeToLiveLikeMidge()
+    {
+        var plan = RuntimePlan.Resolve(PantsOpenOptions
+            .InMemory()
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero)
+            .WithLeaseTimeToLive(TimeSpan.FromTicks(1)));
+
+        Assert.Equal(TimeSpan.FromTicks(1), plan.LeaseTimeToLive);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), plan.LeaseHeartbeatInterval);
+    }
+
+    [Fact]
+    public void ShouldAcceptLeaseClockSkewEqualToTimeToLiveLikeMidge()
+    {
+        var plan = RuntimePlan.Resolve(PantsOpenOptions
+            .InMemory()
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero)
+            .WithLeaseTimeToLive(TimeSpan.FromMilliseconds(10))
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(10)));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(10), plan.LeaseClockSkewTolerance);
+    }
+
     [Theory]
-    [InlineData(10)]
+    [InlineData(-1)]
     [InlineData(11)]
-    public void ShouldRejectLeaseClockSkewAtOrAboveTimeToLive(int skewMilliseconds)
+    public void ShouldRejectNegativeLeaseClockSkewOrSkewAboveTimeToLive(int skewMilliseconds)
     {
         var error = Assert.Throws<PantsInvalidArgumentException>(() => PantsOpenOptions
             .InMemory()

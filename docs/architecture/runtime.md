@@ -107,3 +107,10 @@ whether to retry, back off, step down or halt. Caller errors are not retryable; 
 succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost
 authority; defect errors (including `ResourceLimit`) are reported rather than retried; fatal errors
 mean durable state cannot be trusted.
+
+Classification follows Midge at the edges. A missing file or directory surfaced by storage I/O is a
+transient `Io` failure, not a caller `NotFound`. A zero deadline passed to
+`IPantsPersistentStorage.VerifyAsync` or `ShutdownAsync` is an already-expired budget and reports
+`Timeout` (shutdown still begins and may be retried); only a negative deadline is
+`InvalidArgument`. The `ShutdownTimeout` open option, which has no Midge counterpart and bounds
+disposal, must still be greater than zero.

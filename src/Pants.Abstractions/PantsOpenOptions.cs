@@ -3,7 +3,6 @@ namespace Cntryl.Pants;
 /// <summary>Immutable database-open configuration.</summary>
 public sealed class PantsOpenOptions
 {
-    static readonly TimeSpan MinimumLeaseTimeToLive = TimeSpan.FromMilliseconds(3);
     readonly Configuration _configuration;
 
     PantsOpenOptions(Configuration configuration)
@@ -289,19 +288,18 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
         }
 
-        if (Lease.TimeToLive < MinimumLeaseTimeToLive)
+        if (Lease.TimeToLive <= TimeSpan.Zero)
         {
             throw PantsException.InvalidArgument(
-                $"LeaseTimeToLive ({Lease.TimeToLive:c}) must be at least " +
-                $"{MinimumLeaseTimeToLive:c}.");
+                $"LeaseTimeToLive ({Lease.TimeToLive:c}) must be greater than zero.");
         }
 
         if (Lease.ClockSkewTolerance < TimeSpan.Zero ||
-            Lease.ClockSkewTolerance >= Lease.TimeToLive)
+            Lease.ClockSkewTolerance > Lease.TimeToLive)
         {
             throw PantsException.InvalidArgument(
                 $"LeaseClockSkewTolerance ({Lease.ClockSkewTolerance:c}) must be non-negative " +
-                $"and strictly less than LeaseTimeToLive ({Lease.TimeToLive:c}).");
+                $"and must not exceed LeaseTimeToLive ({Lease.TimeToLive:c}).");
         }
 
         if (CloudWritePolicy.EventualFlushSegmentGap <= 0 ||
