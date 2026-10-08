@@ -8,7 +8,7 @@ namespace Cntryl.Pants.Cloud.Internal.Providers;
 
 sealed class AzureBlobObjectStore : CloudObjectStore
 {
-    const int MaximumAttempts = 3;
+    const int MaximumAttempts = CloudRetryPolicy.MaximumAttempts;
     const string ServiceVersion = "2024-11-04";
     readonly string _account;
     readonly Uri _containerEndpoint;
@@ -356,7 +356,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 }
 
                 if (!retryTransientFailures ||
-                    !IsRetryable(response.StatusCode) ||
+                    !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
                     attempt >= MaximumAttempts)
                 {
                     return response;
@@ -390,8 +390,21 @@ sealed class AzureBlobObjectStore : CloudObjectStore
             catch (HttpRequestException)
             {
             }
+            catch (CloudBodyReadException) when (retryTransientFailures && attempt < MaximumAttempts)
+            {
+            }
+            catch (CloudBodyReadException exception)
+            {
+                throw new PantsIOException(
+                    "Azure Blob response body failed after bounded retries.",
+                    exception);
+            }
 
-            await Task.Yield();
+            await CloudRetryPolicy.DelayAsync(
+                attempt,
+                "Azure Blob",
+                linked.Token,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

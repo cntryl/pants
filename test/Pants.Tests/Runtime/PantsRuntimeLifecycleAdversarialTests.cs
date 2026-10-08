@@ -33,7 +33,7 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
     }
 
     [Fact]
-    public async Task ShouldRemainUsableAndAllowShutdownRetryAfterPreparationFailure()
+    public async Task ShouldRejectNewWorkAndReplayTheSameErrorAfterPermanentShutdownFailure()
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new RetryingShutdownBoundaryFailpointHandler();
@@ -49,25 +49,21 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
-        await Assert.ThrowsAsync<PantsIOException>(() =>
+        directory.AbandonCleanup();
+        var first = await Assert.ThrowsAsync<PantsIOException>(() =>
             database.ShutdownAsync(AssertionTimeout).AsTask());
 
-        await using (var transaction = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
-                         PantsTransactionMode.ReadWrite))
-        {
-            transaction.Put("after-failure"u8.ToArray(), "value"u8.ToArray());
-            await transaction.CommitAsync(PantsWriteOptions.Sync);
-        }
+        // Shutdown is monotonic: the failure is terminal, so no new work is admitted...
+        await Assert.ThrowsAsync<PantsBusyException>(() => database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite)
+            .AsTask());
 
-        await database.ShutdownAsync(AssertionTimeout);
-        await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.Transactions.BeginAsync(
-            reopened.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-        Assert.Equal(
-            "value",
-            TestBytes.ToText((await read.GetAsync("after-failure"u8.ToArray()))!.Value));
+        // ...and every later caller sees the identical error without re-running shutdown.
+        var second = await Assert.ThrowsAsync<PantsIOException>(() =>
+            database.ShutdownAsync(AssertionTimeout).AsTask());
+        Assert.Same(first, second);
+        Assert.Equal(1, failpoint.HitCount);
     }
 
     [Fact]

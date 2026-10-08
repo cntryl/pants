@@ -1121,7 +1121,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
-    public async Task ShouldRetryShutdownWalDurabilityBoundaryAfterFailure()
+    public async Task ShouldReplayShutdownWalDurabilityBoundaryFailureWithoutRetrying()
     {
         using var directory = new TemporaryDirectory();
         var failpoint = new RetryingShutdownBoundaryFailpointHandler();
@@ -1137,21 +1137,16 @@ public sealed class PantsBackgroundFlushPipelineTests
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
+        directory.AbandonCleanup();
         var firstFailure = await Assert.ThrowsAsync<PantsIOException>(() =>
             database.ShutdownAsync(AssertionTimeout).AsTask());
         Assert.Equal(PantsErrorCode.Io, firstFailure.Code);
         Assert.Equal(1, failpoint.HitCount);
 
-        await database.ShutdownAsync(AssertionTimeout);
-        Assert.Equal(2, failpoint.HitCount);
-
-        await using var reopened = await PantsDatabase.OpenAsync(options);
-        await using var read = await reopened.Transactions.BeginAsync(
-            reopened.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-        Assert.Equal(
-            "value",
-            TestBytes.ToText((await read.GetAsync("buffered-shutdown"u8.ToArray()))!.Value));
+        var replayed = await Assert.ThrowsAsync<PantsIOException>(() =>
+            database.ShutdownAsync(AssertionTimeout).AsTask());
+        Assert.Same(firstFailure, replayed);
+        Assert.Equal(1, failpoint.HitCount);
     }
 
     [Fact]
@@ -2815,7 +2810,9 @@ public sealed class PantsBackgroundFlushPipelineTests
     static void ExpireWriterLease(string path)
     {
         var leasePath = Path.Combine(path, ".midge_leader");
+        // Editing the record invalidates its checksum, so the edited copy carries none.
         var lines = File.ReadAllLines(leasePath)
+            .Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal))
             .Select(line => line.StartsWith("acquired_at: ", StringComparison.Ordinal)
                 ? "acquired_at: 1970-01-01T00:00:00Z"
                 : line)
