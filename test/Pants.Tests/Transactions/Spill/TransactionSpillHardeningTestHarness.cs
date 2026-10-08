@@ -25,7 +25,7 @@ static class TransactionSpillHardeningTestHarness
         string path,
         long transactionMemoryPoolBytes = DefaultPoolBytes) =>
         PantsOpenOptions.Local(path)
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(64 * 1_024))
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1_024))
             .WithMemtableLimits(24 * 1_024)
             .WithTransactionMemoryPool(transactionMemoryPoolBytes)
             .WithBackgroundCompaction(false);

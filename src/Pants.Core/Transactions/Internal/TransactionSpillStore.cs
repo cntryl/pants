@@ -6,7 +6,6 @@ sealed class TransactionSpillStore : IDisposable
 {
     const int HeaderLength = 48;
     const int SparseIndexStride = 16;
-    const int RangeHeaderLength = 32;
 
     /// <summary>
     ///     Per-entry framing charged on top of an operation's own bytes when reserving budget.
@@ -14,8 +13,6 @@ sealed class TransactionSpillStore : IDisposable
     ///     slightly conservative estimate.
     /// </summary>
     const int RunEntryOverheadBytes = 64;
-    const int RangeTableEntryLength = 12;
-    const ulong NoRangeChild = ulong.MaxValue;
 
     static readonly Lock DirectoryMutationGate = new();
 
@@ -51,8 +48,6 @@ sealed class TransactionSpillStore : IDisposable
     }
 
     static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
-
-    static ReadOnlySpan<byte> RangeMagic => "MDGRNG01"u8;
 
     public bool HasRuns => _runs.Count != 0;
 
@@ -145,7 +140,7 @@ sealed class TransactionSpillStore : IDisposable
                 WriteRunFile(stream, sorted);
             }
 
-            WriteRangeFile(rangeTemporaryPath, sorted);
+            TransactionSpillRangeIndex.Write(rangeTemporaryPath, sorted);
             File.Move(rangeTemporaryPath, rangePath);
             File.Move(runTemporaryPath, runPath);
             _runs.Add(new TransactionSpillRun(runPath, rangePath, sorted.Length));
@@ -562,138 +557,11 @@ sealed class TransactionSpillStore : IDisposable
                 }
             }
 
-            LookupRangeIndex(run.RangePath, ordinalCeiling, key, ref latest);
+            TransactionSpillRangeIndex.Lookup(run.RangePath, ordinalCeiling, key, ref latest);
         }
         catch (Exception exception)
         {
             throw MapReadException(exception);
-        }
-    }
-
-    static void LookupRangeIndex(
-        string path,
-        ulong ordinalCeiling,
-        ReadOnlySpan<byte> key,
-        ref TransactionIntentLookup? latest)
-    {
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            16 * 1_024,
-            FileOptions.RandomAccess);
-        Span<byte> header = stackalloc byte[RangeHeaderLength];
-        ReadExactly(stream, header, "Transaction range index header is truncated.");
-        if (!header[..8].SequenceEqual(RangeMagic) ||
-            BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 1 ||
-            DiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range index header is invalid.");
-        }
-
-        var nodeCount = BinaryPrimitives.ReadUInt64LittleEndian(header[12..]);
-        var nodeSectionOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
-        var streamLength = checked((ulong)stream.Length);
-        if (nodeCount > int.MaxValue ||
-            nodeSectionOffset != checked(RangeHeaderLength + nodeCount * RangeTableEntryLength) ||
-            nodeSectionOffset > streamLength)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range index metadata is inconsistent.");
-        }
-
-        if (nodeCount == 0)
-        {
-            return;
-        }
-
-        LookupRangeSubtree(
-            stream,
-            0,
-            null,
-            nodeCount,
-            nodeCount,
-            nodeSectionOffset,
-            streamLength,
-            ordinalCeiling,
-            key,
-            ref latest);
-    }
-
-    static void LookupRangeSubtree(
-        Stream stream,
-        ulong nodeIndex,
-        TransactionSpillRangeNode? loaded,
-        ulong remainingNodes,
-        ulong nodeCount,
-        ulong nodeSectionOffset,
-        ulong streamLength,
-        ulong ordinalCeiling,
-        ReadOnlySpan<byte> key,
-        ref TransactionIntentLookup? latest)
-    {
-        if (remainingNodes == 0)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range index contains a child cycle.");
-        }
-
-        var node = loaded ?? ReadRangeNode(
-            stream,
-            nodeIndex,
-            nodeCount,
-            nodeSectionOffset,
-            streamLength);
-        if (node.Left != NoRangeChild)
-        {
-            var left = ReadRangeNode(
-                stream,
-                node.Left,
-                nodeCount,
-                nodeSectionOffset,
-                streamLength);
-            if (key.SequenceCompareTo(left.MaximumEnd) < 0)
-            {
-                LookupRangeSubtree(
-                    stream,
-                    node.Left,
-                    left,
-                    remainingNodes - 1,
-                    nodeCount,
-                    nodeSectionOffset,
-                    streamLength,
-                    ordinalCeiling,
-                    key,
-                    ref latest);
-            }
-        }
-
-        if (node.Ordinal < ordinalCeiling &&
-            node.Start.AsSpan().SequenceCompareTo(key) <= 0 &&
-            key.SequenceCompareTo(node.End) < 0 &&
-            (latest is null || node.Ordinal > latest.Ordinal))
-        {
-            latest = new TransactionIntentLookup(node.Ordinal, null, true);
-        }
-
-        if (node.Right != NoRangeChild && node.Start.AsSpan().SequenceCompareTo(key) <= 0)
-        {
-            LookupRangeSubtree(
-                stream,
-                node.Right,
-                null,
-                remainingNodes - 1,
-                nodeCount,
-                nodeSectionOffset,
-                streamLength,
-                ordinalCeiling,
-                key,
-                ref latest);
         }
     }
 
@@ -839,11 +707,13 @@ sealed class TransactionSpillStore : IDisposable
                 sparseIndexOffset,
                 checked((int)sparseCount),
                 run.RecordCount);
-            ValidateRangeFile(
+            TransactionSpillRangeIndex.Validate(
                 run.RangePath,
-                stream,
-                ordinalTableOffset,
-                run.RecordCount);
+                node => ValidateRangeNodeOperation(
+                    stream,
+                    ordinalTableOffset,
+                    run.RecordCount,
+                    node));
         }
         catch (PantsException)
         {
@@ -1103,47 +973,6 @@ sealed class TransactionSpillStore : IDisposable
         checksum = DiskFormat.Crc32CAppend(checksum, destination);
     }
 
-    static void WriteRangeFile(string path, IReadOnlyList<TransactionIntentOperation> operations)
-    {
-        var nodes = BuildRangeNodes(operations);
-        using var stream = new FileStream(
-            path,
-            FileMode.CreateNew,
-            FileAccess.ReadWrite,
-            FileShare.None,
-            16 * 1024,
-            FileOptions.None);
-        stream.Write(new byte[RangeHeaderLength + checked(nodes.Length * RangeTableEntryLength)]);
-        var nodeSectionOffset = checked((ulong)stream.Position);
-        var offsets = new ulong[nodes.Length];
-        for (var index = 0; index < nodes.Length; index++)
-        {
-            offsets[index] = checked((ulong)stream.Position);
-            WriteRangeNodeFrame(stream, nodes[index]);
-        }
-
-        stream.Position = RangeHeaderLength;
-        var entry = new byte[RangeTableEntryLength];
-        foreach (var offset in offsets)
-        {
-            BinaryPrimitives.WriteUInt64LittleEndian(entry, offset);
-            BinaryPrimitives.WriteUInt32LittleEndian(
-                entry.AsSpan(8),
-                DiskFormat.Crc32C(entry.AsSpan(0, 8)));
-            stream.Write(entry);
-        }
-
-        Span<byte> header = stackalloc byte[RangeHeaderLength];
-        RangeMagic.CopyTo(header);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[8..], 1);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[12..], checked((ulong)nodes.Length));
-        BinaryPrimitives.WriteUInt64LittleEndian(header[20..], nodeSectionOffset);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[28..], DiskFormat.Crc32C(header[..28]));
-        stream.Position = 0;
-        stream.Write(header);
-        stream.Flush(true);
-    }
-
     void ValidateSparseIndex(
         Stream stream,
         ulong ordinalTableOffset,
@@ -1214,91 +1043,6 @@ sealed class TransactionSpillStore : IDisposable
         }
     }
 
-    void ValidateRangeFile(
-        string path,
-        Stream runStream,
-        ulong ordinalTableOffset,
-        int recordCount)
-    {
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            16 * 1024,
-            FileOptions.RandomAccess);
-        Span<byte> header = stackalloc byte[RangeHeaderLength];
-        ReadExactly(stream, header, "Transaction range index header is truncated.");
-        if (!header[..8].SequenceEqual(RangeMagic) ||
-            BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 1 ||
-            DiskFormat.Crc32C(header[..28]) != BinaryPrimitives.ReadUInt32LittleEndian(header[28..]))
-        {
-            throw PantsException.Create(PantsErrorCode.Corruption, "Transaction range index header is invalid.");
-        }
-
-        var nodeCount = BinaryPrimitives.ReadUInt64LittleEndian(header[12..]);
-        var nodeSectionOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
-        var streamLength = checked((ulong)stream.Length);
-        if (nodeCount > int.MaxValue ||
-            nodeCount > (streamLength - Math.Min(streamLength, RangeHeaderLength)) /
-            RangeTableEntryLength)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range node count exceeds the file bounds.");
-        }
-
-        var expectedNodeSectionOffset =
-            RangeHeaderLength + nodeCount * RangeTableEntryLength;
-        if (nodeSectionOffset != expectedNodeSectionOffset || nodeSectionOffset > streamLength)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range node section offset is invalid.");
-        }
-
-        ulong? previousNodeEnd = null;
-        Span<byte> entry = stackalloc byte[RangeTableEntryLength];
-        for (var index = 0UL; index < nodeCount; index++)
-        {
-            stream.Position = checked((long)(RangeHeaderLength + index * RangeTableEntryLength));
-            ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
-            if (DiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction range offset checksum does not match.");
-            }
-
-            var nodeOffset = BinaryPrimitives.ReadUInt64LittleEndian(entry);
-            var expectedOffset = previousNodeEnd ?? nodeSectionOffset;
-            if (nodeOffset != expectedOffset || nodeOffset >= streamLength)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction range node offset is out of bounds.");
-            }
-
-            stream.Position = checked((long)nodeOffset);
-            var node = ReadRangeNodeFrame(stream, nodeCount);
-            ValidateRangeNodeOperation(
-                runStream,
-                ordinalTableOffset,
-                recordCount,
-                node);
-            previousNodeEnd = checked((ulong)stream.Position);
-        }
-
-        if ((previousNodeEnd ?? nodeSectionOffset) != streamLength)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range node section has an invalid extent.");
-        }
-
-        ValidateRangeGraph(stream, checked((int)nodeCount), nodeSectionOffset, streamLength);
-    }
-
     void ValidateRangeNodeOperation(
         Stream runStream,
         ulong ordinalTableOffset,
@@ -1355,246 +1099,7 @@ sealed class TransactionSpillStore : IDisposable
             "Transaction range node does not reference a spill operation.");
     }
 
-    static void ValidateRangeGraph(
-        Stream stream,
-        int nodeCount,
-        ulong nodeSectionOffset,
-        ulong streamLength)
-    {
-        if (nodeCount == 0)
-        {
-            return;
-        }
-
-        var visited = new byte[nodeCount];
-        var pending = new Stack<(ulong NodeIndex, byte[]? LowerBound, byte[]? UpperBound)>();
-        pending.Push((0, null, null));
-        var visitedCount = 0;
-        while (pending.TryPop(out var pendingNode))
-        {
-            var (nodeIndex, lowerBound, upperBound) = pendingNode;
-            var index = checked((int)nodeIndex);
-            if (visited[index] != 0)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction range index contains a cycle or shared child.");
-            }
-
-            visited[index] = 1;
-            visitedCount++;
-            var node = ReadRangeNode(
-                stream,
-                nodeIndex,
-                checked((ulong)nodeCount),
-                nodeSectionOffset,
-                streamLength);
-            if ((lowerBound is not null &&
-                 ByteArrayComparer.Instance.Compare(node.Start, lowerBound) < 0) ||
-                (upperBound is not null &&
-                 ByteArrayComparer.Instance.Compare(node.Start, upperBound) > 0))
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction range index violates an ancestor ordering bound.");
-            }
-
-            var expectedMaximumEnd = node.End;
-            ValidateChild(node.Left, true);
-            ValidateChild(node.Right, false);
-            if (!expectedMaximumEnd.AsSpan().SequenceEqual(node.MaximumEnd))
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction range subtree maximum is invalid.");
-            }
-
-            void ValidateChild(ulong childIndex, bool isLeft)
-            {
-                if (childIndex == NoRangeChild)
-                {
-                    return;
-                }
-
-                var child = ReadRangeNode(
-                    stream,
-                    childIndex,
-                    checked((ulong)nodeCount),
-                    nodeSectionOffset,
-                    streamLength);
-                var ordering = ByteArrayComparer.Instance.Compare(child.Start, node.Start);
-                if ((isLeft && ordering > 0) || (!isLeft && ordering < 0))
-                {
-                    throw PantsException.Create(
-                        PantsErrorCode.Corruption,
-                        "Transaction range index ordering is invalid.");
-                }
-
-                if (ByteArrayComparer.Instance.Compare(child.MaximumEnd, expectedMaximumEnd) > 0)
-                {
-                    expectedMaximumEnd = child.MaximumEnd;
-                }
-
-                pending.Push(isLeft
-                    ? (childIndex, lowerBound, node.Start)
-                    : (childIndex, node.Start, upperBound));
-            }
-        }
-
-        if (visitedCount != nodeCount)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range index contains disconnected nodes.");
-        }
-    }
-
-    static TransactionSpillRangeNode ReadRangeNode(
-        Stream stream,
-        ulong nodeIndex,
-        ulong nodeCount,
-        ulong nodeSectionOffset,
-        ulong streamLength)
-    {
-        if (nodeIndex >= nodeCount)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range child is out of bounds.");
-        }
-
-        stream.Position = checked((long)(RangeHeaderLength + nodeIndex * RangeTableEntryLength));
-        Span<byte> entry = stackalloc byte[RangeTableEntryLength];
-        ReadExactly(stream, entry, "Transaction range offset entry is truncated.");
-        if (DiskFormat.Crc32C(entry[..8]) != BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range offset checksum does not match.");
-        }
-
-        var nodeOffset = BinaryPrimitives.ReadUInt64LittleEndian(entry);
-        if (nodeOffset < nodeSectionOffset || nodeOffset >= streamLength)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range node offset is out of bounds.");
-        }
-
-        stream.Position = checked((long)nodeOffset);
-        return ReadRangeNodeFrame(stream, nodeCount);
-    }
-
-    static TransactionSpillRangeNode ReadRangeNodeFrame(Stream stream, ulong nodeCount)
-    {
-        var payload = ReadFrame(stream);
-        if (payload.Length < 36)
-        {
-            throw PantsException.Create(PantsErrorCode.Corruption, "Transaction range node is truncated.");
-        }
-
-        var left = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(8));
-        var right = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(16));
-        if ((left != NoRangeChild && left >= nodeCount) ||
-            (right != NoRangeChild && right >= nodeCount))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range child is out of bounds.");
-        }
-
-        var cursor = 24;
-        var start = ReadField(payload, ref cursor);
-        var end = ReadField(payload, ref cursor);
-        var maximumEnd = ReadField(payload, ref cursor);
-        if (cursor != payload.Length ||
-            ByteArrayComparer.Instance.Compare(start, end) > 0 ||
-            ByteArrayComparer.Instance.Compare(maximumEnd, end) < 0)
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                "Transaction range node payload is invalid.");
-        }
-
-        return new TransactionSpillRangeNode(
-            BinaryPrimitives.ReadUInt64LittleEndian(payload),
-            left,
-            right,
-            start,
-            end,
-            maximumEnd);
-    }
-
-    static TransactionSpillRangeNode[] BuildRangeNodes(
-        IReadOnlyList<TransactionIntentOperation> operations)
-    {
-        var operationIndexes = operations
-            .Select(static (operation, index) => (operation, index))
-            .Where(static item => item.operation.Kind == CommitOperationKind.DeleteRange)
-            .Select(static item => item.index)
-            .ToArray();
-        var nodes = new List<TransactionSpillRangeNode>(operationIndexes.Length);
-        BuildRangeSubtree(operationIndexes, operations, nodes);
-        return nodes.ToArray();
-    }
-
-    static ulong? BuildRangeSubtree(
-        ReadOnlySpan<int> operationIndexes,
-        IReadOnlyList<TransactionIntentOperation> operations,
-        List<TransactionSpillRangeNode> nodes)
-    {
-        if (operationIndexes.IsEmpty)
-        {
-            return null;
-        }
-
-        var middle = operationIndexes.Length / 2;
-        var operation = operations[operationIndexes[middle]];
-        var nodeIndex = nodes.Count;
-        var node = new TransactionSpillRangeNode(
-            operation.Ordinal,
-            NoRangeChild,
-            NoRangeChild,
-            operation.Key,
-            operation.EndExclusive!,
-            operation.EndExclusive!);
-        nodes.Add(node);
-        var left = BuildRangeSubtree(operationIndexes[..middle], operations, nodes);
-        var right = BuildRangeSubtree(operationIndexes[(middle + 1)..], operations, nodes);
-        var maximumEnd = node.End;
-        foreach (var child in new[] { left, right }.OfType<ulong>())
-        {
-            if (ByteArrayComparer.Instance.Compare(nodes[checked((int)child)].MaximumEnd, maximumEnd) > 0)
-            {
-                maximumEnd = nodes[checked((int)child)].MaximumEnd;
-            }
-        }
-
-        nodes[nodeIndex] = node with
-        {
-            Left = left ?? NoRangeChild,
-            Right = right ?? NoRangeChild,
-            MaximumEnd = maximumEnd
-        };
-        return checked((ulong)nodeIndex);
-    }
-
-    static void WriteRangeNodeFrame(Stream stream, TransactionSpillRangeNode node)
-    {
-        using var payload = new MemoryStream();
-        DiskFormat.WriteUInt64(payload, node.Ordinal);
-        DiskFormat.WriteUInt64(payload, node.Left);
-        DiskFormat.WriteUInt64(payload, node.Right);
-        WriteLength(payload, node.Start.Length);
-        payload.Write(node.Start);
-        WriteLength(payload, node.End.Length);
-        payload.Write(node.End);
-        WriteLength(payload, node.MaximumEnd.Length);
-        payload.Write(node.MaximumEnd);
-        WriteFrame(stream, payload.GetBuffer().AsSpan(0, checked((int)payload.Length)));
-    }
-
-    static void WriteFrame(Stream stream, ReadOnlySpan<byte> payload)
+    internal static void WriteFrame(Stream stream, ReadOnlySpan<byte> payload)
     {
         if (payload.Length > DiskFormat.WalMaximumRecordBytes)
         {
@@ -1606,7 +1111,7 @@ sealed class TransactionSpillStore : IDisposable
         stream.Write(payload);
     }
 
-    static byte[] ReadFrame(Stream stream)
+    internal static byte[] ReadFrame(Stream stream)
     {
         Span<byte> header = stackalloc byte[8];
         ReadExactly(stream, header, "Transaction spill frame header is truncated.");
@@ -1627,7 +1132,7 @@ sealed class TransactionSpillStore : IDisposable
         return payload;
     }
 
-    static byte[] ReadField(ReadOnlySpan<byte> payload, ref int cursor)
+    internal static byte[] ReadField(ReadOnlySpan<byte> payload, ref int cursor)
     {
         if (cursor > payload.Length - sizeof(uint))
         {
@@ -1660,7 +1165,7 @@ sealed class TransactionSpillStore : IDisposable
         return length;
     }
 
-    static void ReadExactly(Stream stream, Span<byte> destination, string message)
+    internal static void ReadExactly(Stream stream, Span<byte> destination, string message)
     {
         if (!DiskFormat.ReadExactly(stream, destination))
         {
@@ -1668,7 +1173,7 @@ sealed class TransactionSpillStore : IDisposable
         }
     }
 
-    static void WriteLength(Stream stream, int length) =>
+    internal static void WriteLength(Stream stream, int length) =>
         DiskFormat.WriteUInt32(stream, checked((uint)length));
 
     static void DeleteIfPresent(string path)

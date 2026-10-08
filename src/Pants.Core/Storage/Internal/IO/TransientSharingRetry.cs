@@ -20,7 +20,7 @@ static class TransientSharingRetry
     static readonly TimeSpan MaximumDelay = TimeSpan.FromMilliseconds(100);
 
     public static void Move(string source, string destination, bool overwrite) =>
-        Run(() => File.Move(source, destination, overwrite));
+        Run(() => ReplacingFileMove.Move(source, destination, overwrite));
 
     public static void Delete(string path) => Run(() => File.Delete(path));
 

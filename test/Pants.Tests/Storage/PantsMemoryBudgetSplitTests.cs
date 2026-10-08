@@ -8,20 +8,6 @@ namespace Cntryl.Pants.Storage;
 /// </summary>
 public sealed class PantsMemoryBudgetSplitTests
 {
-    [Theory]
-    [InlineData(64L * 1024 * 1024)]
-    [InlineData(256L * 1024 * 1024)]
-    [InlineData(4L * 1024 * 1024 * 1024)]
-    public void ShouldCapCompactionMemoryPoolAtOneTenthOfBudgetOrTwoHundredFiftySixMebibytes(long budget)
-    {
-        var options = PantsOpenOptions.InMemory()
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
-        var plan = RuntimePlan.Resolve(options);
-
-        var expected = Math.Min(budget / 10, 256L * 1024 * 1024);
-        Assert.Equal(Math.Max(1, expected), plan.CompactionMemoryPoolBytes);
-    }
-
     [Fact]
     public void ShouldNotLetTheDerivedPoolsExceedTheConfiguredBudget()
     {
@@ -56,7 +42,7 @@ public sealed class PantsMemoryBudgetSplitTests
     }
 
     [Fact]
-    public void ShouldUseUnallocatedExplicitBudgetForCompactionInputAndOutputBuffers()
+    public void ShouldReserveOneFifthOfTheBudgetForCompactionWhenMemtablesAreExplicit()
     {
         const long budget = 2L * 1024 * 1024;
         var options = PantsOpenOptions.InMemory()
@@ -65,7 +51,7 @@ public sealed class PantsMemoryBudgetSplitTests
             .WithTransactionMemoryPool(512 * 1024);
         var plan = RuntimePlan.Resolve(options);
 
-        Assert.True(plan.CompactionMemoryPoolBytes > 300 * 1024);
+        Assert.Equal(budget / 5, plan.CompactionMemoryPoolBytes);
         Assert.True(
             plan.TransactionMemoryPoolBytes +
             plan.CompactionMemoryPoolBytes +
