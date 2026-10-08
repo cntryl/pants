@@ -972,7 +972,7 @@ sealed class LocalDiskStore :
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
-                var cacheKey = new SstBlockCacheKey(candidate.Name, blockIndex);
+                var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(candidate), blockIndex);
                 var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
                 if (isCandidateBlock)
                 {
@@ -980,7 +980,7 @@ sealed class LocalDiskStore :
                 }
 
                 var blockContent = await ReadPointBlockAsync(
-                        candidate.Name,
+                        candidate,
                         reader,
                         blockIndex,
                         cancellationToken)
@@ -1317,7 +1317,10 @@ sealed class LocalDiskStore :
         foreach (var candidate in candidatesNewestFirst)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out var readerCacheHit);
+            using var readerLease = _readerCache.GetOrAdd(
+                SstFileIdentity.Of(candidate),
+                path,
+                out var readerCacheHit);
             var reader = readerLease.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
@@ -1352,7 +1355,7 @@ sealed class LocalDiskStore :
                  blockIndex++)
             {
                 var blockContent = ReadPointBlock(
-                    candidate.Name,
+                    candidate,
                     reader,
                     blockIndex,
                     out var cacheHit);
@@ -1402,7 +1405,7 @@ sealed class LocalDiskStore :
         foreach (var candidate in available)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             foreach (var tombstone in readerLease.Reader.RangeTombstones)
             {
                 if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
@@ -1442,7 +1445,7 @@ sealed class LocalDiskStore :
             }
 
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             var reader = readerLease.Reader;
             if (reader.RangeTombstones.Any(tombstone =>
                     tombstone.Sequence > afterSequence &&
@@ -1468,9 +1471,9 @@ sealed class LocalDiskStore :
         return false;
     }
 
-    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex, out bool cacheHit)
+    byte[] ReadPointBlock(FileMeta file, SstReader reader, int blockIndex, out bool cacheHit)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
             cacheHit = true;
@@ -1484,12 +1487,12 @@ sealed class LocalDiskStore :
     }
 
     async ValueTask<byte[]> ReadPointBlockAsync(
-        string fileName,
+        FileMeta file,
         AsyncSstReader reader,
         int blockIndex,
         CancellationToken cancellationToken)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
             return cachedBlock.Content.ToArray();
@@ -1524,7 +1527,7 @@ sealed class LocalDiskStore :
             foreach (var candidate in candidates)
             {
                 var path = Path.Combine(_sstDirectory, candidate.Name);
-                var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+                var lease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
                 sources.Add(new SstScanSource(
                     lease,
                     SstBlockIterator.Create(
