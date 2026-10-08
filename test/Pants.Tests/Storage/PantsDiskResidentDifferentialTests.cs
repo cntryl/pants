@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
@@ -48,22 +47,13 @@ public sealed class PantsDiskResidentDifferentialTests
     public async Task ShouldMatchTheModelAfterAbruptWalRecovery(bool simulatedCloud)
     {
         using var directory = new TemporaryDirectory();
-        using var child = StartCrashChild(directory.Path, simulatedCloud);
-        try
+        using (var child = await StartReadyCrashChildAsync(directory.Path, simulatedCloud))
         {
-            await WaitForCrashChildAsync(child, directory.Path);
-        }
-        finally
-        {
-            if (!child.HasExited)
-            {
-                child.Kill(true);
-            }
-
-            await child.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
+            child.TryKillProcessTree();
+            await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
+            Assert.NotEqual(0, child.ExitCode);
         }
 
-        Assert.NotEqual(0, child.ExitCode);
         if (simulatedCloud)
         {
             RemoveLocalCache(directory.Path);
@@ -282,44 +272,20 @@ public sealed class PantsDiskResidentDifferentialTests
             [Key(7)] = new ModelValue("epsilon", null)
         };
 
-    static Process StartCrashChild(string path, bool simulatedCloud)
+    static Task<CrashChildProcess> StartReadyCrashChildAsync(string path, bool simulatedCloud)
     {
-        var start = new ProcessStartInfo
-        {
-            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                       Environment.ProcessPath ??
-                       "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        start.ArgumentList.Add("vstest");
-        start.ArgumentList.Add(typeof(PantsDiskResidentDifferentialTests).Assembly.Location);
-        start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
-        start.ArgumentList.Add(
-            $"--Tests:{typeof(PantsDiskResidentDifferentialTests).FullName}." +
+        var start = CrashChildProcess.CreateStartInfo(
+            typeof(PantsDiskResidentDifferentialTests),
             nameof(ShouldAbortAfterWritingDifferentialWalChildScenario));
         start.Environment[CrashDatabasePathEnvironmentVariable] = path;
         start.Environment[CrashStorageEnvironmentVariable] = simulatedCloud
             ? "simulated-cloud"
             : "local";
-        return Process.Start(start) ?? throw new XunitException(
-            "Could not start the differential crash child.");
-    }
-
-    static async Task WaitForCrashChildAsync(Process child, string path)
-    {
-        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
-        var readyPath = Path.Combine(path, CrashReadyFileName);
-        while (!File.Exists(readyPath))
-        {
-            if (child.HasExited)
-            {
-                throw new XunitException(
-                    $"Differential crash child exited with {child.ExitCode} before readiness.");
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
-        }
+        return CrashChildProcess.StartAndWaitForReadinessAsync(
+            start,
+            "differential crash child",
+            path,
+            Path.Combine(path, CrashReadyFileName));
     }
 
     static async Task ExpireCrashedLeaseAsync(string path)

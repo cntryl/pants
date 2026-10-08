@@ -1,7 +1,5 @@
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
@@ -77,22 +75,20 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldRecoverEveryAcceptedCommitWhenProcessAbortsAfterCoalescedWalSync()
     {
         using var directory = new TemporaryDirectory();
-        var childRun = StartCrashChild(directory.Path);
-        using var child = childRun.Child;
+        using var child = await StartCrashChildAsync(directory.Path);
         try
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-            await WaitForCrashChildExitAsync(child);
+            await WaitForCrashChildExitAsync(child.Process);
         }
         finally
         {
-            TryKillProcessTree(child);
+            child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
 
-        var standardOutput = await childRun.StandardOutput;
-        var standardError = await childRun.StandardError;
-        ValidateChildCrash(child, directory.Path, standardOutput, standardError);
+        var standardOutput = await child.StandardOutput;
+        var standardError = await child.StandardError;
+        ValidateChildCrash(child.Process, directory.Path, standardOutput, standardError);
         await ExpireCrashedProcessLeaseAsync(directory.Path);
 
         await using var reopened = await PantsDatabase.OpenAsync(
@@ -232,21 +228,19 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldNotRecoverFencedSuffixGivenCoalescedRollbackUncertainty()
     {
         using var directory = new TemporaryDirectory();
-        var childRun = StartRollbackFailureChild(directory.Path);
-        using var child = childRun.Child;
+        using var child = await StartRollbackFailureChildAsync(directory.Path);
         try
         {
-            await WaitForChildReadinessAsync(child, directory.Path);
-            await WaitForCrashChildExitAsync(child);
+            await WaitForCrashChildExitAsync(child.Process);
         }
         finally
         {
-            TryKillProcessTree(child);
+            child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
 
-        var standardOutput = await childRun.StandardOutput;
-        var standardError = await childRun.StandardError;
+        var standardOutput = await child.StandardOutput;
+        var standardError = await child.StandardError;
         Assert.NotEqual(0, child.ExitCode);
         var sentinelPath = Path.Combine(directory.Path, RollbackFailureSentinelFileName);
         Assert.True(
@@ -271,20 +265,19 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldNotRecoverFencedSuffixGivenSingleRollbackUncertainty()
     {
         using var directory = new TemporaryDirectory();
-        var childRun = StartSingleRollbackFailureChild(directory.Path);
-        using var child = childRun.Child;
+        using var child = StartSingleRollbackFailureChild(directory.Path);
         try
         {
-            await WaitForCrashChildExitAsync(child);
+            await WaitForCrashChildExitAsync(child.Process);
         }
         finally
         {
-            TryKillProcessTree(child);
+            child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
 
-        var standardOutput = await childRun.StandardOutput;
-        var standardError = await childRun.StandardError;
+        var standardOutput = await child.StandardOutput;
+        var standardError = await child.StandardError;
         Assert.NotEqual(0, child.ExitCode);
         var sentinelPath = Path.Combine(directory.Path, SingleRollbackFailureSentinelFileName);
         Assert.True(
@@ -305,86 +298,50 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         Assert.Null(await reader.GetAsync("fenced-single-suffix"u8.ToArray()));
     }
 
-    static (Process Child, Task<string> StandardOutput, Task<string> StandardError) StartCrashChild(
-        string databasePath) =>
-        StartCrashChild(
+    static Task<CrashChildProcess> StartCrashChildAsync(string databasePath) =>
+        StartReadyCrashChildAsync(
             databasePath,
             nameof(ShouldAbortInChildProcessAfterCoalescedWalDurabilityBoundary),
             AfterSharedSyncScenario,
             "coalesced-commit crash child");
 
-    static (Process Child, Task<string> StandardOutput, Task<string> StandardError)
-        StartRollbackFailureChild(string databasePath) =>
-        StartCrashChild(
+    static Task<CrashChildProcess> StartRollbackFailureChildAsync(string databasePath) =>
+        StartReadyCrashChildAsync(
             databasePath,
             nameof(ShouldFenceWalSuffixAndLayoutInChildProcessWhenGroupRollbackFails),
             RollbackFailureScenario,
             "coalesced-rollback-failure child");
 
-    static (Process Child, Task<string> StandardOutput, Task<string> StandardError)
-        StartSingleRollbackFailureChild(string databasePath) =>
-        StartCrashChild(
-            databasePath,
-            nameof(ShouldFenceWalSuffixInChildProcessWhenSingleRollbackFails),
-            SingleRollbackFailureScenario,
+    static CrashChildProcess StartSingleRollbackFailureChild(string databasePath) =>
+        CrashChildProcess.Start(
+            CreateChildStartInfo(
+                databasePath,
+                nameof(ShouldFenceWalSuffixInChildProcessWhenSingleRollbackFails),
+                SingleRollbackFailureScenario),
             "single-rollback-failure child");
 
-    static (Process Child, Task<string> StandardOutput, Task<string> StandardError) StartCrashChild(
+    static Task<CrashChildProcess> StartReadyCrashChildAsync(
         string databasePath,
         string childTestName,
         string scenario,
-        string childDescription)
+        string childDescription) =>
+        CrashChildProcess.StartAndWaitForReadinessAsync(
+            CreateChildStartInfo(databasePath, childTestName, scenario),
+            childDescription,
+            databasePath,
+            Path.Combine(databasePath, ReadyFileName));
+
+    static ProcessStartInfo CreateChildStartInfo(
+        string databasePath,
+        string childTestName,
+        string scenario)
     {
-        var start = new ProcessStartInfo
-        {
-            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                       Environment.ProcessPath ??
-                       "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        start.ArgumentList.Add("vstest");
-        start.ArgumentList.Add(typeof(PantsCommitCoalescingCrashRecoveryTests).Assembly.Location);
-        start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
-        start.ArgumentList.Add(
-            $"--Tests:{typeof(PantsCommitCoalescingCrashRecoveryTests).FullName}." +
+        var start = CrashChildProcess.CreateStartInfo(
+            typeof(PantsCommitCoalescingCrashRecoveryTests),
             childTestName);
         start.Environment[ChildScenarioEnvironmentVariable] = scenario;
         start.Environment[DatabasePathEnvironmentVariable] = databasePath;
-        var child = Process.Start(start) ??
-                    throw new InvalidOperationException($"Could not start the {childDescription}.");
-        return (
-            child,
-            child.StandardOutput.ReadToEndAsync(),
-            child.StandardError.ReadToEndAsync());
-    }
-
-    static async Task WaitForChildReadinessAsync(Process child, string databasePath)
-    {
-        var readyPath = Path.Combine(databasePath, ReadyFileName);
-        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
-        try
-        {
-            while (!File.Exists(readyPath))
-            {
-                if (child.HasExited)
-                {
-                    throw new XunitException(
-                        $"Coalesced-commit crash child exited with code {child.ExitCode} " +
-                        "before readiness.");
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
-            }
-        }
-        catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
-        {
-            throw new XunitException(
-                "Coalesced-commit crash child did not become ready within the test timeout.",
-                exception);
-        }
+        return start;
     }
 
     static async Task WaitForCrashChildExitAsync(Process child)
@@ -506,29 +463,6 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             FileOptions.WriteThrough);
         stream.Write(bytes);
         stream.Flush(true);
-    }
-
-    static void TryKillProcessTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(true);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // The process exited after HasExited was observed.
-        }
-        catch (Win32Exception)
-        {
-            // Lock-release validation below remains the primary failure.
-        }
-        catch (NotSupportedException)
-        {
-            // Lock-release validation below remains the primary failure.
-        }
     }
 
     static byte[] GetKey(int index) => TestBytes.FromString($"coalesced-key-{index:D2}");
