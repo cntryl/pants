@@ -337,7 +337,10 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         }
 
         Assert.True(updated, "The crashed process lease must contain an acquisition timestamp.");
-        await File.WriteAllLinesAsync(leasePath, lines);
+        // The edit invalidates the record checksum, so the expired copy carries none.
+        await File.WriteAllLinesAsync(
+            leasePath,
+            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(databasePath, ".midge_leader.lock");
         if (File.Exists(acquisitionLockPath))
         {
