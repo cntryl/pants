@@ -99,12 +99,26 @@ static class CloudHttpResponseReader
         }
         catch (EndOfStreamException exception)
         {
-            throw new PantsIOException("Cloud ranged GET returned a truncated body.", exception);
+            throw new CloudBodyReadException("Cloud ranged GET returned a truncated body.", exception);
+        }
+        catch (IOException exception)
+        {
+            throw new CloudBodyReadException("Cloud ranged GET body was reset.", exception);
         }
 
         // Confirm EOF without draining or retaining an oversized response. This read remains
         // inside the same operation deadline as the headers and requested bytes.
-        if (await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0)
+        int trailing;
+        try
+        {
+            trailing = await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException exception)
+        {
+            throw new CloudBodyReadException("Cloud ranged GET body was reset.", exception);
+        }
+
+        if (trailing != 0)
         {
             throw InvalidLength();
         }
