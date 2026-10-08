@@ -157,6 +157,60 @@ public sealed class PantsLeveledCompactionTests
         Assert.Equal(10, entries.Count);
     }
 
+    [Fact]
+    public async Task ShouldReadEveryKeyAfterCompactionSplitsOutputsAcrossARangeTombstone()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithCompaction(new PantsCompactionConfiguration(
+                L0FileCountTrigger: 2,
+                TargetSstSizeBytes: 80,
+                BackgroundEnabled: false));
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await using (var first = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            for (var index = 0; index < 8; index++)
+            {
+                first.Put(
+                    TestBytes.FromString($"key-{index}"),
+                    TestBytes.FromString(new string('v', 40)));
+            }
+
+            await first.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await using (var second = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            second.DeleteRange(TestBytes.FromString("key-2"), TestBytes.FromString("key-5"));
+            second.Put("key-9"u8.ToArray(), TestBytes.FromString(new string('w', 40)));
+            await second.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await database.Maintenance.CompactAllAsync();
+
+        var level = Assert.Single(
+            (await database.Diagnostics.GetStorageLayoutAsync()).Levels,
+            static candidate => candidate.Level == 1);
+        Assert.True(level.FileCount > 1);
+        await using var read = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        for (var index = 0; index < 8; index++)
+        {
+            var value = await read.GetAsync(TestBytes.FromString($"key-{index}"));
+            Assert.Equal(index is >= 2 and < 5, value is null);
+        }
+
+        Assert.NotNull(await read.GetAsync("key-9"u8.ToArray()));
+    }
+
     static async ValueTask PutAndFlushAsync(IPantsDatabase database, int index)
     {
         await using var transaction = await database.Transactions.BeginAsync(
