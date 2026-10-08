@@ -194,6 +194,108 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
+    public async Task ShouldWriteChecksumMidgeVerifiesAndSurviveRenewalAndRelease()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using (var lease = FileLease.Acquire(
+                   directory.Path,
+                   0,
+                   TimeSpan.Zero,
+                   null,
+                   LongHeartbeatInterval,
+                   clock,
+                   TimeSpan.FromSeconds(60)))
+        {
+            Assert.True(lease.RenewForTesting());
+            AssertChecksumVerifies(await File.ReadAllTextAsync(Path.Combine(directory.Path, ".midge_leader")));
+        }
+
+        // Release rewrites the record; it must still carry a valid checksum.
+        AssertChecksumVerifies(await File.ReadAllTextAsync(Path.Combine(directory.Path, ".midge_leader")));
+    }
+
+    [Fact]
+    public async Task ShouldAcceptRecordWithoutChecksumForBackwardCompatibility()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteLeaseRecordAsync(directory.Path, 5, "previous-writer", DateTimeOffset.UnixEpoch);
+
+        using var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1)),
+            TimeSpan.FromSeconds(60));
+
+        Assert.Equal(6UL, lease.Epoch);
+    }
+
+    [Theory]
+    [InlineData("checksum: not-a-number")]
+    [InlineData("checksum: 12345")]
+    public async Task ShouldTreatPresentButWrongChecksumAsIndeterminate(string checksumLine)
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: 5\nholder_id: previous-writer\nacquired_at: {DateTimeOffset.UnixEpoch:O}\n{checksumLine}\n");
+
+        Assert.Throws<PantsLeaseIndeterminateException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1)),
+            TimeSpan.FromSeconds(60)));
+    }
+
+    [Fact]
+    public async Task ShouldRejectBitFlippedEpochInChecksummedRecord()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using (FileLease.Acquire(
+                   directory.Path,
+                   0,
+                   TimeSpan.Zero,
+                   null,
+                   LongHeartbeatInterval,
+                   clock,
+                   TimeSpan.FromSeconds(60)))
+        {
+        }
+
+        var path = Path.Combine(directory.Path, ".midge_leader");
+        var text = await File.ReadAllTextAsync(path);
+        await File.WriteAllTextAsync(path, text.Replace("epoch: 1\n", "epoch: 3\n", StringComparison.Ordinal));
+        clock.UtcNow += TimeSpan.FromDays(1);
+
+        Assert.Throws<PantsLeaseIndeterminateException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60)));
+    }
+
+    static void AssertChecksumVerifies(string content)
+    {
+        var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(4, lines.Length);
+        var body = string.Join('\n', lines.Take(3)) + "\n";
+        var expected = uint.Parse(
+            lines[3]["checksum: ".Length..],
+            CultureInfo.InvariantCulture);
+        Assert.Equal(DiskFormat.Crc32C(System.Text.Encoding.UTF8.GetBytes(body)), expected);
+    }
+
+    [Fact]
     public async Task LocalOpenDefaultMinimumEpochLeavesBehaviorUnchanged()
     {
         using var directory = new TemporaryDirectory();
