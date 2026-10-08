@@ -153,13 +153,13 @@ sealed class FileLease : IDisposable
         var time = timeProvider ?? TimeProvider.System;
         var acquireStarted = time.GetTimestamp();
         var effectiveTimeToLive = leaseTimeToLive ?? TimeSpan.FromSeconds(30);
-        if (effectiveTimeToLive < TimeSpan.FromMilliseconds(3) ||
+        if (effectiveTimeToLive <= TimeSpan.Zero ||
             clockSkewTolerance < TimeSpan.Zero ||
-            clockSkewTolerance >= effectiveTimeToLive)
+            clockSkewTolerance > effectiveTimeToLive)
         {
             throw PantsException.InvalidArgument(
-                "The file lease requires a TTL of at least three milliseconds and " +
-                "non-negative clock skew shorter than that TTL.");
+                "The file lease requires a positive TTL and non-negative clock skew " +
+                "that does not exceed that TTL.");
         }
 
         var effectiveClock = clock ?? SystemPantsClock.Instance;

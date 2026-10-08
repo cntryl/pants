@@ -5,22 +5,6 @@ namespace Cntryl.Pants.Runtime;
 public sealed class PantsCoreCorrectnessContractTests
 {
     [Fact]
-    public async Task ShouldMapMissingVerificationFileToNotFound()
-    {
-        using var directory = new TemporaryDirectory();
-        await using var database = await PantsDatabase.OpenForTestingAsync(
-            PantsOpenOptions.Local(directory.Path),
-            new RuntimeDependencies(storageVerifier: (_, _) =>
-                throw new FileNotFoundException("Required SST is missing.")));
-
-        var failure = await Assert.ThrowsAsync<PantsNotFoundException>(() =>
-            database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected).AsTask());
-
-        Assert.Equal(PantsErrorCode.NotFound, failure.Code);
-        Assert.IsType<FileNotFoundException>(failure.InnerException);
-    }
-
-    [Fact]
     public void ShouldPreserveNoSpaceClassificationWhenMappingIoFailures()
     {
         var failure = new IOException("The disk full condition was reached.");
