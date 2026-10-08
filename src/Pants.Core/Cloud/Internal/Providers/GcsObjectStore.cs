@@ -9,7 +9,7 @@ namespace Cntryl.Pants.Cloud.Internal.Providers;
 
 sealed class GcsObjectStore : CloudObjectStore
 {
-    const int MaximumAttempts = 3;
+    const int MaximumAttempts = CloudRetryPolicy.MaximumAttempts;
     readonly PantsGcsProvider _configuration;
     readonly GcsCredential _credential;
     readonly Uri _endpoint;
@@ -247,7 +247,7 @@ sealed class GcsObjectStore : CloudObjectStore
                 }
 
                 if (!retryTransientFailures ||
-                    !IsRetryable(response.StatusCode) ||
+                    !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
                     attempt >= MaximumAttempts)
                 {
                     return response;
@@ -279,8 +279,21 @@ sealed class GcsObjectStore : CloudObjectStore
             catch (HttpRequestException)
             {
             }
+            catch (CloudBodyReadException) when (retryTransientFailures && attempt < MaximumAttempts)
+            {
+            }
+            catch (CloudBodyReadException exception)
+            {
+                throw new PantsIOException(
+                    "GCS response body failed after bounded retries.",
+                    exception);
+            }
 
-            await Task.Yield();
+            await CloudRetryPolicy.DelayAsync(
+                attempt,
+                "GCS",
+                linked.Token,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

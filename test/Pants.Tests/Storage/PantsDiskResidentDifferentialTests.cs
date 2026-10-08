@@ -334,7 +334,10 @@ public sealed class PantsDiskResidentDifferentialTests
             }
         }
 
-        await File.WriteAllLinesAsync(leasePath, lines);
+        // The edit invalidates the record checksum, so the expired copy carries none.
+        await File.WriteAllLinesAsync(
+            leasePath,
+            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         File.Delete(Path.Combine(path, ".midge_leader.lock"));
     }
 

@@ -142,6 +142,13 @@ sealed class CloudLeaseCoordinator : IDisposable
             }
             else
             {
+                if (current.Lease.ExpiryMalformed)
+                {
+                    throw new PantsLeaseIndeterminateException(
+                        $"Cloud primary lease expiry is invalid; ownership is ambiguous " +
+                        $"(holder: {current.Lease.HolderId}, epoch: {current.Lease.Epoch}).");
+                }
+
                 if (now <= AddSaturating(current.Lease.ExpiresAtUtc, _clockSkewTolerance))
                 {
                     throw new PantsLeaseHeldException(
@@ -203,7 +210,7 @@ sealed class CloudLeaseCoordinator : IDisposable
 
             var renewedAt = _timeProvider.GetTimestamp();
             var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
-            var proposed = current.Lease with { ExpiresAtUtc = expiresAt };
+            var proposed = current.Lease with { ExpiresAtUtc = expiresAt, ExpiryMalformed = false };
             EnsureValid();
             CloudLeaseSnapshot? confirmed = null;
             try
@@ -252,6 +259,25 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Re-reads the stored lease and confirms this process still owns it, so a successor that
+    ///     took the lease object before the local deadline passed is caught at a publication
+    ///     boundary instead of up to a renewal interval later. Losing the lease fires the loss
+    ///     callback once.
+    /// </summary>
+    public async ValueTask ValidateRemoteAsync(CancellationToken cancellationToken)
+    {
+        EnsureValid();
+        var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
+        EnsureValid();
+        if (current is null || !Owns(current.Lease, Epoch))
+        {
+            LoseLease();
+            throw new PantsFencedException(
+                "The cloud primary lease is owned by another writer or no longer exists.");
+        }
+    }
+
     public void EnsureValid()
     {
         if (!IsHealthy)
@@ -285,7 +311,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                 current.Version,
                 current.Lease with
                 {
-                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1),
+                    ExpiryMalformed = false
                 },
                 cancellationToken).ConfigureAwait(false);
             if (released)
@@ -387,7 +414,8 @@ sealed class CloudLeaseCoordinator : IDisposable
                 current.Version,
                 current.Lease with
                 {
-                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1)
+                    ExpiresAtUtc = ObserveMonotonicUtcNow() - _clockSkewTolerance - TimeSpan.FromTicks(1),
+                    ExpiryMalformed = false
                 },
                 cancellationToken).ConfigureAwait(false);
         }

@@ -51,6 +51,41 @@ public sealed class PantsCloudCompactionFailureTests
     }
 
     [Fact]
+    public async Task ShouldRollBackProvenUnpublishedCompactionOrphanUnderStrictWhenItsLocalCopyIsCorrupt()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new CloudCompactionFailpointHandler();
+        var options = CreateOptions(directory.Path);
+        var initialRemoteCount = 0;
+        string orphanLocalPath;
+        await using (var database = await OpenAsync(options, failpoints))
+        {
+            await SeedCompactionInputsAsync(database, database.ColumnFamilies.DefaultFamily, "corrupt-orphan");
+            initialRemoteCount = RemoteSsts(directory.Path).Length;
+            var initialLocalNames = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst")
+                .Select(Path.GetFileName)
+                .ToHashSet(StringComparer.Ordinal);
+            failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
+
+            await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
+
+            orphanLocalPath = Assert.Single(
+                Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"),
+                path => !initialLocalNames.Contains(Path.GetFileName(path)));
+        }
+
+        var bytes = await File.ReadAllBytesAsync(orphanLocalPath);
+        bytes[bytes.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(orphanLocalPath, bytes);
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+
+        Assert.Equal(initialRemoteCount, RemoteSsts(directory.Path).Length);
+        Assert.False(File.Exists(orphanLocalPath));
+        await AssertSeedValuesAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "corrupt-orphan");
+    }
+
+    [Fact]
     public async Task ShouldRemoveRemoteCompactionOrphanWhenColumnFamilyIsDroppedBeforeReopen()
     {
         using var directory = new TemporaryDirectory();
