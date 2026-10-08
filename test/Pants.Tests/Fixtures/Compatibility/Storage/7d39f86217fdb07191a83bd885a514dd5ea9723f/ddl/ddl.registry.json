@@ -1,0 +1,1 @@
+{"epoch":1,"column_families":[{"id":1,"name":"fixture","created_at":1791490319110,"reclaimed":false}],"operations":[{"op_id":"18a2f4db-5262-4393-b065-05da242bf58f","edit":{"CreateColumnFamily":{"id":1,"name":"fixture","created_at":1791490319110}}}]}
