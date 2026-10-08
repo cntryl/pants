@@ -296,6 +296,145 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
+    public async Task ShouldLetSuccessorTakeOverImmediatelyAfterTheLeaseFencesItselfWithoutDisposal()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        var released = 0;
+        using var fenced = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+        fenced.FencedRelease = () => Interlocked.Increment(ref released);
+        Assert.Throws<PantsLeaseHeldException>(() => FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60)));
+        fenced.RenewWriteInterferenceHookForTesting = () => throw new IOException("injected");
+
+        Assert.False(fenced.RenewForTesting());
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        FileLease? successor = null;
+        while (successor is null)
+        {
+            try
+            {
+                successor = FileLease.Acquire(
+                    directory.Path,
+                    0,
+                    TimeSpan.Zero,
+                    null,
+                    LongHeartbeatInterval,
+                    clock,
+                    TimeSpan.FromSeconds(60));
+            }
+            catch (Exception exception) when (
+                exception is PantsLeaseHeldException or PantsLeaseUnavailableException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+        }
+
+        using (successor)
+        {
+            Assert.Equal(fenced.Epoch + 1, successor.Epoch);
+        }
+
+        while (Volatile.Read(ref released) == 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+        }
+
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseSameHostLockWhenTheEngineFencesItselfSoASuccessorCanOpen()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        await using var fenced = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(leaseHeartbeatInterval: TimeSpan.FromMilliseconds(50)));
+        var epoch = await ReadLeaseEpochAsync(directory.Path);
+        // Another writer superseded this one and has since expired, so only the same-host LOCK
+        // handle could still keep a successor out.
+        await WriteLeaseRecordAsync(
+            directory.Path,
+            epoch + 1,
+            "superseding-writer",
+            DateTimeOffset.UnixEpoch);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while ((await fenced.Diagnostics.GetRuntimeMetricsAsync()).Health != PantsEngineHealth.Degraded &&
+               !await Task.Run(() => IsFenced(fenced), timeout.Token))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+        }
+
+        // The successor must get past the lease and LOCK. On Windows the undisposed instance
+        // still holds the WAL file open, so reaching that file (a storage error) is also proof
+        // the LOCK handle is gone; being refused as lease-held is the failure.
+        IPantsDatabase? successor = null;
+        while (true)
+        {
+            try
+            {
+                successor = await PantsDatabase.OpenAsync(options);
+                break;
+            }
+            catch (Exception exception) when (
+                exception is PantsLeaseHeldException or PantsLeaseUnavailableException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+            catch (PantsIOException) when (OperatingSystem.IsWindows())
+            {
+                return;
+            }
+        }
+
+        await using (successor)
+        {
+            Assert.True(await ReadLeaseEpochAsync(directory.Path) > epoch + 1);
+        }
+    }
+
+    static bool IsFenced(IPantsDatabase database) => !database.PersistentStorage!.IsPrimaryLeaseHealthy;
+
+    [Fact]
+    public async Task ShouldNotOverwriteARecordAnotherWriterOwnsWhenFencing()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch + TimeSpan.FromDays(1));
+        using var fenced = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+        var path = Path.Combine(directory.Path, ".midge_leader");
+        var foreign = $"epoch: 9\nholder_id: someone-else\nacquired_at: {clock.UtcNow:O}\n";
+        File.WriteAllText(path, foreign);
+
+        Assert.False(fenced.RenewForTesting());
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(foreign, await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
     public async Task LocalOpenDefaultMinimumEpochLeavesBehaviorUnchanged()
     {
         using var directory = new TemporaryDirectory();
