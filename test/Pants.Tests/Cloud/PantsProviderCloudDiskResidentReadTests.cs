@@ -166,7 +166,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         // unwinding. This query is ordered behind that command and establishes the cleanup boundary.
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp", SearchOption.AllDirectories));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(directory.Path, path)));
         Assert.Equal(0, metrics.CompactionBufferUsedBytes);
         Assert.True(metrics.CompactionBufferPeakBytes <= metrics.CompactionBufferCapacityBytes);
     }
