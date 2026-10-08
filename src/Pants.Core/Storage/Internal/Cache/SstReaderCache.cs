@@ -7,7 +7,7 @@ sealed class SstReaderCache : IDisposable
     readonly LinkedList<ReaderEntry> _idleOrder = [];
     readonly Func<string, SstReader> _openReader;
     readonly HashSet<ReaderEntry> _retiredReaders = [];
-    readonly Dictionary<string, ReaderSlot> _slots = new(StringComparer.Ordinal);
+    readonly Dictionary<SstFileIdentity, ReaderSlot> _slots = [];
     bool _disposeCompleted;
 
     int _disposed;
@@ -80,16 +80,21 @@ sealed class SstReaderCache : IDisposable
         }
     }
 
-    public SstReaderLease GetOrAdd(string fileName, string path, out bool cacheHit)
+    /// <summary>
+    ///     Leases the cached reader for <paramref name="file" />, opening it from
+    ///     <paramref name="path" /> on a miss. Readers are keyed by manifest identity, so a name
+    ///     reused for a different manifest entry opens its own reader instead of sharing the old one.
+    /// </summary>
+    public SstReaderLease GetOrAdd(SstFileIdentity file, string path, out bool cacheHit)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(file.Name);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ReaderSlot slot;
         int generation;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
-            slot = GetOrCreateSlot(fileName);
+            slot = GetOrCreateSlot(file);
             while (true)
             {
                 if (slot.Reader is { } cached)
@@ -107,7 +112,7 @@ sealed class SstReaderCache : IDisposable
                 // take over if that open fails.
                 Monitor.Wait(_gate);
                 ObjectDisposedException.ThrowIf(_disposed != 0, this);
-                slot = GetOrCreateSlot(fileName);
+                slot = GetOrCreateSlot(file);
             }
 
             generation = slot.Generation;
@@ -123,7 +128,7 @@ sealed class SstReaderCache : IDisposable
         }
         catch
         {
-            CompleteOpening(fileName, slot);
+            CompleteOpening(file, slot);
             throw;
         }
 
@@ -139,9 +144,9 @@ sealed class SstReaderCache : IDisposable
             if (slot.Generation != generation)
             {
                 created.Dispose();
-                RemoveUnusedSlot(fileName, slot);
+                RemoveUnusedSlot(file, slot);
                 throw new FileNotFoundException(
-                    $"SST reader '{fileName}' was removed while it was opening.",
+                    $"SST reader '{file.Name}' was removed while it was opening.",
                     path);
             }
 
@@ -152,7 +157,7 @@ sealed class SstReaderCache : IDisposable
                 return Acquire(winner);
             }
 
-            var added = new ReaderEntry(fileName, created) { References = 1 };
+            var added = new ReaderEntry(file, created) { References = 1 };
             slot.Reader = added;
             _cachedBytes = checked(_cachedBytes + added.Bytes);
             added.Node = _idleOrder.AddLast(added);
@@ -162,24 +167,29 @@ sealed class SstReaderCache : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Drops every cached reader published under <paramref name="fileName" />, whatever its
+    ///     manifest identity. Leased readers stay valid until their holders release them.
+    /// </summary>
     public void RemoveFile(string fileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         lock (_gate)
         {
-            if (!_slots.TryGetValue(fileName, out var slot))
+            var matches = _slots
+                .Where(pair => StringComparer.Ordinal.Equals(pair.Key.Name, fileName))
+                .ToArray();
+            foreach (var (file, slot) in matches)
             {
-                return;
-            }
+                slot.Generation = checked(slot.Generation + 1);
+                if (slot.Reader is { } entry)
+                {
+                    slot.Reader = null;
+                    Retire(entry);
+                }
 
-            slot.Generation = checked(slot.Generation + 1);
-            if (slot.Reader is { } entry)
-            {
-                slot.Reader = null;
-                Retire(entry);
+                RemoveUnusedSlot(file, slot);
             }
-
-            RemoveUnusedSlot(fileName, slot);
         }
     }
 
@@ -189,7 +199,7 @@ sealed class SstReaderCache : IDisposable
         {
             return _slots
                 .Where(static pair => pair.Value.Reader is not null)
-                .Select(static pair => pair.Key)
+                .Select(static pair => pair.Key.Name)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
         }
@@ -207,12 +217,12 @@ sealed class SstReaderCache : IDisposable
         return new SstReaderLease(entry.Reader, () => Release(entry));
     }
 
-    void CompleteOpening(string fileName, ReaderSlot slot)
+    void CompleteOpening(SstFileIdentity file, ReaderSlot slot)
     {
         lock (_gate)
         {
             CompleteOpeningUnderLock(slot);
-            RemoveUnusedSlot(fileName, slot);
+            RemoveUnusedSlot(file, slot);
         }
     }
 
@@ -224,12 +234,12 @@ sealed class SstReaderCache : IDisposable
         Monitor.PulseAll(_gate);
     }
 
-    ReaderSlot GetOrCreateSlot(string fileName)
+    ReaderSlot GetOrCreateSlot(SstFileIdentity file)
     {
-        if (!_slots.TryGetValue(fileName, out var slot))
+        if (!_slots.TryGetValue(file, out var slot))
         {
             slot = new ReaderSlot();
-            _slots.Add(fileName, slot);
+            _slots.Add(file, slot);
         }
 
         return slot;
@@ -265,24 +275,24 @@ sealed class SstReaderCache : IDisposable
             var next = node.Next;
             var entry = node.Value;
             if (entry.References == 0 &&
-                _slots.TryGetValue(entry.FileName, out var slot) &&
+                _slots.TryGetValue(entry.File, out var slot) &&
                 ReferenceEquals(slot.Reader, entry))
             {
                 slot.Reader = null;
                 Retire(entry);
-                RemoveUnusedSlot(entry.FileName, slot);
+                RemoveUnusedSlot(entry.File, slot);
             }
 
             node = next;
         }
     }
 
-    void RemoveUnusedSlot(string fileName, ReaderSlot slot)
+    void RemoveUnusedSlot(SstFileIdentity file, ReaderSlot slot)
     {
         if (slot.Reader is null && slot.OpeningReaders == 0 &&
-            _slots.TryGetValue(fileName, out var current) && ReferenceEquals(current, slot))
+            _slots.TryGetValue(file, out var current) && ReferenceEquals(current, slot))
         {
-            _slots.Remove(fileName);
+            _slots.Remove(file);
         }
     }
 
@@ -304,9 +314,9 @@ sealed class SstReaderCache : IDisposable
         _retiredReaders.Add(entry);
     }
 
-    sealed class ReaderEntry(string fileName, SstReader reader)
+    sealed class ReaderEntry(SstFileIdentity file, SstReader reader)
     {
-        public string FileName { get; } = fileName;
+        public SstFileIdentity File { get; } = file;
 
         public SstReader Reader { get; } = reader;
 
