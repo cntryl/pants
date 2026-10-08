@@ -42,8 +42,11 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
+      - name: Restore (locked)
+        run: dotnet restore Pants.slnx --locked-mode
+
       - name: Check formatting
-        run: dotnet format Pants.slnx --verify-no-changes
+        run: dotnet format Pants.slnx --verify-no-changes --no-restore
 
       - name: Start Sqrzl emulator
         if: matrix.os == 'ubuntu-latest'
