@@ -500,7 +500,7 @@ sealed class LocalDiskStore :
             {
                 if (!File.Exists(path))
                 {
-                    File.Move(stagingPath, path);
+                    TransientSharingRetry.Move(stagingPath, path, false);
                     AtomicStagedFile.FlushDirectory(_sstDirectory);
                 }
 
@@ -509,7 +509,7 @@ sealed class LocalDiskStore :
         }
         finally
         {
-            File.Delete(stagingPath);
+            TransientSharingRetry.Delete(stagingPath);
         }
     }
 
@@ -3651,7 +3651,7 @@ sealed class LocalDiskStore :
         var stagingDirectory = Path.Combine(_sstDirectory, ".flush-staging");
         foreach (var name in distinctNames)
         {
-            File.Delete(Path.Combine(
+            TransientSharingRetry.Delete(Path.Combine(
                 stagingDirectory,
                 $"{_lease.Epoch}.compaction.{name}.tmp"));
             File.Delete(Path.Combine(_sstDirectory, name));
