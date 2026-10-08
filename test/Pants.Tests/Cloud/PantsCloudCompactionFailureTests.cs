@@ -183,6 +183,44 @@ public sealed class PantsCloudCompactionFailureTests
             6);
     }
 
+    [Fact]
+    public async Task ShouldResumeCompactionAfterTransientCloudUploadFailureUnderASmallMemoryBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new CloudCompactionFailpointHandler();
+        await using var database = await OpenAsync(
+            CreateOptions(directory.Path)
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(4L * 1024 * 1024)),
+            failpoints);
+        var family = database.ColumnFamilies.DefaultFamily;
+        var value = new byte[512];
+        for (var file = 0; file < 4; file++)
+        {
+            for (var index = 0; index < 400; index++)
+            {
+                await using var transaction = await database.Transactions.BeginAsync(
+                    family,
+                    PantsTransactionMode.ReadWrite);
+                transaction.Put(TestBytes.FromString($"small-budget-{index:D4}-{file}"), value);
+                await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
+            }
+
+            await database.Maintenance.FlushAsync(family);
+        }
+
+        var initialRemoteCount = RemoteSsts(directory.Path).Length;
+        failpoints.Arm(Failpoint.BeforeCloudUpload);
+
+        await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
+        await database.Maintenance.CompactAllAsync();
+
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(4, initialRemoteCount);
+        Assert.Equal(1, metrics.CompactionFailures);
+        Assert.Equal(0, metrics.CompactionBufferUsedBytes);
+        Assert.True(metrics.CompactionBufferPeakBytes <= metrics.CompactionBufferCapacityBytes);
+    }
+
     static async ValueTask SeedCompactionInputsAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,

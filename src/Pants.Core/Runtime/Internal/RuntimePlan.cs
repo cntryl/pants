@@ -25,76 +25,18 @@ sealed class RuntimePlan
         FlushAfterWalRecords = options.FlushAfterWalRecords;
 
         MemoryBudgetBytes = ResolveMemoryBudget(options.Memory.Budget);
-        TransactionMemoryPoolBytes = options.Memory.TransactionMemoryPoolBytes ??
-                                     Math.Max(1, MemoryBudgetBytes / 10);
-
-        // Keep compaction and scan reservations bounded while preserving enough space for two
-        // memtables. Tiny automatic configurations prioritize decoded compaction input blocks so
-        // compaction can still make progress.
-        var remainingAfterRequiredPools = Math.Max(
-            0,
-            MemoryBudgetBytes - TransactionMemoryPoolBytes - 2);
-        var desiredCompactionPoolBytes = MemoryBudgetBytes < 1024 * 1024 &&
-                                         options.Memory.MemtableSizeLimitBytes is null
-            ? Math.Max(1, MemoryBudgetBytes * 2 / 3)
-            : Math.Max(1, Math.Min(MemoryBudgetBytes / 10, 256L * 1024 * 1024));
-        var desiredScanPoolBytes = Math.Max(
-            1,
-            Math.Min(MemoryBudgetBytes / 20, 128L * 1024 * 1024));
-        if (options.Memory.MemtableSizeLimitBytes is > 0 and <= long.MaxValue / 2)
-        {
-            var unallocatedBytes = MemoryBudgetBytes -
-                                   TransactionMemoryPoolBytes -
-                                   2 * options.Memory.MemtableSizeLimitBytes.Value -
-                                   desiredCompactionPoolBytes -
-                                   desiredScanPoolBytes;
-            desiredCompactionPoolBytes = checked(
-                desiredCompactionPoolBytes +
-                Math.Min(
-                    Math.Max(0, unallocatedBytes),
-                    256L * 1024 * 1024 - desiredCompactionPoolBytes));
-        }
-
-        CompactionMemoryPoolBytes = Math.Min(
-            desiredCompactionPoolBytes,
-            remainingAfterRequiredPools);
-        ScanMemoryPoolBytes = Math.Min(
-            desiredScanPoolBytes,
-            remainingAfterRequiredPools - CompactionMemoryPoolBytes);
-
-        var maximumMemtable =
-            (MemoryBudgetBytes -
-             TransactionMemoryPoolBytes -
-             CompactionMemoryPoolBytes -
-             ScanMemoryPoolBytes) / 2;
-        var baseMemtable = PerformanceGoal switch
-        {
-            PantsPerformanceGoal.Latency => 64L * 1024 * 1024,
-            PantsPerformanceGoal.Throughput => 256L * 1024 * 1024,
-            PantsPerformanceGoal.Economy => 32L * 1024 * 1024,
-            _ => throw PantsException.InvalidArgument("Unknown performance goal.")
-        };
-        var desiredMemtable = WorkloadProfile switch
-        {
-            PantsWorkloadProfile.WriteHeavy => baseMemtable * 2,
-            PantsWorkloadProfile.ReadMostly => baseMemtable / 2,
-            _ => baseMemtable
-        };
-        MemtableSizeLimitBytes = options.Memory.MemtableSizeLimitBytes ??
-                                 Math.Max(1, Math.Min(desiredMemtable, maximumMemtable));
-        MemtableFlushThresholdBytes = options.Memory.MemtableFlushThresholdBytes ??
-                                      MemtableSizeLimitBytes;
-        BlockCacheBytes = Math.Max(
-            0,
-            MemoryBudgetBytes -
-            TransactionMemoryPoolBytes -
-            CompactionMemoryPoolBytes -
-            ScanMemoryPoolBytes -
-            2 * MemtableSizeLimitBytes);
-        if (PerformanceGoal == PantsPerformanceGoal.Economy)
-        {
-            BlockCacheBytes = Math.Min(BlockCacheBytes, 256L * 1024 * 1024);
-        }
+        var pools = MemoryPools.Derive(
+            MemoryBudgetBytes,
+            options.Memory,
+            Storage,
+            PerformanceGoal,
+            WorkloadProfile);
+        TransactionMemoryPoolBytes = pools.TransactionMemoryPoolBytes;
+        CompactionMemoryPoolBytes = pools.CompactionMemoryPoolBytes;
+        ScanMemoryPoolBytes = pools.ScanMemoryPoolBytes;
+        MemtableSizeLimitBytes = pools.MemtableSizeLimitBytes;
+        MemtableFlushThresholdBytes = pools.MemtableFlushThresholdBytes;
+        BlockCacheBytes = pools.BlockCacheBytes;
 
         BlockSizeBytes = (PerformanceGoal, WorkloadProfile) switch
         {
@@ -132,7 +74,7 @@ sealed class RuntimePlan
             BackgroundEnabled = options.BackgroundCompaction
         };
         TargetSstSizeBytes = Compaction.TargetSstSizeBytes ?? TargetSstSizeBytes;
-        ValidateMemoryPlan();
+        ValidateWalBuffer();
     }
 
     public PantsStorageConfiguration Storage { get; }
@@ -196,61 +138,11 @@ sealed class RuntimePlan
 
     public static RuntimePlan Resolve(PantsOpenOptions options) => new(options);
 
-    void ValidateMemoryPlan()
+    void ValidateWalBuffer()
     {
-        if (TransactionMemoryPoolBytes > MemoryBudgetBytes)
-        {
-            throw PantsException.ResourceLimit("Transaction memory pool exceeds the total memory budget.");
-        }
-
-        if (MemtableSizeLimitBytes <= 0 || MemtableFlushThresholdBytes <= 0)
-        {
-            throw PantsException.InvalidArgument("Memtable limits must be greater than zero.");
-        }
-
         if (WalBufferSizeBytes <= 0)
         {
             throw PantsException.InvalidArgument("WAL buffer size must be greater than zero.");
-        }
-
-        if (MemtableFlushThresholdBytes > MemtableSizeLimitBytes)
-        {
-            throw PantsException.InvalidArgument("Memtable flush threshold exceeds its size limit.");
-        }
-
-        long reservedBytes;
-        try
-        {
-            reservedBytes = checked(
-                2 * MemtableSizeLimitBytes +
-                TransactionMemoryPoolBytes +
-                CompactionMemoryPoolBytes +
-                ScanMemoryPoolBytes);
-        }
-        catch (OverflowException)
-        {
-            throw PantsException.ResourceLimit(
-                "Configured memory pools overflow the total memory budget calculation.");
-        }
-
-        if (reservedBytes > MemoryBudgetBytes)
-        {
-            throw PantsException.ResourceLimit(
-                "Two memtables plus the transaction, compaction, and scan pools exceed the " +
-                "total memory budget.");
-        }
-
-        if (Storage is not PantsStorageConfiguration.InMemory)
-        {
-            // Maintenance must be able to make progress: a zero compaction pool can never merge, so
-            // L0 debt would stall writes for good. A zero block cache is an accepted adaptation (it
-            // means "cache disabled"; reads still work), unlike the reference engine, which
-            // rejects it.
-            if (CompactionMemoryPoolBytes <= 0)
-            {
-                throw PantsException.ResourceLimit(
-                    "The memory budget leaves no compaction pool for persistent storage.");
-            }
         }
     }
 

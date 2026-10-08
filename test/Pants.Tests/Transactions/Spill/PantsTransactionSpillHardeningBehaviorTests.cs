@@ -409,7 +409,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         var failpoints = new ThrowingTransactionCommitBoundaryFailpointHandler(spilledBoundary);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "spill-sequence-hole/")
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(64 * 1_024))
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1_024))
             .WithMemtableLimits(24 * 1_024)
             .WithTransactionMemoryPool(1_024)
             .WithBackgroundCompaction(false);
