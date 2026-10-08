@@ -545,7 +545,7 @@ sealed class LocalDiskStore :
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
-        ResourceBudget? compactionBudget = null,
+        CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
@@ -555,7 +555,7 @@ sealed class LocalDiskStore :
             flushMutableOperations,
             false,
             publicationCompleted,
-            compactionBudget,
+            memory,
             prepareInputs,
             cancellationToken);
 
@@ -3362,10 +3362,65 @@ sealed class LocalDiskStore :
         bool flushMutableOperations,
         bool continueCompacting,
         Action<long>? publicationCompleted,
-        ResourceBudget? compactionBudget,
+        CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        long outputBytes;
+        bool hasCompactionPlan;
+        bool persistenceAnomaly;
+        // Each round has the maintenance pool to itself: its merge buffers and its outputs'
+        // publication never contend with a concurrent SST publication. The gate is released before
+        // a continuation round so waiting publications are served between rounds.
+        using (memory is null
+                   ? null
+                   : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
+        {
+            (outputBytes, hasCompactionPlan, persistenceAnomaly) = await CompactRoundAsync(
+                    state,
+                    force,
+                    outputPublisher,
+                    flushMutableOperations,
+                    publicationCompleted,
+                    memory,
+                    prepareInputs,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var publicationCount = hasCompactionPlan ? 1 : 0;
+        if (!persistenceAnomaly && (force || continueCompacting) && hasCompactionPlan)
+        {
+            var continued = await CompactAsync(
+                state,
+                false,
+                outputPublisher,
+                flushMutableOperations,
+                true,
+                publicationCompleted,
+                memory,
+                prepareInputs,
+                cancellationToken).ConfigureAwait(false);
+            outputBytes = checked(outputBytes + continued.BytesRewritten);
+            publicationCount = checked(publicationCount + continued.PublicationCount);
+            persistenceAnomaly |= continued.PersistenceAnomaly;
+        }
+
+        return new CompactionResult(outputBytes, publicationCount, persistenceAnomaly);
+    }
+
+    async ValueTask<(long OutputBytes, bool HasCompactionPlan, bool PersistenceAnomaly)> CompactRoundAsync(
+        RuntimeState state,
+        bool force,
+        CloudCompactionOutputPublisher? outputPublisher,
+        bool flushMutableOperations,
+        Action<long>? publicationCompleted,
+        CompactionMemory? memory,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        CancellationToken cancellationToken)
+    {
+        var compactionBudget = memory?.Budget;
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         ThrowIfWalFenced();
@@ -3382,6 +3437,11 @@ sealed class LocalDiskStore :
         }
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        // A publisher with its own memory envelope (cloud upload and readback) can require
+        // outputs smaller than the plain target size.
+        var partitionTargetBytes = Math.Min(
+            _targetSstSizeBytes,
+            memory?.OutputPartitionTargetBytes ?? long.MaxValue);
         var obsoleteNames = new List<string>();
         var edits = new List<ManifestEdit>();
         var intents = new List<IntentEntry>();
@@ -3436,7 +3496,7 @@ sealed class LocalDiskStore :
                              compactionStreams.Streams,
                              compactionStreams.RangeTombstones,
                              plan,
-                             _targetSstSizeBytes,
+                             partitionTargetBytes,
                              compactionBudget))
                 {
                     var outputSequence = checked(firstOutputSequence + outputIndex);
@@ -3508,7 +3568,7 @@ sealed class LocalDiskStore :
 
         if (edits.Count == 0)
         {
-            return new CompactionResult(0, 0, false);
+            return (0, false, false);
         }
 
         _lease.EnsureValid();
@@ -3580,25 +3640,7 @@ sealed class LocalDiskStore :
 
         _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
 
-        var publicationCount = hasCompactionPlan ? 1 : 0;
-        if (!persistenceAnomaly && (force || continueCompacting) && hasCompactionPlan)
-        {
-            var continued = await CompactAsync(
-                state,
-                false,
-                outputPublisher,
-                flushMutableOperations,
-                true,
-                publicationCompleted,
-                compactionBudget,
-                prepareInputs,
-                cancellationToken).ConfigureAwait(false);
-            outputBytes = checked(outputBytes + continued.BytesRewritten);
-            publicationCount = checked(publicationCount + continued.PublicationCount);
-            persistenceAnomaly |= continued.PersistenceAnomaly;
-        }
-
-        return new CompactionResult(outputBytes, publicationCount, persistenceAnomaly);
+        return (outputBytes, hasCompactionPlan, persistenceAnomaly);
     }
 
     void RemoveSstFromCaches(string name)

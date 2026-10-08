@@ -1,4 +1,4 @@
-using System.Text;
+using Cntryl.Pants.Storage.Internal.Lease;
 
 namespace Cntryl.Pants.Storage.Internal;
 
@@ -162,7 +162,39 @@ sealed class FileLease : IDisposable
                 "that does not exceed that TTL.");
         }
 
-        var effectiveClock = clock ?? SystemPantsClock.Instance;
+        try
+        {
+            return AcquireRecord(
+                root,
+                minimumEpoch,
+                clockSkewTolerance,
+                leaseLossCallback,
+                heartbeatInterval,
+                clock ?? SystemPantsClock.Instance,
+                effectiveTimeToLive,
+                time,
+                acquireStarted);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Lease I/O failures are LeaseUnavailable, as in Midge, never a generic storage error.
+            throw new PantsLeaseUnavailableException(
+                "The Midge leader record could not be read or written.",
+                exception);
+        }
+    }
+
+    static FileLease AcquireRecord(
+        string root,
+        ulong minimumEpoch,
+        TimeSpan clockSkewTolerance,
+        Action? leaseLossCallback,
+        TimeSpan heartbeatInterval,
+        IPantsClock effectiveClock,
+        TimeSpan effectiveTimeToLive,
+        TimeProvider time,
+        long acquireStarted)
+    {
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
         var holderId = $"{Environment.ProcessId}.{Guid.NewGuid():N}@{Environment.MachineName}";
@@ -170,7 +202,7 @@ sealed class FileLease : IDisposable
         var current = ReadRecord(leaderPath);
         if (current is not null)
         {
-            if (!DateTimeOffset.TryParse(current.AcquiredAt, out var acquiredAt))
+            if (!Rfc3339Timestamp.TryParse(current.AcquiredAt, out var acquiredAt))
             {
                 throw new PantsLeaseIndeterminateException(
                     "Midge leader timestamp is invalid; ownership is ambiguous.");
@@ -183,8 +215,9 @@ sealed class FileLease : IDisposable
                     "Midge leader timestamp is in the future; ownership is ambiguous.");
             }
 
+            // format/lease.md: a record is stale once its age is at or beyond TTL + skew.
             var takeoverBoundary = AddSaturating(effectiveTimeToLive, clockSkewTolerance);
-            if (age <= takeoverBoundary)
+            if (age < takeoverBoundary)
             {
                 throw new PantsLeaseHeldException(
                     $"Another Midge-compatible writer '{current.HolderId}' owns this database; " +
@@ -203,7 +236,7 @@ sealed class FileLease : IDisposable
         var epoch = previousEpoch + 1;
         WriteRecord(
             leaderPath,
-            new LeaseRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O")));
+            new LeaderRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O")));
         var published = ReadRecord(leaderPath);
         if (published?.Epoch != epoch || published.HolderId != holderId)
         {
@@ -452,60 +485,11 @@ sealed class FileLease : IDisposable
         return null;
     }
 
-    static LeaseRecord? ReadRecord(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return null;
-        }
+    static LeaderRecord? ReadRecord(string path) =>
+        SharedReadFile.TryReadAllBytes(path) is { } bytes ? LeaderRecordCodec.Decode(bytes) : null;
 
-        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in File.ReadAllLines(path))
-        {
-            var parts = line.Split(": ", 2);
-            if (parts.Length == 2)
-            {
-                // Last-occurrence-wins per format/lease.md §7: a duplicate field is resolved,
-                // not treated as an indeterminate/corrupt record.
-                fields[parts[0]] = parts[1];
-            }
-        }
-
-        if (!(fields.TryGetValue("epoch", out var epochRaw) && ulong.TryParse(epochRaw, out var epoch) &&
-              fields.TryGetValue("holder_id", out var holderId) &&
-              fields.TryGetValue("acquired_at", out var acquiredAt)))
-        {
-            throw new PantsLeaseIndeterminateException(
-                "Midge leader record is invalid; ownership is ambiguous.");
-        }
-
-        var record = new LeaseRecord(epoch, holderId, acquiredAt);
-
-        // A record may carry a CRC32C over its three-field body. One that is present but wrong or
-        // unparseable is a damaged record; one that is absent is an older, unchecked record.
-        if (fields.TryGetValue("checksum", out var checksumRaw) &&
-            (!uint.TryParse(checksumRaw, out var expected) || expected != Checksum(record)))
-        {
-            throw new PantsLeaseIndeterminateException(
-                "Midge leader record checksum does not verify; ownership is ambiguous.");
-        }
-
-        return record;
-    }
-
-    static uint Checksum(LeaseRecord record) =>
-        DiskFormat.Crc32C(Encoding.UTF8.GetBytes(Body(record)));
-
-    static string Body(LeaseRecord record) =>
-        $"epoch: {record.Epoch}\nholder_id: {record.HolderId}\nacquired_at: {record.AcquiredAt}\n";
-
-    static void WriteRecord(string target, LeaseRecord record)
-    {
-        var content = $"{Body(record)}checksum: {Checksum(record)}\n";
-        AtomicStagedFile.Write(target, Encoding.UTF8.GetBytes(content));
-    }
-
-    sealed record LeaseRecord(ulong Epoch, string HolderId, string AcquiredAt);
+    static void WriteRecord(string target, LeaderRecord record) =>
+        AtomicStagedFile.Write(target, LeaderRecordCodec.Encode(record));
 
     sealed class LeaseMutationLock : IDisposable
     {

@@ -140,8 +140,9 @@ public sealed class TransactionOperationSourceTests
         var rangePath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.ranges"));
         var bytes = File.ReadAllBytes(rangePath);
         var rootOffset = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(32)));
-        var maximumEndOffset = FindMaximumEndOffset(bytes, rootOffset);
-        "zzzz"u8.CopyTo(bytes.AsSpan(maximumEndOffset, 4));
+        // The root ("bravo") must name its left child ("alpha".."zulu") as the subtree maximum;
+        // point it at the right child ("delta".."echo") instead.
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(rootOffset + 8 + 24), 2);
         RewriteFrameChecksum(bytes, rootOffset);
         File.WriteAllBytes(rangePath, bytes);
         var source = new TransactionOperationSource(store, [], 3, DateTimeOffset.UnixEpoch);
@@ -160,7 +161,7 @@ public sealed class TransactionOperationSourceTests
         var rangePath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.ranges"));
         var bytes = File.ReadAllBytes(rangePath);
         var rootOffset = GetRangeNodeOffset(bytes, 0);
-        var startOffset = rootOffset + 8 + 24 + sizeof(uint);
+        var startOffset = rootOffset + 8 + 32 + sizeof(uint);
         "omega"u8.CopyTo(bytes.AsSpan(startOffset, 5));
         RewriteFrameChecksum(bytes, rootOffset);
         File.WriteAllBytes(rangePath, bytes);
@@ -330,15 +331,5 @@ public sealed class TransactionOperationSourceTests
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(frameOffset + 16), left);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(frameOffset + 24), right);
         RewriteFrameChecksum(bytes, frameOffset);
-    }
-
-    static int FindMaximumEndOffset(byte[] bytes, int frameOffset)
-    {
-        var cursor = frameOffset + 8 + 24;
-        cursor += sizeof(uint) + checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor)));
-        cursor += sizeof(uint) + checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor)));
-        var maximumEndLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor)));
-        Assert.Equal(4, maximumEndLength);
-        return cursor + sizeof(uint);
     }
 }
