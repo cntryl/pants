@@ -84,8 +84,12 @@ SPI, while Pants retains ownership of object layout, WAL/SST formats, leases, fe
 Local, simulated-cloud, and provider-cloud writers use the same `LeaseTimeToLive` and
 `LeaseClockSkewTolerance` profile. The 30-second default TTL retains the provider-cloud default
 and aligns local takeover with current Midge; older Pants builds used an independent 60-second
-local takeover delay. The exact boundary remains held, and takeover becomes eligible on the first
-clock tick after `last renewal + TTL + skew`. Heartbeats run at one third of TTL, bounded between
+local takeover delay. A local `.midge_leader` record becomes eligible for takeover once its age is
+at or beyond `TTL + skew` (format/lease.md), matching Midge; a cloud lease document keeps the exact
+`expires_at + skew` boundary held and becomes eligible on the first clock tick after it, also
+matching Midge. The local record is parsed strictly: it must be UTF-8, `acquired_at` must be an
+RFC 3339 timestamp with an explicit offset, and `epoch`/`checksum` must be plain decimal digits;
+anything else is `LeaseIndeterminate`. Heartbeats run at one third of TTL, bounded between
 1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
 release still validates the writer epoch/owner token, so a resumed old owner remains fenced.
 
