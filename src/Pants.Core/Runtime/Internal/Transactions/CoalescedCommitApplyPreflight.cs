@@ -12,7 +12,9 @@ static class CoalescedCommitApplyPreflight
         var sequence = state.Sequence;
         foreach (var command in commands)
         {
-            sequence = GetCommitSequence(sequence, command.Payload.Operations.Count);
+            sequence = SequenceSpace.CommitSequenceAfter(
+                checked((ulong)sequence),
+                command.Payload.Operations.Count);
             var operations = new List<TransactionIntentOperation>();
             var bytesByFamily = new Dictionary<ColumnFamilyIdentity, long>(
                 ColumnFamilyIdentityComparer.Instance);
@@ -69,20 +71,6 @@ static class CoalescedCommitApplyPreflight
         (operation.EndExclusive?.Length ?? 0) +
         (operation.Value?.Length ?? 0) +
         64);
-
-    static long GetCommitSequence(long sequence, ulong operationCount)
-    {
-        try
-        {
-            return checked(sequence + checked((long)operationCount) + 2);
-        }
-        catch (OverflowException exception)
-        {
-            throw new StorageException(
-                "The transaction sequence range is exhausted.",
-                exception);
-        }
-    }
 
     static void ValidateOperation(
         RuntimeState state,

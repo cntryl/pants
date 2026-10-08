@@ -345,7 +345,10 @@ sealed class Actor : IAsyncDisposable
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
-        var state = new RuntimeState(ttlClock, telemetry);
+        var state = new RuntimeState(ttlClock, telemetry)
+        {
+            Sequence = dependencies.InitialMemorySequence ?? 0
+        };
         var startupPhases = dependencies.StartupPhases;
 
         var cloudMode = false;
@@ -2852,7 +2855,7 @@ sealed class Actor : IAsyncDisposable
             ulong? writtenWalSegmentId = null;
             if (_diskStore is null)
             {
-                state.Sequence++;
+                state.Sequence = SequenceSpace.NextMemorySequence(state.Sequence);
             }
             else
             {

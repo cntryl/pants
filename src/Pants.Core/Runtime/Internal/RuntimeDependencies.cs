@@ -12,8 +12,10 @@ sealed class RuntimeDependencies
         Action<StartupPhaseMeasurement>? startupPhaseMeasurement = null,
         IPantsClock? leaseClock = null,
         long? hybridLocalStorageBudgetBytes = null,
-        TimeSpan? workerDisposalTimeout = null)
+        TimeSpan? workerDisposalTimeout = null,
+        long? initialMemorySequence = null)
     {
+        InitialMemorySequence = initialMemorySequence;
         WorkerDisposalTimeout = workerDisposalTimeout;
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Storage.Internal.StorageVerifier.VerifyPathAsync;
@@ -38,6 +40,9 @@ sealed class RuntimeDependencies
                 "The hybrid local storage budget must be greater than zero.");
         }
     }
+
+    /// <summary>Seeds the in-memory runtime sequence so tests can reach sequence-space exhaustion.</summary>
+    public long? InitialMemorySequence { get; }
 
     public IFailpointHandler Failpoints { get; }
 
