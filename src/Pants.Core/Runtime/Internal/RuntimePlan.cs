@@ -239,6 +239,19 @@ sealed class RuntimePlan
                 "Two memtables plus the transaction, compaction, and scan pools exceed the " +
                 "total memory budget.");
         }
+
+        if (Storage is not PantsStorageConfiguration.InMemory)
+        {
+            // Maintenance must be able to make progress: a zero compaction pool can never merge, so
+            // L0 debt would stall writes for good. A zero block cache is an accepted adaptation (it
+            // means "cache disabled"; reads still work), unlike the reference engine, which
+            // rejects it.
+            if (CompactionMemoryPoolBytes <= 0)
+            {
+                throw PantsException.ResourceLimit(
+                    "The memory budget leaves no compaction pool for persistent storage.");
+            }
+        }
     }
 
     static long ResolveMemoryBudget(PantsMemoryBudget budget)
