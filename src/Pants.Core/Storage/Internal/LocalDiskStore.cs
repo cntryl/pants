@@ -2555,11 +2555,16 @@ sealed class LocalDiskStore :
     ///     Background half of the Buffered contract. A failed fsync fences the WAL inside
     ///     <see cref="SyncWal" />, so there is nothing further to do with the failure here.
     /// </summary>
-    void SyncBufferedWalIfPending()
+    /// <remarks>
+    ///     Pending writes with an empty active WAL belong to a segment sealed for cloud upload and
+    ///     awaiting admission. Syncing the empty replacement file proves nothing about them, so
+    ///     only <see cref="CompleteCloudWalSeal" /> may clear them.
+    /// </remarks>
+    internal void SyncBufferedWalIfPending()
     {
         lock (_walStateGate)
         {
-            if (IsDisposed || _walPendingWrites == 0 || _walIo.IsFenced)
+            if (IsDisposed || _walPendingWrites == 0 || _walIo.IsFenced || _walStream.Length == 0)
             {
                 return;
             }
