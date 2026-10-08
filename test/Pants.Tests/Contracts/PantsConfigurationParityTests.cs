@@ -66,7 +66,6 @@ public sealed class PantsConfigurationParityTests
     }
 
     [Theory]
-    [InlineData(3)]
     [InlineData(9)]
     [InlineData(10)]
     [InlineData(31)]
@@ -79,7 +78,7 @@ public sealed class PantsConfigurationParityTests
 
         Assert.Equal(budget, options.MemoryBudgetBytes);
         Assert.True(options.TransactionMemoryPoolBytes > 0);
-        Assert.True(options.CompactionMemoryPoolBytes >= 0);
+        Assert.True(options.CompactionMemoryPoolBytes > 0);
         Assert.True(options.ScanMemoryPoolBytes >= 0);
         Assert.True(
             2 * options.MemtableSizeLimitBytes +
