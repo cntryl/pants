@@ -317,7 +317,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 if (expected is not null &&
                     !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version)))
                 {
-                    return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                    return ProviderPreconditionResponses.Azure();
                 }
 
                 _objects.Remove(key);
@@ -332,14 +332,14 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             var exists = _objects.TryGetValue(key, out var current);
             if (request.Headers.IfNoneMatch.Any(static value => value.Tag == "*") && exists)
             {
-                return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                return ProviderPreconditionResponses.Azure();
             }
 
             var expected = request.Headers.IfMatch.SingleOrDefault()?.Tag;
             if (expected is not null &&
                 (!exists || !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version))))
             {
-                return new HttpResponseMessage(HttpStatusCode.PreconditionFailed);
+                return ProviderPreconditionResponses.Azure();
             }
 
             var next = (bytes, exists ? current.Version + 1 : 1);
