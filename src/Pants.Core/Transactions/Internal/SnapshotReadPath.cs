@@ -61,8 +61,8 @@ static class SnapshotReadPath
             return true;
         }
 
-        var smallest = LocalDiskStore.GetMetadataKey(file.SmallestKey!);
-        var largest = LocalDiskStore.GetMetadataKey(file.LargestKey!);
+        var smallest = file.SmallestKey!;
+        var largest = file.LargestKey!;
         return (endExclusive is null || smallest.AsSpan().SequenceCompareTo(endExclusive) < 0) &&
                (startInclusive is null || largest.AsSpan().SequenceCompareTo(startInclusive) >= 0);
     }
