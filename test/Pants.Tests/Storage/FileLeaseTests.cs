@@ -279,17 +279,25 @@ public sealed class FileLeaseTests
             await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
         }
 
+        // The successor must get past the lease and LOCK. On Windows the undisposed instance
+        // still holds the WAL file open, so reaching that file (a storage error) is also proof
+        // the LOCK handle is gone; being refused as lease-held is the failure.
         IPantsDatabase? successor = null;
-        while (successor is null)
+        while (true)
         {
             try
             {
                 successor = await PantsDatabase.OpenAsync(options);
+                break;
             }
             catch (Exception exception) when (
                 exception is PantsLeaseHeldException or PantsLeaseUnavailableException)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+            catch (PantsIOException) when (OperatingSystem.IsWindows())
+            {
+                return;
             }
         }
 
