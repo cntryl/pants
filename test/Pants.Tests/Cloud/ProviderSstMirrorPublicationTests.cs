@@ -23,6 +23,10 @@ public sealed class ProviderSstMirrorPublicationTests
         }
 
         var published = LocalSstNames(cache.Path);
+        // Background WAL retirement checks covering SSTs by HEAD; let it finish first.
+        await TestWait.UntilAsync(
+            () => !azure.ContainsObjectPath("/wal/epochs/"),
+            "the covered WAL is retired");
         recorder.Clear();
 
         await CommitAndFlushAsync(database, "new-output", 100_000);

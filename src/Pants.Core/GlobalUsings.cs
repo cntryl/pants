@@ -9,6 +9,7 @@ global using Cntryl.Pants.Cloud.Internal.Providers.Credentials.Azure;
 global using Cntryl.Pants.Cloud.Internal.Providers.Credentials.Gcs;
 global using Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 global using Cntryl.Pants.Cloud.Internal.Providers.Protocol;
+global using Cntryl.Pants.Cloud.Internal.WalRetirement;
 global using Cntryl.Pants.Exceptions;
 global using Cntryl.Pants.Observability;
 global using Cntryl.Pants.Observability.Internal;

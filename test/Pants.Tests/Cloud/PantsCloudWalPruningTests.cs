@@ -32,6 +32,7 @@ public sealed class PantsCloudWalPruningTests
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await WaitForProviderWalRetirementAsync(handler);
 
         Assert.False(handler.ContainsObjectPath("/wal/epochs/"));
         using var catalog = JsonDocument.Parse(
@@ -58,6 +59,7 @@ public sealed class PantsCloudWalPruningTests
                 System.Text.Encoding.UTF8.GetBytes($"earlier-{index}"),
                 PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await WaitForProviderWalRetirementAsync(handler);
         }
 
         handler.ResetSstReadMetrics();
@@ -68,6 +70,7 @@ public sealed class PantsCloudWalPruningTests
             "latest"u8.ToArray(),
             PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await WaitForProviderWalRetirementAsync(handler);
 
         var newSstBytes = handler.SstStoredBytes - storedBefore;
         Assert.False(handler.ContainsObjectPath("/wal/epochs/"));
@@ -177,7 +180,7 @@ public sealed class PantsCloudWalPruningTests
     }
 
     [Fact]
-    public async Task ShouldRetainProviderWalGivenCatalogRetirementHasNoReadback()
+    public async Task ShouldRetainProviderWalAndReportAnomalyGivenCatalogRetirementHasNoReadback()
     {
         using var cache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -189,8 +192,13 @@ public sealed class PantsCloudWalPruningTests
         await CommitProviderValueAsync(database);
         handler.AcknowledgeWalCatalogWritesWithoutPersisting = true;
 
-        await Assert.ThrowsAnyAsync<PantsException>(() =>
-            database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
+        // Retirement is background maintenance: the flush succeeds, and the failed catalog
+        // readback surfaces as a persistence anomaly rather than as the flush's error.
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        await TestWait.UntilAsync(
+            async () => (await database.Diagnostics.GetRuntimeMetricsAsync()).Health ==
+                        PantsEngineHealth.Degraded,
+            "the unconfirmed catalog retirement is reported");
 
         Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
         Assert.NotEmpty(ReadProviderCatalogSegments(handler));
@@ -419,6 +427,11 @@ public sealed class PantsCloudWalPruningTests
         Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
             await reader.GetAsync("retained"u8.ToArray()))));
     }
+
+    static Task WaitForProviderWalRetirementAsync(InMemoryAzureBlobHandler handler) =>
+        TestWait.UntilAsync(
+            () => !handler.ContainsObjectPath("/wal/epochs/"),
+            "background retirement removes the covered provider WAL");
 
     static PantsOpenOptions CreateOptions(string path) =>
         PantsOpenOptions.SimulatedCloud(path, "pants-tests", "wal-pruning/")
