@@ -972,7 +972,7 @@ sealed class LocalDiskStore :
                  blockIndex <= decision.CandidateBlockIndex;
                  blockIndex++)
             {
-                var cacheKey = new SstBlockCacheKey(candidate.Name, blockIndex);
+                var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(candidate), blockIndex);
                 var isCandidateBlock = blockIndex == decision.CandidateBlockIndex;
                 if (isCandidateBlock)
                 {
@@ -980,7 +980,7 @@ sealed class LocalDiskStore :
                 }
 
                 var blockContent = await ReadPointBlockAsync(
-                        candidate.Name,
+                        candidate,
                         reader,
                         blockIndex,
                         cancellationToken)
@@ -1317,7 +1317,10 @@ sealed class LocalDiskStore :
         foreach (var candidate in candidatesNewestFirst)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out var readerCacheHit);
+            using var readerLease = _readerCache.GetOrAdd(
+                SstFileIdentity.Of(candidate),
+                path,
+                out var readerCacheHit);
             var reader = readerLease.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
             var decision = reader.GetPointReadDecision(keyCopy);
@@ -1352,7 +1355,7 @@ sealed class LocalDiskStore :
                  blockIndex++)
             {
                 var blockContent = ReadPointBlock(
-                    candidate.Name,
+                    candidate,
                     reader,
                     blockIndex,
                     out var cacheHit);
@@ -1402,7 +1405,7 @@ sealed class LocalDiskStore :
         foreach (var candidate in available)
         {
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             foreach (var tombstone in readerLease.Reader.RangeTombstones)
             {
                 if (keyCopy.AsSpan().SequenceCompareTo(tombstone.Start) >= 0 &&
@@ -1442,7 +1445,7 @@ sealed class LocalDiskStore :
             }
 
             var path = Path.Combine(_sstDirectory, candidate.Name);
-            using var readerLease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+            using var readerLease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
             var reader = readerLease.Reader;
             if (reader.RangeTombstones.Any(tombstone =>
                     tombstone.Sequence > afterSequence &&
@@ -1468,9 +1471,9 @@ sealed class LocalDiskStore :
         return false;
     }
 
-    byte[] ReadPointBlock(string fileName, SstReader reader, int blockIndex, out bool cacheHit)
+    byte[] ReadPointBlock(FileMeta file, SstReader reader, int blockIndex, out bool cacheHit)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
             cacheHit = true;
@@ -1484,12 +1487,12 @@ sealed class LocalDiskStore :
     }
 
     async ValueTask<byte[]> ReadPointBlockAsync(
-        string fileName,
+        FileMeta file,
         AsyncSstReader reader,
         int blockIndex,
         CancellationToken cancellationToken)
     {
-        var cacheKey = new SstBlockCacheKey(fileName, blockIndex);
+        var cacheKey = new SstBlockCacheKey(SstFileIdentity.Of(file), blockIndex);
         if (_blockCache.TryGet(cacheKey, out var cachedBlock) && cachedBlock is not null)
         {
             return cachedBlock.Content.ToArray();
@@ -1524,7 +1527,7 @@ sealed class LocalDiskStore :
             foreach (var candidate in candidates)
             {
                 var path = Path.Combine(_sstDirectory, candidate.Name);
-                var lease = _readerCache.GetOrAdd(candidate.Name, path, out _);
+                var lease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
                 sources.Add(new SstScanSource(
                     lease,
                     SstBlockIterator.Create(
@@ -2204,7 +2207,7 @@ sealed class LocalDiskStore :
                 _familyIds[existing.Value] = id;
                 state.NextColumnFamilyId = Math.Max(
                     state.NextColumnFamilyId,
-                    checked(id + 1));
+                    (ulong)id + 1);
                 return;
             }
 
@@ -2217,7 +2220,7 @@ sealed class LocalDiskStore :
             state.FamilyData[identity] = RuntimeState.EmptyFamily;
             state.RangeTombstones[identity] = [];
             state.ActiveMemtableBytes[identity] = 0;
-            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, checked(id + 1));
+            state.NextColumnFamilyId = Math.Max(state.NextColumnFamilyId, (ulong)id + 1);
             _familyIds[identity] = id;
             return;
         }
@@ -2320,17 +2323,9 @@ sealed class LocalDiskStore :
         CommitPayload payload,
         RuntimeState state)
     {
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == 0 ||
-            payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        var sequence = checked((long)commitSequence);
-        _nextSequence = commitSequence;
+        var beginSequence = _nextSequence + 1;
+        var sequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        _nextSequence = (ulong)sequence;
         state.Sequence = sequence;
         return (beginSequence, sequence);
     }
@@ -2353,15 +2348,9 @@ sealed class LocalDiskStore :
         }
 
         payload.Operations.Validate();
-        var beginSequence = checked(_nextSequence + 1);
-        if (payload.Operations.Count == ulong.MaxValue ||
-            beginSequence > ulong.MaxValue - payload.Operations.Count - 1)
-        {
-            throw new StorageException("The transaction sequence range is exhausted.");
-        }
-
-        var commitSequence = beginSequence + payload.Operations.Count + 1;
-        reservedSequence = checked((long)commitSequence);
+        var beginSequence = _nextSequence + 1;
+        reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
+        var commitSequence = (ulong)reservedSequence;
         _nextSequence = commitSequence;
         state.Sequence = reservedSequence;
         List<WalMutation>? residentMutations = null;
@@ -4259,7 +4248,7 @@ sealed class LocalDiskStore :
 
         state.NextColumnFamilyId = _manifest.ColumnFamilies.Count == 0
             ? 1
-            : checked(_manifest.ColumnFamilies.Max(family => family.Id) + 1);
+            : (ulong)_manifest.ColumnFamilies.Max(family => family.Id) + 1;
     }
 
     void ApplyMutations(RuntimeState state, IEnumerable<WalMutation> mutations)
