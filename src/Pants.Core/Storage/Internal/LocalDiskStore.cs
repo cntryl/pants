@@ -1746,6 +1746,7 @@ sealed class LocalDiskStore :
                     leaseClock,
                     leaseTimeToLive,
                     leaseTimeProvider);
+                lease.FencedRelease = lockStream.Dispose;
             }
 
             lease.EnsureValid();
