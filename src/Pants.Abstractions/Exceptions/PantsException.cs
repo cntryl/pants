@@ -53,13 +53,13 @@ public abstract class PantsException : Exception
 
     internal static PantsResourceLimitException ResourceLimit(string message) => new(message);
 
+    /// <summary>
+    /// Maps a storage I/O failure. A missing file or directory is an I/O failure, not a caller
+    /// <see cref="PantsErrorCode.NotFound"/>: matching Midge, it stays a transient
+    /// <see cref="PantsErrorCode.Io"/> so hosts retry rather than treat it as a bad request.
+    /// </summary>
     internal static PantsException FromIOException(IOException exception)
     {
-        if (exception is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return new PantsNotFoundException(exception.Message, exception);
-        }
-
         var nativeCode = exception.HResult & 0xffff;
         var message = exception.Message;
         var normalized = message.ToUpperInvariant();

@@ -1829,9 +1829,9 @@ sealed class Actor : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        if (timeout <= TimeSpan.Zero)
+        if (timeout < TimeSpan.Zero)
         {
-            throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
+            throw PantsException.InvalidArgument("Verification timeout must not be negative.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -1840,6 +1840,12 @@ sealed class Actor : IAsyncDisposable
             throw PantsException.Create(
                 PantsErrorCode.NotSupported,
                 "In-memory storage has no persistent path to verify.");
+        }
+
+        // Matching Midge, a zero budget is an already-expired deadline, not a bad argument.
+        if (timeout == TimeSpan.Zero)
+        {
+            throw CreateVerificationTimeoutException();
         }
 
         using var deadline = new CancellationTokenSource(timeout);

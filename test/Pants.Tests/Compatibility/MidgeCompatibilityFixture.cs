@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Compatibility;
 
 static class MidgeCompatibilityFixture
 {
-    const string PinnedSha = "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71";
+    const string PinnedSha = "7d39f86217fdb07191a83bd885a514dd5ea9723f";
 
     public static TemporaryDirectory CopyToTemporaryDirectory(string fixtureName)
     {

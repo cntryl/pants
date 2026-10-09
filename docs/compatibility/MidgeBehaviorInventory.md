@@ -1,16 +1,20 @@
 # Midge contract inventory
 
 Pants is baselined against Midge commit
-`75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`.
+`7d39f86217fdb07191a83bd885a514dd5ea9723f`.
 
 The committed, machine-readable inventory is
 [`MidgeContractManifest.json`](../../test/Pants.Tests/MidgeContractManifest.json).
-It records the compatibility-bearing public source symbols and integration
-tests discovered at that exact revision, their observable behavior, the
-expected Midge error when statically discoverable, the mapped Pants test, and
-coverage status. Its 949 entries are a historical mapping, not a current
-coverage certificate: some mappings reference removed shape/architecture
-tests, and it omits the newer source-test inventory. See the
+It records compatibility-bearing public source symbols and integration tests,
+their observable behavior, the expected Midge error when statically
+discoverable, the mapped Pants test, and coverage status. The inventory was
+discovered at `75dcc39` and its sources were re-resolved at `7d39f86`: entries
+for tests Midge consolidated into its 13 integration targets now cite the new
+file and Rust module path, entries for tests Midge deleted were removed, and
+tests Midge renamed with a changed assertion are marked `revalidate`. Its 945
+entries are a historical mapping, not a current coverage certificate: some
+mappings reference removed shape/architecture tests, and it omits integration
+tests added after `75dcc39` and the source-test inventory. See the
 [behavior gap analysis](MidgeBehaviorGapAnalysis.md) for known uncovered
 scenarios, demonstrated differences, and unresolved baseline questions.
 Public exports and public integration tests are canonical. Source-level

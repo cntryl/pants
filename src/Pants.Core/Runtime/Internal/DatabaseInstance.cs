@@ -135,9 +135,11 @@ sealed class DatabaseInstance :
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        if (timeout <= TimeSpan.Zero)
+        // Matching Midge, a zero budget still begins shutdown and reports a retryable Timeout
+        // unless the database is already closed.
+        if (timeout < TimeSpan.Zero)
         {
-            throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
+            throw PantsException.InvalidArgument("Shutdown timeout must not be negative.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();

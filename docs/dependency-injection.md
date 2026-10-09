@@ -65,9 +65,9 @@ owned by Pants and can still complete, so callers must not assume a timed-out mu
 retry it blindly.
 
 `LeaseTimeToLive` defaults to 30 seconds for Midge parity and applies to local,
-simulated-cloud, and provider-cloud writers. `LeaseClockSkewTolerance` must be non-negative and
-strictly shorter than the TTL. Pants renews at one third of the TTL, clamped to 1 ms through 10
-seconds; the supported minimum TTL is 3 ms. A successor may take over only after the persisted
+simulated-cloud, and provider-cloud writers. As in Midge, the TTL must be greater than zero and
+`LeaseClockSkewTolerance` must be non-negative and must not exceed the TTL (skew equal to the TTL
+is allowed). Pants renews at one third of the TTL, clamped to 1 ms through 10 seconds. A successor may take over only after the persisted
 lease boundary plus skew, and writer-epoch checks still fence the old owner.
 
 ## Bind multiple databases
