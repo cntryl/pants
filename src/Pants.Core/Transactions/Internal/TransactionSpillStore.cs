@@ -5,14 +5,7 @@ namespace Cntryl.Pants.Transactions.Internal;
 sealed class TransactionSpillStore : IDisposable
 {
     const int HeaderLength = 48;
-    const int SparseIndexStride = 16;
-
-    /// <summary>
-    ///     Per-entry framing charged on top of an operation's own bytes when reserving budget.
-    ///     Deliberately generous: admitting a spill that then fails to write is worse than a
-    ///     slightly conservative estimate.
-    /// </summary>
-    const int RunEntryOverheadBytes = 64;
+    internal const int SparseIndexStride = 16;
 
     static readonly Lock DirectoryMutationGate = new();
 
@@ -90,27 +83,19 @@ sealed class TransactionSpillStore : IDisposable
     }
 
     /// <summary>
-    ///     Charges the bytes this run is about to write, before writing them.
+    ///     Charges the bytes this run is about to write, including the range index and sparse
+    ///     index copies of keys, before writing them.
     /// </summary>
-    void ReserveRunBytes(IReadOnlyList<TransactionIntentOperation> operations)
+    void ReserveRunBytes(IReadOnlyList<TransactionIntentOperation> sortedOperations)
     {
         if (_ledger is null)
         {
             return;
         }
 
-        var estimate = (long)HeaderLength;
-        foreach (var operation in operations)
-        {
-            estimate = checked(
-                estimate +
-                operation.Key.Length +
-                (operation.Value?.Length ?? 0) +
-                (operation.EndExclusive?.Length ?? 0) +
-                RunEntryOverheadBytes);
-        }
-
-        var reservation = _ledger.Reserve(StorageAdmissionKind.TransactionSpill, estimate);
+        var reservation = _ledger.Reserve(
+            StorageAdmissionKind.TransactionSpill,
+            TransactionSpillFootprint.Measure(sortedOperations));
         lock (_lifetimeGate)
         {
             _reservations.Add(reservation);
@@ -128,17 +113,17 @@ sealed class TransactionSpillStore : IDisposable
         // Retry first: a file freed by a successful removal returns its charge before this write
         // is measured against the budget.
         _retirement.RetryPending();
-        ReserveRunBytes(operations);
+        var sorted = operations
+            .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
+            .ThenBy(static operation => operation.Ordinal)
+            .ToArray();
+        ReserveRunBytes(sorted);
         var runNumber = _runs.Count;
         var stem = $"{_transactionId:x16}-{runNumber:x8}";
         var runPath = Path.Combine(_directory, $"{stem}.run");
         var runTemporaryPath = $"{runPath}.tmp";
         var rangePath = Path.Combine(_directory, $"{stem}.ranges");
         var rangeTemporaryPath = $"{rangePath}.tmp";
-        var sorted = operations
-            .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
-            .ThenBy(static operation => operation.Ordinal)
-            .ToArray();
 
         try
         {
