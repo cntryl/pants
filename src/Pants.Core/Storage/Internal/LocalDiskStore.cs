@@ -5856,16 +5856,22 @@ sealed class LocalDiskStore :
     internal static void ValidateManifestJournal(ReadOnlySpan<byte> bytes) =>
         _ = ReadDurableJournalRecords(bytes, out _);
 
+    /// <summary>
+    ///     Replays the durable journal prefix all-or-nothing: edits are applied to a copy of
+    ///     <paramref name="manifest" />, which is committed only after every edit has applied. A failure
+    ///     leaves <paramref name="manifest" /> at the base state, so no part of a damaged journal survives.
+    /// </summary>
     static void ReplayManifestJournal(ReadOnlySpan<byte> bytes, ManifestState manifest, out int durableByteLength)
     {
         var records = ReadDurableJournalRecords(bytes, out durableByteLength);
-        var nextLegacyEditId = manifest.EditCheckpointId;
+        var replayed = manifest.Clone();
+        var nextLegacyEditId = replayed.EditCheckpointId;
         foreach (var record in records)
         {
             var editStart = ManifestJournalPayload.Locate(record.Payload, out var envelopedEditId);
             var editId = envelopedEditId ?? checked(++nextLegacyEditId);
             nextLegacyEditId = Math.Max(nextLegacyEditId, editId);
-            if (editId <= manifest.EditCheckpointId)
+            if (editId <= replayed.EditCheckpointId)
             {
                 continue;
             }
@@ -5883,9 +5889,11 @@ sealed class LocalDiskStore :
                     exception);
             }
 
-            ApplyManifestEdit(manifest, edit, record.Type);
-            manifest.EditCheckpointId = editId;
+            ApplyManifestEdit(replayed, edit, record.Type);
+            replayed.EditCheckpointId = editId;
         }
+
+        manifest.CopyFrom(replayed);
     }
 
     static JournalRecord[] ReadDurableJournalRecords(ReadOnlySpan<byte> bytes, out int durableByteLength)
