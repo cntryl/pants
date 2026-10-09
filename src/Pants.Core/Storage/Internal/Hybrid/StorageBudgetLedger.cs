@@ -31,6 +31,12 @@ sealed class StorageBudgetLedger
     public long ChargedBytes => checked(_residentBytes() + ReservedBytes);
 
     /// <summary>
+    ///     Bytes a <paramref name="kind" /> operation could still reserve right now.
+    /// </summary>
+    public long GetAvailableBytes(StorageAdmissionKind kind) =>
+        Math.Max(0, GetCeilingBytes(kind) - ChargedBytes);
+
+    /// <summary>
     ///     Reserves <paramref name="estimateBytes" /> or throws.
     /// </summary>
     public StorageReservation Reserve(StorageAdmissionKind kind, long estimateBytes)

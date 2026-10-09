@@ -14,16 +14,34 @@ namespace Cntryl.Pants.Storage.Internal.Wal;
 /// </remarks>
 sealed class WalRecoverySpool : IDisposable
 {
+    /// <summary>
+    ///     Spooled bytes are charged in chunks of at least this size, so a transaction of many small
+    ///     records holds a handful of reservations rather than one per record.
+    /// </summary>
+    const long ReservationChunkBytes = 64 * 1024;
+
+    const long FrameHeaderBytes = 2 * sizeof(uint);
+
+    readonly StorageBudgetLedger? _ledger;
     readonly string _path;
+    readonly List<StorageBudgetLedger.StorageReservation> _reservations = [];
     bool _disposed;
+    long _reservedBytes;
+    long _spooledBytes;
     FileStream? _stream;
 
-    public WalRecoverySpool(string scratchDirectory)
+    /// <summary>
+    ///     <paramref name="ledger" /> charges spooled bytes against the local-storage budget, or is
+    ///     <see langword="null" /> where no local budget applies. The spool sits outside the
+    ///     resident figure the budget measures, so the charge is held until the spool is disposed.
+    /// </summary>
+    public WalRecoverySpool(string scratchDirectory, StorageBudgetLedger? ledger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
         _path = Path.Combine(
             scratchDirectory,
             $"pants-wal-recovery-{Guid.NewGuid():N}.tmp");
+        _ledger = ledger;
     }
 
     /// <summary>
@@ -47,6 +65,18 @@ sealed class WalRecoverySpool : IDisposable
         }
 
         _disposed = true;
+        try
+        {
+            DeleteSpoolFile();
+        }
+        finally
+        {
+            ReleaseReservations();
+        }
+    }
+
+    void DeleteSpoolFile()
+    {
         if (_stream is null)
         {
             return;
@@ -72,9 +102,49 @@ sealed class WalRecoverySpool : IDisposable
     public void Append(WalRecord record)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var stream = OpenStream();
         var payload = WalCodec.EncodeRecord(record);
+        Reserve(checked(payload.Length + FrameHeaderBytes));
+        var stream = OpenStream();
         WalCodec.AppendFrame(stream.SafeFileHandle, stream.Length, payload);
+    }
+
+    /// <summary>Charges the bytes about to be spooled, before writing them.</summary>
+    void Reserve(long frameBytes)
+    {
+        _spooledBytes = checked(_spooledBytes + frameBytes);
+        if (_ledger is null || _spooledBytes <= _reservedBytes)
+        {
+            return;
+        }
+
+        var needed = _spooledBytes - _reservedBytes;
+        var chunk = Math.Max(needed, ReservationChunkBytes);
+        if (!_ledger.TryReserve(StorageAdmissionKind.RecoverySpool, chunk, out var reservation))
+        {
+            // Near the limit the chunk's slack must not refuse bytes that would still fit.
+            chunk = needed;
+            if (!_ledger.TryReserve(StorageAdmissionKind.RecoverySpool, chunk, out reservation))
+            {
+                _spooledBytes -= frameBytes;
+                throw new PantsNoSpaceException(
+                    $"The local storage budget cannot admit {needed} more bytes of WAL recovery " +
+                    "spool; the WAL was left untouched.");
+            }
+        }
+
+        _reservations.Add(reservation);
+        _reservedBytes = checked(_reservedBytes + chunk);
+    }
+
+    void ReleaseReservations()
+    {
+        foreach (var reservation in _reservations)
+        {
+            reservation.Dispose();
+        }
+
+        _reservations.Clear();
+        _reservedBytes = 0;
     }
 
     public void Replay(Action<WalRecord> accept)
