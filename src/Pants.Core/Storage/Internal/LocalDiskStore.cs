@@ -4314,8 +4314,10 @@ sealed class LocalDiskStore :
                         checked((long)mutation.Sequence),
                         mutation.Expiration));
                     break;
+                // A recovered delete stays in the memtable as a tombstone, exactly as a live commit
+                // leaves it: removing the key instead would let an older value in an SST show through.
                 case WalOperation.Delete:
-                    family = family.Remove(mutation.Key);
+                    family = family.SetItem(mutation.Key, Tombstone(mutation.Sequence));
                     break;
                 case WalOperation.DeleteRange when mutation.RangeEnd is not null:
                     state.RangeTombstones[identity] = state.RangeTombstones[identity].Add(
@@ -4327,7 +4329,7 @@ sealed class LocalDiskStore :
                                  ByteArrayComparer.Instance.Compare(key, mutation.Key) >= 0 &&
                                  ByteArrayComparer.Instance.Compare(key, mutation.RangeEnd) < 0).ToList())
                     {
-                        family = family.Remove(key);
+                        family = family.SetItem(key, Tombstone(mutation.Sequence));
                     }
 
                     break;
@@ -4335,6 +4337,9 @@ sealed class LocalDiskStore :
 
             state.FamilyData[identity] = family;
         }
+
+        static CellState Tombstone(ulong sequence) =>
+            CellState.FromUnixMilliseconds(null, checked((long)sequence), null);
     }
 
     FileMeta CreateSst(
