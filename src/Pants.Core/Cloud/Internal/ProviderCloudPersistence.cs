@@ -9,7 +9,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     ///     How much of a published WAL segment recovery holds in memory at once.
     /// </summary>
     public const int WalRecoveryPageBytes = 4 * 1024 * 1024;
-    public const int WalPruningPageBytes = 256 * 1024;
     public const ulong MaximumWholeObjectWalRecoveryBytes = 256UL * 1024 * 1024;
 
     static readonly string[] MetadataFiles =
@@ -43,6 +42,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ICloudObjectStore _walStore;
     readonly ProviderWalCatalogStore _catalog;
     readonly ProviderSstPublisher _sstPublisher;
+    readonly ProviderWalRetirement _walRetirement;
     readonly ulong _writerEpoch;
     int _disposed;
     int _persistenceAnomaly;
@@ -54,7 +54,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
         IFailpointHandler? failpoints = null,
-        SstPublicationAdmission? sstPublicationAdmission = null)
+        SstPublicationAdmission? sstPublicationAdmission = null,
+        WalRetirementSettings? walRetirementSettings = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
@@ -76,6 +77,15 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             () => CloudSstReferenceReader.ReadLocalProtectedNames(_localRoot),
             _lease.EnsureValid,
             failpoints ?? NullPantsFailpointHandler.Instance);
+        _walRetirement = new ProviderWalRetirement(
+            walStore,
+            sstStore,
+            controlStore,
+            _catalog,
+            static catalog => JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions),
+            lease,
+            walRetirementSettings ?? WalRetirementSettings.Standalone(),
+            () => Volatile.Write(ref _persistenceAnomaly, 1));
     }
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
@@ -241,9 +251,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
 
         await CollectObsoleteSstsAsync(cancellationToken).ConfigureAwait(false);
-
-        await PruneCoveredWalAsync(metadata, cancellationToken).ConfigureAwait(false);
     }
+
+    public ValueTask<WalRetirementResult> RetireCoveredWalAsync(CancellationToken cancellationToken) =>
+        _walRetirement.RetireAsync(cancellationToken);
 
     public async ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
     {
@@ -929,323 +940,6 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     static bool IsManifestObjectKey(string objectKey) =>
         objectKey.EndsWith("/manifest.snapshot.json", StringComparison.Ordinal) ||
         objectKey.EndsWith("/manifest.json", StringComparison.Ordinal);
-
-    async ValueTask PruneCoveredWalAsync(
-        CloudControlMetadataSnapshot metadata,
-        CancellationToken cancellationToken)
-    {
-        var manifest = metadata.AuthoritativeManifest;
-        if (manifest is null)
-        {
-            return;
-        }
-
-        var coveredSequence = manifest.LastPersistedSequence;
-        if (coveredSequence == 0)
-        {
-            return;
-        }
-
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            _lease.EnsureValid();
-            var read = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
-            if (read.Object is not { } current || read.Catalog is not { } catalog)
-            {
-                return;
-            }
-
-            if (catalog.FencingEpoch != _writerEpoch)
-            {
-                throw new PantsFencedException(
-                    "The cloud WAL catalog is not fenced to this writer during pruning.");
-            }
-
-            // Retire only the contiguous oldest prefix: a gap must stay recoverable in order, so a
-            // segment that is not yet covered ends the prefix however many newer ones are.
-            var candidates = new List<ProviderPublishedWalSegment>();
-            foreach (var segment in catalog.Segments.Values.OrderBy(static segment => segment.SegmentId))
-            {
-                if (segment.MaximumSequence > coveredSequence)
-                {
-                    break;
-                }
-
-                candidates.Add(segment);
-            }
-
-            if (candidates.Count == 0)
-            {
-                return;
-            }
-
-            var retired = new List<ProviderPublishedWalSegment>(candidates.Count);
-            var walGuards = new Dictionary<ulong, CloudObjectIdentityGuard>();
-            var coveringFiles = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var segment in candidates)
-            {
-                string? version;
-                try
-                {
-                    version = await ProveWalSegmentCoveredAsync(
-                        segment,
-                        manifest,
-                        coveringFiles,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception exception) when (
-                    exception is PantsTimeoutException or PantsResourceLimitException or PantsBusyException)
-                {
-                    // Out of time or memory is not an error: authority is retained and the proof
-                    // resumes on a later maintenance turn. What is already proven still retires.
-                    break;
-                }
-
-                if (version is null)
-                {
-                    break;
-                }
-
-                retired.Add(segment);
-                walGuards.Add(
-                    segment.SegmentId,
-                    new CloudObjectIdentityGuard(_walStore, segment.ObjectKey, version));
-            }
-
-            if (retired.Count == 0 || cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            var dependencyGuards = await ValidateManifestDependenciesAsync(
-                (ManifestState)manifest,
-                coveringFiles,
-                metadata,
-                cancellationToken).ConfigureAwait(false);
-            await VerifyIdentityGuardsAsync(
-                dependencyGuards.Concat(walGuards.Values),
-                cancellationToken).ConfigureAwait(false);
-            _lease.EnsureValid();
-
-            var retiredIds = retired
-                .Select(static segment => segment.SegmentId)
-                .ToHashSet();
-            var retained = new SortedDictionary<ulong, ProviderPublishedWalSegment>(
-                catalog.Segments
-                    .Where(entry => !retiredIds.Contains(entry.Key))
-                    .ToDictionary());
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(
-                catalog with { Segments = retained },
-                JsonOptions);
-            var published = await _walStore.PutAsync(
-                PantsCloudObjectLayout.WalCatalogObjectKey,
-                bytes,
-                new PantsCloudObjectWriteCondition.IfVersion(current.Version),
-                cancellationToken).ConfigureAwait(false);
-            if (!published)
-            {
-                continue;
-            }
-
-            var readback = await _walStore.GetAsync(
-                               PantsCloudObjectLayout.WalCatalogObjectKey,
-                               cancellationToken).ConfigureAwait(false) ??
-                           throw new PantsLeaseIndeterminateException(
-                               "Cloud WAL catalog retirement was acknowledged without an authoritative object.");
-            if (!readback.Data.Span.SequenceEqual(bytes))
-            {
-                throw new PantsCorruptionException(
-                    "Cloud WAL catalog retirement read back different bytes after CAS.");
-            }
-
-            await _catalog.ConvergeMirrorAsync(bytes, cancellationToken).ConfigureAwait(false);
-            _lease.EnsureValid();
-
-            foreach (var segment in retired)
-            {
-                await TryDeleteRetiredWalAsync(
-                    segment,
-                    walGuards[segment.SegmentId].Version,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            return;
-        }
-    }
-
-    async ValueTask TryDeleteRetiredWalAsync(
-        ProviderPublishedWalSegment segment,
-        string expectedVersion,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            _lease.EnsureValid();
-            var outcome = await _walStore.DeleteAsync(
-                segment.ObjectKey,
-                new PantsCloudObjectDeleteCondition.IfVersion(expectedVersion),
-                cancellationToken).ConfigureAwait(false);
-            if (outcome != CloudObjectDeleteOutcome.Deleted)
-            {
-                Volatile.Write(ref _persistenceAnomaly, 1);
-            }
-        }
-        catch (PantsException) when (!cancellationToken.IsCancellationRequested)
-        {
-            Volatile.Write(ref _persistenceAnomaly, 1);
-            // The retired catalog is authoritative. Retaining an unproven
-            // object as harmless residue is safer than an unconditional retry.
-        }
-    }
-
-    /// <summary>
-    ///     Proves a published WAL segment's size, checksum and manifest coverage by reading it a
-    ///     bounded page at a time, so pruning memory does not depend on segment size.
-    /// </summary>
-    /// <returns>The object version that was proven, or null when the segment is not yet covered.</returns>
-    async ValueTask<string?> ProveWalSegmentCoveredAsync(
-        ProviderPublishedWalSegment segment,
-        ManifestState manifest,
-        HashSet<string> coveringFiles,
-        CancellationToken cancellationToken)
-    {
-        _lease.EnsureValid();
-        var metadata = await _walStore.HeadAsync(segment.ObjectKey, cancellationToken)
-            .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-            $"Published cloud WAL object '{segment.ObjectKey}' is missing during pruning.");
-        if (metadata.SizeBytes != segment.SizeBytes)
-        {
-            throw new PantsCorruptionException(
-                $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
-        }
-
-        var covered = new HashSet<string>(StringComparer.Ordinal);
-        bool isCovered;
-        if (await TryVerifySegmentInPagesAsync(
-                _walStore,
-                segment,
-                cancellationToken,
-                WalPruningPageBytes).ConfigureAwait(false))
-        {
-            using var stream = new RemoteRangeStream(
-                _walStore,
-                segment.ObjectKey,
-                checked((long)segment.SizeBytes),
-                WalPruningPageBytes);
-            isCovered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
-                stream,
-                segment.MaximumSequence,
-                segment.WriterEpoch,
-                manifest,
-                covered);
-        }
-        else
-        {
-            // No ranged reads (or a mismatch to classify): the whole object is the only proof, so
-            // admit it against the whole-object limit before any GET.
-            if (segment.SizeBytes > MaximumWholeObjectWalRecoveryBytes)
-            {
-                throw new PantsResourceLimitException(
-                    $"Published cloud WAL object '{segment.ObjectKey}' is too large to prove " +
-                    "without ranged reads.");
-            }
-
-            var remote = await _walStore.GetAsync(segment.ObjectKey, cancellationToken)
-                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-                $"Published cloud WAL object '{segment.ObjectKey}' is missing during pruning.");
-            if (checked((ulong)remote.Data.Length) != segment.SizeBytes ||
-                DiskFormat.Crc32C(remote.Data.Span) != segment.ContentCrc32C)
-            {
-                throw new PantsCorruptionException(
-                    $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
-            }
-
-            using var stream = new MemoryStream(remote.Data.ToArray(), false);
-            isCovered = CloudWalCoverageValidator.ValidateStreamAndCollectCoveringFiles(
-                stream,
-                segment.MaximumSequence,
-                segment.WriterEpoch,
-                manifest,
-                covered);
-        }
-
-        _lease.EnsureValid();
-        if (!isCovered)
-        {
-            return null;
-        }
-
-        coveringFiles.UnionWith(covered);
-        return metadata.Version;
-    }
-
-    async ValueTask<IReadOnlyList<CloudObjectIdentityGuard>> ValidateManifestDependenciesAsync(
-        ManifestState manifest,
-        HashSet<string> coveringFileNames,
-        CloudControlMetadataSnapshot metadata,
-        CancellationToken cancellationToken)
-    {
-        var guards = new List<CloudObjectIdentityGuard>(
-            coveringFileNames.Count + MetadataFiles.Length);
-
-        // Only the SSTs that cover the retiring segments matter; unrelated ones are never touched.
-        // An SST's bytes were verified when it was published and it is immutable, so existence,
-        // length and an identity guard are the proof that it is still the covering object.
-        foreach (var file in manifest.Files.Where(file => coveringFileNames.Contains(file.Name)))
-        {
-            _lease.EnsureValid();
-            var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
-            var remote = await _sstStore.HeadAsync(objectKey, cancellationToken)
-                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-                $"Manifest cloud SST '{file.Name}' is missing during WAL pruning.");
-            _lease.EnsureValid();
-            if (file.SizeBytes != 0 && remote.SizeBytes != file.SizeBytes)
-            {
-                throw new PantsCorruptionException(
-                    $"Manifest cloud SST '{file.Name}' length differs during WAL pruning.");
-            }
-
-            guards.Add(new CloudObjectIdentityGuard(_sstStore, objectKey, remote.Version));
-        }
-
-        foreach (var (fileName, capturedBytes) in metadata.Files)
-        {
-            _lease.EnsureValid();
-            var objectKey = PantsCloudObjectLayout.MetadataPrefix + fileName;
-            var remote = await _controlStore.GetAsync(objectKey, cancellationToken)
-                .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
-                $"Cloud metadata object '{objectKey}' is missing during WAL pruning.");
-            _lease.EnsureValid();
-            if (!remote.Data.Span.SequenceEqual(capturedBytes.Span))
-            {
-                throw new PantsCorruptionException(
-                    $"Cloud metadata object '{objectKey}' differs from the published snapshot bytes.");
-            }
-
-            guards.Add(new CloudObjectIdentityGuard(_controlStore, objectKey, remote.Version));
-        }
-
-        return guards;
-    }
-
-    async ValueTask VerifyIdentityGuardsAsync(
-        IEnumerable<CloudObjectIdentityGuard> guards,
-        CancellationToken cancellationToken)
-    {
-        foreach (var guard in guards)
-        {
-            _lease.EnsureValid();
-            var current = await guard.Store.HeadAsync(guard.ObjectKey, cancellationToken)
-                .ConfigureAwait(false);
-            _lease.EnsureValid();
-            if (current is null ||
-                !StringComparer.Ordinal.Equals(current.Version, guard.Version))
-            {
-                throw new PantsLeaseIndeterminateException(
-                    $"Cloud WAL pruning dependency '{guard.ObjectKey}' changed after validation.");
-            }
-        }
-    }
 
     internal static ProviderWalCatalog DecodeCatalogForFloor(ReadOnlySpan<byte> bytes) =>
         DecodeCatalog(bytes);

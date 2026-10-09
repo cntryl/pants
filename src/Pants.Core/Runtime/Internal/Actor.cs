@@ -48,6 +48,8 @@ sealed class Actor : IAsyncDisposable
     readonly bool _cloudMode;
     readonly ICloudPersistence? _cloudPersistence;
     CloudWorkScheduler _cloudWalDrainScheduler = null!;
+    CloudWorkScheduler _cloudWalRetirementScheduler = null!;
+    RuntimeWorker _cloudWalRetirementWorker = null!;
     CloudWalSealController? _cloudWalSealController;
     CancellationTokenSource? _cloudWalSealDeadlineCancellation;
     bool _cloudWalSealPending;
@@ -170,7 +172,9 @@ sealed class Actor : IAsyncDisposable
         _cloudFlushRetries.IsDisposed &&
         _cloudWalDrainScheduler.IsDisposed &&
         _cloudMaintenanceScheduler.IsDisposed &&
+        _cloudWalRetirementScheduler.IsDisposed &&
         _cloudWorker.IsDisposed &&
+        _cloudWalRetirementWorker.IsDisposed &&
         _walRuntime.IsDisposed &&
         _flushRuntime.IsDisposed &&
         _compactionRuntime.IsDisposed &&
@@ -241,8 +245,10 @@ sealed class Actor : IAsyncDisposable
 
         await CaptureCleanupAsync(_cloudWalDrainScheduler.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_cloudMaintenanceScheduler.DisposeAsync).ConfigureAwait(false);
+        await CaptureCleanupAsync(_cloudWalRetirementScheduler.DisposeAsync).ConfigureAwait(false);
         var stuckWorkers = new List<Task>();
         await DisposeWorkerAsync(_cloudWorker).ConfigureAwait(false);
+        await DisposeWorkerAsync(_cloudWalRetirementWorker).ConfigureAwait(false);
 
         await CaptureCleanupAsync(_walRuntime.DisposeAsync).ConfigureAwait(false);
         await CaptureCleanupAsync(_flushRuntime.DisposeAsync).ConfigureAwait(false);
@@ -555,7 +561,14 @@ sealed class Actor : IAsyncDisposable
                         objectStores.Control,
                         cloudLease,
                         dependencies.Failpoints,
-                        mirrorPublicationAdmission);
+                        mirrorPublicationAdmission,
+                        new WalRetirementSettings(
+                            maintenanceMemoryBudget,
+                            maintenanceMemoryGate,
+                            WalRetirementSettings.DefaultPageBytes,
+                            dependencies.CloudWalRetirementQuantum ??
+                            WalRetirementSettings.DefaultQuantum,
+                            runtimeTimeProvider));
                     cloudPersistence = providerPersistence;
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
@@ -768,6 +781,15 @@ sealed class Actor : IAsyncDisposable
                 _cloudWorker,
                 MirrorCloudStorageWithFailureTrackingAsync,
                 _runtimeTimeProvider);
+            // WAL retirement is background maintenance on its own lane: a slow proof never queues
+            // ahead of a commit's WAL upload, authority check or mirror on the cloud worker.
+            _cloudWalRetirementWorker = new RuntimeWorker(
+                options.CoordinatorQueueCapacity,
+                dependencies.WorkerDisposalTimeout);
+            _cloudWalRetirementScheduler = new CloudWorkScheduler(
+                _cloudWalRetirementWorker,
+                RetireCoveredCloudWalAsync,
+                _runtimeTimeProvider);
             _runtimeMetricsSnapshotFactory = new RuntimeMetricsSnapshotFactory(
                 options,
                 telemetry,
@@ -796,6 +818,12 @@ sealed class Actor : IAsyncDisposable
             }
 
             _loopTask = Task.Run(RunLoopAsync, CancellationToken.None);
+            if (_cloudPersistence is not null)
+            {
+                // Resume retirement left by an earlier process; proofs revalidate from durable state.
+                _cloudWalRetirementScheduler.Signal();
+            }
+
             if (UsesBackgroundImmutableFlushes)
             {
                 _ = ScheduleRecoveredMemtableFlushesAsync();
@@ -4443,6 +4471,46 @@ sealed class Actor : IAsyncDisposable
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
         }
+
+        // The published manifest may now cover more WAL; retire it in the background.
+        _cloudWalRetirementScheduler?.Signal();
+    }
+
+    /// <summary>
+    ///     One background WAL retirement turn. Yielding, a provider timeout or exhausted maintenance
+    ///     memory only reschedule the turn; a real failure is a persistence anomaly, as for the
+    ///     mirror, and retries after the backoff.
+    /// </summary>
+    async ValueTask<CloudWorkOutcome> RetireCoveredCloudWalAsync(CancellationToken cancellationToken)
+    {
+        var persistence = _cloudPersistence;
+        if (persistence is null)
+        {
+            return CloudWorkOutcome.Completed;
+        }
+
+        WalRetirementResult result;
+        try
+        {
+            result = await persistence.RetireCoveredWalAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+            throw;
+        }
+
+        if (persistence.HasPersistenceAnomaly)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+
+        return result.Outcome switch
+        {
+            WalRetirementOutcome.Yielded => CloudWorkOutcome.Continue,
+            WalRetirementOutcome.Deferred => CloudWorkOutcome.RetryLater,
+            _ => CloudWorkOutcome.Completed
+        };
     }
 
     async ValueTask MirrorCloudStorageWithFailureTrackingAsync(

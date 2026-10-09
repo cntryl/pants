@@ -1,20 +1,48 @@
 namespace Cntryl.Pants.Runtime.Internal.Services.Cloud;
 
-sealed class CloudWorkScheduler(
-    RuntimeWorker worker,
-    Func<CancellationToken, ValueTask> operation,
-    TimeProvider? timeProvider = null) : IAsyncDisposable
+sealed class CloudWorkScheduler : IAsyncDisposable
 {
     static readonly TimeSpan InitialRetryDelay = TimeSpan.FromMilliseconds(25);
     static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromSeconds(1);
 
     readonly Lock _gate = new();
     readonly CancellationTokenSource _lifetimeCancellation = new();
-    readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    readonly Func<CancellationToken, ValueTask<CloudWorkOutcome>> _operation;
+    readonly TimeProvider _timeProvider;
+    readonly RuntimeWorker _worker;
     bool _disposed;
     int _outstanding;
     Task? _pumpTask;
     bool _requested;
+
+    public CloudWorkScheduler(
+        RuntimeWorker worker,
+        Func<CancellationToken, ValueTask> operation,
+        TimeProvider? timeProvider = null)
+        : this(
+            worker,
+            async cancellationToken =>
+            {
+                await operation(cancellationToken).ConfigureAwait(false);
+                return CloudWorkOutcome.Completed;
+            },
+            timeProvider)
+    {
+    }
+
+    /// <param name="operation">
+    ///     Work that reports whether it should run again at once (<see cref="CloudWorkOutcome.Continue" />)
+    ///     or after the retry backoff (<see cref="CloudWorkOutcome.RetryLater" />) without failing.
+    /// </param>
+    public CloudWorkScheduler(
+        RuntimeWorker worker,
+        Func<CancellationToken, ValueTask<CloudWorkOutcome>> operation,
+        TimeProvider? timeProvider = null)
+    {
+        _worker = worker;
+        _operation = operation;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public int Outstanding => Volatile.Read(ref _outstanding);
 
@@ -84,11 +112,14 @@ sealed class CloudWorkScheduler(
         var retryDelay = InitialRetryDelay;
         while (TryTakeRequest())
         {
+            var outcome = CloudWorkOutcome.RetryLater;
             try
             {
-                await worker.ExecuteAsync(operation, _lifetimeCancellation.Token)
+                await _worker.ExecuteAsync(
+                        async cancellationToken =>
+                            outcome = await _operation(cancellationToken).ConfigureAwait(false),
+                        _lifetimeCancellation.Token)
                     .ConfigureAwait(false);
-                retryDelay = InitialRetryDelay;
             }
             catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
             {
@@ -97,29 +128,43 @@ sealed class CloudWorkScheduler(
             }
             catch (Exception)
             {
-                if (!RequestRetry())
-                {
-                    CompleteDisposedPump();
-                    return;
-                }
-
-                try
-                {
-                    await Task.Delay(
-                            retryDelay,
-                            _timeProvider,
-                            _lifetimeCancellation.Token)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (
-                    _lifetimeCancellation.IsCancellationRequested)
-                {
-                    CompleteDisposedPump();
-                    return;
-                }
-
-                retryDelay = NextRetryDelay(retryDelay);
+                outcome = CloudWorkOutcome.RetryLater;
             }
+
+            if (outcome == CloudWorkOutcome.Completed)
+            {
+                retryDelay = InitialRetryDelay;
+                continue;
+            }
+
+            if (!RequestRetry())
+            {
+                CompleteDisposedPump();
+                return;
+            }
+
+            if (outcome == CloudWorkOutcome.Continue)
+            {
+                retryDelay = InitialRetryDelay;
+                continue;
+            }
+
+            try
+            {
+                await Task.Delay(
+                        retryDelay,
+                        _timeProvider,
+                        _lifetimeCancellation.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                _lifetimeCancellation.IsCancellationRequested)
+            {
+                CompleteDisposedPump();
+                return;
+            }
+
+            retryDelay = NextRetryDelay(retryDelay);
         }
     }
 
