@@ -19,6 +19,7 @@ sealed class CompactionRuntimeService(
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations = true,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
             new CompactionRuntimeRequest(
@@ -26,13 +27,15 @@ sealed class CompactionRuntimeService(
                 force,
                 outputPublisher,
                 flushMutableOperations,
-                prepareInputs),
+                prepareInputs,
+                staging),
             cancellationToken);
 
     public ValueTask<CompactionResult> DrainDebtAsync(
         RuntimeState state,
         CloudCompactionOutputPublisher? outputPublisher,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
             new CompactionRuntimeRequest(
@@ -41,6 +44,7 @@ sealed class CompactionRuntimeService(
                 outputPublisher,
                 true,
                 prepareInputs,
+                staging,
                 DrainDebt: true),
             cancellationToken);
 
@@ -63,6 +67,7 @@ sealed class CompactionRuntimeService(
                         telemetry.RecordCompaction,
                         memory,
                         request.PrepareInputs,
+                        request.Staging,
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -75,6 +80,7 @@ sealed class CompactionRuntimeService(
                     telemetry.RecordCompaction,
                     memory,
                     request.PrepareInputs,
+                    request.Staging,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

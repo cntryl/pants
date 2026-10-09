@@ -1536,13 +1536,12 @@ sealed class Actor : IAsyncDisposable
                     if (_diskStore is not null)
                     {
                         var inputs = _diskStore.GetCompactionDebtInputNames(state);
-                        using var inputProtection = await ProtectCompactionInputsAsync(
+                        using var staging = await ReserveCompactionStagingAsync(
                                 inputs,
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        using var compactionReservation = await ReserveCompactionAsync(
-                                state,
-                                true,
+                        using var inputProtection = await ProtectCompactionInputsAsync(
+                                inputs,
                                 cancellationToken)
                             .ConfigureAwait(false);
                         await deadline.RunAsync(
@@ -1554,6 +1553,7 @@ sealed class Actor : IAsyncDisposable
                                     state,
                                     _cloudCompactionOutputPublisher,
                                     prepareInputs: EnsureHybridSstsLocalForMaintenanceAsync,
+                                    staging: staging?.Staging,
                                     cancellationToken: token),
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -4171,13 +4171,12 @@ sealed class Actor : IAsyncDisposable
         _backgroundCompactionPending = false;
         EnsureCloudWriteAuthorityValid();
         var inputs = _diskStore.GetCompactionInputNames(state, false);
-        using var inputProtection = await ProtectCompactionInputsAsync(
+        using var staging = await ReserveCompactionStagingAsync(
                 inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
-        using var compactionReservation = await ReserveCompactionAsync(
-                state,
-                false,
+        using var inputProtection = await ProtectCompactionInputsAsync(
+                inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
         await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
@@ -4188,7 +4187,8 @@ sealed class Actor : IAsyncDisposable
                 false,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalForMaintenanceAsync)
+                EnsureHybridSstsLocalForMaintenanceAsync,
+                staging?.Staging)
             .ConfigureAwait(false);
 
         if (result.PersistenceAnomaly)
@@ -4246,13 +4246,12 @@ sealed class Actor : IAsyncDisposable
         EnsureCloudWriteAuthorityValid();
         _telemetry.RecordReadAmplificationCompactionTrigger();
         var inputs = _diskStore!.GetCompactionInputNames(state, true);
-        using var inputProtection = await ProtectCompactionInputsAsync(
+        using var staging = await ReserveCompactionStagingAsync(
                 inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
-        using var compactionReservation = await ReserveCompactionAsync(
-                state,
-                true,
+        using var inputProtection = await ProtectCompactionInputsAsync(
+                inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
         await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
@@ -4263,7 +4262,8 @@ sealed class Actor : IAsyncDisposable
                 true,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalForMaintenanceAsync)
+                EnsureHybridSstsLocalForMaintenanceAsync,
+                staging?.Staging)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
         {
@@ -4826,9 +4826,8 @@ sealed class Actor : IAsyncDisposable
                 .ConfigureAwait(false);
         }
 
-        var reservation = await _hybridCache.ReserveForMaintenanceAsync(
+        var reservation = await _hybridCache.ReserveFlushAsync(
                 _diskStore,
-                StorageAdmissionKind.Flush,
                 frozen.SizeBytes,
                 CancellationToken.None)
             .ConfigureAwait(false);
@@ -4857,39 +4856,37 @@ sealed class Actor : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Reserves local disk for a compaction, sized at the total of its inputs.
+    ///     Reserves the fixed local window a hybrid compaction stages its outputs through.
     /// </summary>
     /// <remarks>
-    ///     A compaction holds its inputs and its outputs at the same time until the inputs retire,
-    ///     and its outputs are at most the size of its inputs, so the inputs bound the transient
-    ///     growth. Returns <see langword="null" /> outside hybrid storage, where there is no local
-    ///     budget to honour.
+    ///     Cold inputs are merged through ranged remote reads and each output is drained to cloud
+    ///     storage before the next is staged, so neither the input size nor the output count adds to
+    ///     local disk: the window is the compaction's whole footprint. It is taken before the inputs
+    ///     are protected, so eviction can still drop cloud-durable local inputs to make room. Returns
+    ///     <see langword="null" /> outside hybrid storage, where there is no local budget to honour,
+    ///     and when there is nothing to compact.
     /// </remarks>
-    async ValueTask<StorageBudgetLedger.StorageReservation?> ReserveCompactionAsync(
-        RuntimeState state,
-        bool force,
+    async ValueTask<CompactionStagingLease?> ReserveCompactionStagingAsync(
+        IReadOnlyCollection<string> inputs,
         CancellationToken cancellationToken)
     {
-        if (_hybridCache is null || _diskStore is null)
+        if (_hybridCache is null ||
+            _diskStore is null ||
+            _cloudCompactionOutputPublisher is null ||
+            inputs.Count == 0)
         {
             return null;
         }
 
-        var estimate = 0L;
-        foreach (var name in _diskStore.GetCompactionInputNames(state, force))
-        {
-            if (_diskStore.TryGetManifestSstSizeBytes(name, out var sizeBytes))
-            {
-                estimate = checked(estimate + sizeBytes);
-            }
-        }
-
-        return await _hybridCache.ReserveForMaintenanceAsync(
+        var windowBytes = _hybridCache.CompactionStagingWindowBytes;
+        var reservation = await _hybridCache.ReserveCompactionStagingAsync(
                 _diskStore,
-                StorageAdmissionKind.Compaction,
-                estimate,
+                windowBytes,
                 cancellationToken)
             .ConfigureAwait(false);
+        return new CompactionStagingLease(
+            reservation,
+            new CompactionOutputStaging(windowBytes, _cloudCompactionOutputPublisher));
     }
 
     /// <summary>

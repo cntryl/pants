@@ -73,6 +73,12 @@ static class StreamingCompactionMerger
             yield break;
         }
 
+        // The target only decides where partitions are cut. A single entry is bounded by the merge
+        // memory alone; one larger than the target becomes its own indivisible partition, which the
+        // caller's output staging admits or refuses.
+        var entryLimitBytes = resourceBudget is null
+            ? long.MaxValue
+            : Math.Max(1, resourceBudget.Limit / 2);
         // Resolved on the first entry, once every input has primed its block into the pool, so the
         // partition target is sized from the pool those blocks actually leave free.
         long? effectiveTargetSizeBytes = null;
@@ -92,11 +98,11 @@ static class StreamingCompactionMerger
             {
                 var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 var entryBytes = EstimateEntryBytes(entry);
-                if (entryBytes > target)
+                if (entryBytes > entryLimitBytes)
                 {
                     throw PantsException.ResourceLimit(
                         $"A {entryBytes}-byte compaction entry exceeds the " +
-                        $"{target}-byte compaction buffer budget.");
+                        $"{entryLimitBytes}-byte compaction buffer budget.");
                 }
 
                 if (currentEntries.Count > 0 &&
@@ -171,7 +177,8 @@ static class StreamingCompactionMerger
                 requestedTargetBytes,
                 resourceBudget.Limit - resourceBudget.Current);
 
-    static long EstimatePartitionBytes(CompactionMergeResult partition) => checked(
+    /// <summary>The merge's size estimate of one output partition's entries and range tombstones.</summary>
+    public static long EstimatePartitionBytes(CompactionMergeResult partition) => checked(
         partition.Entries.Sum(static entry =>
             (long)entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes) +
         partition.RangeTombstones.Sum(static range =>

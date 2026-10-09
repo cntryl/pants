@@ -36,12 +36,12 @@ public sealed class HybridHydrationAdmissionTests
     }
 
     /// <summary>
-    ///     Compaction and flush are the only things that reduce L0 debt, and writes now stall on
-    ///     that debt. Refusing them for space would therefore not degrade the engine, it would wedge
-    ///     it permanently — so maintenance evicts to make room and, failing that, proceeds anyway.
+    ///     A flush is the only thing that turns a full memtable into an SST, and writes stall on
+    ///     level-0 debt, so refusing it for space would wedge the engine rather than degrade it. It
+    ///     evicts to make room and, failing that, proceeds with its bounded, memtable-sized output.
     /// </summary>
     [Fact]
-    public async Task ShouldEvictToAdmitMaintenanceRatherThanRefuseIt()
+    public async Task ShouldEvictToAdmitFlushRatherThanRefuseIt()
     {
         var store = new FakeHybridCacheStore(sstSizeBytes: 300);
         using var manager = new HybridCacheManager(1000);
@@ -51,18 +51,14 @@ public sealed class HybridHydrationAdmissionTests
             ["a.sst", "b.sst", "c.sst"],
             CancellationToken.None);
 
-        using var reservation = await manager.ReserveForMaintenanceAsync(
-            store,
-            StorageAdmissionKind.Compaction,
-            400,
-            CancellationToken.None);
+        using var reservation = await manager.ReserveFlushAsync(store, 400, CancellationToken.None);
 
         Assert.NotEmpty(store.Evicted);
         Assert.Equal(400, manager.Ledger.ReservedBytes);
     }
 
     [Fact]
-    public async Task ShouldProceedWithMaintenanceWhenEvictionCannotFreeEnough()
+    public async Task ShouldProceedWithFlushWhenEvictionCannotFreeEnough()
     {
         var store = new FakeHybridCacheStore(sstSizeBytes: 300, evictable: false);
         using var manager = new HybridCacheManager(1000);
@@ -72,17 +68,56 @@ public sealed class HybridHydrationAdmissionTests
             ["a.sst", "b.sst", "c.sst"],
             CancellationToken.None);
 
-        using var reservation = await manager.ReserveForMaintenanceAsync(
-            store,
-            StorageAdmissionKind.Compaction,
-            5000,
-            CancellationToken.None);
+        using var reservation = await manager.ReserveFlushAsync(store, 5000, CancellationToken.None);
 
         Assert.Equal(5000, manager.Ledger.ReservedBytes);
     }
 
+    /// <summary>
+    ///     Compaction used to be admitted unconditionally here, overshooting the budget by its whole
+    ///     input and output set. It now stages outputs through a fixed window and streams inputs
+    ///     remotely, so a window that cannot be made to fit is refused with a typed error instead.
+    /// </summary>
     [Fact]
-    public async Task ShouldHydrateProtectedCompactionInputsWhenTheBudgetIsSaturated()
+    public async Task ShouldRefuseCompactionStagingWithNoSpaceWhenEvictionCannotFreeEnough()
+    {
+        var store = new FakeHybridCacheStore(sstSizeBytes: 300, evictable: false);
+        using var manager = new HybridCacheManager(1000);
+        manager.BindStore(store);
+        await manager.EnsureLocalSstsAsync(
+            store,
+            ["a.sst", "b.sst", "c.sst"],
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<PantsNoSpaceException>(async () =>
+            await manager.ReserveCompactionStagingAsync(store, 500, CancellationToken.None));
+
+        Assert.Equal(0, manager.Ledger.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task ShouldEvictBelowTheHighWatermarkUntilTheCompactionStagingWindowFits()
+    {
+        var store = new FakeHybridCacheStore(sstSizeBytes: 100);
+        using var manager = new HybridCacheManager(1000);
+        manager.BindStore(store);
+        await manager.EnsureLocalSstsAsync(
+            store,
+            ["a.sst", "b.sst", "c.sst", "d.sst", "e.sst", "f.sst", "g.sst"],
+            CancellationToken.None);
+
+        using var reservation = await manager.ReserveCompactionStagingAsync(
+            store,
+            500,
+            CancellationToken.None);
+
+        Assert.Equal(["a.sst", "b.sst"], store.Evicted);
+        Assert.Equal(500, manager.Ledger.ReservedBytes);
+        Assert.True(manager.Ledger.ChargedBytes <= 1000);
+    }
+
+    [Fact]
+    public async Task ShouldNotEvictProtectedCompactionInputsToFitTheStagingWindow()
     {
         var store = new FakeHybridCacheStore(sstSizeBytes: 300);
         using var manager = new HybridCacheManager(1000);
@@ -92,16 +127,12 @@ public sealed class HybridHydrationAdmissionTests
             ["a.sst", "b.sst", "c.sst"],
             CancellationToken.None);
         using var protection = await manager.ProtectSstsFromEvictionAsync(
-            ["a.sst", "b.sst", "c.sst", "d.sst"],
+            ["a.sst", "b.sst", "c.sst"],
             CancellationToken.None);
 
-        await manager.EnsureLocalSstsForMaintenanceAsync(
-            store,
-            ["d.sst"],
-            CancellationToken.None);
-        await manager.EvictIfNeededAsync(store, CancellationToken.None);
+        await Assert.ThrowsAsync<PantsNoSpaceException>(async () =>
+            await manager.ReserveCompactionStagingAsync(store, 500, CancellationToken.None));
 
-        Assert.Equal(["a.sst", "b.sst", "c.sst", "d.sst"], store.Hydrated);
         Assert.Empty(store.Evicted);
     }
 

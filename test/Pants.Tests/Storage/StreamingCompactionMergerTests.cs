@@ -147,6 +147,27 @@ public sealed class StreamingCompactionMergerTests
         Assert.InRange(budget.Peak, largestOutputBytes + 1, budget.Limit);
     }
 
+    /// <summary>
+    ///     The output target only decides where partitions are cut. An entry larger than it, but
+    ///     within the merge's memory, becomes its own indivisible partition for the caller's staging
+    ///     window to admit or refuse, rather than failing as a memory limit it never reached.
+    /// </summary>
+    [Fact]
+    public void ShouldEmitAnEntryLargerThanTheTargetAsItsOwnPartitionWhenMemoryAllows()
+    {
+        var file = Build(("a", 1, "small"), ("b", 2, new string('v', 4096)), ("c", 3, "small"));
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "input.sst", file);
+        var budget = new ResourceBudget(64 * 1024);
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition([reader], Plan(), 1024, budget)
+            .Select(static partition => partition.Entries.Select(static entry => TestBytes.ToText(entry.Key)).ToArray())
+            .ToArray();
+
+        Assert.Equal([["a"], ["b"], ["c"]], partitions);
+        Assert.Equal(0, budget.Current);
+    }
+
     static void AssertEquivalent(
         IReadOnlyList<SstContents> contents,
         CompactionPlan plan,

@@ -62,16 +62,23 @@ public sealed class PantsCloudCompactionFailureTests
         {
             await SeedCompactionInputsAsync(database, database.ColumnFamilies.DefaultFamily, "corrupt-orphan");
             initialRemoteCount = RemoteSsts(directory.Path).Length;
-            var initialLocalNames = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst")
+            var initialRemoteNames = RemoteSsts(directory.Path)
                 .Select(Path.GetFileName)
                 .ToHashSet(StringComparer.Ordinal);
-            failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
+            // A hybrid compaction drains each output and releases its local copy, and an in-process
+            // failure removes it too, so a local orphan only survives a crash between the upload
+            // and that release. Fail just after the upload and restore the local copy as such a
+            // crash would have left it, corrupted.
+            failpoints.Arm(Failpoint.AfterCloudUpload);
 
             await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
 
-            orphanLocalPath = Assert.Single(
-                Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"),
-                path => !initialLocalNames.Contains(Path.GetFileName(path)));
+            var remoteOrphanPath = Assert.Single(
+                RemoteSsts(directory.Path),
+                path => !initialRemoteNames.Contains(Path.GetFileName(path)));
+            orphanLocalPath = Path.Combine(directory.Path, "sst", Path.GetFileName(remoteOrphanPath));
+            Assert.False(File.Exists(orphanLocalPath));
+            File.Copy(remoteOrphanPath, orphanLocalPath);
         }
 
         var bytes = await File.ReadAllBytesAsync(orphanLocalPath);
