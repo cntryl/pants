@@ -69,6 +69,8 @@ jobs:
           --configuration Release
           --no-build
           --filter "Category!=Sqrzl"
+          --blame-hang-timeout 4m
+          --blame-hang-dump-type mini
 
       - name: Stop Sqrzl emulator
         if: ${{ always() && matrix.os == 'ubuntu-latest' }}
