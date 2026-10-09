@@ -547,6 +547,7 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
             state,
@@ -557,6 +558,7 @@ sealed class LocalDiskStore :
             publicationCompleted,
             memory,
             prepareInputs,
+            staging,
             cancellationToken);
 
     public void Flush(RuntimeState state)
@@ -1790,7 +1792,8 @@ sealed class LocalDiskStore :
                 recoveryPolicy,
                 state,
                 startupPhases,
-                failpointHandler);
+                failpointHandler,
+                remoteSstSourceFactory is not null);
             ValidateManifestSstNames(manifest);
             lease.EnsureValid();
             CleanStartupResidue(
@@ -3333,6 +3336,7 @@ sealed class LocalDiskStore :
                 null,
                 null,
                 null,
+                null,
                 CancellationToken.None)
             .AsTask()
             .GetAwaiter()
@@ -3353,6 +3357,7 @@ sealed class LocalDiskStore :
             null,
             null,
             null,
+            null,
             cancellationToken);
 
     async ValueTask<CompactionResult> CompactAsync(
@@ -3364,6 +3369,7 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        CompactionOutputStaging? staging,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -3385,6 +3391,7 @@ sealed class LocalDiskStore :
                     publicationCompleted,
                     memory,
                     prepareInputs,
+                    staging,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -3401,6 +3408,7 @@ sealed class LocalDiskStore :
                 publicationCompleted,
                 memory,
                 prepareInputs,
+                staging,
                 cancellationToken).ConfigureAwait(false);
             outputBytes = checked(outputBytes + continued.BytesRewritten);
             publicationCount = checked(publicationCount + continued.PublicationCount);
@@ -3418,6 +3426,7 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        CompactionOutputStaging? staging,
         CancellationToken cancellationToken)
     {
         var compactionBudget = memory?.Budget;
@@ -3438,10 +3447,11 @@ sealed class LocalDiskStore :
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         // A publisher with its own memory envelope (cloud upload and readback) can require
-        // outputs smaller than the plain target size.
+        // outputs smaller than the plain target size, and a hybrid compaction's outputs must fit
+        // its fixed local staging window.
         var partitionTargetBytes = Math.Min(
-            _targetSstSizeBytes,
-            memory?.OutputPartitionTargetBytes ?? long.MaxValue);
+            Math.Min(_targetSstSizeBytes, memory?.OutputPartitionTargetBytes ?? long.MaxValue),
+            staging?.PartitionTargetBytes ?? long.MaxValue);
         var obsoleteNames = new List<string>();
         var edits = new List<ManifestEdit>();
         var intents = new List<IntentEntry>();
@@ -3499,6 +3509,7 @@ sealed class LocalDiskStore :
                              partitionTargetBytes,
                              compactionBudget))
                 {
+                    staging?.AdmitPartition(StreamingCompactionMerger.EstimatePartitionBytes(partition));
                     var outputSequence = checked(firstOutputSequence + outputIndex);
                     outputNames.Add(CreateSstFileName(
                         familyId,
@@ -3514,6 +3525,15 @@ sealed class LocalDiskStore :
                     outputs.Add(output);
                     edits.Add(CreateManifestEdit("AddSst", output));
                     outputIndex = checked(outputIndex + 1);
+                    if (staging is not null)
+                    {
+                        // Name every output so far in the intent before this one leaves the
+                        // machine, so recovery and garbage collection can attribute the object.
+                        DeleteSupersededCompactionOutputs(UpsertCompactionIntents(
+                            [CreateCompactionPublishIntent(familyId, plan, outputs)]));
+                        await DrainCompactionOutputAsync(staging, output, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
                 }
 
                 if (outputs.Count > 0)
@@ -3530,15 +3550,7 @@ sealed class LocalDiskStore :
                 edits.AddRange(plan.Inputs.Select(static input => CreateManifestEdit(
                     "RemoveSst",
                     new { name = input.Name })));
-                intents.Add(CreateIntentEntry(
-                    "CompactionPublish",
-                    new
-                    {
-                        phase = "OutputDurable",
-                        cf_id = familyId,
-                        removed = plan.Inputs.Select(static input => input.Name).ToArray(),
-                        added = outputs.Select(CreateIntentFileMetadata).ToArray()
-                    }));
+                intents.Add(CreateCompactionPublishIntent(familyId, plan, outputs));
 
                 obsoleteNames.AddRange(plan.Inputs.Select(static input => input.Name));
                 outputBytes = checked(outputBytes + outputs.Sum(static output => checked((long)output.SizeBytes)));
@@ -3592,7 +3604,9 @@ sealed class LocalDiskStore :
         if (outputPublisher is not null && outputNames.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await outputPublisher(outputNames, cancellationToken).ConfigureAwait(false);
+            // Drained outputs are already published; only the intent remains to publish.
+            await outputPublisher(staging is null ? outputNames : [], cancellationToken)
+                .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             _lease.EnsureValid();
         }
@@ -3641,6 +3655,41 @@ sealed class LocalDiskStore :
         _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
 
         return (outputBytes, hasCompactionPlan, persistenceAnomaly);
+    }
+
+    static IntentEntry CreateCompactionPublishIntent(
+        uint familyId,
+        CompactionPlan plan,
+        List<FileMeta> outputs) =>
+        CreateIntentEntry(
+            "CompactionPublish",
+            new
+            {
+                phase = "OutputDurable",
+                cf_id = familyId,
+                removed = plan.Inputs.Select(static input => input.Name).ToArray(),
+                added = outputs.Select(CreateIntentFileMetadata).ToArray()
+            });
+
+    /// <summary>
+    ///     Publishes one finished output partition to cloud storage and releases its local copy, so
+    ///     the next partition is staged in the same fixed window. Until the manifest publishes, the
+    ///     inputs stay authoritative and the remote copy is an unpublished output the compaction
+    ///     intent names, which recovery rolls back like any other.
+    /// </summary>
+    async ValueTask DrainCompactionOutputAsync(
+        CompactionOutputStaging staging,
+        FileMeta output,
+        CancellationToken cancellationToken)
+    {
+        _lease.EnsureValid();
+        await staging.DrainAsync(output.Name, checked((long)output.SizeBytes), cancellationToken)
+            .ConfigureAwait(false);
+        _lease.EnsureValid();
+        RemoveSstFromCaches(output.Name);
+        File.Delete(Path.Combine(_sstDirectory, output.Name));
+        AtomicStagedFile.FlushDirectory(_sstDirectory);
+        _failpoints.Hit(Failpoint.AfterCompactionPartitionDrained);
     }
 
     void RemoveSstFromCaches(string name)
@@ -5239,7 +5288,8 @@ sealed class LocalDiskStore :
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
         StartupPhaseRecorder startupPhases,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints,
+        bool remoteSstsAuthoritative)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
         using (startupPhases.Measure(StartupPhase.ManifestJournal))
@@ -5298,7 +5348,8 @@ sealed class LocalDiskStore :
                     manifest,
                     document.RootElement,
                     recoveryPolicy,
-                    state);
+                    state,
+                    remoteSstsAuthoritative);
                 return new RecoveryMetadataResult(clearRecoveredIntents, !clearRecoveredIntents &&
                                                                          document.RootElement.GetArrayLength() != 0);
             }
@@ -5321,7 +5372,8 @@ sealed class LocalDiskStore :
         ManifestState manifest,
         JsonElement intentLog,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        bool remoteSstsAuthoritative)
     {
         var entryCount = intentLog.GetArrayLength();
         if (entryCount == 0)
@@ -5372,7 +5424,8 @@ sealed class LocalDiskStore :
                         variant.Value,
                         GetRequiredString(variant.Value, "phase"),
                         recoveryPolicy,
-                        state);
+                        state,
+                        remoteSstsAuthoritative);
                     break;
                 case "CompactionApplied":
                     safeToClear &= ReplayCompactionIntent(
@@ -5381,7 +5434,8 @@ sealed class LocalDiskStore :
                         variant.Value,
                         "ManifestPublished",
                         recoveryPolicy,
-                        state);
+                        state,
+                        remoteSstsAuthoritative);
                     break;
                 case "CompactionPlanned":
                     foreach (var name in GetStringArray(variant.Value, "input_files"))
@@ -5450,7 +5504,8 @@ sealed class LocalDiskStore :
         JsonElement intent,
         string phase,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        bool remoteSstsAuthoritative)
     {
         var removed = GetStringArray(intent, "removed");
         if (removed.Length == 0)
@@ -5501,7 +5556,7 @@ sealed class LocalDiskStore :
             allInputsAbsent &&
             allOutputsPresent)
         {
-            if (!added.All(output => ValidateIntentSst(root, output, recoveryPolicy, state)))
+            if (!added.All(ValidateOutput))
             {
                 return false;
             }
@@ -5515,7 +5570,7 @@ sealed class LocalDiskStore :
 
         if (phase == "ManifestPublished" && allInputsPresent && allOutputsAbsent)
         {
-            if (!added.All(output => ValidateIntentSst(root, output, recoveryPolicy, state)))
+            if (!added.All(ValidateOutput))
             {
                 return false;
             }
@@ -5534,6 +5589,13 @@ sealed class LocalDiskStore :
             $"Compaction publication intent has partial manifest visibility (phase={phase}).",
             recoveryPolicy,
             state);
+
+        // A hybrid compaction drains each output to cloud storage and releases the local copy
+        // before the manifest publishes. Such an output is proven by the remote open every
+        // manifest SST missing locally receives during recovery, not by a local file.
+        bool ValidateOutput(FileMeta output) =>
+            (remoteSstsAuthoritative && !File.Exists(Path.Combine(root, "sst", output.Name))) ||
+            ValidateIntentSst(root, output, recoveryPolicy, state);
     }
 
     static FileMeta ParseIntentFileMetadata(JsonElement element)

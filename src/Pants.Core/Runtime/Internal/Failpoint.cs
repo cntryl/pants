@@ -45,6 +45,7 @@ enum Failpoint
     BeforeCompactionAdmission,
     BeforeDeferredCompactionSignalReset,
     AfterCompactionOutputDurable,
+    AfterCompactionPartitionDrained,
     BeforeCompactionDirectorySync,
     BeforeCompactionManifestPublish,
     AfterCompactionManifestPublish,

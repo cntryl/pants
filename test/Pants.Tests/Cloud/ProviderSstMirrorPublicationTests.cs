@@ -156,9 +156,15 @@ public sealed class ProviderSstMirrorPublicationTests
         await database.Maintenance.CompactAllAsync();
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-        var outputs = Directory.EnumerateFiles(Path.Combine(cache.Path, "sst"), "*.sst")
-            .Select(static path => new FileInfo(path).Length)
+        // Hybrid compaction drains each output to the provider and releases its local copy, so
+        // the published layout is the record of what was written.
+        var layout = (await database.Diagnostics.GetStorageLayoutAsync())
+            .Levels.SelectMany(static level => level.Files)
             .ToArray();
+        var outputs = layout.Select(static file => file.SizeBytes).ToArray();
+        Assert.All(
+            layout.Where(static file => file.Level > 0),
+            file => Assert.False(File.Exists(Path.Combine(cache.Path, "sst", file.Name))));
         Assert.True(outputs.Length > 1, "Outputs should be partitioned to fit the publication envelope.");
         Assert.All(
             outputs,

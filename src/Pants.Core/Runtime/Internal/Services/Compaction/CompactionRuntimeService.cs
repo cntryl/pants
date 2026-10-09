@@ -19,6 +19,7 @@ sealed class CompactionRuntimeService(
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations = true,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
             new CompactionRuntimeRequest(
@@ -26,7 +27,8 @@ sealed class CompactionRuntimeService(
                 force,
                 outputPublisher,
                 flushMutableOperations,
-                prepareInputs),
+                prepareInputs,
+                staging),
             cancellationToken);
 
     protected override async ValueTask<CompactionResult> DispatchAsync(
@@ -48,6 +50,7 @@ sealed class CompactionRuntimeService(
                     telemetry.RecordCompaction,
                     memory,
                     request.PrepareInputs,
+                    request.Staging,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

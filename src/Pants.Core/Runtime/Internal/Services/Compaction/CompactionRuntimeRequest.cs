@@ -5,4 +5,5 @@ sealed record CompactionRuntimeRequest(
     bool Force,
     CloudCompactionOutputPublisher? OutputPublisher,
     bool FlushMutableOperations,
-    Func<IReadOnlyList<string>, CancellationToken, ValueTask>? PrepareInputs);
+    Func<IReadOnlyList<string>, CancellationToken, ValueTask>? PrepareInputs,
+    CompactionOutputStaging? Staging);

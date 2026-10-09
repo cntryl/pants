@@ -411,7 +411,9 @@ public sealed class PantsDiskStorageTests
                          database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
-            transaction.Put("z-oversized"u8.ToArray(), new byte[32 * 1024]);
+            // Larger than half the 1.6 MiB compaction pool this budget derives, so the merge cannot
+            // buffer it.
+            transaction.Put("z-oversized"u8.ToArray(), new byte[1024 * 1024]);
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 

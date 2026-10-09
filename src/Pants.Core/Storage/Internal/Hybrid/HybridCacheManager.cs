@@ -29,6 +29,12 @@ sealed class HybridCacheManager : IDisposable
     public int PendingEvictions => Volatile.Read(ref _pendingEvictions);
 
     /// <summary>
+    ///     The fixed local window one compaction stages its outputs through: half the local budget,
+    ///     as in Midge, leaving the other half for resident SSTs, the WAL and concurrent flushes.
+    /// </summary>
+    public long CompactionStagingWindowBytes => Math.Max(1, _policy.MaximumLocalBytes / 2);
+
+    /// <summary>
     ///     Binds the store the ledger measures resident bytes from. The manager is constructed
     ///     before the store exists, so this closes that loop once during startup.
     /// </summary>
@@ -44,34 +50,56 @@ sealed class HybridCacheManager : IDisposable
         Ledger.Reserve(kind, estimateBytes);
 
     /// <summary>
-    ///     Reserves for flush or compaction, evicting to make room and proceeding regardless if that
-    ///     is not enough.
+    ///     Reserves a flush's output, evicting to make room and proceeding regardless if that is not
+    ///     enough.
     /// </summary>
     /// <remarks>
-    ///     Maintenance transiently needs its inputs and its outputs at once, so a strict check can
-    ///     refuse it exactly when the database is full. Refusing is not a safe answer: write
-    ///     admission stalls on level-0 debt, and flush and compaction are the only things that
-    ///     reduce it, so a refusal here is a permanent wedge rather than a delay. Eviction is tried
-    ///     first because a hybrid database can drop local copies of SSTs already durable in the
-    ///     cloud; if that still leaves too little, the work proceeds and the overshoot is bounded by
-    ///     one maintenance operation's working set. The bytes stay charged either way, so concurrent
-    ///     callers still see the true figure and are refused correctly.
+    ///     A flush is the only thing that turns a full memtable into an SST, and write admission
+    ///     stalls on level-0 debt, so refusing it for space would be a permanent wedge rather than a
+    ///     delay. Eviction is tried first because a hybrid database can drop local copies of SSTs
+    ///     already durable in the cloud; if that still leaves too little, the flush proceeds and the
+    ///     overshoot is bounded by one memtable-sized output. The bytes stay charged either way, so
+    ///     concurrent callers still see the true figure and are refused correctly. Compaction does
+    ///     not take this path: it stages through <see cref="ReserveCompactionStagingAsync" />.
     /// </remarks>
-    public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveForMaintenanceAsync(
+    public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveFlushAsync(
         IHybridCacheStore store,
-        StorageAdmissionKind kind,
         long estimateBytes,
         CancellationToken cancellationToken)
     {
-        if (Ledger.TryReserve(kind, estimateBytes, out var reservation))
+        if (Ledger.TryReserve(StorageAdmissionKind.Flush, estimateBytes, out var reservation))
         {
             return reservation;
         }
 
         await EvictIfNeededAsync(store, cancellationToken).ConfigureAwait(false);
-        return Ledger.TryReserve(kind, estimateBytes, out reservation)
+        return Ledger.TryReserve(StorageAdmissionKind.Flush, estimateBytes, out reservation)
             ? reservation
             : Ledger.ReserveUnconditionally(estimateBytes);
+    }
+
+    /// <summary>
+    ///     Reserves a compaction's fixed local staging window, evicting cloud-durable local SSTs
+    ///     until it fits, and refusing with <see cref="PantsNoSpaceException" /> when it cannot.
+    /// </summary>
+    /// <remarks>
+    ///     Compaction reads cold inputs through ranged remote reads and drains each output before
+    ///     staging the next, so this window is its whole local footprint. Unlike a flush it is never
+    ///     admitted unconditionally: a refusal leaves every input authoritative and is retried, while
+    ///     an unconditional admission would let one compaction overrun the operator's cap.
+    /// </remarks>
+    public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveCompactionStagingAsync(
+        IHybridCacheStore store,
+        long windowBytes,
+        CancellationToken cancellationToken)
+    {
+        if (Ledger.TryReserve(StorageAdmissionKind.Compaction, windowBytes, out var reservation))
+        {
+            return reservation;
+        }
+
+        await EvictToFitAsync(store, windowBytes, cancellationToken).ConfigureAwait(false);
+        return Ledger.Reserve(StorageAdmissionKind.Compaction, windowBytes);
     }
 
     /// <summary>
@@ -163,6 +191,62 @@ sealed class HybridCacheManager : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Evicts unprotected, cloud-verified local SSTs, oldest first, until
+    ///     <paramref name="requiredBytes" /> more fit under the local budget.
+    /// </summary>
+    async ValueTask EvictToFitAsync(
+        IHybridCacheStore store,
+        long requiredBytes,
+        CancellationToken cancellationToken)
+    {
+        await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var candidates = store.GetLocalManifestSsts()
+                .Where(candidate => !IsProtected(candidate.Name))
+                .ToArray();
+            var projectedBytes = Ledger.ChargedBytes;
+            var planned = new List<HybridLocalSst>();
+            foreach (var candidate in candidates)
+            {
+                if (checked(projectedBytes + requiredBytes) <= _policy.MaximumLocalBytes)
+                {
+                    break;
+                }
+
+                planned.Add(candidate);
+                projectedBytes = Math.Max(0, projectedBytes - candidate.SizeBytes);
+            }
+
+            if (checked(projectedBytes + requiredBytes) > _policy.MaximumLocalBytes)
+            {
+                // Evicting cannot make the window fit, so keep the local cache warm.
+                return;
+            }
+
+            Volatile.Write(ref _pendingEvictions, planned.Count);
+            _failpoints.Hit(Failpoint.BeforeHybridSstEviction);
+            foreach (var candidate in planned)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (store.IsSstLocal(candidate.Name))
+                {
+                    await store.VerifyRemoteSstMatchesLocalAsync(candidate.Name, cancellationToken)
+                        .ConfigureAwait(false);
+                    store.EvictLocalSst(candidate.Name);
+                }
+
+                Interlocked.Decrement(ref _pendingEvictions);
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _pendingEvictions, 0);
+            _evictionGate.Release();
+        }
+    }
+
     List<HybridLocalSst> PlanEvictions(
         long totalCommittedBytes,
         IReadOnlyList<HybridLocalSst> candidates)
@@ -209,36 +293,6 @@ sealed class HybridCacheManager : IDisposable
                 ? sizeBytes
                 : 0;
             using var reservation = Reserve(StorageAdmissionKind.Hydration, estimate);
-            await store.HydrateLocalSstAsync(name, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    ///     Hydrates inputs required to make maintenance progress, using maintenance admission so a
-    ///     saturated cache cannot wedge compaction.
-    /// </summary>
-    public async ValueTask EnsureLocalSstsForMaintenanceAsync(
-        IHybridCacheStore store,
-        IEnumerable<string> names,
-        CancellationToken cancellationToken)
-    {
-        foreach (var name in names.Distinct(StringComparer.Ordinal))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (store.IsSstLocal(name))
-            {
-                continue;
-            }
-
-            var estimate = store.TryGetManifestSstSizeBytes(name, out var sizeBytes)
-                ? sizeBytes
-                : 0;
-            using var reservation = await ReserveForMaintenanceAsync(
-                    store,
-                    StorageAdmissionKind.Compaction,
-                    estimate,
-                    cancellationToken)
-                .ConfigureAwait(false);
             await store.HydrateLocalSstAsync(name, cancellationToken).ConfigureAwait(false);
         }
     }
