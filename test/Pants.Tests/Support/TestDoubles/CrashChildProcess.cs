@@ -121,6 +121,47 @@ sealed class CrashChildProcess : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Runs the child until it exits and returns it with its output still readable.
+    /// </summary>
+    /// <remarks>
+    ///     A launch that the macOS runner kills before vstest prints its banner (see
+    ///     <see cref="StartAndWaitForReadinessAsync" />) exits non-zero with no output at all, so no
+    ///     test code ran. Such a launch is retried once; a child that printed anything is returned as
+    ///     is for the caller to judge.
+    /// </remarks>
+    public static async Task<CrashChildProcess> RunToExitAsync(
+        ProcessStartInfo start,
+        string description,
+        TimeSpan timeout)
+    {
+        var relaunched = false;
+        while (true)
+        {
+            var child = Start(start, description);
+            try
+            {
+                await child.WaitForExitAsync(timeout);
+            }
+            catch
+            {
+                child.Dispose();
+                throw;
+            }
+
+            if (!relaunched &&
+                child.ExitCode != 0 &&
+                (await ReadOutputAsync(child.StandardOutput)).Length == 0)
+            {
+                relaunched = true;
+                child.Dispose();
+                continue;
+            }
+
+            return child;
+        }
+    }
+
     public async Task<string> DescribeAsync()
     {
         var exit = Process.HasExited
@@ -155,6 +196,31 @@ sealed class CrashChildProcess : IDisposable
     }
 
     public void Dispose() => Process.Dispose();
+
+    async Task WaitForExitAsync(TimeSpan timeout)
+    {
+        try
+        {
+            await Process.WaitForExitAsync().WaitAsync(timeout);
+        }
+        catch (TimeoutException exception)
+        {
+            TryKillProcessTree();
+            try
+            {
+                await Process.WaitForExitAsync().WaitAsync(OutputDrainTimeout);
+            }
+            catch (TimeoutException)
+            {
+                // The description below reports the child as still running.
+            }
+
+            throw new XunitException(
+                $"The {_description} did not exit within {timeout.TotalSeconds:0} seconds: " +
+                await DescribeAsync(),
+                exception);
+        }
+    }
 
     async Task<bool> WaitForReadinessAsync(string readyPath, TimeSpan timeout)
     {

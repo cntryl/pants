@@ -167,11 +167,11 @@ public sealed class PantsManifestSpecDriftTests
         var durableEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
             """{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}""");
-        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
+        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
         var tornEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
             """{"CreateColumnFamily":{"id":2,"name":"torn-tail-family","created_at":2}}""");
-        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
+        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
 
         using var stream = new MemoryStream();
         stream.Write(durableEdit);
@@ -239,8 +239,8 @@ public sealed class PantsManifestSpecDriftTests
         var durableEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
             """{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}""");
-        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
-        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, "{}");
+        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
+        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
         var journal = durableEdit.Concat(durableMarker).Concat(tornMarker[..^2]).ToArray();
         var journalPath = Path.Combine(directory.Path, "manifest.journal");
         await File.WriteAllBytesAsync(journalPath, journal);
@@ -431,7 +431,7 @@ public sealed class PantsManifestSpecDriftTests
         record[^1] ^= 0xff;
         await File.WriteAllBytesAsync(
             Path.Combine(directory.Path, "manifest.journal"),
-            [.. record, .. EncodeJournalRecord(DurabilityMarkerRecordType, "{}")]);
+            [.. record, .. EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1))]);
 
         var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
 
@@ -501,15 +501,67 @@ public sealed class PantsManifestSpecDriftTests
         Assert.False(resurrectedMeta.TryGetProperty("deleted_at", out _));
     }
 
+    // Issue #265 ------------------------------------------------------------
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"last_persisted_sequence":1}""")]
+    [InlineData("""{"ts_millis":1}""")]
+    [InlineData("""{"last_persisted_sequence":"1","ts_millis":1}""")]
+    [InlineData("""{"last_persisted_sequence":-1,"ts_millis":1}""")]
+    [InlineData("""{"last_persisted_sequence":1,"ts_millis":1.5}""")]
+    [InlineData("""{"last_persisted_sequence":null,"ts_millis":1}""")]
+    [InlineData("[1,1]")]
+    [InlineData("1")]
+    public async Task ShouldRejectManifestJournalGivenMalformedDurabilityMarkerUnderStrictRecovery(
+        string markerJson)
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = EncodeJournalRecord(
+                CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"unmarked","created_at":1}}""")
+            .Concat(EncodeJournalRecord(DurabilityMarkerRecordType, markerJson))
+            .ToArray();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+        var cause = Assert.IsAssignableFrom<PantsException>(exception.InnerException);
+        Assert.Equal(PantsErrorCode.Corruption, cause.Code);
+    }
+
+    [Fact]
+    public async Task ShouldDiscardJournalGivenMalformedDurabilityMarkerUnderSalvageRecovery()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var journal = EncodeJournalRecord(
+                CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"unmarked","created_at":1}}""")
+            .Concat(EncodeJournalRecord(DurabilityMarkerRecordType, "{}"))
+            .ToArray();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
+
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("unmarked"));
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.NotEmpty(Directory.GetFiles(directory.Path, "manifest.journal.salvage-retained*"));
+    }
+
     // Helpers -----------------------------------------------------------------
 
     static byte[] BuildJournal(params (byte Type, string Json)[] edits)
     {
         using var stream = new MemoryStream();
+        var sequence = 0UL;
         foreach (var (type, json) in edits)
         {
             stream.Write(EncodeJournalRecord(type, json));
-            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, "{}"));
+            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(++sequence)));
         }
 
         return stream.ToArray();
@@ -521,11 +573,14 @@ public sealed class PantsManifestSpecDriftTests
         foreach (var (id, type, json) in edits)
         {
             stream.Write(EncodeJournalRecord(type, $"{{\"edit_id\":{id},\"edit\":{json}}}"));
-            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, "{}"));
+            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(id)));
         }
 
         return stream.ToArray();
     }
+
+    static string DurabilityMarkerJson(ulong sequence) =>
+        $"{{\"last_persisted_sequence\":{sequence},\"ts_millis\":1}}";
 
     static byte[] EncodeJournalRecord(byte recordType, string json)
     {

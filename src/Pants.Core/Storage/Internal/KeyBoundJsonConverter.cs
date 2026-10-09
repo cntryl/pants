@@ -22,7 +22,7 @@ sealed class KeyBoundJsonConverter : JsonConverter<byte[]>
     {
         if (reader.TokenType != JsonTokenType.StartArray)
         {
-            throw new JsonException("A manifest key bound must be an array of byte values.");
+            throw new ManifestKeyBoundFormatException("A manifest key bound must be an array of byte values.");
         }
 
         var buffer = new byte[InitialCapacity];
@@ -36,7 +36,7 @@ sealed class KeyBoundJsonConverter : JsonConverter<byte[]>
 
             if (reader.TokenType != JsonTokenType.Number || !reader.TryGetByte(out var value))
             {
-                throw new JsonException("A manifest key bound must contain only byte values.");
+                throw new ManifestKeyBoundFormatException("A manifest key bound must contain only byte values.");
             }
 
             if (length == buffer.Length)
@@ -47,7 +47,7 @@ sealed class KeyBoundJsonConverter : JsonConverter<byte[]>
             buffer[length++] = value;
         }
 
-        throw new JsonException("A manifest key bound array is not terminated.");
+        throw new ManifestKeyBoundFormatException("A manifest key bound array is not terminated.");
     }
 
     internal static void WriteBytes(Utf8JsonWriter writer, byte[] value)

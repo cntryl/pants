@@ -5,14 +5,7 @@ namespace Cntryl.Pants.Transactions.Internal;
 sealed class TransactionSpillStore : IDisposable
 {
     const int HeaderLength = 48;
-    const int SparseIndexStride = 16;
-
-    /// <summary>
-    ///     Per-entry framing charged on top of an operation's own bytes when reserving budget.
-    ///     Deliberately generous: admitting a spill that then fails to write is worse than a
-    ///     slightly conservative estimate.
-    /// </summary>
-    const int RunEntryOverheadBytes = 64;
+    internal const int SparseIndexStride = 16;
 
     static readonly Lock DirectoryMutationGate = new();
 
@@ -26,6 +19,7 @@ sealed class TransactionSpillStore : IDisposable
     int _disposed;
 
     readonly StorageBudgetLedger? _ledger;
+    readonly SpillRunRetirement _retirement;
 
     readonly List<StorageBudgetLedger.StorageReservation> _reservations = [];
 
@@ -33,18 +27,21 @@ sealed class TransactionSpillStore : IDisposable
     ///     <paramref name="ledger" /> charges spilled bytes against the local-disk budget, or is
     ///     <see langword="null" /> where no local budget applies. Spill files sit outside the
     ///     resident figure the budget measures, so their charge is held for the store's lifetime
-    ///     rather than released once written.
+    ///     rather than released once written. <paramref name="retirement" /> outlives the store and
+    ///     keeps that charge until a file that could not be removed is actually gone.
     /// </summary>
     public TransactionSpillStore(
         string databasePath,
         long transactionId,
         ColumnFamilyIdentity family,
-        StorageBudgetLedger? ledger = null)
+        StorageBudgetLedger? ledger = null,
+        SpillRunRetirement? retirement = null)
     {
         _directory = Path.Combine(databasePath, "txn");
         _transactionId = checked((ulong)transactionId);
         _family = family;
         _ledger = ledger;
+        _retirement = retirement ?? new SpillRunRetirement(new FileSystemSpillFileRemover());
     }
 
     static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
@@ -86,27 +83,19 @@ sealed class TransactionSpillStore : IDisposable
     }
 
     /// <summary>
-    ///     Charges the bytes this run is about to write, before writing them.
+    ///     Charges the bytes this run is about to write, including the range index and sparse
+    ///     index copies of keys, before writing them.
     /// </summary>
-    void ReserveRunBytes(IReadOnlyList<TransactionIntentOperation> operations)
+    void ReserveRunBytes(IReadOnlyList<TransactionIntentOperation> sortedOperations)
     {
         if (_ledger is null)
         {
             return;
         }
 
-        var estimate = (long)HeaderLength;
-        foreach (var operation in operations)
-        {
-            estimate = checked(
-                estimate +
-                operation.Key.Length +
-                (operation.Value?.Length ?? 0) +
-                (operation.EndExclusive?.Length ?? 0) +
-                RunEntryOverheadBytes);
-        }
-
-        var reservation = _ledger.Reserve(StorageAdmissionKind.TransactionSpill, estimate);
+        var reservation = _ledger.Reserve(
+            StorageAdmissionKind.TransactionSpill,
+            TransactionSpillFootprint.Measure(sortedOperations));
         lock (_lifetimeGate)
         {
             _reservations.Add(reservation);
@@ -121,17 +110,20 @@ sealed class TransactionSpillStore : IDisposable
             return;
         }
 
-        ReserveRunBytes(operations);
+        // Retry first: a file freed by a successful removal returns its charge before this write
+        // is measured against the budget.
+        _retirement.RetryPending();
+        var sorted = operations
+            .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
+            .ThenBy(static operation => operation.Ordinal)
+            .ToArray();
+        ReserveRunBytes(sorted);
         var runNumber = _runs.Count;
         var stem = $"{_transactionId:x16}-{runNumber:x8}";
         var runPath = Path.Combine(_directory, $"{stem}.run");
         var runTemporaryPath = $"{runPath}.tmp";
         var rangePath = Path.Combine(_directory, $"{stem}.ranges");
         var rangeTemporaryPath = $"{rangePath}.tmp";
-        var sorted = operations
-            .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
-            .ThenBy(static operation => operation.Ordinal)
-            .ToArray();
 
         try
         {
@@ -253,21 +245,24 @@ sealed class TransactionSpillStore : IDisposable
 
     void DeleteRuns()
     {
+        var paths = new List<string>(_runs.Count * 2);
         foreach (var run in _runs)
         {
-            TryDelete(run.Path);
-            TryDelete(run.RangePath);
+            paths.Add(run.Path);
+            paths.Add(run.RangePath);
         }
 
         _runs.Clear();
-        // Released here rather than on dispose: a read view can defer deletion, and the bytes stay
-        // on disk until it drains.
-        foreach (var reservation in _reservations)
+        // Charges are handed to retirement rather than released here: a read view can defer deletion,
+        // and a file that cannot be removed keeps occupying the disk, so its charge must stay.
+        StorageBudgetLedger.StorageReservation[] reservations;
+        lock (_lifetimeGate)
         {
-            reservation.Dispose();
+            reservations = _reservations.ToArray();
+            _reservations.Clear();
         }
 
-        _reservations.Clear();
+        _retirement.Retire(paths, reservations);
         try
         {
             lock (DirectoryMutationGate)
@@ -1183,17 +1178,6 @@ sealed class TransactionSpillStore : IDisposable
             File.Delete(path);
         }
         catch (DirectoryNotFoundException)
-        {
-        }
-    }
-
-    static void TryDelete(string path)
-    {
-        try
-        {
-            DeleteIfPresent(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
         }
     }

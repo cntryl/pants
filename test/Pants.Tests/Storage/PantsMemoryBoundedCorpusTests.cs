@@ -109,21 +109,9 @@ public sealed class PantsMemoryBoundedCorpusTests
             $"pants-rss-results-{Guid.NewGuid():N}.txt");
         try
         {
-            var start = new ProcessStartInfo
-            {
-                FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                           Environment.ProcessPath ??
-                           "dotnet",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            start.ArgumentList.Add("vstest");
-            start.ArgumentList.Add(typeof(PantsMemoryBoundedCorpusTests).Assembly.Location);
-            start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
-            start.ArgumentList.Add(
-                $"--Tests:{typeof(PantsMemoryBoundedCorpusTests).FullName}.{nameof(MeasureRssChild)}");
+            var start = CrashChildProcess.CreateStartInfo(
+                typeof(PantsMemoryBoundedCorpusTests),
+                nameof(MeasureRssChild));
             start.Environment[ChildRoleEnvironmentVariable] = ChildRole;
             start.Environment[DatabasePathEnvironmentVariable] = databasePath;
             start.Environment[BudgetBytesEnvironmentVariable] =
@@ -132,30 +120,15 @@ public sealed class PantsMemoryBoundedCorpusTests
                 multiplier.ToString(CultureInfo.InvariantCulture);
             start.Environment[ResultsPathEnvironmentVariable] = resultsPath;
 
-            using var child = Process.Start(start) ??
-                              throw new InvalidOperationException(
-                                  "Could not start the RSS-measurement child.");
-            var standardOutput = child.StandardOutput.ReadToEndAsync();
-            var standardError = child.StandardError.ReadToEndAsync();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(240));
-            try
-            {
-                await child.WaitForExitAsync(timeout.Token);
-            }
-            catch (OperationCanceledException exception) when (timeout.IsCancellationRequested)
-            {
-                TryKillProcessTree(child);
-                await child.WaitForExitAsync(CancellationToken.None);
-                throw new XunitException(
-                    "RSS-measurement child did not exit within 240 seconds.",
-                    exception);
-            }
+            using var child = await CrashChildProcess.RunToExitAsync(
+                start,
+                "RSS-measurement child",
+                TimeSpan.FromSeconds(240));
 
             Assert.True(
                 child.ExitCode == 0 && File.Exists(resultsPath),
                 $"RSS-measurement child (budget={budgetBytes}, multiplier={multiplier}) failed: " +
-                $"exit={child.ExitCode}; results-exists={File.Exists(resultsPath)}; " +
-                $"stdout={await standardOutput}; stderr={await standardError}");
+                $"results-exists={File.Exists(resultsPath)}; {await child.DescribeAsync()}");
 
             return RssResults.Parse(await File.ReadAllTextAsync(resultsPath));
         }
@@ -265,28 +238,6 @@ public sealed class PantsMemoryBoundedCorpusTests
             new RssResults(openRss, steadyStateRss, reopenRss).Serialize());
     }
 
-    static void TryKillProcessTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(true);
-            }
-        }
-        catch (InvalidOperationException)
-        {
-            // The process exited after HasExited was observed.
-        }
-        catch (Win32Exception)
-        {
-            // Best effort — nothing more to do if the OS refuses the kill.
-        }
-        catch (NotSupportedException)
-        {
-            // Best effort — nothing more to do if the platform refuses the kill.
-        }
-    }
 
     static long MeasureRssBytes()
     {

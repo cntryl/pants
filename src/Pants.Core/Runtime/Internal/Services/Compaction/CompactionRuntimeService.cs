@@ -31,6 +31,23 @@ sealed class CompactionRuntimeService(
                 staging),
             cancellationToken);
 
+    public ValueTask<CompactionResult> DrainDebtAsync(
+        RuntimeState state,
+        CloudCompactionOutputPublisher? outputPublisher,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CompactionOutputStaging? staging = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(
+            new CompactionRuntimeRequest(
+                state,
+                true,
+                outputPublisher,
+                true,
+                prepareInputs,
+                staging,
+                DrainDebt: true),
+            cancellationToken);
+
     protected override async ValueTask<CompactionResult> DispatchAsync(
         CompactionRuntimeRequest request,
         CancellationToken cancellationToken)
@@ -42,6 +59,19 @@ sealed class CompactionRuntimeService(
             Volatile.Write(
                 ref _compactingSsts,
                 store.CountCompactionInputs(request.State, request.Force));
+            if (request.DrainDebt)
+            {
+                return await store.DrainCompactionDebtAsync(
+                        request.State,
+                        request.OutputPublisher,
+                        telemetry.RecordCompaction,
+                        memory,
+                        request.PrepareInputs,
+                        request.Staging,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             return await store.CompactAsync(
                     request.State,
                     request.Force,

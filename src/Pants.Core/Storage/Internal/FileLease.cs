@@ -9,14 +9,14 @@ sealed class FileLease : IDisposable
 
     readonly IPantsClock _clock;
     readonly object _gate = new();
-    readonly Timer _heartbeat;
+    readonly ITimer _heartbeat;
     readonly string _holderId;
     readonly string _leaderPath;
     readonly Action? _leaseLossCallback;
     readonly string _lockPath;
     readonly TimeProvider _time;
     readonly long _timeToLiveTimestamps;
-    readonly Timer _watchdog;
+    readonly ITimer _watchdog;
     long _validUntilTimestamp;
     bool _disposed;
     int _leaseLossNotified;
@@ -42,8 +42,8 @@ sealed class FileLease : IDisposable
         _timeToLiveTimestamps = ToTimestamps(time, timeToLive);
         _validUntilTimestamp = AddSaturating(acquireStartedTimestamp, _timeToLiveTimestamps);
         Epoch = epoch;
-        _watchdog = new Timer(_ => OnWatchdog(), null, timeToLive, Timeout.InfiniteTimeSpan);
-        _heartbeat = new Timer(_ => Renew(), null, heartbeatInterval, heartbeatInterval);
+        _watchdog = time.CreateTimer(_ => OnWatchdog(), null, timeToLive, Timeout.InfiniteTimeSpan);
+        _heartbeat = time.CreateTimer(_ => Renew(), null, heartbeatInterval, heartbeatInterval);
     }
 
     public ulong Epoch { get; }
@@ -466,7 +466,7 @@ sealed class FileLease : IDisposable
         }
     }
 
-    static string? TryReadOwnerToken(string path)
+    internal static string? TryReadOwnerToken(string path)
     {
         if (!File.Exists(path))
         {
