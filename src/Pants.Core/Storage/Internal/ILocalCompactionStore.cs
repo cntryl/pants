@@ -10,7 +10,7 @@ interface ILocalCompactionStore
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
-        ResourceBudget? compactionBudget = null,
+        CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
         CancellationToken cancellationToken = default);
 }

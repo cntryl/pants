@@ -80,6 +80,7 @@ sealed class Actor : IAsyncDisposable
     readonly RuntimeResponseRegistry _runtimeResponses;
     readonly TimeProvider _runtimeTimeProvider;
     readonly ResourceBudget _scanMemoryBudget;
+    readonly CompactionMemory _compactionMemory;
     bool _shutdownPreparationCompleted;
     bool _shutdownRequested;
     int _snapshotReleaseCollectionRequired;
@@ -116,6 +117,7 @@ sealed class Actor : IAsyncDisposable
         TimeProvider runtimeTimeProvider,
         RuntimeResponseRegistry runtimeResponses,
         ResourceBudget scanMemoryBudget,
+        CompactionMemory compactionMemory,
         RuntimeState state,
         bool cloudMode,
         LocalDiskStore? diskStore,
@@ -139,6 +141,7 @@ sealed class Actor : IAsyncDisposable
         _runtimeTimeProvider = runtimeTimeProvider;
         _runtimeResponses = runtimeResponses;
         _scanMemoryBudget = scanMemoryBudget;
+        _compactionMemory = compactionMemory;
         _state = state;
         _cloudMode = cloudMode;
         _diskStore = diskStore;
@@ -342,6 +345,10 @@ sealed class Actor : IAsyncDisposable
         var runtimeTimeProvider = dependencies.RuntimeTimeProvider;
         var runtimeResponses = new RuntimeResponseRegistry(telemetry, runtimeTimeProvider);
         var scanMemoryBudget = new ResourceBudget(options.ScanMemoryPoolBytes);
+        // Compaction merges and SST publication draw from one maintenance pool, taking turns
+        // through one first-in, first-out gate.
+        var maintenanceMemoryBudget = new ResourceBudget(options.CompactionMemoryPoolBytes);
+        var maintenanceMemoryGate = new MaintenanceMemoryGate();
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
@@ -355,6 +362,7 @@ sealed class Actor : IAsyncDisposable
         LocalDiskStore? diskStore = null;
         ICloudPersistence? cloudPersistence = null;
         CloudCompactionOutputPublisher? cloudCompactionOutputPublisher = null;
+        long? compactionOutputPartitionTargetBytes = null;
         CloudDdlCoordinator? cloudDdlCoordinator = null;
         CloudLeaseCoordinator? cloudLease = null;
         CancellationTokenSource? cloudLeaseCancellation = null;
@@ -537,20 +545,27 @@ sealed class Actor : IAsyncDisposable
                         options.LeaseTimeToLive,
                         remoteWalSegments: hydration.RemoteWalSegments,
                         recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
+                    var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
+                        maintenanceMemoryBudget,
+                        maintenanceMemoryGate);
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,
                         objectStores.Sst,
                         objectStores.Control,
                         cloudLease,
-                        dependencies.Failpoints);
+                        dependencies.Failpoints,
+                        mirrorPublicationAdmission);
                     cloudPersistence = providerPersistence;
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
                         objectStores.Sst,
                         objectStores.Control,
                         cloudLease,
-                        dependencies.Failpoints).PublishAsync;
+                        dependencies.Failpoints,
+                        SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget))
+                        .PublishAsync;
+                    compactionOutputPartitionTargetBytes = mirrorPublicationAdmission.PartitionTargetBytes;
                     await cloudStartupDeadline.RunMutationAsync(
                             providerPersistence.FenceWalCatalogAsync,
                             cancellationToken)
@@ -612,6 +627,10 @@ sealed class Actor : IAsyncDisposable
             runtimeTimeProvider,
             runtimeResponses,
             scanMemoryBudget,
+            new CompactionMemory(
+                maintenanceMemoryBudget,
+                maintenanceMemoryGate,
+                compactionOutputPartitionTargetBytes),
             state,
             cloudMode,
             diskStore,
@@ -731,7 +750,7 @@ sealed class Actor : IAsyncDisposable
                 options.CoordinatorQueueCapacity,
                 _diskStore,
                 telemetry,
-                options.CompactionMemoryPoolBytes);
+                _compactionMemory);
             _manifestWorker = new RuntimeWorker(
                 options.CoordinatorQueueCapacity,
                 dependencies.WorkerDisposalTimeout);
@@ -1810,9 +1829,9 @@ sealed class Actor : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        if (timeout <= TimeSpan.Zero)
+        if (timeout < TimeSpan.Zero)
         {
-            throw PantsException.InvalidArgument("Verification timeout must be greater than zero.");
+            throw PantsException.InvalidArgument("Verification timeout must not be negative.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -1821,6 +1840,12 @@ sealed class Actor : IAsyncDisposable
             throw PantsException.Create(
                 PantsErrorCode.NotSupported,
                 "In-memory storage has no persistent path to verify.");
+        }
+
+        // Matching Midge, a zero budget is an already-expired deadline, not a bad argument.
+        if (timeout == TimeSpan.Zero)
+        {
+            throw CreateVerificationTimeoutException();
         }
 
         using var deadline = new CancellationTokenSource(timeout);

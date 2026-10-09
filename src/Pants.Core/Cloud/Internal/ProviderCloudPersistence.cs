@@ -53,7 +53,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        IFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null,
+        SstPublicationAdmission? sstPublicationAdmission = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
@@ -62,7 +63,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             static bytes => DecodeCatalog(bytes.Span),
             lease.EnsureValid);
         _sstStore = sstStore;
-        _sstPublisher = new ProviderSstPublisher(sstStore, lease.EnsureValid);
+        _sstPublisher = new ProviderSstPublisher(
+            sstStore,
+            lease.EnsureValid,
+            sstPublicationAdmission);
         _controlStore = controlStore;
         _lease = lease;
         _writerEpoch = lease.Epoch;
