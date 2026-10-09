@@ -73,11 +73,9 @@ static class StreamingCompactionMerger
             yield break;
         }
 
-        var effectiveTargetSizeBytes = resourceBudget is null
-            ? targetSizeBytes
-            : Math.Min(
-                targetSizeBytes,
-                Math.Max(1, resourceBudget.Limit / 2));
+        // Resolved on the first entry, once every input has primed its block into the pool, so the
+        // partition target is sized from the pool those blocks actually leave free.
+        long? effectiveTargetSizeBytes = null;
         var currentEntries = new List<SstEntry>();
         var reservations = new List<IDisposable>();
         long reservedBytes = 0;
@@ -92,16 +90,17 @@ static class StreamingCompactionMerger
                          droppedRanges,
                          resourceBudget))
             {
+                var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 var entryBytes = EstimateEntryBytes(entry);
-                if (entryBytes > effectiveTargetSizeBytes)
+                if (entryBytes > target)
                 {
                     throw PantsException.ResourceLimit(
                         $"A {entryBytes}-byte compaction entry exceeds the " +
-                        $"{effectiveTargetSizeBytes}-byte compaction buffer budget.");
+                        $"{target}-byte compaction buffer budget.");
                 }
 
                 if (currentEntries.Count > 0 &&
-                    currentBytes + entryBytes > effectiveTargetSizeBytes &&
+                    currentBytes + entryBytes > target &&
                     !ByteArrayComparer.Instance.Equals(currentEntries[^1].Key, entry.Key))
                 {
                     var partition = CreatePartition(
@@ -143,9 +142,10 @@ static class StreamingCompactionMerger
             }
             else if (retainedRanges.Length > 0)
             {
+                var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 foreach (var partition in CompactionOutputPartitioner.Partition(
                              new CompactionMergeResult([], retainedRanges),
-                             effectiveTargetSizeBytes))
+                             target))
                 {
                     ReserveThrough(
                         resourceBudget,
@@ -163,6 +163,13 @@ static class StreamingCompactionMerger
             DisposeReservations(reservations);
         }
     }
+
+    static long OutputPartitionTarget(long requestedTargetBytes, ResourceBudget? resourceBudget) =>
+        resourceBudget is null
+            ? requestedTargetBytes
+            : CompactionPartitionSizing.OutputPartitionTargetBytes(
+                requestedTargetBytes,
+                resourceBudget.Limit - resourceBudget.Current);
 
     static long EstimatePartitionBytes(CompactionMergeResult partition) => checked(
         partition.Entries.Sum(static entry =>

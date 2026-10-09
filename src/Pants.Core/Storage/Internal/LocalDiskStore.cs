@@ -1113,6 +1113,26 @@ sealed class LocalDiskStore :
                 .DefaultIfEmpty()
                 .Max());
 
+    public IReadOnlyList<string> GetCompactionDebtInputNames(RuntimeState state)
+    {
+        var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        var snapshotHorizon = state.ActiveSnapshots
+            .Select(static snapshot => snapshot.BeginSequence)
+            .Cast<long?>()
+            .Min();
+        return _familyIds.Values
+            .Select(familyId => LeveledCompactionPlanner.PickDebtDrain(
+                manifest.Files,
+                familyId,
+                _compaction,
+                snapshotHorizon))
+            .Where(static plan => plan is not null)
+            .SelectMany(static plan => plan!.Inputs)
+            .Select(static file => file.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public IReadOnlyList<string> GetCompactionInputNames(RuntimeState state, bool force)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
@@ -3361,6 +3381,66 @@ sealed class LocalDiskStore :
             null,
             cancellationToken);
 
+    /// <summary>
+    ///     Drains compaction debt: repeats debt-drain rounds until no plan remains, then verifies
+    ///     that no L0 file or overfull inner level is left.
+    /// </summary>
+    public async ValueTask<CompactionResult> DrainCompactionDebtAsync(
+        RuntimeState state,
+        CloudCompactionOutputPublisher? outputPublisher,
+        Action<long>? publicationCompleted = null,
+        CompactionMemory? memory = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        CancellationToken cancellationToken = default)
+    {
+        var outputBytes = 0L;
+        var publicationCount = 0;
+        while (true)
+        {
+            // Each round holds the maintenance gate alone and releases it before the next round,
+            // so publications waiting on the gate are served between rounds.
+            using (memory is null
+                       ? null
+                       : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var round = await CompactRoundAsync(
+                        state,
+                        false,
+                        outputPublisher,
+                        true,
+                        publicationCompleted,
+                        memory,
+                        prepareInputs,
+                        cancellationToken,
+                        drainDebt: true)
+                    .ConfigureAwait(false);
+                outputBytes = checked(outputBytes + round.OutputBytes);
+                publicationCount = checked(publicationCount + (round.HasCompactionPlan ? 1 : 0));
+                if (round.PersistenceAnomaly)
+                {
+                    return new CompactionResult(outputBytes, publicationCount, true);
+                }
+
+                if (!round.HasCompactionPlan)
+                {
+                    break;
+                }
+            }
+        }
+
+        var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        foreach (var (_, familyId) in _familyIds.ToList())
+        {
+            if (!CompactionDebt.IsClear(manifest.Files, familyId, _compaction))
+            {
+                throw new PantsInternalException(
+                    "Compaction debt remains with no legal compaction plan.");
+            }
+        }
+
+        return new CompactionResult(outputBytes, publicationCount, false);
+    }
+
     async ValueTask<CompactionResult> CompactAsync(
         RuntimeState state,
         bool force,
@@ -3424,7 +3504,8 @@ sealed class LocalDiskStore :
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool drainDebt = false)
     {
         var compactionBudget = memory?.Budget;
         cancellationToken.ThrowIfCancellationRequested();
@@ -3458,12 +3539,22 @@ sealed class LocalDiskStore :
         {
             foreach (var (_, familyId) in _familyIds.ToList())
             {
-                var plan = LeveledCompactionPlanner.Pick(
-                    manifest.Files,
-                    familyId,
-                    _compaction,
-                    state.ActiveSnapshots.Select(static snapshot => snapshot.BeginSequence).Cast<long?>().Min(),
-                    force);
+                var snapshotHorizon = state.ActiveSnapshots
+                    .Select(static snapshot => snapshot.BeginSequence)
+                    .Cast<long?>()
+                    .Min();
+                var plan = drainDebt
+                    ? LeveledCompactionPlanner.PickDebtDrain(
+                        manifest.Files,
+                        familyId,
+                        _compaction,
+                        snapshotHorizon)
+                    : LeveledCompactionPlanner.Pick(
+                        manifest.Files,
+                        familyId,
+                        _compaction,
+                        snapshotHorizon,
+                        force);
                 if (plan is null)
                 {
                     continue;
@@ -4916,6 +5007,7 @@ sealed class LocalDiskStore :
 
     void DurablyApplyManifestEditCore(ManifestEdit edit)
     {
+        ManifestEditValidator.Validate(edit, JsonOptions);
         var recordType = GetManifestEditRecordType(edit.Variant);
         var editId = checked(_manifest.EditCheckpointId + 1);
         var payload = new ArrayBufferWriter<byte>();
@@ -5135,10 +5227,15 @@ sealed class LocalDiskStore :
                 failure = exception;
                 if (recoveryPolicy == PantsRecoveryPolicy.Strict)
                 {
-                    throw PantsException.Create(
-                        PantsErrorCode.RecoveryFailed,
-                        "The manifest could not be recovered strictly.",
-                        exception);
+                    throw exception is ManifestKeyBoundFormatException
+                        ? PantsException.Create(
+                            PantsErrorCode.Corruption,
+                            "The manifest holds a key bound outside the byte range.",
+                            exception)
+                        : PantsException.Create(
+                            PantsErrorCode.RecoveryFailed,
+                            "The manifest could not be recovered strictly.",
+                            exception);
                 }
 
                 state.MarkSalvageMode();
@@ -5777,6 +5874,10 @@ sealed class LocalDiskStore :
             try
             {
                 ManifestJournalPayload.Validate(payloadCopy);
+                if (recordType == 9)
+                {
+                    ManifestDurabilityMarkerValidator.Validate(payloadCopy);
+                }
             }
             catch (JsonException exception)
             {
@@ -6093,12 +6194,7 @@ sealed class LocalDiskStore :
 
     static string ValidateSstName(string name)
     {
-        if (string.IsNullOrEmpty(name) ||
-            name != Path.GetFileName(name) ||
-            !name.EndsWith(".sst", StringComparison.Ordinal) ||
-            name.Contains(':') ||
-            name.Contains('\\') ||
-            name.Contains('\0'))
+        if (!SstFileName.IsSafe(name))
         {
             throw new StorageException($"Manifest SST name '{name}' is unsafe.");
         }

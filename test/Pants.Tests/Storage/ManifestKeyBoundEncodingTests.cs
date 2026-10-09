@@ -56,8 +56,9 @@ public sealed class ManifestKeyBoundEncodingTests
             File.WriteAllText(path, manifest.ToJsonString());
         }
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+        var exception = await Assert.ThrowsAsync<PantsCorruptionException>(() =>
             PantsDatabase.OpenAsync(options).AsTask());
+        Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
 
     static async Task FlushDeleteAsync(PantsOpenOptions options, byte[] key)

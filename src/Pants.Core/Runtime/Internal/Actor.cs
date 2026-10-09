@@ -67,6 +67,7 @@ sealed class Actor : IAsyncDisposable
     bool _garbageCollectionPending;
     RuntimeWorker _garbageCollectionWorker = null!;
     readonly HybridCacheManager? _hybridCache;
+    readonly SpillRunRetirement _spillRetirement = new(new FileSystemSpillFileRemover());
     ImmutableFlushPipeline _immutableFlushPipeline = null!;
     Task _loopTask = null!;
     RuntimeWorker _manifestWorker = null!;
@@ -615,6 +616,7 @@ sealed class Actor : IAsyncDisposable
                     cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
                         cloudLease,
                         leaseHeartbeatInterval,
+                        dependencies.RuntimeTimeProvider,
                         cloudLeaseCancellation.Token);
                     cloudMode = true;
                 }
@@ -1250,7 +1252,8 @@ sealed class Actor : IAsyncDisposable
                     snapshot,
                     state.Clock.UtcNow,
                     _diskStore?.RootPath,
-                    _hybridCache?.Ledger);
+                    _hybridCache?.Ledger,
+                    spillRetirement: _spillRetirement);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
@@ -1532,7 +1535,7 @@ sealed class Actor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
-                        var inputs = _diskStore.GetCompactionInputNames(state, true);
+                        var inputs = _diskStore.GetCompactionDebtInputNames(state);
                         using var inputProtection = await ProtectCompactionInputsAsync(
                                 inputs,
                                 cancellationToken)
@@ -1547,9 +1550,8 @@ sealed class Actor : IAsyncDisposable
                                 cancellationToken)
                             .ConfigureAwait(false);
                         var result = await deadline.RunMutationAsync(
-                                token => _compactionRuntime.CompactAsync(
+                                token => _compactionRuntime.DrainDebtAsync(
                                     state,
-                                    true,
                                     _cloudCompactionOutputPublisher,
                                     prepareInputs: EnsureHybridSstsLocalForMaintenanceAsync,
                                     cancellationToken: token),
@@ -2252,11 +2254,12 @@ sealed class Actor : IAsyncDisposable
     static async Task RunCloudLeaseHeartbeatAsync(
         CloudLeaseCoordinator lease,
         TimeSpan interval,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         try
         {
-            using var timer = new PeriodicTimer(interval);
+            using var timer = new PeriodicTimer(interval, timeProvider);
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
                 await lease.RenewAsync(cancellationToken).ConfigureAwait(false);
