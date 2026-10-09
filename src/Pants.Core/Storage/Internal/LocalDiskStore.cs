@@ -5007,6 +5007,7 @@ sealed class LocalDiskStore :
 
     void DurablyApplyManifestEditCore(ManifestEdit edit)
     {
+        ManifestEditValidator.Validate(edit, JsonOptions);
         var recordType = GetManifestEditRecordType(edit.Variant);
         var editId = checked(_manifest.EditCheckpointId + 1);
         var payload = new ArrayBufferWriter<byte>();
@@ -6189,12 +6190,7 @@ sealed class LocalDiskStore :
 
     static string ValidateSstName(string name)
     {
-        if (string.IsNullOrEmpty(name) ||
-            name != Path.GetFileName(name) ||
-            !name.EndsWith(".sst", StringComparison.Ordinal) ||
-            name.Contains(':') ||
-            name.Contains('\\') ||
-            name.Contains('\0'))
+        if (!SstFileName.IsSafe(name))
         {
             throw new StorageException($"Manifest SST name '{name}' is unsafe.");
         }
