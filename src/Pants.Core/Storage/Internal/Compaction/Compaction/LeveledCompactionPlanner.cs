@@ -2,12 +2,52 @@ namespace Cntryl.Pants.Storage.Internal.Compaction.Compaction;
 
 static class LeveledCompactionPlanner
 {
+    /// <summary>
+    ///     Picks the next compaction. A forced pick also rewrites L0 once it holds more than one file
+    ///     and any inner level holding more than one file, even below its size target.
+    /// </summary>
     public static CompactionPlan? Pick(
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
         long? snapshotHorizon,
-        bool force)
+        bool force) =>
+        PickCore(
+            files,
+            columnFamilyId,
+            configuration,
+            snapshotHorizon,
+            l0ForceFloor: force ? 2 : int.MaxValue,
+            innerForceFloor: force ? 2 : int.MaxValue);
+
+    /// <summary>
+    ///     Picks the next step of a manual debt drain. Any L0 file is drained, and inner levels are
+    ///     compacted only while overfull, so under-target levels are never rewritten.
+    /// </summary>
+    public static CompactionPlan? PickDebtDrain(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration,
+        long? snapshotHorizon) =>
+        PickCore(
+            files,
+            columnFamilyId,
+            configuration,
+            snapshotHorizon,
+            l0ForceFloor: 1,
+            innerForceFloor: int.MaxValue);
+
+    /// <summary>
+    ///     Shared selection. A level is forced once it holds at least its floor in files; a floor of
+    ///     <see cref="int.MaxValue" /> disables forcing for that level.
+    /// </summary>
+    static CompactionPlan? PickCore(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration,
+        long? snapshotHorizon,
+        int l0ForceFloor,
+        int innerForceFloor)
     {
         ValidateConfiguration(configuration);
         var familyFiles = files.Where(file => file.ColumnFamilyId == columnFamilyId).ToArray();
@@ -21,7 +61,7 @@ static class LeveledCompactionPlanner
         var l0Size = l0Files.Aggregate(0UL, static (total, file) => checked(total + file.SizeBytes));
         if (l0Size > checked((ulong)configuration.L0SizeTriggerBytes) ||
             l0Files.Length >= configuration.L0FileCountTrigger ||
-            (force && l0Files.Length > 1))
+            l0Files.Length >= l0ForceFloor)
         {
             var source = l0Files
                 .OrderBy(static file => file.SstSequence)
@@ -31,13 +71,11 @@ static class LeveledCompactionPlanner
                 columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
         }
 
-        var targetSize = checked((ulong)configuration.L1TargetSizeBytes);
         for (uint level = 1; level < configuration.MaximumLevels - 1; level++)
         {
             var sourceLevelFiles = FilesAtLevel(familyFiles, level);
-            var levelSize = sourceLevelFiles.Aggregate(0UL, static (total, file) =>
-                checked(total + file.SizeBytes));
-            if (levelSize > targetSize || (force && sourceLevelFiles.Length > 1))
+            if (IsOverfull(sourceLevelFiles, configuration, level) ||
+                sourceLevelFiles.Length >= innerForceFloor)
             {
                 var source = sourceLevelFiles
                     .OrderBy(GetSmallestKey, ByteArrayComparer.Instance)
@@ -47,11 +85,36 @@ static class LeveledCompactionPlanner
                 return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, level + 1), level,
                     level + 1, columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
             }
-
-            targetSize = SaturatingMultiply(targetSize, checked((ulong)configuration.LevelMultiplier));
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Returns whether an inner level's total size exceeds its target.
+    /// </summary>
+    static bool IsOverfull(
+        IReadOnlyList<FileMeta> levelFiles,
+        PantsCompactionConfiguration configuration,
+        uint level)
+    {
+        var levelSize = levelFiles.Aggregate(0UL, static (total, file) =>
+            checked(total + file.SizeBytes));
+        return levelSize > LevelTargetBytes(configuration, level);
+    }
+
+    /// <summary>
+    ///     Returns the size target for an inner level, which grows by the level multiplier per level.
+    /// </summary>
+    public static ulong LevelTargetBytes(PantsCompactionConfiguration configuration, uint level)
+    {
+        var targetSize = checked((ulong)configuration.L1TargetSizeBytes);
+        for (uint current = 1; current < level; current++)
+        {
+            targetSize = SaturatingMultiply(targetSize, checked((ulong)configuration.LevelMultiplier));
+        }
+
+        return targetSize;
     }
 
     /// <summary>

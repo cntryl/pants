@@ -270,6 +270,41 @@ public sealed class LeveledCompactionPlannerTests
             second?.Inputs.Select(static file => file.Name));
     }
 
+    [Fact]
+    public void ShouldDrainSingleL0FileWhenDebtDrainPicks()
+    {
+        var plan = LeveledCompactionPlanner.PickDebtDrain(
+            [File("l0-1.sst", 0, 1, "a", "b")], 0, Configuration(), null);
+
+        Assert.NotNull(plan);
+        Assert.Equal(0u, plan.SourceLevel);
+    }
+
+    [Fact]
+    public void ShouldNotRewriteUnderTargetInnerLevelsWhenDebtDrainPicks()
+    {
+        FileMeta[] files =
+        [
+            File("l1-1.sst", 1, 1, "a", "b"),
+            File("l1-2.sst", 1, 2, "c", "d")
+        ];
+
+        Assert.Null(LeveledCompactionPlanner.PickDebtDrain(files, 0, Configuration(), null));
+    }
+
+    [Fact]
+    public void ShouldReportDebtClearOnlyWithoutL0OrOverfullInnerLevel()
+    {
+        var configuration = Configuration(l1TargetSizeBytes: 2048);
+
+        Assert.True(CompactionDebt.IsClear([File("l1.sst", 1, 1, "a", "b", 1024)], 0, configuration));
+        Assert.False(CompactionDebt.IsClear([File("l0.sst", 0, 1, "a", "b")], 0, configuration));
+        Assert.False(CompactionDebt.IsClear(
+            [File("l1-1.sst", 1, 1, "a", "b", 1024), File("l1-2.sst", 1, 2, "c", "d", 2048)],
+            0,
+            configuration));
+    }
+
     static PantsCompactionConfiguration Configuration(
         long l0SizeTriggerBytes = 4L * 1024 * 1024,
         int l0FileCountTrigger = 4,
