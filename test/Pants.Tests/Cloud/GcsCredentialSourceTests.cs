@@ -9,6 +9,11 @@ namespace Cntryl.Pants.Cloud;
 [Collection(CredentialEnvironmentDefinition.Name)]
 public sealed class GcsCredentialSourceTests
 {
+    static readonly string[] DevstorageScopes =
+    [
+        "https://www.googleapis.com/auth/devstorage.full_control"
+    ];
+
     static readonly string[] GcsEnvironmentVariables =
     [
         "GOOGLE_APPLICATION_CREDENTIALS",
@@ -267,6 +272,330 @@ public sealed class GcsCredentialSourceTests
             Assert.DoesNotContain(secret, source.ToString(), StringComparison.Ordinal);
         });
     }
+
+    [Fact]
+    public async Task ShouldFetchUrlSourcedJsonSubjectTokenWithConfiguredHeaders()
+    {
+        using var directory = new TemporaryDirectory();
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(
+            credentialPath,
+            ExternalAccountJson(new Dictionary<string, object?>
+            {
+                ["url"] = "https://subject.example.test/token",
+                ["headers"] = new Dictionary<string, string>
+                {
+                    ["Metadata-Flavor"] = "Google",
+                    ["X-Subject-Tenant"] = "tenant-42"
+                },
+                ["format"] = new { type = "json", subject_token_field_name = "id_token" }
+            }));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler((request, _) => request.Uri.Host switch
+        {
+            "subject.example.test" => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"id_token":"url-subject-token"}""")
+            },
+            "sts.example.test" => GcsTokenResponse("federated-token", 3600),
+            _ => GcsObjectResponse()
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+
+        var subjectRequest = handler.Requests[0];
+        Assert.Equal(HttpMethod.Get, subjectRequest.Method);
+        Assert.Equal("https://subject.example.test/token", subjectRequest.Uri.ToString());
+        Assert.Equal("Google", subjectRequest.Header("Metadata-Flavor"));
+        Assert.Equal("tenant-42", subjectRequest.Header("X-Subject-Tenant"));
+        Assert.Contains("subject_token=url-subject-token", handler.Requests[1].Body, StringComparison.Ordinal);
+        Assert.Equal("Bearer federated-token", handler.Requests[2].Header("Authorization"));
+    }
+
+    [Fact]
+    public async Task ShouldSendWorkforceUserProjectInStsOptions()
+    {
+        using var directory = new TemporaryDirectory();
+        var subjectPath = Path.Combine(directory.Path, "subject-token");
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(subjectPath, "workforce-subject");
+        await File.WriteAllTextAsync(
+            credentialPath,
+            ExternalAccountJson(
+                new Dictionary<string, object?> { ["file"] = subjectPath },
+                new Dictionary<string, object?>
+                {
+                    ["workforce_pool_user_project"] = "billing-project"
+                }));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler((request, _) =>
+            request.Uri.Host == "sts.example.test"
+                ? GcsTokenResponse("workforce-token", 3600)
+                : GcsObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+
+        Assert.Contains(
+            "options=" + Uri.EscapeDataString("{\"userProject\":\"billing-project\"}"),
+            handler.Requests[0].Body,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShouldImpersonateServiceAccountWithCloudPlatformStsTokenAndDevstorageScope()
+    {
+        using var directory = new TemporaryDirectory();
+        var subjectPath = Path.Combine(directory.Path, "subject-token");
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(subjectPath, "impersonation-subject");
+        await File.WriteAllTextAsync(
+            credentialPath,
+            ExternalAccountJson(
+                new Dictionary<string, object?> { ["file"] = subjectPath },
+                ImpersonationExtras(900)));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler((request, _) => request.Uri.Host switch
+        {
+            "sts.example.test" => GcsTokenResponse("federated-token", 3600),
+            "iam.example.test" => ImpersonationResponse("impersonated-token", "2099-01-01T00:00:00Z"),
+            _ => GcsObjectResponse()
+        });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+
+        Assert.Contains(
+            "scope=" + Uri.EscapeDataString("https://www.googleapis.com/auth/cloud-platform"),
+            handler.Requests[0].Body,
+            StringComparison.Ordinal);
+        var impersonation = handler.Requests[1];
+        Assert.Equal("Bearer federated-token", impersonation.Header("Authorization"));
+        using var impersonationBody = JsonDocument.Parse(impersonation.Body);
+        Assert.Equal("900s", impersonationBody.RootElement.GetProperty("lifetime").GetString());
+        var scopes = impersonationBody.RootElement.GetProperty("scope").EnumerateArray()
+            .Select(static scope => scope.GetString())
+            .ToArray();
+        Assert.Equal(DevstorageScopes, scopes);
+        Assert.Equal("Bearer impersonated-token", handler.Requests[2].Header("Authorization"));
+    }
+
+    [Theory]
+    [MemberData(nameof(UnsupportedImpersonationLifetimes))]
+    public async Task ShouldRejectImpersonationLifetimeOutsideSupportedRange(object lifetime)
+    {
+        using var directory = new TemporaryDirectory();
+        var subjectPath = Path.Combine(directory.Path, "subject-token");
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(subjectPath, "lifetime-subject");
+        await File.WriteAllTextAsync(
+            credentialPath,
+            ExternalAccountJson(
+                new Dictionary<string, object?> { ["file"] = subjectPath },
+                ImpersonationExtras(lifetime)));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler((request, _) =>
+            request.Uri.Host == "sts.example.test"
+                ? GcsTokenResponse("federated-token", 3600)
+                : ImpersonationResponse("impersonated-token", "2099-01-01T00:00:00Z"));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.DoesNotContain(handler.Requests, static request => request.Uri.Host == "iam.example.test");
+    }
+
+    public static TheoryData<object> UnsupportedImpersonationLifetimes() => new()
+    {
+        599,
+        43_201,
+        "900",
+        900.5
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidImpersonationResponses))]
+    public async Task ShouldRejectImpersonationResponseWithoutUsableExpiryOrToken(
+        string? expireTime,
+        string accessToken)
+    {
+        using var directory = new TemporaryDirectory();
+        var subjectPath = Path.Combine(directory.Path, "subject-token");
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(subjectPath, "response-subject");
+        await File.WriteAllTextAsync(
+            credentialPath,
+            ExternalAccountJson(
+                new Dictionary<string, object?> { ["file"] = subjectPath },
+                ImpersonationExtras(900)));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler((request, _) =>
+            request.Uri.Host switch
+            {
+                "sts.example.test" => GcsTokenResponse("federated-token", 3600),
+                "iam.example.test" => ImpersonationResponse(accessToken, expireTime),
+                _ => GcsObjectResponse()
+            });
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(
+            () => store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.DoesNotContain("never-leak-impersonated", exception.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(handler.Requests, static request => request.Uri.Host == "gcs.example.test");
+    }
+
+    public static TheoryData<string?, string> InvalidImpersonationResponses() => new()
+    {
+        { null, "never-leak-impersonated" },
+        { "not-a-timestamp", "never-leak-impersonated" },
+        { "2000-01-01T00:00:00Z", "never-leak-impersonated" },
+        { "2099-01-01T00:00:00Z", string.Empty }
+    };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldRejectWhitespaceOnlySubjectTokenBeforeStsRequest(bool jsonFormat)
+    {
+        using var directory = new TemporaryDirectory();
+        var subjectPath = Path.Combine(directory.Path, "subject-token");
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(subjectPath, jsonFormat ? """{"id_token":"   "}""" : " \n\t ");
+        var source = jsonFormat
+            ? new Dictionary<string, object?>
+            {
+                ["file"] = subjectPath,
+                ["format"] = new { type = "json", subject_token_field_name = "id_token" }
+            }
+            : new Dictionary<string, object?> { ["file"] = subjectPath };
+        await File.WriteAllTextAsync(credentialPath, ExternalAccountJson(source));
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) => GcsTokenResponse("unexpected", 3600));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldRejectRootExecutableCredentialWithoutHttpRequests()
+    {
+        await AssertExternalAccountRejectedWithoutHttpAsync(
+            ExternalAccountJson(
+                new Dictionary<string, object?> { ["file"] = "unused" },
+                new Dictionary<string, object?>
+                {
+                    ["executable"] = new { command = "print-token" }
+                }));
+    }
+
+    [Fact]
+    public async Task ShouldRejectExecutableCredentialSourceWithoutHttpRequests()
+    {
+        await AssertExternalAccountRejectedWithoutHttpAsync(
+            ExternalAccountJson(new Dictionary<string, object?>
+            {
+                ["executable"] = new { command = "print-token" }
+            }));
+    }
+
+    [Fact]
+    public async Task ShouldRejectAwsEnvironmentIdWithUrlWithoutTreatingUrlAsSubjectToken()
+    {
+        await AssertExternalAccountRejectedWithoutHttpAsync(
+            ExternalAccountJson(new Dictionary<string, object?>
+            {
+                ["environment_id"] = "aws1",
+                ["url"] = "http://169.254.169.254/latest/meta-data/identity"
+            }));
+    }
+
+    static async Task AssertExternalAccountRejectedWithoutHttpAsync(string credentialJson)
+    {
+        using var directory = new TemporaryDirectory();
+        var credentialPath = Path.Combine(directory.Path, "external-account.json");
+        await File.WriteAllTextAsync(credentialPath, credentialJson);
+        using var environment = SetGcsEnvironment(new Dictionary<string, string?>
+        {
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = credentialPath
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) => GcsTokenResponse("unexpected", 3600));
+        using var client = new HttpClient(handler);
+        var store = CreateStore(new PantsGcsCredentialSource.ApplicationDefault(), client);
+
+        var exception = await Assert.ThrowsAsync<PantsInvalidArgumentException>(
+            () => store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.Empty(handler.Requests);
+        Assert.DoesNotContain("169.254.169.254", exception.Message, StringComparison.Ordinal);
+    }
+
+    static string ExternalAccountJson(
+        object credentialSource,
+        IReadOnlyDictionary<string, object?>? extras = null)
+    {
+        var document = new Dictionary<string, object?>
+        {
+            ["type"] = "external_account",
+            ["audience"] =
+                "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/provider",
+            ["subject_token_type"] = "urn:ietf:params:oauth:token-type:jwt",
+            ["token_url"] = "https://sts.example.test/v1/token",
+            ["credential_source"] = credentialSource
+        };
+        if (extras is not null)
+        {
+            foreach (var pair in extras)
+            {
+                document[pair.Key] = pair.Value;
+            }
+        }
+
+        return JsonSerializer.Serialize(document);
+    }
+
+    static Dictionary<string, object?> ImpersonationExtras(object lifetime) => new()
+    {
+        ["service_account_impersonation_url"] =
+            "https://iam.example.test/v1/projects/-/serviceAccounts/service@example.test:generateAccessToken",
+        ["service_account_impersonation"] = new { token_lifetime_seconds = lifetime }
+    };
+
+    static HttpResponseMessage ImpersonationResponse(string accessToken, string? expireTime) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { accessToken, expireTime }))
+        };
 
     static GcsObjectStore CreateStore(
         PantsGcsCredentialSource source,
