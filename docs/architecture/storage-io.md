@@ -29,6 +29,18 @@ prepare ownership simultaneously. SST flush staging and WAL rotation likewise
 retain their recovery-specific immutable naming protocols rather than using a
 metadata replacement helper.
 
+The mutation lock is never broken automatically: a plain open refuses with
+`LeaseUnavailable` while `.midge_leader.lock` is present, whatever its age. A
+writer killed while holding it leaves it behind. Recover explicitly, with no
+writer running against the database, through
+`PantsDatabase.RecoverStaleLeaseMutationLockAsync(path, leaseConfiguration)`.
+Pass the same `PantsLeaseConfiguration` as the writers. The call returns `true`
+when it removed the lock and `false` when none existed. It removes the lock only
+when the `.midge_leader` record is absent or older than the TTL plus clock skew,
+and only when the lock still carries the owner token it read first. It throws
+`LeaseHeld` while the record is still live, and `LeaseIndeterminate` when the
+lock has no owner token or the record cannot be proven stale.
+
 WAL frames and manifest-journal records use positional, vectored writes through
 `System.IO.RandomAccess`. SST point-read bytes are loaded through positional
 reads rather than a shared mutable `FileStream.Position`. These primitives
