@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Compatibility;
 
 public sealed class MidgeWireGoldenTests
 {
-    const string PinnedMidgeSha = "75dcc39f7a9b87df480ed91c3a5c93fe1389ca71";
+    const string PinnedMidgeSha = "7d39f86217fdb07191a83bd885a514dd5ea9723f";
 
     [Fact]
     public void ShouldDecodeFormatMarkerGivenPinnedMidgeWireGolden()

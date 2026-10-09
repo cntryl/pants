@@ -10,6 +10,7 @@ static class SstCodec
     const int EntryHeaderSize = 26;
 
     const int ExtendedLengthSize = 2 * sizeof(uint);
+    const int SingletonRangeBlockOverhead = sizeof(uint) + 2 * sizeof(uint) + sizeof(ulong);
 
     /// <summary>
     ///     Rejects a key/value pair that could not be encoded into an SST block.
@@ -39,12 +40,16 @@ static class SstCodec
     /// <summary>
     ///     Rejects a range tombstone whose bounds could not be encoded into a block.
     /// </summary>
+    /// <remarks>
+    ///     Each bound must be admissible as a point key, and the singleton range block - count, two
+    ///     bound lengths, sequence and both bounds - must fit the decoded block limit.
+    /// </remarks>
     public static void ValidateRangeTombstoneSize(int startLength, int endLength)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(startLength);
-        ArgumentOutOfRangeException.ThrowIfNegative(endLength);
+        ValidateEntrySize(startLength, 0);
+        ValidateEntrySize(endLength, 0);
 
-        var encoded = (long)EntryHeaderSize + startLength + endLength;
+        var encoded = (long)SingletonRangeBlockOverhead + startLength + endLength;
         if (encoded > DiskFormat.MaximumDecodedBlockBytes)
         {
             throw new PantsResourceLimitException(

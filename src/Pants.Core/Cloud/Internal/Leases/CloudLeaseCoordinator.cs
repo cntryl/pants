@@ -52,10 +52,10 @@ sealed class CloudLeaseCoordinator : IDisposable
             throw PantsException.InvalidArgument("Cloud lease duration must be greater than zero.");
         }
 
-        if (clockSkewTolerance < TimeSpan.Zero || clockSkewTolerance >= leaseDuration)
+        if (clockSkewTolerance < TimeSpan.Zero || clockSkewTolerance > leaseDuration)
         {
             throw PantsException.InvalidArgument(
-                "Cloud lease clock-skew tolerance must be non-negative and shorter than the lease duration.");
+                "Cloud lease clock-skew tolerance must be non-negative and must not exceed the lease duration.");
         }
 
         _holderId = holderId;
