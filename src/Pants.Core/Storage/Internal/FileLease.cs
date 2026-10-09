@@ -466,7 +466,7 @@ sealed class FileLease : IDisposable
         }
     }
 
-    static string? TryReadOwnerToken(string path)
+    internal static string? TryReadOwnerToken(string path)
     {
         if (!File.Exists(path))
         {
