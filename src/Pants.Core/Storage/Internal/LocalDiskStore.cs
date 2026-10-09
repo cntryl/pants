@@ -42,7 +42,8 @@ sealed class LocalDiskStore :
     bool _localWalPruningEnabled = true;
     IReadOnlyList<IRemoteWalSegment> _remoteWalSegments = [];
     long? _recoveryCheckpointBytes;
-    const long RecoveryTransactionLimitMultiple = 8;
+    RecoveryCheckpointer? _recoveryCheckpoints;
+    StorageBudgetLedger? _localStorageLedger;
     readonly ManifestState _manifest;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
 
@@ -1699,7 +1700,8 @@ sealed class LocalDiskStore :
         TimeSpan? leaseTimeToLive = null,
         TimeProvider? leaseTimeProvider = null,
         IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null,
-        long? recoveryCheckpointBytes = null)
+        long? recoveryCheckpointBytes = null,
+        HybridCacheManager? hybridCache = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1829,9 +1831,13 @@ sealed class LocalDiskStore :
             {
                 _rootTrust = rootTrust,
                 _remoteWalSegments = remoteWalSegments ?? [],
-                _recoveryCheckpointBytes = recoveryCheckpointBytes
+                _recoveryCheckpointBytes = recoveryCheckpointBytes,
+                _localStorageLedger = hybridCache?.Ledger
             };
             rootTrust = null;
+            // Recovery admits its spool and checkpoints against the ledger, which measures the
+            // bytes already resident from this store.
+            hybridCache?.BindStore(store);
             lease.EnsureValid();
             store.Recover(state, startupPhases);
             store.RestoreRecoveredWalDurability(state.Sequence);
@@ -3829,7 +3835,36 @@ sealed class LocalDiskStore :
         var activeFamilyIds = _familyIds.Values.ToHashSet();
         var sealedSegments = CollectWalReplaySources();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
-        using var recovery = new WalRecoveryStateMachine(Path.Combine(RootPath, "recovery"));
+        using var recovery = new WalRecoveryStateMachine(
+            Path.Combine(RootPath, "recovery"),
+            _localStorageLedger);
+        _recoveryCheckpoints = _recoveryCheckpointBytes is { } checkpointTarget
+            ? RecoveryCheckpointer.Create(checkpointTarget, _localStorageLedger)
+            : null;
+        try
+        {
+            ReplayWalSources(
+                state,
+                persistedFamilySequences,
+                activeFamilyIds,
+                sealedSegments,
+                writerEpochFrontiers,
+                recovery);
+        }
+        finally
+        {
+            _recoveryCheckpoints = null;
+        }
+    }
+
+    void ReplayWalSources(
+        RuntimeState state,
+        Dictionary<uint, ulong> persistedFamilySequences,
+        HashSet<uint> activeFamilyIds,
+        List<WalReplaySource> sealedSegments,
+        WalWriterEpochFrontiers writerEpochFrontiers,
+        WalRecoveryStateMachine recovery)
+    {
         var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
         for (var index = 0; index < sealedSegments.Count; index++)
@@ -4052,7 +4087,8 @@ sealed class LocalDiskStore :
                                        mutation.ColumnFamilyId);
                         })
                         .ToArray();
-                    RequireTransactionFitsRecoveryWorkingSet(applicableMutations);
+                    _recoveryCheckpoints?.RequireTransactionFits(
+                        applicableMutations.Select(static item => item.Mutation));
                     foreach (var (mutation, commitSequence) in applicableMutations)
                     {
                         ApplyMutations(state, [mutation]);
@@ -4063,10 +4099,12 @@ sealed class LocalDiskStore :
                             commitSequence);
                     }
                 }
-                catch (PantsResourceLimitException)
+                catch (PantsException exception) when (
+                    exception is PantsResourceLimitException or PantsNoSpaceException)
                 {
-                    // A transaction too large to recover is a resource failure, never corruption:
-                    // salvage would truncate acknowledged data.
+                    // A transaction too large to recover, or a spool the local budget cannot hold,
+                    // is a resource failure, never corruption: salvage would truncate acknowledged
+                    // data.
                     throw;
                 }
                 catch (PantsException exception)
@@ -4082,59 +4120,32 @@ sealed class LocalDiskStore :
                 return true;
             });
 
-    static long EstimateRecoveredBytes(WalMutation mutation) =>
-        (long)mutation.Key.Length +
-        (mutation.Value?.Length ?? 0) +
-        (mutation.RangeEnd?.Length ?? 0) +
-        64;
-
-    /// <summary>
-    ///     One transaction is applied atomically, so it cannot be split across checkpoints. Beyond a
-    ///     generous multiple of the working-set target it cannot be recovered in bounded memory.
-    /// </summary>
-    void RequireTransactionFitsRecoveryWorkingSet(
-        IReadOnlyList<(WalMutation Mutation, ulong CommitSequence)> mutations)
-    {
-        if (_recoveryCheckpointBytes is not { } target)
-        {
-            return;
-        }
-
-        var limit = target > long.MaxValue / RecoveryTransactionLimitMultiple
-            ? long.MaxValue
-            : target * RecoveryTransactionLimitMultiple;
-        long bytes = 0;
-        foreach (var (mutation, _) in mutations)
-        {
-            bytes = checked(bytes + EstimateRecoveredBytes(mutation));
-            if (bytes > limit)
-            {
-                throw PantsException.ResourceLimit(
-                    $"A WAL transaction needs more than {limit} bytes to recover, above the " +
-                    $"{target}-byte recovery working-set target; the WAL was left untouched.");
-            }
-        }
-    }
-
     /// <summary>
     ///     Publishes the recovered memtable as an SST and manifest entry once it reaches the
     ///     working-set target, then releases its memory. Checkpoints never retire WAL: a crash at
     ///     any point replays the WAL again, and per-family SST coverage skips what was published.
-    ///     Running between records keeps every transaction, including cross-family ones, whole.
+    ///     Running between records keeps every transaction, including cross-family ones, whole, and
+    ///     one manifest batch publishes every family's output together.
     /// </summary>
     void CheckpointRecoveredMemtableIfOverTarget(
         RuntimeState state,
         WalRecoveredVersionTracker recoveredVersions)
     {
-        if (_recoveryCheckpointBytes is not { } target ||
-            state.ActiveMemtableBytes.Values.Sum() < target ||
+        var recoveredBytes = state.ActiveMemtableBytes.Values.Sum();
+        if (_recoveryCheckpoints is not { } checkpoints ||
+            !checkpoints.IsDue(recoveredBytes) ||
             _mutableOperations.Count == 0)
         {
             return;
         }
 
-        _lease.EnsureValid();
-        FlushOperations(_mutableOperations.SnapshotAll(), null);
+        checkpoints.Publish(
+            recoveredBytes,
+            () =>
+            {
+                _lease.EnsureValid();
+                FlushOperations(_mutableOperations.SnapshotAll(), null);
+            });
         _mutableOperations.Clear();
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
         {
@@ -4144,6 +4155,7 @@ sealed class LocalDiskStore :
 
         state.UnflushedFamilies.Clear();
         recoveredVersions.Clear();
+        _failpoints.Hit(Failpoint.AfterRecoveryCheckpointPublished);
     }
 
     WalReplayOutcome VisitWalStream(

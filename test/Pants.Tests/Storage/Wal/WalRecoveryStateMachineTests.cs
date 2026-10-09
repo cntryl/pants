@@ -188,6 +188,66 @@ public sealed class WalRecoveryStateMachineTests
             });
     }
 
+    [Fact]
+    public void ShouldChargeSpooledTransactionToLocalStorageLedgerUntilItCommits()
+    {
+        var ledger = new StorageBudgetLedger(
+            new HybridStorageBudgetPolicy(64L * 1024 * 1024),
+            static () => 0);
+        using var recovery = CreateRecovery(ledger);
+        var applied = new List<(WalMutation Mutation, ulong CommitSequence)>();
+
+        Visit(
+            recovery,
+            applied,
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 9, 1, 7),
+            WalCodec.EncodeTransactionMutation(CreatePut("alpha", new string('v', 4096), 2), 9, 7));
+
+        Assert.True(ledger.ReservedBytes >= 4096, "Spooled bytes must be charged to the ledger.");
+
+        Visit(
+            recovery,
+            applied,
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 9, 3, 7));
+
+        Assert.Single(applied);
+        Assert.Equal(0, ledger.ReservedBytes);
+    }
+
+    [Fact]
+    public void ShouldReleaseSpoolChargeWhenAnOpenTransactionIsDiscarded()
+    {
+        var ledger = new StorageBudgetLedger(
+            new HybridStorageBudgetPolicy(64L * 1024 * 1024),
+            static () => 0);
+        using (var recovery = CreateRecovery(ledger))
+        {
+            Visit(
+                recovery,
+                [],
+                WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 9, 1, 7),
+                WalCodec.EncodeTransactionMutation(CreatePut("alpha", "one", 2), 9, 7));
+            Assert.NotEqual(0, ledger.ReservedBytes);
+        }
+
+        Assert.Equal(0, ledger.ReservedBytes);
+    }
+
+    [Fact]
+    public void ShouldRefuseToSpoolWithNoSpaceWhenLocalStorageBudgetIsExhausted()
+    {
+        var ledger = new StorageBudgetLedger(
+            new HybridStorageBudgetPolicy(1024 * 1024),
+            static () => 1024 * 1024 - 1024);
+        using var recovery = CreateRecovery(ledger);
+
+        Assert.Throws<PantsNoSpaceException>(() => Visit(
+            recovery,
+            [],
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 9, 1, 7),
+            WalCodec.EncodeTransactionMutation(CreatePut("alpha", new string('v', 4096), 2), 9, 7)));
+    }
+
     static WalMutation CreatePut(string key, string value, ulong sequence) => new(
         0,
         WalOperation.Put,
@@ -225,6 +285,6 @@ public sealed class WalRecoveryStateMachineTests
 
     // The spool file is created lazily and removed on dispose, so this directory usually never
     // materializes.
-    static WalRecoveryStateMachine CreateRecovery() =>
-        new(Path.Combine(Path.GetTempPath(), $"pants-recovery-tests-{Guid.NewGuid():N}"));
+    static WalRecoveryStateMachine CreateRecovery(StorageBudgetLedger? ledger = null) =>
+        new(Path.Combine(Path.GetTempPath(), $"pants-recovery-tests-{Guid.NewGuid():N}"), ledger);
 }

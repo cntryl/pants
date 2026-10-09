@@ -66,7 +66,7 @@ sealed class Actor : IAsyncDisposable
     FlushRuntimeService _flushRuntime = null!;
     bool _garbageCollectionPending;
     RuntimeWorker _garbageCollectionWorker = null!;
-    HybridCacheManager? _hybridCache;
+    readonly HybridCacheManager? _hybridCache;
     ImmutableFlushPipeline _immutableFlushPipeline = null!;
     Task _loopTask = null!;
     RuntimeWorker _manifestWorker = null!;
@@ -129,7 +129,8 @@ sealed class Actor : IAsyncDisposable
         CloudLeaseCoordinator? cloudLease,
         CancellationTokenSource? cloudLeaseCancellation,
         Task? cloudLeaseHeartbeat,
-        long walCloudDurableSequence)
+        long walCloudDurableSequence,
+        HybridCacheManager? hybridCache)
     {
         _options = options;
         _backgroundCompactionEnabled = backgroundCompactionEnabled;
@@ -159,6 +160,7 @@ sealed class Actor : IAsyncDisposable
         _cloudLeaseCancellation = cloudLeaseCancellation;
         _cloudLeaseHeartbeat = cloudLeaseHeartbeat;
         _walCloudDurableSequence = walCloudDurableSequence;
+        _hybridCache = hybridCache;
     }
 
     public bool IsPrimaryLeaseHealthy =>
@@ -373,6 +375,7 @@ sealed class Actor : IAsyncDisposable
         CloudLeaseCoordinator? cloudLease = null;
         CancellationTokenSource? cloudLeaseCancellation = null;
         Task? cloudLeaseHeartbeat = null;
+        HybridCacheManager? hybridCache = null;
         var walCloudDurableSequence = 0L;
 
         switch (options.Storage)
@@ -418,6 +421,10 @@ sealed class Actor : IAsyncDisposable
 
                 try
                 {
+                    hybridCache = new HybridCacheManager(
+                        simulated.LocalStorageBudgetBytes ??
+                        HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
+                        dependencies.Failpoints);
                     diskStore = LocalDiskStore.Open(
                         simulated.LocalCachePath,
                         state,
@@ -436,7 +443,8 @@ sealed class Actor : IAsyncDisposable
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,
-                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                        hybridCache: hybridCache);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulated.LocalCachePath,
                         diskStore.WriterEpoch,
@@ -462,6 +470,7 @@ sealed class Actor : IAsyncDisposable
                 catch
                 {
                     CleanupFailedDiskStartup(diskStore);
+                    hybridCache?.Dispose();
                     throw;
                 }
 
@@ -531,6 +540,10 @@ sealed class Actor : IAsyncDisposable
                         state.MarkSalvageMode();
                     }
 
+                    hybridCache = new HybridCacheManager(
+                        dependencies.HybridLocalStorageBudgetBytes ??
+                        HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
+                        dependencies.Failpoints);
                     diskStore = LocalDiskStore.Open(
                         cloud.LocalCachePath,
                         state,
@@ -550,7 +563,8 @@ sealed class Actor : IAsyncDisposable
                         leaseClock,
                         options.LeaseTimeToLive,
                         remoteWalSegments: hydration.RemoteWalSegments,
-                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                        hybridCache: hybridCache);
                     var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
                         maintenanceMemoryBudget,
                         maintenanceMemoryGate);
@@ -618,6 +632,7 @@ sealed class Actor : IAsyncDisposable
                     await DisposeFailedCloudStartupResourcesAsync(
                         providerPersistence,
                         objectStores).ConfigureAwait(false);
+                    hybridCache?.Dispose();
 
                     throw;
                 }
@@ -653,7 +668,8 @@ sealed class Actor : IAsyncDisposable
             cloudLease,
             cloudLeaseCancellation,
             cloudLeaseHeartbeat,
-            walCloudDurableSequence);
+            walCloudDurableSequence,
+            hybridCache);
         await actor.FinishStartupAsync(options, telemetry, dependencies, startupPhases, cancellationToken)
             .ConfigureAwait(false);
         return actor;
@@ -676,24 +692,6 @@ sealed class Actor : IAsyncDisposable
     {
         try
         {
-            _hybridCache = options.Storage switch
-            {
-                PantsStorageConfiguration.SimulatedCloud simulated => new HybridCacheManager(
-                    simulated.LocalStorageBudgetBytes ??
-                    HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
-                    _failpoints),
-                PantsStorageConfiguration.Cloud => new HybridCacheManager(
-                    dependencies.HybridLocalStorageBudgetBytes ??
-                    HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
-                    _failpoints),
-                _ => null
-            };
-
-            if (_hybridCache is not null && _diskStore is not null)
-            {
-                _hybridCache.BindStore(_diskStore);
-            }
-
             if (_cloudMode && _diskStore is not null && _cloudPersistence is not null)
             {
                 var recoveryDeadline = OperationDeadline.FromBudget(
