@@ -106,7 +106,8 @@ lease and `LOCK` held, because a failed shutdown cannot prove its workers have s
 whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
 succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost
 authority; defect errors (including `ResourceLimit`) are reported rather than retried; fatal errors
-mean durable state cannot be trusted.
+mean durable state cannot be trusted. Storage verification maps severity onto operator outcome
+classes and `midge verify` exit codes; see [Storage Verification Outcomes](../storage-verification.md).
 
 Classification follows Midge at the edges. A missing file or directory surfaced by storage I/O is a
 transient `Io` failure, not a caller `NotFound`. A zero deadline passed to
