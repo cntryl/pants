@@ -1,0 +1,79 @@
+name: Crash soak
+
+# Seeded crash/soak exploration is open-ended, so it runs on a schedule and on request rather than on
+# pull requests. Pull requests still run the fixed smoke seeds through the default test suite.
+on:
+  schedule:
+    - cron: '41 4 * * 2,5'
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Seed list or range (empty draws seeds from a time-derived start)
+        required: false
+        default: ''
+      minutes:
+        description: Keep drawing further seeds until this many minutes have passed
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    name: Crash soak (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Build
+        run: dotnet build Pants.slnx --configuration Release
+
+      # Failing runs are copied under TMPDIR with a killed-NNN snapshot of each cycle, and the
+      # failure message carries the seed and a replay command.
+      - name: Soak
+        env:
+          PANTS_CRASH_SOAK: '1'
+          PANTS_CRASH_SOAK_SEEDS: ${{ github.event.inputs.seeds || '' }}
+          PANTS_CRASH_SOAK_MINUTES: ${{ github.event.inputs.minutes || '30' }}
+          PANTS_CRASH_SOAK_BACKENDS: Local,SimulatedCloud
+          PANTS_CRASH_SOAK_KEEP_FAILURES: '1'
+          TMPDIR: ${{ runner.temp }}/soak-tmp
+        run: >-
+          mkdir -p "$TMPDIR" &&
+          dotnet test test/Pants.Tests/Pants.Tests.csproj
+          --configuration Release
+          --no-build
+          --filter 'Category=Soak'
+          --logger 'trx;LogFileName=soak.trx'
+          --results-directory ${{ runner.temp }}/soak-results
+
+      - name: Upload reproduction
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-reproduction-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/soak-results
+            ${{ runner.temp }}/soak-tmp
+          retention-days: 30
