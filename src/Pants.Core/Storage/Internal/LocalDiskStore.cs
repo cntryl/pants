@@ -5135,10 +5135,15 @@ sealed class LocalDiskStore :
                 failure = exception;
                 if (recoveryPolicy == PantsRecoveryPolicy.Strict)
                 {
-                    throw PantsException.Create(
-                        PantsErrorCode.RecoveryFailed,
-                        "The manifest could not be recovered strictly.",
-                        exception);
+                    throw exception is ManifestKeyBoundFormatException
+                        ? PantsException.Create(
+                            PantsErrorCode.Corruption,
+                            "The manifest holds a key bound outside the byte range.",
+                            exception)
+                        : PantsException.Create(
+                            PantsErrorCode.RecoveryFailed,
+                            "The manifest could not be recovered strictly.",
+                            exception);
                 }
 
                 state.MarkSalvageMode();
