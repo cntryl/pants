@@ -112,15 +112,25 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
 
         public long? PeriodTicks { get; set; }
 
+        bool _disposed;
+
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             owner.Schedule(this, dueTime, period);
             return true;
         }
 
         public void Invoke() => callback(state);
 
-        public void Dispose() => owner.Unschedule(this);
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                owner.Unschedule(this);
+            }
+        }
 
         public ValueTask DisposeAsync()
         {
