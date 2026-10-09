@@ -1,6 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
@@ -58,48 +56,24 @@ public sealed class PantsWalRotationCrashRecoveryTests
     public async Task ShouldRecoverOnlyAcceptedWriteAfterRotationProcessAbort(string boundaryName)
     {
         using var directory = new TemporaryDirectory();
-        var start = new ProcessStartInfo
-        {
-            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
-                       Environment.ProcessPath ??
-                       "dotnet",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        start.ArgumentList.Add("vstest");
-        start.ArgumentList.Add(typeof(PantsWalRotationCrashRecoveryTests).Assembly.Location);
-        start.ArgumentList.Add($"/Platform:{RuntimeInformation.ProcessArchitecture}");
-        start.ArgumentList.Add(
-            $"--Tests:{typeof(PantsWalRotationCrashRecoveryTests).FullName}." +
+        var start = CrashChildProcess.CreateStartInfo(
+            typeof(PantsWalRotationCrashRecoveryTests),
             nameof(ShouldAbortAtWalRotationBoundaryInChildProcess));
         start.Environment[BoundaryEnvironmentVariable] = boundaryName;
         start.Environment[DatabaseEnvironmentVariable] = directory.Path;
-        using var child = Process.Start(start) ??
-                          throw new InvalidOperationException("Could not start the WAL rotation child.");
-        var standardOutput = child.StandardOutput.ReadToEndAsync();
-        var standardError = child.StandardError.ReadToEndAsync();
-        try
-        {
-            using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
-            await child.WaitForExitAsync(timeout.Token);
-        }
-        finally
-        {
-            TryKillProcessTree(child);
-        }
+        using var child = await CrashChildProcess.RunToExitAsync(
+            start,
+            "WAL rotation child",
+            TestTimeouts.Expected);
 
-        var output = await standardOutput;
-        var error = await standardError;
         var sentinelPath = Path.Combine(directory.Path, SentinelFileName);
         var sentinel = File.Exists(sentinelPath)
             ? await File.ReadAllTextAsync(sentinelPath)
             : null;
         Assert.True(
             child.ExitCode != 0 && StringComparer.Ordinal.Equals(boundaryName, sentinel),
-            $"Rotation child did not abort at {boundaryName}: exit={child.ExitCode}; " +
-            $"sentinel={sentinel ?? "<missing>"}; stdout={output}; stderr={error}");
+            $"Rotation child did not abort at {boundaryName}: " +
+            $"sentinel={sentinel ?? "<missing>"}; {await child.DescribeAsync()}");
 
         await WaitForLockReleaseAsync(directory.Path);
         await ExpireCrashedLeaseAsync(directory.Path);
@@ -190,20 +164,6 @@ public sealed class PantsWalRotationCrashRecoveryTests
         }
     }
 
-    static void TryKillProcessTree(Process child)
-    {
-        try
-        {
-            if (!child.HasExited)
-            {
-                child.Kill(true);
-            }
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
-        {
-            // The child exited while the test was checking it.
-        }
-    }
 
     sealed class RotationCrashFailpointHandler(Failpoint boundary, string sentinelPath) :
         IFailpointHandler
