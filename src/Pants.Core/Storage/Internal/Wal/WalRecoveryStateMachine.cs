@@ -5,6 +5,7 @@ sealed class WalRecoveryStateMachine : IDisposable
     readonly Dictionary<(ulong WriterEpoch, ulong TransactionId), WalRecoverySpool>
         _openTransactions = [];
 
+    readonly StorageBudgetLedger? _ledger;
     readonly string _scratchDirectory;
 
     bool _disposed;
@@ -14,12 +15,14 @@ sealed class WalRecoveryStateMachine : IDisposable
     /// <summary>
     ///     <paramref name="scratchDirectory" /> holds the per-transaction spools. It belongs under
     ///     the database so the bytes land on the volume the operator sized for it, and so the
-    ///     database's own cleanup owns them.
+    ///     database's own cleanup owns them. <paramref name="ledger" />, when a local-storage budget
+    ///     applies, is charged for every spooled byte until its transaction resolves.
     /// </summary>
-    public WalRecoveryStateMachine(string scratchDirectory)
+    public WalRecoveryStateMachine(string scratchDirectory, StorageBudgetLedger? ledger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
         _scratchDirectory = scratchDirectory;
+        _ledger = ledger;
     }
 
     public void Dispose()
@@ -102,7 +105,7 @@ sealed class WalRecoveryStateMachine : IDisposable
             throw new StorageException("WAL contains a duplicate transaction begin record.");
         }
 
-        _openTransactions.Add(key, new WalRecoverySpool(_scratchDirectory));
+        _openTransactions.Add(key, new WalRecoverySpool(_scratchDirectory, _ledger));
     }
 
     void AcceptCommit(
