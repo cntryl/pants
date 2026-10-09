@@ -5874,6 +5874,10 @@ sealed class LocalDiskStore :
             try
             {
                 ManifestJournalPayload.Validate(payloadCopy);
+                if (recordType == 9)
+                {
+                    ManifestDurabilityMarkerValidator.Validate(payloadCopy);
+                }
             }
             catch (JsonException exception)
             {
