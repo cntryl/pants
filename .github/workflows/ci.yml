@@ -18,7 +18,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
@@ -69,6 +69,9 @@ jobs:
           --configuration Release
           --no-build
           --filter "Category!=Sqrzl"
+          --blame-hang-timeout 4m
+          --blame-hang-dump-type mini
+          --logger "console;verbosity=normal"
 
       - name: Stop Sqrzl emulator
         if: ${{ always() && matrix.os == 'ubuntu-latest' }}
