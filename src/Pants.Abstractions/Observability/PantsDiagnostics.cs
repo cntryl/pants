@@ -21,6 +21,9 @@ public static class PantsDiagnostics
     internal static Counter<long> TransactionsConflicted { get; } =
         Meter.CreateCounter<long>("pants.transactions.conflicted");
 
+    internal static Counter<long> TransactionSpillDeleteFailures { get; } =
+        Meter.CreateCounter<long>("pants.transactions.spill_delete_failures");
+
     internal static Counter<long> CommandsRejected { get; } =
         Meter.CreateCounter<long>("pants.runtime.commands_rejected");
 

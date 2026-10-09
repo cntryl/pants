@@ -67,6 +67,7 @@ sealed class Actor : IAsyncDisposable
     bool _garbageCollectionPending;
     RuntimeWorker _garbageCollectionWorker = null!;
     readonly HybridCacheManager? _hybridCache;
+    readonly SpillRunRetirement _spillRetirement = new(new FileSystemSpillFileRemover());
     ImmutableFlushPipeline _immutableFlushPipeline = null!;
     Task _loopTask = null!;
     RuntimeWorker _manifestWorker = null!;
@@ -1250,7 +1251,8 @@ sealed class Actor : IAsyncDisposable
                     snapshot,
                     state.Clock.UtcNow,
                     _diskStore?.RootPath,
-                    _hybridCache?.Ledger);
+                    _hybridCache?.Ledger,
+                    spillRetirement: _spillRetirement);
                 state.ActiveTransactions[transactionId] = new TransactionInfo(
                     transactionId,
                     mode,
