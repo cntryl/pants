@@ -27,7 +27,7 @@ static class LeaseMutationLockRecovery
         }
 
         var lockPath = Path.Combine(root, LockFileName);
-        var ownerToken = FileLease.TryReadOwnerToken(lockPath);
+        var ownerToken = ReadOwnerTokenOrRefuse(lockPath);
         if (ownerToken is null)
         {
             if (!File.Exists(lockPath))
@@ -42,7 +42,7 @@ static class LeaseMutationLockRecovery
         RequireNoLiveWriter(Path.Combine(root, LeaderFileName), timeToLive, clockSkewTolerance, clock);
 
         // Re-check the token immediately before removal so a lock replaced since the check survives.
-        if (FileLease.TryReadOwnerToken(lockPath) != ownerToken)
+        if (ReadOwnerTokenOrRefuse(lockPath) != ownerToken)
         {
             throw new PantsLeaseHeldException(
                 "The Midge leader mutation lock changed during recovery; no lock was removed.");
@@ -50,6 +50,24 @@ static class LeaseMutationLockRecovery
 
         File.Delete(lockPath);
         return true;
+    }
+
+    /// <summary>
+    ///     A sharing violation means another process still holds the lock open, so its owner is
+    ///     alive: refuse with <see cref="PantsLeaseHeldException" /> rather than leak an I/O error.
+    /// </summary>
+    static string? ReadOwnerTokenOrRefuse(string lockPath)
+    {
+        try
+        {
+            return FileLease.TryReadOwnerToken(lockPath);
+        }
+        catch (IOException exception)
+        {
+            throw new PantsLeaseHeldException(
+                "The Midge leader mutation lock is held by another process; no lock was removed.",
+                exception);
+        }
     }
 
     static void RequireNoLiveWriter(string leaderPath, TimeSpan timeToLive, TimeSpan clockSkewTolerance, IPantsClock clock)

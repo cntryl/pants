@@ -65,11 +65,20 @@ public sealed class LeaseMutationLockRecoveryTests
                    databasePath,
                    readyPath))
         {
+            // The child still holds the lock, so recovery must refuse rather than fail with a raw
+            // sharing violation.
+            await Assert.ThrowsAsync<PantsLeaseHeldException>(
+                () => PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath).AsTask());
+            Assert.True(File.Exists(lockPath));
+
             child.TryKillProcessTree();
             await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
             Assert.NotEqual(0, child.ExitCode);
         }
 
+        // The vstest test host that owns the lock can outlive its launcher for a moment after the
+        // kill. Wait until the kernel has released its handle, as the other crash tests do.
+        await WaitForLockReleaseAsync(lockPath);
         Assert.True(File.Exists(lockPath), "The killed writer must leave its mutation lock behind.");
 
         // The lock is sticky: a plain open refuses while it is present, and nothing breaks it.
@@ -113,6 +122,27 @@ public sealed class LeaseMutationLockRecoveryTests
             () => PantsDatabase.RecoverStaleLeaseMutationLockAsync(directory.Path).AsTask());
 
         Assert.Contains("interrupted-token", await File.ReadAllTextAsync(lockPath));
+    }
+
+    static async Task WaitForLockReleaseAsync(string lockPath)
+    {
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+        while (true)
+        {
+            try
+            {
+                await using var stream = new FileStream(
+                    lockPath,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+                return;
+            }
+            catch (IOException) when (!timeout.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+            }
+        }
     }
 
     static PantsOpenOptions CreateOptions(string path) =>

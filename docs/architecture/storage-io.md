@@ -38,7 +38,8 @@ Pass the same `PantsLeaseConfiguration` as the writers. The call returns `true`
 when it removed the lock and `false` when none existed. It removes the lock only
 when the `.midge_leader` record is absent or older than the TTL plus clock skew,
 and only when the lock still carries the owner token it read first. It throws
-`LeaseHeld` while the record is still live, and `LeaseIndeterminate` when the
+`LeaseHeld` while the record is still live or another process still holds the
+lock open, and `LeaseIndeterminate` when the
 lock has no owner token or the record cannot be proven stale.
 
 WAL frames and manifest-journal records use positional, vectored writes through
