@@ -84,8 +84,12 @@ SPI, while Pants retains ownership of object layout, WAL/SST formats, leases, fe
 Local, simulated-cloud, and provider-cloud writers use the same `LeaseTimeToLive` and
 `LeaseClockSkewTolerance` profile. The 30-second default TTL retains the provider-cloud default
 and aligns local takeover with current Midge; older Pants builds used an independent 60-second
-local takeover delay. The exact boundary remains held, and takeover becomes eligible on the first
-clock tick after `last renewal + TTL + skew`. Heartbeats run at one third of TTL, bounded between
+local takeover delay. A local `.midge_leader` record becomes eligible for takeover once its age is
+at or beyond `TTL + skew` (format/lease.md), matching Midge; a cloud lease document keeps the exact
+`expires_at + skew` boundary held and becomes eligible on the first clock tick after it, also
+matching Midge. The local record is parsed strictly: it must be UTF-8, `acquired_at` must be an
+RFC 3339 timestamp with an explicit offset, and `epoch`/`checksum` must be plain decimal digits;
+anything else is `LeaseIndeterminate`. Heartbeats run at one third of TTL, bounded between
 1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
 release still validates the writer epoch/owner token, so a resumed old owner remains fenced.
 
@@ -102,4 +106,12 @@ lease and `LOCK` held, because a failed shutdown cannot prove its workers have s
 whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
 succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost
 authority; defect errors (including `ResourceLimit`) are reported rather than retried; fatal errors
-mean durable state cannot be trusted.
+mean durable state cannot be trusted. Storage verification maps severity onto operator outcome
+classes and `midge verify` exit codes; see [Storage Verification Outcomes](../storage-verification.md).
+
+Classification follows Midge at the edges. A missing file or directory surfaced by storage I/O is a
+transient `Io` failure, not a caller `NotFound`. A zero deadline passed to
+`IPantsPersistentStorage.VerifyAsync` or `ShutdownAsync` is an already-expired budget and reports
+`Timeout` (shutdown still begins and may be retried); only a negative deadline is
+`InvalidArgument`. The `ShutdownTimeout` open option, which has no Midge counterpart and bounds
+disposal, must still be greater than zero.

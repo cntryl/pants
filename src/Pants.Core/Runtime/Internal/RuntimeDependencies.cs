@@ -13,9 +13,11 @@ sealed class RuntimeDependencies
         IPantsClock? leaseClock = null,
         long? hybridLocalStorageBudgetBytes = null,
         TimeSpan? workerDisposalTimeout = null,
-        long? initialMemorySequence = null)
+        long? initialMemorySequence = null,
+        TimeSpan? cloudWalRetirementQuantum = null)
     {
         InitialMemorySequence = initialMemorySequence;
+        CloudWalRetirementQuantum = cloudWalRetirementQuantum;
         WorkerDisposalTimeout = workerDisposalTimeout;
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         StorageVerifier = storageVerifier ?? Storage.Internal.StorageVerifier.VerifyPathAsync;
@@ -45,6 +47,9 @@ sealed class RuntimeDependencies
     public long? InitialMemorySequence { get; }
 
     public IFailpointHandler Failpoints { get; }
+
+    /// <summary>How long one background cloud WAL retirement turn works before yielding.</summary>
+    public TimeSpan? CloudWalRetirementQuantum { get; }
 
     public StorageVerificationDelegate StorageVerifier { get; }
 

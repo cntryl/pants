@@ -175,6 +175,33 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     public void ReleaseLeaseWrites() =>
         Interlocked.Exchange(ref _leaseWriteGate, null)?.TrySetResult();
 
+    int _walRangeReadFailures;
+    int _failedWalRangeReads;
+    TaskCompletionSource? _walRangeReadGate;
+    TaskCompletionSource _walRangeReadBlocked =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public int FailedWalRangeReads => Volatile.Read(ref _failedWalRangeReads);
+
+    /// <summary>Answers the next ranged reads of WAL segment objects with HTTP 408.</summary>
+    public void TimeOutNextWalRangeReads(int count) =>
+        Volatile.Write(ref _walRangeReadFailures, count);
+
+    /// <summary>Holds every ranged read of a WAL segment until <see cref="ReleaseWalRangeReads" />.</summary>
+    public void BlockWalRangeReads()
+    {
+        _walRangeReadBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Volatile.Write(
+            ref _walRangeReadGate,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    }
+
+    public Task WaitForBlockedWalRangeReadAsync() =>
+        _walRangeReadBlocked.Task.WaitAsync(TestTimeouts.Expected);
+
+    public void ReleaseWalRangeReads() =>
+        Interlocked.Exchange(ref _walRangeReadGate, null)?.TrySetResult();
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
@@ -185,6 +212,25 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             Volatile.Read(ref _leaseWriteGate) is { } leaseGate)
         {
             await leaseGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (request.Method == HttpMethod.Get &&
+            request.Headers.Range is not null &&
+            key.Contains("/wal/epochs/", StringComparison.Ordinal))
+        {
+            if (Volatile.Read(ref _walRangeReadGate) is { } walGate)
+            {
+                _walRangeReadBlocked.TrySetResult();
+                await walGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (Interlocked.Decrement(ref _walRangeReadFailures) >= 0)
+            {
+                Interlocked.Increment(ref _failedWalRangeReads);
+                return new HttpResponseMessage(HttpStatusCode.RequestTimeout);
+            }
+
+            Interlocked.Exchange(ref _walRangeReadFailures, 0);
         }
 
         if (request.Method == HttpMethod.Get &&

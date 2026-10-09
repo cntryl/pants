@@ -18,6 +18,16 @@ is already durable, the commit returns without sealing another WAL segment; othe
 pending WAL work or waits behind an upload already in progress. The confirmation adds no sequence
 or WAL record. A failed upload cannot be acknowledged as a successful confirmation.
 
+Published WAL is retired from the catalog by background maintenance, never on a commit or flush
+path. A turn proves that the *published* manifest covers each candidate segment, reading the
+segment frame by frame through version-pinned ranged reads admitted against the shared maintenance
+memory pool, and checks only the SSTs whose recorded bounds cover a record. Only the contiguous
+oldest prefix of covered segments retires, so the catalog never has a gap. Running out of the
+turn's quantum, a provider timeout or busy response, and exhausted maintenance memory leave the
+catalog unchanged, raise no persistence anomaly, and resume on a later turn from the last
+acknowledged frame. Proof progress is process-local; after a restart retirement revalidates from
+the durable catalog and manifest.
+
 `CloudAsync` may acknowledge after the local WAL durability boundary and queues sealed WAL
 objects for upload. Runtime metrics expose pending and completed uploads. `BestEffort` provides
 no recovery guarantee until an explicit flush publishes an SST.

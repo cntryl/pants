@@ -147,6 +147,16 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    ///     The simulated store is a local directory with no provider latency, so it still retires
+    ///     covered WAL inline at the end of each mirror; there is no background work to run.
+    /// </summary>
+    public ValueTask<WalRetirementResult> RetireCoveredWalAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(WalRetirementResult.Settled);
+    }
+
     public ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -2,7 +2,7 @@
 
 M1 closes the behavior groups assigned to issues #1, #2, and #3 in the
 committed Midge contract manifest. The source baseline remains Midge commit
-`75dcc39f7a9b87df480ed91c3a5c93fe1389ca71`.
+`7d39f86217fdb07191a83bd885a514dd5ea9723f`.
 
 The executable coverage is organized by invariant rather than by mechanically
 copying Rust test structure. Transaction suites cover atomic intent ordering,

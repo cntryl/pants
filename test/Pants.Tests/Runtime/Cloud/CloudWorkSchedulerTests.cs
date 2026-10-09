@@ -113,6 +113,33 @@ public sealed class CloudWorkSchedulerTests
         Assert.Equal(0, scheduler.Outstanding);
     }
 
+    [Fact]
+    public async Task ShouldRunCloudWorkAgainUntilItReportsCompletionWithoutAnotherSignal()
+    {
+        await using var worker = new RuntimeWorker(1);
+        var outcomes = new Queue<CloudWorkOutcome>(
+        [
+            CloudWorkOutcome.Continue,
+            CloudWorkOutcome.RetryLater,
+            CloudWorkOutcome.Continue,
+            CloudWorkOutcome.Completed
+        ]);
+        var executions = 0;
+        await using var scheduler = new CloudWorkScheduler(
+            worker,
+            _ =>
+            {
+                Interlocked.Increment(ref executions);
+                return ValueTask.FromResult(outcomes.Dequeue());
+            });
+
+        scheduler.Signal();
+        await WaitForIdleAsync(scheduler);
+
+        Assert.Equal(4, Volatile.Read(ref executions));
+        Assert.Empty(outcomes);
+    }
+
     static async Task WaitForIdleAsync(CloudWorkScheduler scheduler)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);

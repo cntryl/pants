@@ -37,6 +37,50 @@ public sealed class PantsSstEntryAdmissionTests
     }
 
     /// <summary>
+    ///     A singleton range block holds its count, two bound lengths, the sequence and both bounds,
+    ///     so twenty bytes of framing - not a point-entry header - set the combined limit. Each bound
+    ///     must also be admissible as a point key, since either one may later stand alone.
+    /// </summary>
+    [Fact]
+    public void ShouldBoundRangeTombstoneAdmissionByCompleteEncodedSize()
+    {
+        const int limit = DiskFormat.MaximumDecodedBlockBytes;
+        const int half = limit / 2;
+
+        SstCodec.ValidateRangeTombstoneSize(half, half - 20);
+
+        Assert.Throws<PantsResourceLimitException>(() =>
+            SstCodec.ValidateRangeTombstoneSize(half, half - 19));
+        Assert.Throws<PantsResourceLimitException>(() =>
+            SstCodec.ValidateRangeTombstoneSize(0, limit - 33));
+        Assert.Throws<PantsResourceLimitException>(() =>
+            SstCodec.ValidateRangeTombstoneSize(limit - 33, 0));
+        Assert.Throws<PantsResourceLimitException>(() =>
+            SstCodec.ValidateRangeTombstoneSize(int.MaxValue, 1));
+    }
+
+    [Fact]
+    public void ShouldEncodeAndDecodeSstHoldingLargestAdmissibleRangeTombstone()
+    {
+        const int half = DiskFormat.MaximumDecodedBlockBytes / 2;
+        var start = new byte[half];
+        var end = new byte[half - 20];
+        end[0] = 1;
+
+        var bytes = SstCodec.Encode(
+            [],
+            [new RangeTombstone(start, end, 7)],
+            PantsPerformanceGoal.Latency);
+        var contents = SstCodec.Decode(bytes);
+
+        var tombstone = Assert.Single(contents.RangeTombstones);
+        Assert.Equal(start.Length, tombstone.Start.Length);
+        Assert.Equal(end.Length, tombstone.End.Length);
+        Assert.Equal(1, tombstone.End[0]);
+        Assert.Equal(7UL, tombstone.Sequence);
+    }
+
+    /// <summary>
     ///     Rejection has to happen where the caller staged the write, not later at flush: accepting
     ///     data the engine cannot subsequently write down surfaces the failure detached from its
     ///     cause, on a background path the caller cannot handle.
