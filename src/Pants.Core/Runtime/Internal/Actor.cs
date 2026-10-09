@@ -1532,7 +1532,7 @@ sealed class Actor : IAsyncDisposable
 
                     if (_diskStore is not null)
                     {
-                        var inputs = _diskStore.GetCompactionInputNames(state, true);
+                        var inputs = _diskStore.GetCompactionDebtInputNames(state);
                         using var inputProtection = await ProtectCompactionInputsAsync(
                                 inputs,
                                 cancellationToken)
@@ -1547,9 +1547,8 @@ sealed class Actor : IAsyncDisposable
                                 cancellationToken)
                             .ConfigureAwait(false);
                         var result = await deadline.RunMutationAsync(
-                                token => _compactionRuntime.CompactAsync(
+                                token => _compactionRuntime.DrainDebtAsync(
                                     state,
-                                    true,
                                     _cloudCompactionOutputPublisher,
                                     prepareInputs: EnsureHybridSstsLocalForMaintenanceAsync,
                                     cancellationToken: token),

@@ -27,7 +27,7 @@ public sealed class PantsLeveledCompactionTests
     }
 
     [Fact]
-    public async Task ShouldKeepCompactionInputSetBoundedAndReportMultipleLevels()
+    public async Task ShouldDrainAllL0DebtAfterCompactAllWellAboveL0Trigger()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
@@ -42,9 +42,71 @@ public sealed class PantsLeveledCompactionTests
         await database.Maintenance.CompactAllAsync();
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
-        Assert.Equal([0, 1], layout.Levels.Select(static level => level.Level));
-        Assert.Equal(2, layout.Levels.Single(static level => level.Level == 0).FileCount);
+        Assert.DoesNotContain(layout.Levels, static level => level.Level == 0);
+        Assert.Contains(layout.Levels, static level => level.Level == 1);
+    }
+
+    [Fact]
+    public async Task ShouldLeaveNoL0FileAfterCompactAllForSingleFlush()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 3, BackgroundEnabled: false)));
+        await PutAndFlushAsync(database, 0);
+
+        await database.Maintenance.CompactAllAsync();
+
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        Assert.DoesNotContain(layout.Levels, static level => level.Level == 0);
+        Assert.Contains(layout.Levels, static level => level.Level == 1);
+    }
+
+    [Fact]
+    public async Task ShouldNotRewriteUnderTargetInnerLevelsWhenCompactAllFindsNoL0Debt()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false)));
+        await PutAndFlushAsync(database, 0);
+        await PutAndFlushAsync(database, 1);
+        await database.Maintenance.CompactAllAsync();
+        await PutAndFlushAsync(database, 2);
+        await PutAndFlushAsync(database, 3);
+        await database.Maintenance.CompactAllAsync();
+        var before = await database.Diagnostics.GetStorageLayoutAsync();
+        Assert.Equal(2, before.Levels.Single(static level => level.Level == 1).FileCount);
+
+        await database.Maintenance.CompactAllAsync();
+
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        Assert.Equal([1], layout.Levels.Select(static level => level.Level));
         Assert.Equal(2, layout.Levels.Single(static level => level.Level == 1).FileCount);
+    }
+
+    [Fact]
+    public async Task ShouldDrainL0DebtWhenCompactAllStartsDuringBackgroundCompaction()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(true)
+                .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: true)));
+        for (var index = 0; index < 5; index++)
+        {
+            await PutAndFlushAsync(database, index);
+        }
+
+        var compaction = database.Maintenance.CompactAllAsync().AsTask();
+        await PutAndFlushAsync(database, 5);
+        await compaction;
+        await database.Maintenance.CompactAllAsync();
+
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        Assert.DoesNotContain(layout.Levels, static level => level.Level == 0);
     }
 
     [Fact]
