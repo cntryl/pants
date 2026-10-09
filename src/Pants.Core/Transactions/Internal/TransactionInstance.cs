@@ -30,7 +30,8 @@ sealed class TransactionInstance : IPantsTransaction
         DateTimeOffset snapshotTime,
         string? persistentDatabasePath,
         StorageBudgetLedger? storageBudget = null,
-        bool coordinatorRegistered = true)
+        bool coordinatorRegistered = true,
+        SpillRunRetirement? spillRetirement = null)
     {
         _database = database;
         _transactionId = transactionId;
@@ -45,7 +46,8 @@ sealed class TransactionInstance : IPantsTransaction
                 persistentDatabasePath,
                 transactionId,
                 columnFamily.Identity,
-                storageBudget);
+                storageBudget,
+                spillRetirement);
     }
 
     public IPantsColumnFamily ColumnFamily => _columnFamily;

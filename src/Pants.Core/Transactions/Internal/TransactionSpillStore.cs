@@ -26,6 +26,7 @@ sealed class TransactionSpillStore : IDisposable
     int _disposed;
 
     readonly StorageBudgetLedger? _ledger;
+    readonly SpillRunRetirement _retirement;
 
     readonly List<StorageBudgetLedger.StorageReservation> _reservations = [];
 
@@ -33,18 +34,21 @@ sealed class TransactionSpillStore : IDisposable
     ///     <paramref name="ledger" /> charges spilled bytes against the local-disk budget, or is
     ///     <see langword="null" /> where no local budget applies. Spill files sit outside the
     ///     resident figure the budget measures, so their charge is held for the store's lifetime
-    ///     rather than released once written.
+    ///     rather than released once written. <paramref name="retirement" /> outlives the store and
+    ///     keeps that charge until a file that could not be removed is actually gone.
     /// </summary>
     public TransactionSpillStore(
         string databasePath,
         long transactionId,
         ColumnFamilyIdentity family,
-        StorageBudgetLedger? ledger = null)
+        StorageBudgetLedger? ledger = null,
+        SpillRunRetirement? retirement = null)
     {
         _directory = Path.Combine(databasePath, "txn");
         _transactionId = checked((ulong)transactionId);
         _family = family;
         _ledger = ledger;
+        _retirement = retirement ?? new SpillRunRetirement(new FileSystemSpillFileRemover());
     }
 
     static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
@@ -121,6 +125,9 @@ sealed class TransactionSpillStore : IDisposable
             return;
         }
 
+        // Retry first: a file freed by a successful removal returns its charge before this write
+        // is measured against the budget.
+        _retirement.RetryPending();
         ReserveRunBytes(operations);
         var runNumber = _runs.Count;
         var stem = $"{_transactionId:x16}-{runNumber:x8}";
@@ -253,21 +260,24 @@ sealed class TransactionSpillStore : IDisposable
 
     void DeleteRuns()
     {
+        var paths = new List<string>(_runs.Count * 2);
         foreach (var run in _runs)
         {
-            TryDelete(run.Path);
-            TryDelete(run.RangePath);
+            paths.Add(run.Path);
+            paths.Add(run.RangePath);
         }
 
         _runs.Clear();
-        // Released here rather than on dispose: a read view can defer deletion, and the bytes stay
-        // on disk until it drains.
-        foreach (var reservation in _reservations)
+        // Charges are handed to retirement rather than released here: a read view can defer deletion,
+        // and a file that cannot be removed keeps occupying the disk, so its charge must stay.
+        StorageBudgetLedger.StorageReservation[] reservations;
+        lock (_lifetimeGate)
         {
-            reservation.Dispose();
+            reservations = _reservations.ToArray();
+            _reservations.Clear();
         }
 
-        _reservations.Clear();
+        _retirement.Retire(paths, reservations);
         try
         {
             lock (DirectoryMutationGate)
@@ -1183,17 +1193,6 @@ sealed class TransactionSpillStore : IDisposable
             File.Delete(path);
         }
         catch (DirectoryNotFoundException)
-        {
-        }
-    }
-
-    static void TryDelete(string path)
-    {
-        try
-        {
-            DeleteIfPresent(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
         }
     }
