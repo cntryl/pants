@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
+using Cntryl.Pants.Storage.Internal.IO;
 
 namespace Cntryl.Pants.Runtime.Internal;
 
@@ -408,11 +409,12 @@ sealed class Actor : IAsyncDisposable
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
+                var simulatedRoot = StoragePathGuard.CanonicalizeRoot(simulated.LocalCachePath);
                 SimulatedCloudHydrationResult simulatedHydration;
                 using (startupPhases.Measure(StartupPhase.CloudControlHydration))
                 {
                     simulatedHydration = SimulatedCloudPersistence.PrepareLocalCache(
-                        simulated.LocalCachePath,
+                        simulatedRoot,
                         options.RecoveryPolicy);
                 }
 
@@ -428,7 +430,7 @@ sealed class Actor : IAsyncDisposable
                         HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                         dependencies.Failpoints);
                     diskStore = LocalDiskStore.Open(
-                        simulated.LocalCachePath,
+                        simulatedRoot,
                         state,
                         Math.Max(simulatedHydration.MinimumWriterEpoch, options.MinimumEpoch),
                         options.RecoveryPolicy,
@@ -441,22 +443,22 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         leaseHeartbeatInterval,
-                        new SimulatedCloudSstSourceFactory(simulated.LocalCachePath),
+                        new SimulatedCloudSstSourceFactory(simulatedRoot),
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,
                         recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
                         hybridCache: hybridCache);
                     var simulatedPersistence = new SimulatedCloudPersistence(
-                        simulated.LocalCachePath,
+                        simulatedRoot,
                         diskStore.WriterEpoch,
                         dependencies.Failpoints);
                     cloudPersistence = simulatedPersistence;
                     cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
-                        simulated.LocalCachePath,
+                        simulatedRoot,
                         dependencies.Failpoints).PublishAsync;
                     cloudDdlCoordinator = new CloudDdlCoordinator(
-                        simulated.LocalCachePath,
+                        simulatedRoot,
                         simulatedPersistence,
                         diskStore,
                         dependencies.Failpoints);

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal.IO;
 
 namespace Cntryl.Pants.Cloud.Internal;
 
@@ -174,6 +175,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         PantsRecoveryPolicy recoveryPolicy)
     {
         var root = Path.GetFullPath(localRoot);
+        StoragePathGuard.EnsureTreeHasNoLinks(root);
         var cloudRoot = Path.Combine(root, "cloud_store");
         if (!Directory.Exists(cloudRoot))
         {

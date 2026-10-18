@@ -108,6 +108,28 @@ public sealed class StorageSymlinkRefusalTests
     }
 
     [Fact]
+    public async Task ShouldRejectLinkedSimulatedCloudDirectoryBeforeHydrationReadsOutsideManifest()
+    {
+        using var directory = new TemporaryDirectory();
+        using var outside = new TemporaryDirectory();
+        var root = Internal.IO.StoragePathGuard.CanonicalizeRoot(directory.Path);
+        var outsideMetadata = Path.Combine(outside.Path, "metadata");
+        Directory.CreateDirectory(outsideMetadata);
+        var outsideManifest = Path.Combine(outsideMetadata, "manifest.snapshot.json");
+        File.WriteAllText(outsideManifest, "not-json");
+        if (!TryCreateDirectoryLink(Path.Combine(root, "cloud_store"), outside.Path))
+        {
+            return;
+        }
+
+        var options = PantsOpenOptions.SimulatedCloud(root, "pants-tests", "path-guard/")
+            .WithBackgroundCompaction(false);
+        await Assert.ThrowsAsync<PantsInvalidPathException>(async () =>
+            await PantsDatabase.OpenAsync(options));
+        Assert.Equal("not-json", File.ReadAllText(outsideManifest));
+    }
+
+    [Fact]
     public async Task ShouldRefuseSimulatedCloudOpenWhenTheLeaderRecordIsLinkedOutsideStore()
     {
         using var directory = new TemporaryDirectory();
