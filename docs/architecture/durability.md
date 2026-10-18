@@ -41,6 +41,11 @@ the durable catalog and manifest.
 objects for upload. Runtime metrics expose pending and completed uploads. `BestEffort` provides
 no recovery guarantee until an explicit flush publishes an SST.
 
+Every write validates its writer authority before cached or worker write-stall admission can reject
+it, then validates again when the runtime prepares the transaction. Coalesced writes repeat that
+check for each transaction. If authority expires during preparation, the already-prepared prefix
+may commit, while the first transaction prepared after expiry is fenced before it reaches the WAL.
+
 These guarantees describe acknowledgement, not transaction visibility: once a commit is
 published to the in-process snapshot, readers observe it according to MVCC rules regardless of
 the selected persistence boundary.
