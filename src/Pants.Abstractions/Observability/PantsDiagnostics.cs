@@ -18,6 +18,9 @@ public static class PantsDiagnostics
     internal static Counter<long> TransactionsRolledBack { get; } =
         Meter.CreateCounter<long>("pants.transactions.rolledback");
 
+    internal static Counter<long> LongLivedSnapshotWarnings { get; } =
+        Meter.CreateCounter<long>("pants.snapshots.lifetime_warnings");
+
     internal static Counter<long> TransactionsConflicted { get; } =
         Meter.CreateCounter<long>("pants.transactions.conflicted");
 

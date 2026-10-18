@@ -70,6 +70,18 @@ Flush and compaction publication uses durable intent records followed by
 manifest edits. Immutable snapshots pin obsolete SSTs conservatively. GC only
 removes those files after the final transaction or scan snapshot is released.
 
+Transactions and scans must be disposed to release their snapshot pins and any
+transaction spill files. Pants does not evict a live snapshot or use garbage
+collection to release it; disposing an active transaction rolls it back.
+`PantsRuntimeConfiguration.LongLivedSnapshotWarningThreshold` defaults to one
+hour; when runtime metrics are refreshed, snapshots at or beyond that age are
+counted in `PantsRuntimeMetrics.LongLivedSnapshots` and each newly long-lived
+snapshot increments the `pants.snapshots.lifetime_warnings` meter once.
+Warnings do not cancel work or release pins. Hosts can alert on the meter and
+use `OldestSnapshotAgeSeconds` to diagnose snapshots that hold old storage
+state. `PantsDatabaseOptions.LongLivedSnapshotWarningThreshold` exposes the same
+setting through dependency injection.
+
 Cloud leasing is separated from provider transport: `CloudLeaseCoordinator`
 implements expiry, conditional takeover, renewal, and fencing over
 `ICloudLeaseStore`. `CloudObjectLeaseStore` persists the Midge lease document

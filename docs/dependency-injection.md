@@ -27,6 +27,7 @@ services.AddPants().BindConfiguration("Pants");
     "BlockCachePolicy": "Lru",
     "StorageTimeout": "00:00:30",
     "RuntimeResponseTimeout": "00:01:00",
+    "LongLivedSnapshotWarningThreshold": "01:00:00",
     "ShutdownTimeout": "00:00:30",
     "LeaseTimeToLive": "00:00:30",
     "LeaseClockSkewTolerance": "00:00:15",
@@ -63,6 +64,11 @@ greater than `StorageTimeout`. If omitted, Pants derives it as the larger of 60 
 `StorageTimeout + 30 seconds`. A runtime-response timeout is outcome-unknown: accepted work remains
 owned by Pants and can still complete, so callers must not assume a timed-out mutation failed or
 retry it blindly.
+
+`LongLivedSnapshotWarningThreshold` defaults to one hour. Diagnostics count active transaction and
+scan snapshots at or beyond the threshold and increment the `pants.snapshots.lifetime_warnings`
+meter once per snapshot. A warning does not cancel a transaction or release its snapshot pin;
+transactions and scans must be disposed to release retained storage state.
 
 `LeaseTimeToLive` defaults to 30 seconds for Midge parity and applies to local,
 simulated-cloud, and provider-cloud writers. As in Midge, the TTL must be greater than zero and

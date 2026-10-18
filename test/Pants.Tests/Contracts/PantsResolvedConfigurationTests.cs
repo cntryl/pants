@@ -41,6 +41,17 @@ public sealed class PantsResolvedConfigurationTests
     }
 
     [Fact]
+    public void ShouldResolveLongLivedSnapshotWarningThreshold()
+    {
+        var defaults = PantsOpenOptionsResolver.Resolve(PantsOpenOptions.InMemory());
+        Assert.Equal(TimeSpan.FromHours(1), defaults.LongLivedSnapshotWarningThreshold);
+
+        var explicitThreshold = PantsOpenOptionsResolver.Resolve(PantsOpenOptions.InMemory()
+            .WithLongLivedSnapshotWarningThreshold(TimeSpan.FromMinutes(5)));
+        Assert.Equal(TimeSpan.FromMinutes(5), explicitThreshold.LongLivedSnapshotWarningThreshold);
+    }
+
+    [Fact]
     public void ShouldRejectOptionsThatCannotBeResolved()
     {
         var error = Assert.ThrowsAny<PantsException>(() => PantsOpenOptionsResolver.Resolve(

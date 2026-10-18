@@ -1,5 +1,11 @@
 namespace Cntryl.Pants.Transactions;
 
+/// <summary>
+///     A transaction over a fixed database snapshot. Dispose the transaction after commit or
+///     rollback; disposing an active transaction rolls it back and releases its snapshot and spill
+///     resources. An undisposed transaction continues to pin its snapshot, can retain obsolete
+///     storage, and blocks database shutdown.
+/// </summary>
 public interface IPantsTransaction : IAsyncDisposable
 {
     IPantsColumnFamily ColumnFamily { get; }

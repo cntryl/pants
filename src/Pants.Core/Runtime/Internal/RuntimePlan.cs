@@ -17,6 +17,7 @@ sealed class RuntimePlan
         StorageTimeout = options.Runtime.StorageTimeout;
         RuntimeResponseTimeout = options.Runtime.RuntimeResponseTimeout ??
                                  DeriveRuntimeResponseTimeout(StorageTimeout);
+        LongLivedSnapshotWarningThreshold = options.Runtime.LongLivedSnapshotWarningThreshold;
         LeaseTimeToLive = options.Lease.TimeToLive;
         LeaseClockSkewTolerance = options.Lease.ClockSkewTolerance;
         MinimumEpoch = options.Lease.MinimumEpoch;
@@ -92,6 +93,8 @@ sealed class RuntimePlan
     public TimeSpan StorageTimeout { get; }
 
     public TimeSpan RuntimeResponseTimeout { get; }
+
+    public TimeSpan LongLivedSnapshotWarningThreshold { get; }
 
     public long MemoryBudgetBytes { get; }
 

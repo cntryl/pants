@@ -23,6 +23,7 @@ public sealed class PantsOptionsPatternTests
                     .ToString(CultureInfo.InvariantCulture),
                 ["Pants:StorageTimeout"] = "00:00:12",
                 ["Pants:RuntimeResponseTimeout"] = "00:00:45",
+                ["Pants:LongLivedSnapshotWarningThreshold"] = "00:05:00",
                 ["Pants:ShutdownTimeout"] = "00:00:20",
                 ["Pants:LeaseTimeToLive"] = "00:00:45",
                 ["Pants:LeaseClockSkewTolerance"] = "00:00:05",
@@ -53,6 +54,9 @@ public sealed class PantsOptionsPatternTests
         Assert.Equal(512L * 1024 * 1024, database.Options.Memory.Budget.Bytes);
         Assert.Equal(TimeSpan.FromSeconds(12), database.Options.Runtime.StorageTimeout);
         Assert.Equal(TimeSpan.FromSeconds(45), database.Options.Runtime.RuntimeResponseTimeout);
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            database.Options.Runtime.LongLivedSnapshotWarningThreshold);
         Assert.Equal(TimeSpan.FromSeconds(20), database.Options.Runtime.ShutdownTimeout);
         Assert.Equal(TimeSpan.FromSeconds(45), database.Options.Lease.TimeToLive);
         Assert.Equal(TimeSpan.FromSeconds(5), database.Options.Lease.ClockSkewTolerance);

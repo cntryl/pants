@@ -15,4 +15,8 @@ public sealed record PantsResolvedConfiguration(
     int L0CompactionTrigger,
     TimeSpan StorageTimeout,
     TimeSpan RuntimeResponseTimeout,
-    TimeSpan ShutdownTimeout);
+    TimeSpan ShutdownTimeout)
+{
+    /// <summary>The active-snapshot age after which the runtime emits a lifetime warning.</summary>
+    public TimeSpan LongLivedSnapshotWarningThreshold { get; init; } = TimeSpan.FromHours(1);
+}

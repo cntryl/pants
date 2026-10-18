@@ -23,6 +23,8 @@ public sealed class PantsDatabaseOptions
 
     public TimeSpan? RuntimeResponseTimeout { get; set; }
 
+    public TimeSpan LongLivedSnapshotWarningThreshold { get; set; } = TimeSpan.FromHours(1);
+
     public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public bool BackgroundCompaction { get; set; } = true;

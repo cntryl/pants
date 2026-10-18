@@ -1201,12 +1201,13 @@ sealed class Actor : IAsyncDisposable
             {
                 ThrowIfShuttingDown(state);
                 var snapshotId = checked(++state.TransactionCounter);
+                var startedAtUtc = state.Clock.UtcNow;
                 state.ActiveScanSnapshots[snapshotId] = new ScanSnapshotPin(
                     snapshotId,
                     snapshot.Sequence,
-                    state.Clock.UtcNow,
+                    startedAtUtc,
                     snapshot);
-                _telemetry.RecordSnapshotRegister();
+                _telemetry.RecordSnapshotRegister(snapshotId, startedAtUtc);
                 return ValueTask.FromResult(snapshotId);
             },
             cancellationToken,
@@ -1221,7 +1222,7 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveScanSnapshots.Remove(snapshotId))
                 {
-                    _telemetry.RecordSnapshotUnregister();
+                    _telemetry.RecordSnapshotUnregister(snapshotId);
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
                         .ConfigureAwait(false);
                 }
@@ -1244,13 +1245,14 @@ sealed class Actor : IAsyncDisposable
                 ValidateActiveFamily(state, identity);
                 var transactionId = checked(++state.TransactionCounter);
                 var snapshot = Volatile.Read(ref _currentVersion);
+                var startedAtUtc = state.Clock.UtcNow;
                 var transaction = new TransactionInstance(
                     database,
                     transactionId,
                     columnFamily,
                     mode,
                     snapshot,
-                    state.Clock.UtcNow,
+                    startedAtUtc,
                     _diskStore?.RootPath,
                     _hybridCache?.Ledger,
                     spillRetirement: _spillRetirement);
@@ -1258,9 +1260,9 @@ sealed class Actor : IAsyncDisposable
                     transactionId,
                     mode,
                     snapshot.Sequence,
-                    state.Clock.UtcNow,
+                    startedAtUtc,
                     snapshot);
-                _telemetry.RecordTransactionBegin(mode);
+                _telemetry.RecordTransactionBegin(transactionId, startedAtUtc, mode);
                 return ValueTask.FromResult<IPantsTransaction>(transaction);
             },
             cancellationToken,
@@ -1315,7 +1317,10 @@ sealed class Actor : IAsyncDisposable
                 throw new PantsInternalException("A direct read-only transaction identifier collided.");
             }
 
-            _telemetry.RecordTransactionBegin(PantsTransactionMode.ReadOnly);
+            _telemetry.RecordTransactionBegin(
+                transactionId,
+                startedAt,
+                PantsTransactionMode.ReadOnly);
             return transaction;
         }
     }
@@ -1333,7 +1338,7 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        _telemetry.RecordSnapshotUnregister();
+        _telemetry.RecordSnapshotUnregister(transactionId);
         if (committed)
         {
             _telemetry.RecordTransactionCommit();
@@ -1412,7 +1417,7 @@ sealed class Actor : IAsyncDisposable
             {
                 if (state.ActiveTransactions.Remove(transactionId))
                 {
-                    _telemetry.RecordSnapshotUnregister();
+                    _telemetry.RecordSnapshotUnregister(transactionId);
                     _telemetry.RecordTransactionRollback();
                     await CollectObsoleteFilesAfterSnapshotReleaseAsync(state)
                         .ConfigureAwait(false);
@@ -1703,7 +1708,8 @@ sealed class Actor : IAsyncDisposable
             return ValueTask.FromResult(_runtimeMetricsSnapshotFactory.RefreshLive(
                 Volatile.Read(ref _publishedRuntimeMetrics),
                 Volatile.Read(ref _activeCompactionRequests),
-                Volatile.Read(ref _walCloudDurableSequence)));
+                Volatile.Read(ref _walCloudDurableSequence),
+                _state.Clock.UtcNow));
         }
 
         return SendAsync(
@@ -3015,7 +3021,7 @@ sealed class Actor : IAsyncDisposable
                 $"Transaction {payload.TransactionId} is not active.");
         }
 
-        _telemetry.RecordSnapshotUnregister();
+        _telemetry.RecordSnapshotUnregister(payload.TransactionId);
         if (_diskStore is not null)
         {
             DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
@@ -3092,7 +3098,7 @@ sealed class Actor : IAsyncDisposable
     {
         if (state.ActiveTransactions.Remove(payload.TransactionId))
         {
-            _telemetry.RecordSnapshotUnregister();
+            _telemetry.RecordSnapshotUnregister(payload.TransactionId);
         }
     }
 

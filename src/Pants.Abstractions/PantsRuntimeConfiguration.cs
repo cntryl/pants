@@ -7,6 +7,12 @@ public sealed record PantsRuntimeConfiguration(
     TimeSpan? RuntimeResponseTimeout,
     TimeSpan ShutdownTimeout)
 {
+    /// <summary>
+    ///     Age after which an active snapshot is reported as long-lived. The snapshot remains
+    ///     registered until its transaction or scan is disposed.
+    /// </summary>
+    public TimeSpan LongLivedSnapshotWarningThreshold { get; init; } = TimeSpan.FromHours(1);
+
     public static PantsRuntimeConfiguration Default { get; } = new(
         PantsPerformanceGoal.Latency,
         PantsWorkloadProfile.Mixed,

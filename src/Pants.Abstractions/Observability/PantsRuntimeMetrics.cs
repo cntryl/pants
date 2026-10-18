@@ -35,6 +35,10 @@ public sealed record PantsRuntimeMetrics
     public int ActiveCompactions { get; init; }
     public int PendingCloudUploads { get; init; }
     public int ActiveSnapshots { get; init; }
+    /// <summary>Active transaction and scan snapshots at or beyond the configured warning age.</summary>
+    public int LongLivedSnapshots { get; init; }
+    /// <summary>Cumulative long-lived snapshot warnings emitted by this database instance.</summary>
+    public long LongLivedSnapshotWarningsTotal { get; init; }
     public int PinnedSsts { get; init; }
     public long OldestSnapshotAgeSeconds { get; init; }
     public int SstCount { get; init; }

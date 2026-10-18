@@ -6,6 +6,9 @@ namespace Cntryl.Pants.Runtime.Internal;
 sealed class RuntimeTelemetry
 {
     readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
+    readonly Dictionary<long, DateTimeOffset> _activeSnapshotStartTimes = [];
+    readonly object _snapshotLifetimeGate = new();
+    readonly HashSet<long> _longLivedSnapshotWarnings = [];
     readonly TimeProvider _timeProvider;
     readonly object _writeStallTimingGate = new();
     long _blockBudgetViolations;
@@ -42,6 +45,7 @@ sealed class RuntimeTelemetry
     long _flushRetries;
     long _intentLogEntriesReplayed;
     long _intentLogReplayRuns;
+    long _longLivedSnapshotWarningCount;
     long _keyRangeRejects;
     long _l0SstsTouchedTotal;
     long _noSpaceEvents;
@@ -198,8 +202,29 @@ sealed class RuntimeTelemetry
 
     public long RuntimeLateResponses => Volatile.Read(ref _runtimeLateResponses);
 
-    public void RecordTransactionBegin(PantsTransactionMode mode)
+    public KeyValuePair<long, DateTimeOffset>[] ActiveSnapshotStartTimes
     {
+        get
+        {
+            lock (_snapshotLifetimeGate)
+            {
+                return _activeSnapshotStartTimes.ToArray();
+            }
+        }
+    }
+
+    public long LongLivedSnapshotWarnings => Volatile.Read(ref _longLivedSnapshotWarningCount);
+
+    public void RecordTransactionBegin(
+        long snapshotId,
+        DateTimeOffset startedAtUtc,
+        PantsTransactionMode mode)
+    {
+        lock (_snapshotLifetimeGate)
+        {
+            _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+        }
+
         Interlocked.Increment(ref _snapshotsRegistered);
         PantsDiagnostics.TransactionsStarted.Add(1);
         if (mode == PantsTransactionMode.ReadOnly)
@@ -209,12 +234,44 @@ sealed class RuntimeTelemetry
         }
     }
 
-    public void RecordSnapshotRegister() => Interlocked.Increment(ref _snapshotsRegistered);
+    public void RecordSnapshotRegister(long snapshotId, DateTimeOffset startedAtUtc)
+    {
+        lock (_snapshotLifetimeGate)
+        {
+            _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+        }
+
+        Interlocked.Increment(ref _snapshotsRegistered);
+    }
 
     public void RecordReadOnlySnapshotCacheMiss() =>
         Interlocked.Increment(ref _readOnlySnapshotCacheMisses);
 
-    public void RecordSnapshotUnregister() => Interlocked.Increment(ref _snapshotsUnregistered);
+    public void RecordSnapshotUnregister(long snapshotId)
+    {
+        lock (_snapshotLifetimeGate)
+        {
+            _activeSnapshotStartTimes.Remove(snapshotId);
+            _longLivedSnapshotWarnings.Remove(snapshotId);
+        }
+
+        Interlocked.Increment(ref _snapshotsUnregistered);
+    }
+
+    public void RecordLongLivedSnapshotWarning(long snapshotId)
+    {
+        lock (_snapshotLifetimeGate)
+        {
+            if (!_activeSnapshotStartTimes.ContainsKey(snapshotId) ||
+                !_longLivedSnapshotWarnings.Add(snapshotId))
+            {
+                return;
+            }
+        }
+
+        Interlocked.Increment(ref _longLivedSnapshotWarningCount);
+        PantsDiagnostics.LongLivedSnapshotWarnings.Add(1);
+    }
 
     public void RecordTransactionCommit()
     {
