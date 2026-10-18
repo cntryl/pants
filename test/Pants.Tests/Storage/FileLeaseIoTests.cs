@@ -45,6 +45,74 @@ public sealed class FileLeaseIoTests
     }
 
     [Fact]
+    public void ShouldRefuseReadingTheLeaderRecordThroughASymbolicLink()
+    {
+        using var directory = new TemporaryDirectory();
+        using var outside = new TemporaryDirectory();
+        using var lease = Acquire(directory.Path);
+        var leaderPath = LeaderPath(directory.Path);
+        var target = Path.Combine(outside.Path, "leader");
+        File.Copy(leaderPath, target);
+        File.Delete(leaderPath);
+        if (!TryCreateFileLink(leaderPath, target))
+        {
+            return;
+        }
+
+        Assert.Throws<PantsInvalidPathException>(() => Acquire(directory.Path));
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public void ShouldRefuseCreatingTheMutationLockThroughASymbolicLink()
+    {
+        using var directory = new TemporaryDirectory();
+        using var outside = new TemporaryDirectory();
+        var target = Path.Combine(outside.Path, "lock-target");
+        File.WriteAllText(target, "outside");
+        var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
+        if (!TryCreateFileLink(lockPath, target))
+        {
+            return;
+        }
+
+        Assert.Throws<PantsInvalidPathException>(() => Acquire(directory.Path));
+        Assert.Equal("outside", File.ReadAllText(target));
+    }
+
+    [Fact]
+    public void ShouldNotDeleteTheMutationLockThroughASymbolicLinkDuringDisposal()
+    {
+        using var directory = new TemporaryDirectory();
+        using var outside = new TemporaryDirectory();
+        var target = Path.Combine(outside.Path, "lock-target");
+        File.WriteAllText(target, "outside");
+        var probe = Path.Combine(directory.Path, "probe");
+        if (!TryCreateFileLink(probe, target))
+        {
+            return;
+        }
+
+        File.Delete(probe);
+        var lease = Acquire(directory.Path);
+        var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
+        lease.MutationLockDisposalInterferenceHookForTesting = () =>
+        {
+            var ownerToken = File.ReadLines(lockPath)
+                .Single(line => line.StartsWith("owner_token=", StringComparison.Ordinal));
+            File.Delete(lockPath);
+            File.WriteAllText(target, $"{ownerToken}\n");
+            Assert.True(TryCreateFileLink(lockPath, target));
+        };
+
+        lease.Dispose();
+
+        Assert.NotNull(new FileInfo(lockPath).LinkTarget);
+        Assert.Contains("owner_token=", File.ReadAllText(target));
+        lease.Dispose();
+    }
+
+    [Fact]
     public void ShouldSurfaceLeaseUnavailableGivenTheLeaderRecordCannotBeRead()
     {
         if (OperatingSystem.IsWindows())
@@ -106,6 +174,19 @@ public sealed class FileLeaseIoTests
             LongHeartbeatInterval,
             new ManualClock(Now),
             TimeSpan.FromSeconds(60));
+
+    static bool TryCreateFileLink(string link, string target)
+    {
+        try
+        {
+            File.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     static string LeaderPath(string root) => Path.Combine(root, ".midge_leader");
 }

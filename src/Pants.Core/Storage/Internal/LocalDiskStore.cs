@@ -249,8 +249,11 @@ sealed class LocalDiskStore :
         {
             lock (_walStateGate)
             {
+                EnsureSafeResiduePath(_walDirectory);
+                EnsureSafeResiduePath(_walPath);
                 return checked(
-                    GetLocalFileBytes(EnumerateSealedWalSegmentPaths(_walDirectory)) +
+                    GetLocalFileBytes(EnsureSafeResiduePaths(
+                        EnumerateSealedWalSegmentPaths(_walDirectory))) +
                     GetExistingFileBytes(_walPath));
             }
         }
@@ -274,6 +277,7 @@ sealed class LocalDiskStore :
         {
             lock (_localSstLengthGate)
             {
+                EnsureSafeResiduePath(_sstDirectory);
                 if (!Directory.Exists(_sstDirectory))
                 {
                     _localSstLengths.Clear();
@@ -288,6 +292,7 @@ sealed class LocalDiskStore :
                              "*.sst",
                              SearchOption.TopDirectoryOnly))
                 {
+                    EnsureSafeResiduePath(path);
                     var name = Path.GetFileName(path);
                     if (!_localSstLengths.TryGetValue(name, out var entry))
                     {
@@ -1737,6 +1742,7 @@ sealed class LocalDiskStore :
         startupPhases ??= new StartupPhaseRecorder(null);
         try
         {
+            root = StoragePathGuard.CanonicalizeRoot(root);
             AtomicStagedFile.CreateDirectoryDurably(
                 root,
                 () => failpointHandler.Hit(Failpoint.BeforeDatabaseRootDirectorySync));
@@ -6289,6 +6295,29 @@ sealed class LocalDiskStore :
 
     static long GetLocalFileBytes(string directory, string pattern) =>
         GetLocalFileBytes(Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly));
+
+    static IEnumerable<string> EnsureSafeResiduePaths(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            EnsureSafeResiduePath(path);
+            yield return path;
+        }
+    }
+
+    static void EnsureSafeResiduePath(string path)
+    {
+        try
+        {
+            StoragePathGuard.EnsureNotLink(path);
+        }
+        catch (PantsInvalidPathException exception)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Local storage residue accounting encountered a linked path '{path}'.",
+                exception);
+        }
+    }
 
     static long GetLocalFileBytes(IEnumerable<string> paths)
     {

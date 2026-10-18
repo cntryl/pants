@@ -1,3 +1,4 @@
+using Cntryl.Pants.Storage.Internal.IO;
 using Microsoft.Win32.SafeHandles;
 
 namespace Cntryl.Pants.Storage.Internal.Sst;
@@ -62,6 +63,7 @@ sealed class LocalAsyncSstSource : IAsyncSstSource
     public static LocalAsyncSstSource Open(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        StoragePathGuard.EnsureNotLink(path);
         var handle = File.OpenHandle(
             path,
             FileMode.Open,

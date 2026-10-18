@@ -18,6 +18,13 @@ open is followed by a sync of the `wal` directory before open succeeds. File
 content sync and parent-directory sync are separate steps; syncing `wal.log`
 alone does not establish that the `wal.log` name survives a crash.
 
+The configured local root is resolved to its filesystem target when the store
+opens; the root itself may be a symbolic link. Before file access, Pants checks
+each existing path component beneath that resolved root for links or reparse
+points. This is a check immediately before I/O, not an operating-system
+no-follow handle, so replacing a component between the check and the operation
+can still race the guard.
+
 A rename over an existing target must succeed while another process reads it,
 as it does on POSIX. Windows `MoveFileEx` refuses with access denied whenever
 any handle is open on the target, so that refusal falls back to a

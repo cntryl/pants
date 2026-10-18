@@ -1,4 +1,5 @@
 using Cntryl.Pants.Storage.Internal;
+using Cntryl.Pants.Storage.Internal.IO;
 
 namespace Cntryl.Pants.Storage.Internal.Lease;
 
@@ -26,6 +27,8 @@ static class LeaseMutationLockRecovery
                 "The file lease requires a positive TTL and non-negative clock skew that does not exceed that TTL.");
         }
 
+        root = StoragePathGuard.CanonicalizeRoot(root);
+        using var rootTrust = StoragePathGuard.TrustRoot(root);
         var lockPath = Path.Combine(root, LockFileName);
         var ownerToken = ReadOwnerTokenOrRefuse(lockPath);
         if (ownerToken is null)
@@ -48,6 +51,7 @@ static class LeaseMutationLockRecovery
                 "The Midge leader mutation lock changed during recovery; no lock was removed.");
         }
 
+        StoragePathGuard.EnsureNotLink(lockPath);
         File.Delete(lockPath);
         return true;
     }
@@ -72,6 +76,7 @@ static class LeaseMutationLockRecovery
 
     static void RequireNoLiveWriter(string leaderPath, TimeSpan timeToLive, TimeSpan clockSkewTolerance, IPantsClock clock)
     {
+        StoragePathGuard.EnsureNotLink(leaderPath);
         var bytes = SharedReadFile.TryReadAllBytes(leaderPath);
         if (bytes is null)
         {

@@ -21,6 +21,55 @@ static class StoragePathGuard
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
+    /// <summary>Resolves existing links in the configured root path before the store trusts it.</summary>
+    public static string CanonicalizeRoot(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        try
+        {
+            var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            var volumeRoot = Path.GetPathRoot(fullPath) ??
+                             throw new ArgumentException("A storage root must be absolute.", nameof(root));
+            var current = volumeRoot;
+            var components = fullPath[volumeRoot.Length..].Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            foreach (var component in components)
+            {
+                var candidate = Path.Combine(current, component);
+                var entry = new DirectoryInfo(candidate);
+                string? linkTarget;
+                try
+                {
+                    linkTarget = entry.LinkTarget;
+                }
+                catch (Exception exception) when (
+                    exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    linkTarget = null;
+                }
+
+                if (linkTarget is null)
+                {
+                    current = candidate;
+                    continue;
+                }
+
+                var target = entry.ResolveLinkTarget(returnFinalTarget: true) ??
+                             throw new IOException($"Storage root link '{candidate}' could not be resolved.");
+                current = Path.GetFullPath(target.FullName);
+            }
+
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new PantsInvalidPathException(
+                $"Storage root '{root}' could not be resolved.",
+                exception);
+        }
+    }
+
     /// <summary>
     ///     Marks an open store root as allowed to be a link itself. Dispose the result when the
     ///     store closes.
@@ -89,9 +138,15 @@ static class StoragePathGuard
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
+        var trustedRoot = FindTrustedRoot(fullPath);
+        if (trustedRoot is not null)
+        {
+            EnsureNoLinkedComponentBelowRoot(fullPath, trustedRoot);
+            return;
+        }
+
         var parent = Path.GetDirectoryName(fullPath);
-        if (parent is not null &&
-            !TrustedRoots.ContainsKey(Path.TrimEndingDirectorySeparator(parent)))
+        if (parent is not null)
         {
             EnsureNotLinkEntry(parent);
         }
@@ -99,22 +154,61 @@ static class StoragePathGuard
         EnsureNotLinkEntry(fullPath);
     }
 
+    static string? FindTrustedRoot(string path)
+    {
+        string? match = null;
+        foreach (var root in TrustedRoots.Keys)
+        {
+            var relative = Path.GetRelativePath(root, path);
+            if (Path.IsPathRooted(relative) || IsParentPath(relative))
+            {
+                continue;
+            }
+
+            if (match is null || root.Length > match.Length)
+            {
+                match = root;
+            }
+        }
+
+        return match;
+    }
+
+    static bool IsParentPath(string relative) =>
+        relative == ".." ||
+        relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+        relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
+
+    static void EnsureNoLinkedComponentBelowRoot(string path, string root)
+    {
+        var current = Path.TrimEndingDirectorySeparator(path);
+        while (!PathComparer.Equals(Path.TrimEndingDirectorySeparator(current), root))
+        {
+            EnsureNotLinkEntry(current);
+            var parent = Path.GetDirectoryName(current);
+            if (parent is null)
+            {
+                break;
+            }
+
+            current = Path.TrimEndingDirectorySeparator(parent);
+        }
+    }
+
     static void EnsureNotLinkEntry(string path)
     {
-        FileAttributes attributes;
         try
         {
-            attributes = File.GetAttributes(path);
+            if (new FileInfo(path).LinkTarget is not null ||
+                new DirectoryInfo(path).LinkTarget is not null ||
+                IsLink(File.GetAttributes(path)))
+            {
+                throw CreateException(path);
+            }
         }
         catch (Exception exception) when (
             exception is FileNotFoundException or DirectoryNotFoundException)
         {
-            return;
-        }
-
-        if (IsLink(attributes))
-        {
-            throw CreateException(path);
         }
     }
 

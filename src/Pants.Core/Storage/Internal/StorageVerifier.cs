@@ -29,7 +29,7 @@ static class StorageVerifier
         string root;
         try
         {
-            root = Path.GetFullPath(path);
+            root = StoragePathGuard.CanonicalizeRoot(path);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException
                                               or PathTooLongException)
@@ -41,6 +41,8 @@ static class StorageVerifier
         {
             throw PantsException.Create(PantsErrorCode.InvalidPath, $"Database path '{root}' does not exist.");
         }
+
+        StoragePathGuard.EnsureTreeHasNoLinks(root);
 
         cancellationToken.ThrowIfCancellationRequested();
         var formatPath = Path.Combine(root, "FORMAT");
