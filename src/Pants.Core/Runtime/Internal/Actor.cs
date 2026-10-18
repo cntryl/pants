@@ -74,6 +74,7 @@ sealed class Actor : IAsyncDisposable
     long _nextRuntimeRequestId;
     long _nextVerificationBarrierToken;
     readonly RuntimePlan _options;
+    Exception? _commitApplyFailure;
     int _persistenceAnomaly;
     PantsRuntimeMetrics _publishedRuntimeMetrics = new();
     int _queuedCommands;
@@ -1384,6 +1385,10 @@ sealed class Actor : IAsyncDisposable
                     $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
             }
 
+            if (payload.Operations.Count != 0)
+            {
+                ThrowIfCommitApplicationFailed();
+            }
             if (RequiresWriteAdmission(payload))
             {
                 var families = GetCommitFamilies(payload);
@@ -2596,7 +2601,11 @@ sealed class Actor : IAsyncDisposable
                 state,
                 durability,
                 beforeSync),
-            ApplyOperation);
+            (state, operation, sequence) =>
+            {
+                ApplyOperation(state, operation, sequence);
+                _failpoints.Hit(Failpoint.AfterCoalescedCommitOperationApply);
+            });
         try
         {
             await foreach (var command in _commands.Reader
@@ -2787,17 +2796,24 @@ sealed class Actor : IAsyncDisposable
         catch (Exception exception)
         {
             RecordPostDurabilityFailure(state, exception);
+            var commitFailure = new PantsCommitOutcomeUnknownException(
+                "The commit group was accepted by the runtime but could not be applied to its live " +
+                "state. Reopen and reconcile before retrying.",
+                exception);
+            Volatile.Write(ref _commitApplyFailure, commitFailure);
             foreach (var commit in prepared)
             {
-                commit.Command.Fail(state, exception, false);
+                commit.Command.Fail(state, commitFailure, false);
             }
 
-            await ExecuteRemainingDrainedCommitsAsync(
-                    state,
-                    commits,
-                    stopIndex,
-                    deferredError)
-                .ConfigureAwait(false);
+            FailRemainingDrainedCommits(
+                state,
+                commits,
+                stopIndex,
+                new PantsFencedException(
+                    "The commit was not applied because an earlier accepted commit could not be " +
+                    "applied to live state.",
+                    commitFailure));
             return;
         }
 
@@ -3027,6 +3043,10 @@ sealed class Actor : IAsyncDisposable
         PantsDurability durability,
         OperationDeadline deadline)
     {
+        if (payload.Operations.Count != 0)
+        {
+            ThrowIfCommitApplicationFailed();
+        }
         ThrowIfShuttingDown(state);
         ThrowIfVerificationInProgress();
         if (RequiresWriteAdmission(payload))
@@ -4960,6 +4980,17 @@ sealed class Actor : IAsyncDisposable
     {
         EnsureCloudLeaseValid();
         _cloudDdlCoordinator?.EnsureAuthorityResolved();
+    }
+
+    void ThrowIfCommitApplicationFailed()
+    {
+        if (Volatile.Read(ref _commitApplyFailure) is { } failure)
+        {
+            throw new PantsFencedException(
+                "The writer is fenced until the database is reopened to reconcile an accepted " +
+                "commit that could not be applied.",
+                failure);
+        }
     }
 
     static void MarkPersistenceAnomaly(RuntimeState state)

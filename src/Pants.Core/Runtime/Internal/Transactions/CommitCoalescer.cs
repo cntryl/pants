@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Cntryl.Pants.Runtime.Internal.Transactions;
 
 sealed class CommitCoalescer(
@@ -133,23 +135,65 @@ sealed class CommitCoalescer(
         RuntimeState state,
         IReadOnlyList<PreparedCoalescedCommit> prepared)
     {
-        foreach (var commit in prepared)
+        var checkpoints = new Dictionary<ColumnFamilyIdentity, FamilyApplyCheckpoint>(
+            ColumnFamilyIdentityComparer.Instance);
+        foreach (var family in prepared.SelectMany(static commit => commit.Families).Distinct(
+                     ColumnFamilyIdentityComparer.Instance))
         {
-            foreach (var operation in commit.Operations)
-            {
-                applyOperation(state, operation, commit.Sequence);
-            }
+            checkpoints.Add(
+                family,
+                new FamilyApplyCheckpoint(
+                    state.FamilyData[family],
+                    state.RangeTombstones[family],
+                    state.ActiveMemtableBytes[family],
+                    state.UnflushedFamilies.Contains(family)));
+        }
 
-            foreach (var pair in commit.BytesByFamily)
+        try
+        {
+            foreach (var commit in prepared)
             {
-                state.ActiveMemtableBytes[pair.Key] = checked(
-                    state.ActiveMemtableBytes[pair.Key] + pair.Value);
-            }
+                foreach (var operation in commit.Operations)
+                {
+                    applyOperation(state, operation, commit.Sequence);
+                }
 
-            foreach (var family in commit.Families)
-            {
-                state.UnflushedFamilies.Add(family);
+                foreach (var pair in commit.BytesByFamily)
+                {
+                    state.ActiveMemtableBytes[pair.Key] = checked(
+                        state.ActiveMemtableBytes[pair.Key] + pair.Value);
+                }
+
+                foreach (var family in commit.Families)
+                {
+                    state.UnflushedFamilies.Add(family);
+                }
             }
         }
+        catch
+        {
+            foreach (var (family, checkpoint) in checkpoints)
+            {
+                state.FamilyData[family] = checkpoint.FamilyData;
+                state.RangeTombstones[family] = checkpoint.RangeTombstones;
+                state.ActiveMemtableBytes[family] = checkpoint.ActiveMemtableBytes;
+                if (checkpoint.WasUnflushed)
+                {
+                    state.UnflushedFamilies.Add(family);
+                }
+                else
+                {
+                    state.UnflushedFamilies.Remove(family);
+                }
+            }
+
+            throw;
+        }
     }
+
+    readonly record struct FamilyApplyCheckpoint(
+        ImmutableSortedDictionary<byte[], CellState> FamilyData,
+        ImmutableArray<CommittedRangeTombstone> RangeTombstones,
+        long ActiveMemtableBytes,
+        bool WasUnflushed);
 }
