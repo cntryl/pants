@@ -11,6 +11,13 @@ opens a writable directory handle with backup semantics and calls
 `FlushFileBuffers`. Both paths preserve Midge's file-sync, atomic-rename, and
 parent-directory-sync durability boundary.
 
+Local database initialization also treats directory entries as durable state:
+it creates the database root and storage subdirectories one level at a time,
+syncing each parent directory after creating a child. The initial `wal.log`
+open is followed by a sync of the `wal` directory before open succeeds. File
+content sync and parent-directory sync are separate steps; syncing `wal.log`
+alone does not establish that the `wal.log` name survives a crash.
+
 A rename over an existing target must succeed while another process reads it,
 as it does on POSIX. Windows `MoveFileEx` refuses with access denied whenever
 any handle is open on the target, so that refusal falls back to a

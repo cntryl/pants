@@ -1737,7 +1737,9 @@ sealed class LocalDiskStore :
         startupPhases ??= new StartupPhaseRecorder(null);
         try
         {
-            Directory.CreateDirectory(root);
+            AtomicStagedFile.CreateDirectoryDurably(
+                root,
+                () => failpointHandler.Hit(Failpoint.BeforeDatabaseRootDirectorySync));
             StoragePathGuard.EnsureTreeHasNoLinks(root);
             rootTrust = StoragePathGuard.TrustRoot(root);
             try
@@ -1779,9 +1781,13 @@ sealed class LocalDiskStore :
             }
 
             lease.EnsureValid();
-            Directory.CreateDirectory(Path.Combine(root, "wal"));
-            Directory.CreateDirectory(Path.Combine(root, "sst"));
-            Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
+            var walDirectory = Path.Combine(root, "wal");
+            AtomicStagedFile.CreateDirectoryDurably(
+                walDirectory,
+                () => failpointHandler.Hit(Failpoint.BeforeWalDirectorySync));
+            var sstDirectory = Path.Combine(root, "sst");
+            AtomicStagedFile.CreateDirectoryDurably(sstDirectory);
+            AtomicStagedFile.CreateDirectoryDurably(Path.Combine(sstDirectory, ".flush-staging"));
             var intentPath = Path.Combine(root, "intent_log.json");
             if (!File.Exists(intentPath))
             {
@@ -1828,12 +1834,17 @@ sealed class LocalDiskStore :
             lease.EnsureValid();
             Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
             AdvanceNextWalSequencePastSealedSegments(
-                Path.Combine(root, "wal"),
+                walDirectory,
                 manifest,
                 remoteWalSegments);
             lease.EnsureValid();
-            walStream = new FileStream(Path.Combine(root, "wal", "wal.log"), FileMode.OpenOrCreate,
-                FileAccess.ReadWrite, FileShare.Read);
+            walStream = new FileStream(
+                Path.Combine(walDirectory, "wal.log"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read);
+            failpointHandler.Hit(Failpoint.BeforeWalFileDirectorySync);
+            AtomicStagedFile.FlushDirectory(walDirectory);
             var store = new LocalDiskStore(
                 root,
                 lockStream,

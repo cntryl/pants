@@ -2,6 +2,9 @@ namespace Cntryl.Pants.Runtime.Internal;
 
 enum Failpoint
 {
+    BeforeDatabaseRootDirectorySync,
+    BeforeWalDirectorySync,
+    BeforeWalFileDirectorySync,
     BeforeWalAppend,
     MidWalAppend,
     AfterWalAppend,
