@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Cntryl.Pants.Storage.Internal.IO;
 using Microsoft.Win32.SafeHandles;
 
 namespace Cntryl.Pants.Storage.Internal.Sst;
@@ -101,6 +102,7 @@ sealed class SstReader : IDisposable
     public static SstReader Open(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        StoragePathGuard.EnsureNotLink(path);
         SafeFileHandle? file = null;
         try
         {

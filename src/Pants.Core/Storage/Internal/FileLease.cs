@@ -1,3 +1,4 @@
+using Cntryl.Pants.Storage.Internal.IO;
 using Cntryl.Pants.Storage.Internal.Lease;
 
 namespace Cntryl.Pants.Storage.Internal;
@@ -447,6 +448,7 @@ sealed class FileLease : IDisposable
         IPantsClock clock,
         Action? disposalInterferenceHook = null)
     {
+        StoragePathGuard.EnsureNotLink(path);
         try
         {
             var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
@@ -468,6 +470,7 @@ sealed class FileLease : IDisposable
 
     internal static string? TryReadOwnerToken(string path)
     {
+        StoragePathGuard.EnsureNotLink(path);
         if (!File.Exists(path))
         {
             return null;
@@ -485,8 +488,11 @@ sealed class FileLease : IDisposable
         return null;
     }
 
-    static LeaderRecord? ReadRecord(string path) =>
-        SharedReadFile.TryReadAllBytes(path) is { } bytes ? LeaderRecordCodec.Decode(bytes) : null;
+    static LeaderRecord? ReadRecord(string path)
+    {
+        StoragePathGuard.EnsureNotLink(path);
+        return SharedReadFile.TryReadAllBytes(path) is { } bytes ? LeaderRecordCodec.Decode(bytes) : null;
+    }
 
     static void WriteRecord(string target, LeaderRecord record) =>
         AtomicStagedFile.Write(target, LeaderRecordCodec.Encode(record));
@@ -521,6 +527,7 @@ sealed class FileLease : IDisposable
                 // else has since re-acquired the lock, so deleting would drop their lock.
                 if (TryReadOwnerToken(_path) == _ownerToken)
                 {
+                    StoragePathGuard.EnsureNotLink(_path);
                     File.Delete(_path);
                 }
             }
