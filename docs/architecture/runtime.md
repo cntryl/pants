@@ -23,6 +23,10 @@ reports `PantsTimeoutException` with an outcome-unknown diagnostic. The accepted
 cancelled: commits, provider publication, fencing, and cleanup remain runtime-owned. A later
 terminal response is consumed once and counted by `RuntimeLateResponsesTotal`; current waiters,
 bounded tombstones, and total abandonments are available in `PantsRuntimeMetrics`.
+An admitted `CommitAsync` whose response deadline expires reports
+`PantsCommitOutcomeUnknownException`; cancellation after commit admission reports the same type.
+The transaction wrapper does not enqueue a rollback after either response, because the accepted
+commit remains runtime-owned.
 
 Open/recovery is not an admitted runtime-response wait: provider/storage calls made while opening
 share one startup `RuntimeResponseTimeout` budget while each request remains capped by

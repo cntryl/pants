@@ -155,7 +155,11 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsAbortedException>(() => commit.WaitAsync(TestTimeouts.Expected));
+            var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                () => commit.WaitAsync(TestTimeouts.Expected));
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
+            Assert.Equal(PantsErrorSeverity.Fatal, failure.Severity);
+            Assert.NotNull(failure.InnerException);
         }
 
         await using (var suffix = await database.Transactions.BeginAsync(
@@ -202,8 +206,11 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                          PantsTransactionMode.ReadWrite))
         {
             rejected.Put("uncertain-single"u8.ToArray(), "uncertain"u8.ToArray());
-            await Assert.ThrowsAsync<PantsAbortedException>(() =>
+            var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                 rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
+            Assert.Equal(PantsErrorSeverity.Fatal, failure.Severity);
+            Assert.NotNull(failure.InnerException);
         }
 
         await using (var suffix = await database.Transactions.BeginAsync(

@@ -23,5 +23,6 @@ public enum PantsErrorCode
     Aborted,
     Busy,
     Timeout,
-    ResourceLimit
+    ResourceLimit,
+    CommitOutcomeUnknown
 }

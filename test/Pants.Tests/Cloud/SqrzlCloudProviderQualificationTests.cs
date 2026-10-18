@@ -230,8 +230,9 @@ public sealed class SqrzlCloudProviderQualificationTests
             await failpoint.WaitUntilEnteredAsync(TimeSpan.FromSeconds(5));
             try
             {
-                var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                var exception = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                     commit.WaitAsync(TimeSpan.FromSeconds(15)));
+                Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, exception.Code);
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally

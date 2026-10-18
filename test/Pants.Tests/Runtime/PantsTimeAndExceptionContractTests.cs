@@ -61,7 +61,8 @@ public sealed class PantsTimeAndExceptionContractTests
             [PantsErrorCode.Aborted] = typeof(PantsAbortedException),
             [PantsErrorCode.Busy] = typeof(PantsBusyException),
             [PantsErrorCode.Timeout] = typeof(PantsTimeoutException),
-            [PantsErrorCode.ResourceLimit] = typeof(PantsResourceLimitException)
+            [PantsErrorCode.ResourceLimit] = typeof(PantsResourceLimitException),
+            [PantsErrorCode.CommitOutcomeUnknown] = typeof(PantsCommitOutcomeUnknownException)
         };
         var codes = Enum.GetValues<PantsErrorCode>();
         Assert.Equal(codes.Order(), expectedTypes.Keys.Order());
@@ -87,7 +88,9 @@ public sealed class PantsTimeAndExceptionContractTests
         var rollback = new WalCommitRollbackException(
             new IOException("commit"),
             new IOException("rollback"));
-        AssertMapped<PantsAbortedException>(rollback, PantsErrorCode.Aborted);
+        AssertMapped<PantsCommitOutcomeUnknownException>(
+            rollback,
+            PantsErrorCode.CommitOutcomeUnknown);
 
         var noSpace = new TestIOException("native failure", 28);
         AssertMapped<PantsNoSpaceException>(noSpace, PantsErrorCode.NoSpace);

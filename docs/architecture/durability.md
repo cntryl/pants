@@ -18,6 +18,13 @@ is already durable, the commit returns without sealing another WAL segment; othe
 pending WAL work or waits behind an upload already in progress. The confirmation adds no sequence
 or WAL record. A failed upload cannot be acknowledged as a successful confirmation.
 
+If Pants cannot establish whether an admitted commit became durable, `CommitAsync` throws
+`PantsCommitOutcomeUnknownException` (`PantsErrorCode.CommitOutcomeUnknown`, fatal severity). This
+includes a caller response deadline or cancellation after admission and a WAL rollback that cannot
+be proven safe. The runtime may still finish accepted work; reopen and reconcile durable state before
+retrying the mutation. Failures proven to precede all WAL effects keep their ordinary rejection
+classification.
+
 Published WAL is retired from the catalog by background maintenance, never on a commit or flush
 path. A turn proves that the *published* manifest covers each candidate segment, reading the
 segment frame by frame through version-pinned ranged reads admitted against the shared maintenance

@@ -2343,7 +2343,7 @@ sealed class Actor : IAsyncDisposable
             {
                 if (command.AbandonResponse(_options.RuntimeResponseTimeout))
                 {
-                    throw CreateRuntimeResponseTimeout(requestKind, requestId);
+                    throw CreateRuntimeResponseTimeout(requestKind, requestId, false);
                 }
 
                 return await response.ConfigureAwait(false);
@@ -2438,16 +2438,22 @@ sealed class Actor : IAsyncDisposable
             {
                 if (command.AbandonResponse(_options.RuntimeResponseTimeout))
                 {
-                    throw CreateRuntimeResponseTimeout(nameof(CommitAsync), requestId);
+                    throw CreateRuntimeResponseTimeout(nameof(CommitAsync), requestId, true);
                 }
 
                 writeStalled = await command.Task.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (
-                cancellationToken.IsCancellationRequested &&
-                command.AbandonResponse(_options.RuntimeResponseTimeout))
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
             {
-                throw;
+                if (command.AbandonResponse(_options.RuntimeResponseTimeout))
+                {
+                    throw new PantsCommitOutcomeUnknownException(
+                        "The caller canceled after the commit was admitted. The operation remains " +
+                        "runtime-owned, its outcome is unknown, and it is not automatically safe to retry.",
+                        exception);
+                }
+
+                writeStalled = await command.Task.ConfigureAwait(false);
             }
 
             if (writeStalled)
@@ -2514,13 +2520,20 @@ sealed class Actor : IAsyncDisposable
         return requestId;
     }
 
-    PantsTimeoutException CreateRuntimeResponseTimeout(string requestKind, long requestId) => new(
-        $"Runtime request '{requestKind}' with request ID {requestId} exceeded " +
-        $"RuntimeResponseTimeout {_options.RuntimeResponseTimeout:c} after admission; " +
-        "the operation may still complete, its outcome is unknown, and it is not automatically " +
-        "safe to retry.",
-        null,
-        true);
+    PantsException CreateRuntimeResponseTimeout(
+        string requestKind,
+        long requestId,
+        bool commitOutcomeUnknown)
+    {
+        var message =
+            $"Runtime request '{requestKind}' with request ID {requestId} exceeded " +
+            $"RuntimeResponseTimeout {_options.RuntimeResponseTimeout:c} after admission; " +
+            "the operation may still complete, its outcome is unknown, and it is not automatically " +
+            "safe to retry.";
+        return commitOutcomeUnknown
+            ? new PantsCommitOutcomeUnknownException(message)
+            : new PantsTimeoutException(message);
+    }
 
     static async Task DisposeAbandonedTransactionAsync(IPantsTransaction transaction)
     {
@@ -2723,7 +2736,14 @@ sealed class Actor : IAsyncDisposable
             if (exception is WalCommitGroupRollbackException)
             {
                 RecordPostDurabilityFailure(state, exception);
-                FailRemainingDrainedCommits(state, commits, stopIndex, exception);
+                FailRemainingDrainedCommits(
+                    state,
+                    commits,
+                    stopIndex,
+                    new PantsFencedException(
+                        "The commit was not applied because an earlier WAL rollback failed and " +
+                        "fenced this writer.",
+                        exception));
                 return;
             }
 
@@ -2958,7 +2978,7 @@ sealed class Actor : IAsyncDisposable
                 {
                     RecordPostDurabilityFailure(state, exception);
                     PublishSnapshot(state);
-                    ExceptionDispatchInfo.Capture(exception).Throw();
+                    throw CreateCloudStrictCommitOutcomeUnknown(exception);
                 }
             }
 
@@ -2992,7 +3012,7 @@ sealed class Actor : IAsyncDisposable
             {
                 RecordPostDurabilityFailure(state, exception);
                 PublishSnapshot(state);
-                ExceptionDispatchInfo.Capture(exception).Throw();
+                throw CreateCloudStrictCommitOutcomeUnknown(exception);
             }
         }
 
@@ -3117,60 +3137,75 @@ sealed class Actor : IAsyncDisposable
                     ? PantsDurability.Buffered
                     : durability)
             .ConfigureAwait(false);
-        if (result.PostDurabilityFailure is not null)
-        {
-            RecordPostDurabilityFailure(state, result.PostDurabilityFailure);
-        }
-
-        var automaticallyFlushed = false;
-        if (!UsesBackgroundImmutableFlushes &&
-            _options.FlushAfterWalRecords > 0 &&
-            diskStore.WalRecords >= _options.FlushAfterWalRecords)
-        {
-            await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
-            await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
-            await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
-            automaticallyFlushed = true;
-        }
-
         try
         {
-            await RotateLocalWalAtConfiguredThresholdAsync(state, diskStore).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (HasAuthoritativeLocalWalWrite(durability))
-        {
-            RecordPostDurabilityFailure(state, exception);
-        }
-
-        if (_cloudPersistence is not null && durability == PantsDurability.CloudAsync)
-        {
-            var controller = _cloudWalSealController ??
-                             throw new PantsInternalException("CloudAsync has no WAL seal controller.");
-            RecordCloudWalWrite(controller, payload);
-            if (controller.ShouldSeal(diskStore.ActiveWalBytes))
+            if (result.PostDurabilityFailure is not null)
             {
-                try
+                RecordPostDurabilityFailure(state, result.PostDurabilityFailure);
+            }
+
+            var automaticallyFlushed = false;
+            if (!UsesBackgroundImmutableFlushes &&
+                _options.FlushAfterWalRecords > 0 &&
+                diskStore.WalRecords >= _options.FlushAfterWalRecords)
+            {
+                await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
+                await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
+                await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                automaticallyFlushed = true;
+            }
+
+            try
+            {
+                await RotateLocalWalAtConfiguredThresholdAsync(state, diskStore).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (HasAuthoritativeLocalWalWrite(durability))
+            {
+                RecordPostDurabilityFailure(state, exception);
+            }
+
+            if (_cloudPersistence is not null && durability == PantsDurability.CloudAsync)
+            {
+                var controller = _cloudWalSealController ??
+                                 throw new PantsInternalException("CloudAsync has no WAL seal controller.");
+                RecordCloudWalWrite(controller, payload);
+                if (controller.ShouldSeal(diskStore.ActiveWalBytes))
                 {
-                    await SealCloudAsyncWalAsync().ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    RecordPostDurabilityFailure(state, exception);
-                    if (IsRetryableCloudWalSealFailure(exception))
+                    try
                     {
-                        ScheduleCloudWalSealDeadline(TimeSpan.Zero);
+                        await SealCloudAsyncWalAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                    {
+                        RecordPostDurabilityFailure(state, exception);
+                        if (IsRetryableCloudWalSealFailure(exception))
+                        {
+                            ScheduleCloudWalSealDeadline(TimeSpan.Zero);
+                        }
                     }
                 }
+                else
+                {
+                    ScheduleCloudWalSealDeadline();
+                    ScheduleCloudWalBacklogDrain();
+                }
             }
-            else
-            {
-                ScheduleCloudWalSealDeadline();
-                ScheduleCloudWalBacklogDrain();
-            }
-        }
 
-        return automaticallyFlushed;
+            return automaticallyFlushed;
+        }
+        catch (Exception exception) when (durability == PantsDurability.CloudStrict)
+        {
+            RecordPostDurabilityFailure(state, exception);
+            throw CreateCloudStrictCommitOutcomeUnknown(exception);
+        }
     }
+
+    static PantsCommitOutcomeUnknownException CreateCloudStrictCommitOutcomeUnknown(
+        Exception exception) => exception as PantsCommitOutcomeUnknownException ??
+        new PantsCommitOutcomeUnknownException(
+            "CloudStrict commit outcome is indeterminate because cloud durability was not confirmed. " +
+            "Reopen and reconcile before retrying.",
+            exception);
 
     async ValueTask CompleteCloudStrictCommitAsync(
         CommitPayload payload,

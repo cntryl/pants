@@ -116,8 +116,10 @@ public sealed class PantsRuntimeResponseTimeoutTests
 
             try
             {
-                var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                var exception = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                     commit.WaitAsync(TestTimeouts.Expected));
+                Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, exception.Code);
+                Assert.Equal(PantsErrorSeverity.Fatal, exception.Severity);
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -136,6 +138,46 @@ public sealed class PantsRuntimeResponseTimeoutTests
         Assert.Equal(
             "durable"u8.ToArray(),
             (await read.GetAsync("accepted"u8.ToArray()))?.ToArray());
+    }
+
+    [Fact]
+    public async Task ShouldReportUnknownCommitOutcomeGivenCallerCancelsAfterAdmission()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoint = new WriteAdmissionRaceFailpointHandler();
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithStorageTimeout(TimeSpan.FromSeconds(1))
+            .WithRuntimeResponseTimeout(TimeSpan.FromSeconds(10));
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoint)))
+        using (var cancellation = new CancellationTokenSource())
+        {
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("cancelled-accepted"u8.ToArray(), "durable"u8.ToArray());
+            failpoint.ArmWalAppend();
+            var commit = transaction.CommitAsync(PantsWriteOptions.Sync, cancellation.Token).AsTask();
+            await failpoint.WaitForWalAsync(TestTimeouts.Expected);
+
+            cancellation.Cancel();
+            failpoint.ReleaseWal();
+            var exception = await Record.ExceptionAsync(() => commit.WaitAsync(TestTimeouts.Expected));
+            var unknown = Assert.IsType<PantsCommitOutcomeUnknownException>(exception);
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
+            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.IsAssignableFrom<OperationCanceledException>(unknown.InnerException);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "durable",
+            TestBytes.ToText((await reader.GetAsync("cancelled-accepted"u8.ToArray()))!.Value));
     }
 
     static async Task<PantsRuntimeMetrics> WaitForLateResponseAsync(IPantsDatabase database)

@@ -195,12 +195,13 @@ public sealed class PantsCloudAssertionDurabilityTests
         // Act
         try
         {
-            var failure = await Assert.ThrowsAsync<PantsIOException>(() =>
+            var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                 confirming.CommitAsync(PantsWriteOptions.CloudStrict)
                     .AsTask()
                     .WaitAsync(TestTimeouts.Expected));
 
             // Assert
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
             Assert.Contains("indeterminate", failure.Message, StringComparison.OrdinalIgnoreCase);
             Assert.True(failpoint.HitCount > 0);
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
