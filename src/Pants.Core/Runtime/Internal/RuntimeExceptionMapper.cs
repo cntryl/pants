@@ -17,9 +17,12 @@ static class RuntimeExceptionMapper
             OperationCanceledException canceled => new PantsAbortedException(
                 "The Pants runtime operation was aborted by the engine.",
                 canceled),
-            WalCommitRollbackException or
-                WalCommitGroupRollbackException or
-                WalRotationRecoveryException =>
+            WalCommitRollbackException or WalCommitGroupRollbackException =>
+                new PantsCommitOutcomeUnknownException(
+                    "The commit outcome is unknown because WAL rollback failed. " +
+                    "Reopen and reconcile before retrying.",
+                    exception),
+            WalRotationRecoveryException =>
                 new PantsAbortedException(
                     "The WAL outcome is uncertain after a failed rollback.",
                     exception),

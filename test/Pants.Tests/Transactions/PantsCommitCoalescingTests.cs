@@ -718,4 +718,45 @@ public sealed class PantsCommitCoalescingTests
                     await reopenedReader.GetAsync(TestBytes.FromString($"post-sync-key-{index}")))));
         }
     }
+
+    [Fact]
+    public async Task ShouldClassifyUnpreparedDrainedSuffixAsFencedGivenEarlierRollbackFails()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler(
+            Failpoint.AfterWalAppend,
+            rollbackFailure: Failpoint.BeforeCoalescedWalRollback);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        await using var uncertain = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        uncertain.Put("uncertain-prefix"u8.ToArray(), "value"u8.ToArray());
+        await using var notAttempted = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        notAttempted.Put("not-attempted-suffix"u8.ToArray(), "value"u8.ToArray());
+
+        var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+        var uncertainCommit = uncertain.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        var notAttemptedCommit = notAttempted.CommitAsync(PantsWriteOptions.Buffered).AsTask();
+        failpoints.ReleaseRuntimeBarrier();
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
+
+        var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+            () => uncertainCommit.WaitAsync(TestTimeouts.Expected));
+        Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
+        var fenced = await Assert.ThrowsAsync<PantsFencedException>(
+            () => notAttemptedCommit.WaitAsync(TestTimeouts.Expected));
+        Assert.Equal(PantsErrorCode.Fenced, fenced.Code);
+        Assert.Contains("was not applied", fenced.Message, StringComparison.OrdinalIgnoreCase);
+
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Null(await reader.GetAsync("uncertain-prefix"u8.ToArray()));
+        Assert.Null(await reader.GetAsync("not-attempted-suffix"u8.ToArray()));
+    }
 }

@@ -2,7 +2,8 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class CoalescedCommitFailureFailpointHandler(
     Failpoint? failure = null,
-    int failAtHit = 1) : IFailpointHandler, IDisposable
+    int failAtHit = 1,
+    Failpoint? rollbackFailure = null) : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
@@ -11,6 +12,7 @@ sealed class CoalescedCommitFailureFailpointHandler(
 
     readonly ManualResetEventSlim _runtimeBarrierRelease = new(false);
     int _failureHits;
+    int _rollbackFailureHit;
     int _runtimeBarrierArmed = 1;
 
     public void Dispose()
@@ -39,6 +41,12 @@ sealed class CoalescedCommitFailureFailpointHandler(
             Interlocked.Increment(ref _failureHits) == failAtHit)
         {
             throw new PantsNoSpaceException($"Injected failure at {failpoint} hit {failAtHit}.");
+        }
+
+        if (rollbackFailure == failpoint &&
+            Interlocked.Exchange(ref _rollbackFailureHit, 1) == 0)
+        {
+            throw new IOException($"Injected failure at {failpoint}.");
         }
     }
 

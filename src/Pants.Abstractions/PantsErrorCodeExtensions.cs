@@ -31,7 +31,8 @@ public static class PantsErrorCodeExtensions
 
         PantsErrorCode.Corruption or
             PantsErrorCode.RecoveryFailed or
-            PantsErrorCode.CompatibilityError => PantsErrorSeverity.Fatal,
+            PantsErrorCode.CompatibilityError or
+            PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.Fatal,
 
         _ => PantsErrorSeverity.Defect
     };

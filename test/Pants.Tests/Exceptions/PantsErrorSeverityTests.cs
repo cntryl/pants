@@ -21,7 +21,8 @@ public sealed class PantsErrorSeverityTests
                 PantsErrorCode.LeaseIndeterminate => PantsErrorSeverity.Fenced,
             PantsErrorCode.Internal or PantsErrorCode.ResourceLimit => PantsErrorSeverity.Defect,
             PantsErrorCode.Corruption or PantsErrorCode.RecoveryFailed or
-                PantsErrorCode.CompatibilityError => PantsErrorSeverity.Fatal,
+                PantsErrorCode.CompatibilityError or
+                PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.Fatal,
             _ => throw new InvalidOperationException($"Unclassified error code {code}.")
         };
 
@@ -43,6 +44,12 @@ public sealed class PantsErrorSeverityTests
     [InlineData(PantsErrorCode.CompatibilityError)]
     public void ShouldClassifyAsFatalWhenErrorIndicatesUnrecoverableDataLoss(PantsErrorCode code) =>
         Assert.Equal(PantsErrorSeverity.Fatal, code.GetSeverity());
+
+    [Fact]
+    public void ShouldClassifyUnknownCommitOutcomeAsFatalUntilReconciled() =>
+        Assert.Equal(
+            PantsErrorSeverity.Fatal,
+            PantsErrorCode.CommitOutcomeUnknown.GetSeverity());
 
     [Theory]
     [InlineData(PantsErrorCode.Fenced)]

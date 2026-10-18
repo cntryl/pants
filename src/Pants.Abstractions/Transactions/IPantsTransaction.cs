@@ -55,6 +55,11 @@ public interface IPantsTransaction : IAsyncDisposable
         PantsScanQuery query,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Commits the transaction with the requested durability.</summary>
+    /// <remarks>
+    ///     If an admitted commit reports <see cref="PantsCommitOutcomeUnknownException"/>, it may
+    ///     still complete. Reconcile the database before retrying the mutation.
+    /// </remarks>
     ValueTask CommitAsync(
         PantsWriteOptions options,
         CancellationToken cancellationToken = default);

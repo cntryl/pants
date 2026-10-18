@@ -46,6 +46,8 @@ public abstract class PantsException : Exception
             PantsErrorCode.Busy => new PantsBusyException(message, innerException),
             PantsErrorCode.Timeout => new PantsTimeoutException(message, innerException),
             PantsErrorCode.ResourceLimit => new PantsResourceLimitException(message, innerException),
+            PantsErrorCode.CommitOutcomeUnknown =>
+                new PantsCommitOutcomeUnknownException(message, innerException),
             _ => new PantsInternalException($"Unknown Pants error code '{code}': {message}", innerException)
         };
 

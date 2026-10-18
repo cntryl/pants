@@ -338,7 +338,7 @@ sealed class TransactionInstance : IPantsTransaction
                     .ConfigureAwait(false);
             }
         }
-        catch (PantsTimeoutException exception) when (exception.RuntimeResponseAbandoned)
+        catch (PantsCommitOutcomeUnknownException)
         {
             // The runtime accepted the commit and still owns its completion. Rolling it back here
             // would falsely turn an outcome-unknown response into an authoritative failure.

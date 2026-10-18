@@ -30,8 +30,9 @@ public sealed class PantsCloudRuntimeDeadlineTests
 
             try
             {
-                var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                var exception = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                     commit.WaitAsync(TestTimeouts.Expected));
+                Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, exception.Code);
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain("accepted-key", exception.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("accepted-value", exception.Message, StringComparison.Ordinal);
