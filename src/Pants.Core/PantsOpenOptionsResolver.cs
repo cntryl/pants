@@ -21,6 +21,9 @@ public static class PantsOpenOptionsResolver
             plan.L0CompactionTrigger,
             plan.StorageTimeout,
             plan.RuntimeResponseTimeout,
-            options.Runtime.ShutdownTimeout);
+            options.Runtime.ShutdownTimeout)
+        {
+            LongLivedSnapshotWarningThreshold = plan.LongLivedSnapshotWarningThreshold
+        };
     }
 }

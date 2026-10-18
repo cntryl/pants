@@ -13,7 +13,10 @@ public sealed class PantsOpenOptions
             configuration.WorkloadProfile,
             configuration.StorageTimeout,
             configuration.RuntimeResponseTimeout,
-            configuration.ShutdownTimeout);
+            configuration.ShutdownTimeout)
+        {
+            LongLivedSnapshotWarningThreshold = configuration.LongLivedSnapshotWarningThreshold
+        };
         Memory = new PantsMemoryConfiguration(
             configuration.MemoryBudget,
             configuration.BlockCachePolicy,
@@ -81,6 +84,7 @@ public sealed class PantsOpenOptions
             WorkloadProfile = runtime.WorkloadProfile,
             StorageTimeout = runtime.StorageTimeout,
             RuntimeResponseTimeout = runtime.RuntimeResponseTimeout,
+            LongLivedSnapshotWarningThreshold = runtime.LongLivedSnapshotWarningThreshold,
             ShutdownTimeout = runtime.ShutdownTimeout,
             MemoryBudget = memory.Budget,
             BlockCachePolicy = memory.BlockCachePolicy,
@@ -153,6 +157,9 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithShutdownTimeout(TimeSpan timeout) =>
         With(_configuration with { ShutdownTimeout = timeout });
+
+    public PantsOpenOptions WithLongLivedSnapshotWarningThreshold(TimeSpan threshold) =>
+        With(_configuration with { LongLivedSnapshotWarningThreshold = threshold });
 
     public PantsOpenOptions WithBackgroundCompaction(bool enabled) =>
         With(_configuration with
@@ -288,6 +295,13 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Shutdown timeout must be greater than zero.");
         }
 
+        if (Runtime.LongLivedSnapshotWarningThreshold <= TimeSpan.Zero)
+        {
+            throw PantsException.InvalidArgument(
+                $"LongLivedSnapshotWarningThreshold ({Runtime.LongLivedSnapshotWarningThreshold:c}) " +
+                "must be greater than zero.");
+        }
+
         if (Lease.TimeToLive <= TimeSpan.Zero)
         {
             throw PantsException.InvalidArgument(
@@ -403,6 +417,7 @@ public sealed class PantsOpenOptions
         TimeSpan StorageTimeout,
         TimeSpan? RuntimeResponseTimeout,
         TimeSpan ShutdownTimeout,
+        TimeSpan LongLivedSnapshotWarningThreshold,
         bool BackgroundCompaction,
         long? MemtableSizeLimitBytes,
         long? MemtableFlushThresholdBytes,
@@ -428,6 +443,7 @@ public sealed class PantsOpenOptions
             TimeSpan.FromSeconds(30),
             null,
             TimeSpan.FromSeconds(30),
+            TimeSpan.FromHours(1),
             true,
             null,
             null,

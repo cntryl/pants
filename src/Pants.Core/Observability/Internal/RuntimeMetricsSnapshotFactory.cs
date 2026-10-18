@@ -47,6 +47,10 @@ sealed class RuntimeMetricsSnapshotFactory(
         }
 
         var activeSnapshots = state.ActiveSnapshotCount;
+        var snapshotMetrics = ObserveSnapshots(
+            state.ActiveSnapshots.Select(static snapshot =>
+                new KeyValuePair<long, DateTimeOffset>(snapshot.SnapshotId, snapshot.StartedAtUtc)),
+            state.Clock.UtcNow);
         var writeStalled = MemtableWritePressure.IsStalled(options, state);
         var writeStallTiming = telemetry.ObserveWriteStall(writeStalled);
         return snapshot with
@@ -91,8 +95,10 @@ sealed class RuntimeMetricsSnapshotFactory(
             ActiveCompactions = compactionWorker.InFlight,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshots,
+            LongLivedSnapshots = snapshotMetrics.LongLivedSnapshots,
+            LongLivedSnapshotWarningsTotal = telemetry.LongLivedSnapshotWarnings,
             PinnedSsts = diskStore?.SnapshotPinnedObsoleteFileCount ?? 0,
-            OldestSnapshotAgeSeconds = GetOldestSnapshotAgeSeconds(state),
+            OldestSnapshotAgeSeconds = snapshotMetrics.OldestSnapshotAgeSeconds,
             SstCount = diskStore?.SstCount ?? 0,
             SstBytes = diskStore?.SstBytes ?? 0,
             SalvageModeOpens = telemetry.SalvageModeOpens,
@@ -171,8 +177,11 @@ sealed class RuntimeMetricsSnapshotFactory(
     public PantsRuntimeMetrics RefreshLive(
         PantsRuntimeMetrics snapshot,
         int activeCompactionRequests,
-        long walCloudDurableSequence)
+        long walCloudDurableSequence,
+        DateTimeOffset now)
     {
+        var activeSnapshotTimes = telemetry.ActiveSnapshotStartTimes;
+        var snapshotMetrics = ObserveSnapshots(activeSnapshotTimes, now);
         var hybridMetrics = hybridCache is not null && diskStore is not null
             ? hybridCache.GetMetrics(diskStore)
             : null;
@@ -197,6 +206,10 @@ sealed class RuntimeMetricsSnapshotFactory(
             SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? snapshot.SstBytesWrittenTotal,
             WalCloudDurableSequence = walCloudDurableSequence,
             PendingCloudUploads = telemetry.PendingCloudUploads,
+            ActiveSnapshots = activeSnapshotTimes.Length,
+            LongLivedSnapshots = snapshotMetrics.LongLivedSnapshots,
+            LongLivedSnapshotWarningsTotal = telemetry.LongLivedSnapshotWarnings,
+            OldestSnapshotAgeSeconds = snapshotMetrics.OldestSnapshotAgeSeconds,
             SalvageModeOpens = telemetry.SalvageModeOpens,
             NoSpaceEvents = telemetry.NoSpaceEvents,
             CompactionFailures = telemetry.CompactionFailures,
@@ -240,29 +253,31 @@ sealed class RuntimeMetricsSnapshotFactory(
         };
     }
 
-    static long GetOldestSnapshotAgeSeconds(RuntimeState state)
+    (long OldestSnapshotAgeSeconds, int LongLivedSnapshots) ObserveSnapshots(
+        IEnumerable<KeyValuePair<long, DateTimeOffset>> snapshots,
+        DateTimeOffset now)
     {
-        var now = state.Clock.UtcNow;
         var oldestAge = TimeSpan.Zero;
-        foreach (var snapshot in state.ActiveTransactions)
+        var longLivedSnapshots = 0;
+        foreach (var snapshot in snapshots)
         {
-            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
+            var age = GetSnapshotAge(now, snapshot.Value);
+            if (age > oldestAge)
+            {
+                oldestAge = age;
+            }
+
+            if (age < options.LongLivedSnapshotWarningThreshold)
+            {
+                continue;
+            }
+
+            longLivedSnapshots++;
+            telemetry.RecordLongLivedSnapshotWarning(snapshot.Key);
         }
 
-        foreach (var snapshot in state.DirectReadOnlyTransactions)
-        {
-            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
-        }
-
-        foreach (var snapshot in state.ActiveScanSnapshots)
-        {
-            oldestAge = Max(oldestAge, GetSnapshotAge(now, snapshot.Value.StartedAtUtc));
-        }
-
-        return checked((long)oldestAge.TotalSeconds);
+        return (checked((long)oldestAge.TotalSeconds), longLivedSnapshots);
     }
-
-    static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
     static TimeSpan GetSnapshotAge(DateTimeOffset now, DateTimeOffset startedAtUtc) =>
         now <= startedAtUtc ? TimeSpan.Zero : now - startedAtUtc;

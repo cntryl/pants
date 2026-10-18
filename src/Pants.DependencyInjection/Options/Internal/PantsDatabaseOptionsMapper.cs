@@ -24,7 +24,10 @@ static class PantsDatabaseOptionsMapper
                 options.WorkloadProfile,
                 options.StorageTimeout,
                 options.RuntimeResponseTimeout,
-                options.ShutdownTimeout),
+                options.ShutdownTimeout)
+            {
+                LongLivedSnapshotWarningThreshold = options.LongLivedSnapshotWarningThreshold
+            },
             new PantsMemoryConfiguration(
                 options.MemoryBudgetBytes is { } memoryBudgetBytes
                     ? PantsMemoryBudget.FromBytes(memoryBudgetBytes)
