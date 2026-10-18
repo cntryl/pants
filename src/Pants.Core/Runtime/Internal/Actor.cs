@@ -1385,7 +1385,10 @@ sealed class Actor : IAsyncDisposable
                     $"Durability '{writeOptions.Durability}' is not valid for this storage backend.");
             }
 
-            ThrowIfCommitApplicationFailed();
+            if (payload.Operations.Count != 0)
+            {
+                ThrowIfCommitApplicationFailed();
+            }
             if (RequiresWriteAdmission(payload))
             {
                 var families = GetCommitFamilies(payload);
@@ -3040,7 +3043,10 @@ sealed class Actor : IAsyncDisposable
         PantsDurability durability,
         OperationDeadline deadline)
     {
-        ThrowIfCommitApplicationFailed();
+        if (payload.Operations.Count != 0)
+        {
+            ThrowIfCommitApplicationFailed();
+        }
         ThrowIfShuttingDown(state);
         ThrowIfVerificationInProgress();
         if (RequiresWriteAdmission(payload))

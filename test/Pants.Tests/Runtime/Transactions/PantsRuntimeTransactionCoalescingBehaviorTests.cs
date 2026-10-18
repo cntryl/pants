@@ -175,6 +175,24 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
                 Assert.Contains("reopen", fenced.Message, StringComparison.OrdinalIgnoreCase);
             }
 
+            await using (var reader = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadOnly))
+            {
+                await reader.CommitAsync(PantsWriteOptions.Sync)
+                    .AsTask()
+                    .WaitAsync(TestTimeouts.Expected);
+            }
+
+            await using (var noOp = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                await noOp.CommitAsync(PantsWriteOptions.Buffered)
+                    .AsTask()
+                    .WaitAsync(TestTimeouts.Expected);
+            }
+
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
                 .AsTask()
                 .WaitAsync(TestTimeouts.Expected);
