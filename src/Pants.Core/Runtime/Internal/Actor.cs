@@ -1388,6 +1388,7 @@ sealed class Actor : IAsyncDisposable
             if (payload.Operations.Count != 0)
             {
                 ThrowIfCommitApplicationFailed();
+                EnsureCloudWriteAuthorityValid();
             }
             if (RequiresWriteAdmission(payload))
             {
@@ -2696,6 +2697,7 @@ sealed class Actor : IAsyncDisposable
                         command.Deadline)
                     .ConfigureAwait(false);
                 preparedCommands.Add(command);
+                _failpoints.Hit(Failpoint.AfterCoalescedCommitPreparation);
             }
             catch (Exception exception)
             {
@@ -3046,6 +3048,7 @@ sealed class Actor : IAsyncDisposable
         if (payload.Operations.Count != 0)
         {
             ThrowIfCommitApplicationFailed();
+            EnsureCloudWriteAuthorityValid();
         }
         ThrowIfShuttingDown(state);
         ThrowIfVerificationInProgress();

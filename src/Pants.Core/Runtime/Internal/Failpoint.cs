@@ -12,6 +12,7 @@ enum Failpoint
     AfterWalFlush,
     BeforeCoalescedWalDurabilityBoundary,
     AfterCoalescedWalDurabilityBoundary,
+    AfterCoalescedCommitPreparation,
     BeforeCoalescedCommitApply,
     AfterCoalescedCommitOperationApply,
     BeforeWalRollback,

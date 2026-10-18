@@ -1,9 +1,130 @@
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudLeaseEngineExpiryTests
 {
+    [Fact]
+    public async Task ShouldReportFencingBeforeCloudUploadStallGivenLeaseExpires()
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        using var uploadFailpoint = new FlushPipelineFailpointHandler(Failpoint.AfterCloudWalUpload);
+        var monotonic = new ManualSchedulingTimeProvider();
+        var wallClock = new ManualClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
+            .WithBackgroundCompaction(false)
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1))
+            .WithCoordinatorQueueCapacityForTesting(1)
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(
+                failpoints: uploadFailpoint,
+                cloudHttpClient: client,
+                leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
+                runtimeTimeProvider: monotonic,
+                leaseClock: wallClock));
+        await CommitAsync(database, "occupy-upload", PantsWriteOptions.CloudAsync);
+        await uploadFailpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+        var before = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(before.PendingCloudUploads > 0);
+
+        await using var contender = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        contender.Put("after-expiry"u8.ToArray(), "value"u8.ToArray());
+
+        try
+        {
+            handler.BlockLeaseWrites();
+            monotonic.Advance(TimeSpan.FromMilliseconds(100));
+            await handler.WaitForBlockedLeaseWriteAsync();
+            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
+
+            var failure = await Assert.ThrowsAsync<PantsFencedException>(() =>
+                contender.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
+
+            Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+            var after = await database.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.Equal(before.WalAppendCount, after.WalAppendCount);
+        }
+        finally
+        {
+            uploadFailpoint.Release();
+            handler.ReleaseLeaseWrites();
+        }
+    }
+
+    [Fact]
+    public async Task ShouldRevalidateLeaseForEveryCoalescedCloudWrite()
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        using var failpoints = new CoalescedCommitPreparationFailpointHandler();
+        var monotonic = new ManualSchedulingTimeProvider();
+        var wallClock = new ManualClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
+            .WithBackgroundCompaction(false)
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(
+                failpoints: failpoints,
+                cloudHttpClient: client,
+                leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
+                runtimeTimeProvider: monotonic,
+                leaseClock: wallClock));
+        await using var first = await BeginWriteAsync(database, "coalesced-first");
+        await using var second = await BeginWriteAsync(database, "coalesced-second");
+
+        var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+        var firstCommit = first.CommitAsync(PantsWriteOptions.CloudAsync).AsTask();
+        var secondCommit = second.CommitAsync(PantsWriteOptions.CloudAsync).AsTask();
+        failpoints.ReleaseRuntimeBarrier();
+        var before = await blockedMetrics.WaitAsync(TestTimeouts.Expected);
+        await failpoints.WaitForCommitPreparationAsync(TestTimeouts.Expected);
+
+        try
+        {
+            handler.BlockLeaseWrites();
+            monotonic.Advance(TimeSpan.FromMilliseconds(100));
+            await handler.WaitForBlockedLeaseWriteAsync();
+            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
+
+            failpoints.ReleaseCommitPreparation();
+            await firstCommit.WaitAsync(TestTimeouts.Expected);
+            var failure = await Assert.ThrowsAsync<PantsFencedException>(() =>
+                secondCommit.WaitAsync(TestTimeouts.Expected));
+
+            Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+            var after = await database.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.Equal(before.WalAppendCount + 1, after.WalAppendCount);
+            await using var reader = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.NotNull(await reader.GetAsync("coalesced-first"u8.ToArray()));
+            Assert.Null(await reader.GetAsync("coalesced-second"u8.ToArray()));
+        }
+        finally
+        {
+            failpoints.ReleaseCommitPreparation();
+            handler.ReleaseLeaseWrites();
+        }
+    }
+
     [Fact]
     public async Task ShouldFenceEveryWritePathAndFireLossOnceWhenRenewalBlocksPastTheDeadline()
     {
@@ -121,6 +242,15 @@ public sealed class PantsCloudLeaseEngineExpiryTests
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), TestBytes.FromString("value"));
         await transaction.CommitAsync(writeOptions);
+    }
+
+    static async ValueTask<IPantsTransaction> BeginWriteAsync(IPantsDatabase database, string key)
+    {
+        var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(TestBytes.FromString(key), TestBytes.FromString("value"));
+        return transaction;
     }
 
     static PantsCloudStorageLocation CreateLocation() => new(
