@@ -10,6 +10,47 @@ static class AtomicStagedFile
     static readonly object[] PublishLocks = CreatePublishLocks();
 
     /// <summary>
+    ///     Creates a directory path and flushes each parent directory after establishing a child
+    ///     directory entry. Existing paths also have their parent flushed so a retry after an
+    ///     interrupted initialization re-establishes the same durability boundary.
+    /// </summary>
+    public static void CreateDirectoryDurably(
+        string path,
+        Action? beforeParentDirectorySync = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        var missing = new Stack<string>();
+        var current = fullPath;
+        while (!Directory.Exists(current))
+        {
+            missing.Push(current);
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) ||
+                StringComparerForPaths.Equals(parent, current))
+            {
+                throw new DirectoryNotFoundException(
+                    $"The parent directory for '{fullPath}' could not be resolved.");
+            }
+
+            current = parent;
+        }
+
+        var created = false;
+        while (missing.TryPop(out var child))
+        {
+            Directory.CreateDirectory(child);
+            SyncParentDirectory(child, beforeParentDirectorySync);
+            created = true;
+        }
+
+        if (!created)
+        {
+            SyncParentDirectory(fullPath, beforeParentDirectorySync);
+        }
+    }
+
+    /// <summary>
     ///     Stages a file whose payload is produced incrementally, so the caller never holds the
     ///     whole contents in memory.
     /// </summary>
@@ -199,6 +240,21 @@ static class AtomicStagedFile
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         FlushParentDirectory(Path.GetFullPath(directory));
     }
+
+    static void SyncParentDirectory(string path, Action? beforeParentDirectorySync)
+    {
+        var parent = Path.GetDirectoryName(path);
+        if (parent is null)
+        {
+            return;
+        }
+
+        beforeParentDirectorySync?.Invoke();
+        FlushParentDirectory(parent);
+    }
+
+    static StringComparer StringComparerForPaths =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     static void FlushParentDirectory(string directory)
     {
