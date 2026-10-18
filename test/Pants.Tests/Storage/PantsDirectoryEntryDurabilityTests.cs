@@ -8,6 +8,7 @@ public sealed class PantsDirectoryEntryDurabilityTests
     [InlineData(nameof(Failpoint.BeforeDatabaseRootDirectorySync))]
     [InlineData(nameof(Failpoint.BeforeWalDirectorySync))]
     [InlineData(nameof(Failpoint.BeforeWalFileDirectorySync))]
+    [InlineData(nameof(Failpoint.BeforeFlushStagingDirectorySync))]
     public async Task ShouldNotCompleteOpenBeforeNewStorageNamesReachDirectorySync(
         string failpointName)
     {
@@ -26,9 +27,13 @@ public sealed class PantsDirectoryEntryDurabilityTests
             {
                 Directory.Delete(walDirectory, recursive: true);
             }
-            else
+            else if (failpointName == nameof(Failpoint.BeforeWalFileDirectorySync))
             {
                 File.Delete(walPath);
+            }
+            else
+            {
+                Directory.Delete(Path.Combine(root, "sst", ".flush-staging"), recursive: true);
             }
         }
 

@@ -1832,7 +1832,9 @@ sealed class LocalDiskStore :
                 failpointHandler,
                 lease);
             lease.EnsureValid();
-            Directory.CreateDirectory(Path.Combine(root, "sst", ".flush-staging"));
+            AtomicStagedFile.CreateDirectoryDurably(
+                Path.Combine(root, "sst", ".flush-staging"),
+                () => failpointHandler.Hit(Failpoint.BeforeFlushStagingDirectorySync));
             AdvanceNextWalSequencePastSealedSegments(
                 walDirectory,
                 manifest,
