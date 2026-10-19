@@ -257,7 +257,7 @@ public sealed class ProviderCloudControlMetadataReadTests
                     catalogReadAdmission: new ProviderWalCatalogReadAdmission(
                         budget,
                         new MaintenanceMemoryGate()),
-                    catalogWriteAdmission: new ProviderWalCatalogWriteAdmission(budget),
+                    catalogWriteAdmission: new CloudMetadataWriteAdmission(budget),
                     controlMetadataMemoryBudget: budget)
                 .AsTask());
 

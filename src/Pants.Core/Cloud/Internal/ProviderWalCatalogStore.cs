@@ -20,14 +20,14 @@ sealed class ProviderWalCatalogStore(
     Action ensureLeaseValid,
     Func<CancellationToken, ValueTask> validateRemoteLease,
     ProviderWalCatalogReadAdmission? readAdmission = null,
-    ProviderWalCatalogWriteAdmission? writeAdmission = null)
+    CloudMetadataWriteAdmission? writeAdmission = null)
 {
     const int MaximumRepairAttempts = 4;
 
     readonly Func<CancellationToken, ValueTask> _validateRemoteLease = validateRemoteLease;
     readonly ProviderWalCatalogReadAdmission _readAdmission =
         readAdmission ?? ProviderWalCatalogReadAdmission.Standalone();
-    readonly ProviderWalCatalogWriteAdmission? _writeAdmission = writeAdmission;
+    readonly CloudMetadataWriteAdmission? _writeAdmission = writeAdmission;
 
     /// <param name="rejectOrphanedWalSegments">
     ///     At startup recovery, fail closed when neither catalog copy exists but WAL segment objects

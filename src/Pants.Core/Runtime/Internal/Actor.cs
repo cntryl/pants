@@ -406,7 +406,7 @@ sealed class Actor : IAsyncDisposable
         var catalogReadAdmission = new ProviderWalCatalogReadAdmission(
             maintenanceMemoryBudget,
             maintenanceMemoryGate);
-        var catalogWriteAdmission = new ProviderWalCatalogWriteAdmission(maintenanceMemoryBudget);
+        var catalogWriteAdmission = new CloudMetadataWriteAdmission(maintenanceMemoryBudget);
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;

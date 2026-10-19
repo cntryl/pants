@@ -83,7 +83,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var bytes = File.ReadAllBytes(path);
         return ValueTask.FromResult<CloudDdlRegistryObject?>(new CloudDdlRegistryObject(
             CloudDdlJson.DeserializeRegistry(bytes),
-            CreateVersion(bytes)));
+            CreateVersion(bytes),
+            bytes));
     }
 
     public ValueTask FenceDdlRegistryAsync(
@@ -107,7 +108,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     public ValueTask<bool> CompareExchangeDdlRegistryAsync(
         CloudDdlRegistry registry,
         string? expectedVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? beforeSubmission = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
@@ -126,7 +128,9 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return ValueTask.FromResult(false);
         }
 
-        AtomicStagedFile.Write(path, CloudDdlJson.SerializeRegistry(registry));
+        var bytes = CloudDdlJson.SerializeRegistry(registry);
+        beforeSubmission?.Invoke();
+        AtomicStagedFile.Write(path, bytes);
         return ValueTask.FromResult(true);
     }
 

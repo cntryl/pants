@@ -83,6 +83,17 @@ sealed class ProviderCloudControlMetadataReadSet(
         }
     }
 
+    public IDisposable TransferReservations()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            var reservations = _reservations.ToArray();
+            _reservations.Clear();
+            return new ReservationSet(reservations);
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -203,6 +214,25 @@ sealed class ProviderCloudControlMetadataReadSet(
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             _reservations.Add(reservation);
+        }
+    }
+
+    sealed class ReservationSet(IDisposable[] reservations) : IDisposable
+    {
+        IDisposable[]? _reservations = reservations;
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _reservations, null);
+            if (current is null)
+            {
+                return;
+            }
+
+            foreach (var reservation in current)
+            {
+                reservation.Dispose();
+            }
         }
     }
 }

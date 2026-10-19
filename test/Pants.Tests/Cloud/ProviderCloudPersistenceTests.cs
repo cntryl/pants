@@ -734,7 +734,7 @@ public sealed class ProviderCloudPersistenceTests
             new CloudDdlRegistry(),
             null,
             CancellationToken.None));
-        var observed = Assert.IsType<CloudDdlRegistryObject>(
+        using var observed = Assert.IsType<CloudDdlRegistryObject>(
             await firstPersistence.ReadDdlRegistryAsync(CancellationToken.None));
         var putStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -861,7 +861,7 @@ public sealed class ProviderCloudPersistenceTests
                 new CloudDdlRegistry(),
                 null,
                 CancellationToken.None));
-            var observed = Assert.IsType<CloudDdlRegistryObject>(
+            using var observed = Assert.IsType<CloudDdlRegistryObject>(
                 await firstPersistence.ReadDdlRegistryAsync(CancellationToken.None));
             staleRegistry = observed.Registry.Clone();
             expectedVersion = observed.Version;
@@ -931,7 +931,7 @@ public sealed class ProviderCloudPersistenceTests
         releaseClaim.SetResult();
         await claim;
 
-        var claimed = Assert.IsType<CloudDdlRegistryObject>(
+        using var claimed = Assert.IsType<CloudDdlRegistryObject>(
             await secondPersistence.ReadDdlRegistryAsync(CancellationToken.None));
         var operation = Assert.Single(claimed.Registry.Operations);
         Assert.Equal("stale-operation", operation.OperationId);
@@ -977,7 +977,7 @@ public sealed class ProviderCloudPersistenceTests
 
         await persistence.FenceDdlRegistryAsync(initial, CancellationToken.None);
 
-        var fenced = Assert.IsType<CloudDdlRegistryObject>(
+        using var fenced = Assert.IsType<CloudDdlRegistryObject>(
             await persistence.ReadDdlRegistryAsync(CancellationToken.None));
         Assert.Equal(1UL, fenced.Registry.Epoch);
         var operation = Assert.Single(fenced.Registry.Operations);

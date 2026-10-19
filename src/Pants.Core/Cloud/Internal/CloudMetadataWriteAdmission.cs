@@ -4,15 +4,15 @@ using System.Text.Json;
 namespace Cntryl.Pants.Cloud.Internal;
 
 /// <summary>
-///     Counts catalog JSON into a fixed workspace, then reserves the serialized catalog's
-///     publication envelope before allocating its byte array. The reservation shares the
-///     maintenance pool with catalog reads, WAL retirement, and compaction.
+///     Counts JSON into a fixed workspace, then reserves the serialized publication envelope
+///     before allocating its byte array. The reservation is shared with other maintenance work.
 /// </summary>
-sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
+sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
 {
-    public ProviderWalCatalogSerializedBytes Serialize(
-        ProviderWalCatalog catalog,
-        JsonSerializerOptions options)
+    public CloudMetadataSerializedBytes Serialize<T>(
+        T value,
+        JsonSerializerOptions options,
+        string resourceName = "Cloud WAL catalog")
     {
         var fixedWorkspaceBytes = FixedWorkspaceBytes;
         var maximumSerializedBytes = (budget.Limit - fixedWorkspaceBytes) /
@@ -20,7 +20,7 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
         if (maximumSerializedBytes <= 0)
         {
             throw new PantsResourceLimitException(
-                $"Cloud WAL catalog publication needs at least " +
+                $"{resourceName} publication needs at least " +
                 $"{fixedWorkspaceBytes + ImmutablePublicationEnvelope.CopyFactor} " +
                 $"bytes of maintenance memory; the pool holds {budget.Limit}.");
         }
@@ -31,9 +31,10 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
         long serializedBytes;
         using (budget.Reserve(countingBufferBytes))
         {
-            var counter = new CatalogCountingBufferWriter(
+            var counter = new JsonCountingBufferWriter(
                 countingBufferBytes,
-                maximumSerializedBytes);
+                maximumSerializedBytes,
+                resourceName);
             using (var jsonWriter = new Utf8JsonWriter(
                        counter,
                        new JsonWriterOptions
@@ -43,7 +44,7 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
                            MaxDepth = options.MaxDepth
                        }))
             {
-                JsonSerializer.Serialize(jsonWriter, catalog, options);
+                JsonSerializer.Serialize(jsonWriter, value, options);
                 jsonWriter.Flush();
             }
 
@@ -54,21 +55,21 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
         if (workspaceBytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
-                $"Cloud WAL catalog publication needs {workspaceBytes} bytes of maintenance " +
+                $"{resourceName} publication needs {workspaceBytes} bytes of maintenance " +
                 $"memory; the pool holds {budget.Limit}.");
         }
 
         var reservation = budget.Reserve(workspaceBytes);
         try
         {
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(catalog, options);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(value, options);
             if (bytes.LongLength != serializedBytes)
             {
                 throw new PantsCorruptionException(
-                    "Cloud WAL catalog serialization changed length between admission and publication.");
+                    $"{resourceName} serialization changed length between admission and publication.");
             }
 
-            return new ProviderWalCatalogSerializedBytes(bytes, reservation);
+            return new CloudMetadataSerializedBytes(bytes, reservation);
         }
         catch
         {
@@ -77,14 +78,16 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
         }
     }
 
-    public IDisposable AdmitExisting(long serializedBytes)
+    public IDisposable AdmitExisting(
+        long serializedBytes,
+        string resourceName = "Cloud WAL catalog")
     {
         ArgumentOutOfRangeException.ThrowIfNegative(serializedBytes);
         var workspaceBytes = PublicationWorkspaceBytes(serializedBytes, FixedWorkspaceBytes);
         if (workspaceBytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
-                $"Cloud WAL catalog repair needs {workspaceBytes} bytes of maintenance memory; " +
+                $"{resourceName} repair needs {workspaceBytes} bytes of maintenance memory; " +
                 $"the pool holds {budget.Limit}.");
         }
 
@@ -100,7 +103,7 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
             ? long.MaxValue
             : serializedBytes * ImmutablePublicationEnvelope.CopyFactor + fixedWorkspaceBytes;
 
-    sealed class CatalogCountingBufferWriter(int bufferBytes, long maximumBytes) : IBufferWriter<byte>
+    sealed class JsonCountingBufferWriter(int bufferBytes, long maximumBytes, string resourceName) : IBufferWriter<byte>
     {
         readonly byte[] _buffer = GC.AllocateUninitializedArray<byte>(bufferBytes);
         long _bytesWritten;
@@ -113,7 +116,7 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
             if (count > _buffer.Length)
             {
                 throw new PantsResourceLimitException(
-                    "Cloud WAL catalog JSON requested more counting workspace than the maintenance budget allows.");
+                    $"{resourceName} JSON requested more counting workspace than the maintenance budget allows.");
             }
 
             try
@@ -123,14 +126,14 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
             catch (OverflowException exception)
             {
                 throw new PantsResourceLimitException(
-                    "Cloud WAL catalog serialization exceeds the maintenance memory accounting range.",
+                    $"{resourceName} serialization exceeds the memory accounting range.",
                     exception);
             }
 
             if (_bytesWritten > maximumBytes)
             {
                 throw new PantsResourceLimitException(
-                    $"Serialized cloud WAL catalog exceeds the {maximumBytes}-byte publication envelope.");
+                    $"Serialized {resourceName} exceeds the {maximumBytes}-byte publication envelope.");
             }
         }
 
@@ -152,14 +155,14 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
             if (Math.Max(1, sizeHint) > _buffer.Length)
             {
                 throw new PantsResourceLimitException(
-                    $"Cloud WAL catalog JSON needs a {sizeHint}-byte token workspace; " +
+                    $"{resourceName} JSON needs a {sizeHint}-byte token workspace; " +
                     $"the bounded workspace is {_buffer.Length} bytes.");
             }
         }
     }
 }
 
-sealed class ProviderWalCatalogSerializedBytes(byte[] bytes, IDisposable reservation) : IDisposable
+sealed class CloudMetadataSerializedBytes(byte[] bytes, IDisposable reservation) : IDisposable
 {
     IDisposable? _reservation = reservation;
 

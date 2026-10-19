@@ -41,7 +41,7 @@ sealed class CloudDdlCoordinator
             FromLocalManifest(),
             cancellationToken).ConfigureAwait(false);
         await ReconcilePreparedAsync(state, cancellationToken, true).ConfigureAwait(false);
-        var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+        using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
         if (remote is null)
         {
             var bootstrap = FromLocalManifest();
@@ -93,7 +93,7 @@ sealed class CloudDdlCoordinator
             return;
         }
 
-        var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+        using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
         var registry = remote?.Registry.Clone() ?? FromLocalManifest();
         var prepare = new CloudDdlPrepare
         {
@@ -116,17 +116,20 @@ sealed class CloudDdlCoordinator
         var submitted = false;
         try
         {
-            _failpoints.Hit(Failpoint.BeforeDdlRemoteCas);
-            // Record that the CAS may land before submitting it, so a crash or a lost response
-            // cannot be mistaken for an aborted DDL.
-            prepare.RemoteCasAmbiguous = true;
-            WritePrepare(prepare);
-            submitted = true;
-            _failpoints.Hit(Failpoint.AfterDdlAmbiguousPrepare);
             var published = await _authority.CompareExchangeDdlRegistryAsync(
                 registry,
                 remote?.Version,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                () =>
+                {
+                    _failpoints.Hit(Failpoint.BeforeDdlRemoteCas);
+                    // Persist ambiguity only after resource admission and immediately before
+                    // submitting the conditional write, so a rejected admission stays definite.
+                    prepare.RemoteCasAmbiguous = true;
+                    WritePrepare(prepare);
+                    submitted = true;
+                    _failpoints.Hit(Failpoint.AfterDdlAmbiguousPrepare);
+                }).ConfigureAwait(false);
             if (!published)
             {
                 // A rejected conditional write is a definite answer: it did not commit.
@@ -139,10 +142,17 @@ sealed class CloudDdlCoordinator
         }
         catch (Exception publicationError)
         {
+            if (!submitted)
+            {
+                prepare.RemoteCasAmbiguous = false;
+                TryWritePrepare(prepare);
+                throw;
+            }
+
             try
             {
                 _failpoints.Hit(Failpoint.BeforeDdlAuthorityReadback);
-                var readback = await _authority.ReadDdlRegistryAsync(cancellationToken)
+                using var readback = await _authority.ReadDdlRegistryAsync(cancellationToken)
                     .ConfigureAwait(false);
                 if (readback?.Registry.Operations.Any(operation =>
                         StringComparer.Ordinal.Equals(
@@ -205,7 +215,7 @@ sealed class CloudDdlCoordinator
             return;
         }
 
-        var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+        using var remote = await _authority.ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
         if (remote is null)
         {
             if (_diskStore.IsColumnFamilyEditApplied(prepare.Edit))
@@ -294,7 +304,7 @@ sealed class CloudDdlCoordinator
                 remote.Version,
                 cancellationToken).ConfigureAwait(false))
         {
-            var current = await _authority.ReadDdlRegistryAsync(cancellationToken)
+            using var current = await _authority.ReadDdlRegistryAsync(cancellationToken)
                 .ConfigureAwait(false);
             if (current?.Registry.Operations.Any(operation =>
                     StringComparer.Ordinal.Equals(operation.OperationId, prepare.OperationId)) != true)

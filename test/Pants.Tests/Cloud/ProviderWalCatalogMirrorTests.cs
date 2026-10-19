@@ -425,7 +425,7 @@ public sealed class ProviderWalCatalogMirrorTests
             static _ => ValueTask.CompletedTask,
             CancellationToken.None,
             catalogReadAdmission: new ProviderWalCatalogReadAdmission(budget, gate),
-            catalogWriteAdmission: new ProviderWalCatalogWriteAdmission(budget));
+            catalogWriteAdmission: new CloudMetadataWriteAdmission(budget));
     }
 
     static async Task<byte[]?> ReadAsync(CountingCloudObjectStore store, string key) =>
