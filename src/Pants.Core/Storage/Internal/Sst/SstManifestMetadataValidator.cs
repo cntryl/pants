@@ -49,6 +49,38 @@ static class SstManifestMetadataValidator
             sequences.Length == 0 ? null : sequences.Max());
     }
 
+    public static void ValidateRemoteContents(
+        FileMeta file,
+        byte[]? metadataSmallestKey,
+        byte[]? metadataLargestKey,
+        byte[]? actualSmallestKey,
+        byte[]? actualLargestKey,
+        ulong? actualSmallestSequence,
+        ulong? actualLargestSequence,
+        string storageKind)
+    {
+        ValidateKey(storageKind, file.Name, "metadata smallest", metadataSmallestKey, actualSmallestKey);
+        ValidateKey(storageKind, file.Name, "metadata largest", metadataLargestKey, actualLargestKey);
+        if (file.HasTrustedKeyBounds())
+        {
+            ValidateKey(storageKind, file.Name, "smallest", file.SmallestKey, actualSmallestKey);
+            ValidateKey(storageKind, file.Name, "largest", file.LargestKey, actualLargestKey);
+        }
+
+        ValidateSequence(
+            storageKind,
+            file.Name,
+            "smallest",
+            file.SmallestSequence,
+            actualSmallestSequence);
+        ValidateSequence(
+            storageKind,
+            file.Name,
+            "largest",
+            file.LargestSequence,
+            actualLargestSequence);
+    }
+
     static void ValidateKey(
         string storageKind,
         string fileName,

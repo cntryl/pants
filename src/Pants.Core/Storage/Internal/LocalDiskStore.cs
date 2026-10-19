@@ -217,6 +217,8 @@ sealed class LocalDiskStore :
 
     public string RootPath { get; }
 
+    internal IAsyncSstSourceFactory? RemoteSstSourceFactory => _remoteSstSourceFactory;
+
     internal bool IsDisposed { get; private set; }
 
     public bool IsLeaseHealthy

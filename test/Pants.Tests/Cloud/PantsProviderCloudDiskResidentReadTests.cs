@@ -90,6 +90,94 @@ public sealed class PantsProviderCloudDiskResidentReadTests
     }
 
     [Fact]
+    public async Task ShouldVerifyRemoteSstsWithoutHydratingWhenTheyExceedTheLocalBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var initialOptions = CreateOptions(directory.Path);
+        await CreateCorpusAsync(initialOptions, client);
+        Assert.True(handler.SstStoredBytes > 64 * 1024);
+        RemoveLocalSsts(directory.Path);
+
+        var constrainedOptions = CreateOptions(directory.Path)
+            .WithCloudLocalStorageBudget(64 * 1024);
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(
+            constrainedOptions,
+            new RuntimeDependencies(cloudHttpClient: client));
+        handler.ResetSstReadMetrics();
+
+        var report = await reopened.PersistentStorage!
+            .VerifyAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(report.SstFilesVerified > 0);
+        Assert.True(handler.SstRangeReads > 0);
+        Assert.Equal(0, handler.SstFullReads);
+        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+    }
+
+    [Fact]
+    public async Task ShouldRejectRemoteSstChecksumMismatchWithoutHydratingIt()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var options = CreateOptions(directory.Path);
+        await CreateCorpusAsync(options, client);
+        var sstPath = Assert.Single(
+            handler.GetObjectPaths("/sst/"),
+            static path => path.EndsWith(".sst", StringComparison.Ordinal));
+        var sstLength = new FileInfo(Path.Combine(
+            directory.Path,
+            "sst",
+            Path.GetFileName(sstPath))).Length;
+        handler.ReplaceObjectText(sstPath, new string('x', checked((int)sstLength)));
+        RemoveLocalSsts(directory.Path);
+
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(
+            options.WithCloudLocalStorageBudget(64 * 1024),
+            new RuntimeDependencies(cloudHttpClient: client));
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            reopened.PersistentStorage!.VerifyAsync(TimeSpan.FromSeconds(10)).AsTask());
+
+        Assert.True(handler.SstRangeReads > 0);
+        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+    }
+
+    [Fact]
+    public async Task ShouldCancelRemoteSstVerificationAtTheCallerDeadline()
+    {
+        using var directory = new TemporaryDirectory();
+        using var handler = new GatedSstReadHttpHandler(new InMemoryAzureBlobHandler());
+        using var client = new HttpClient(handler, false);
+        var options = CreateOptions(directory.Path);
+        await CreateCorpusAsync(options, client);
+        RemoveLocalSsts(directory.Path);
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(
+            options.WithCloudLocalStorageBudget(64 * 1024),
+            new RuntimeDependencies(cloudHttpClient: client));
+        handler.Arm();
+        var verification = reopened.PersistentStorage!
+            .VerifyAsync(TimeSpan.FromMilliseconds(100))
+            .AsTask();
+
+        try
+        {
+            await handler.WaitUntilRequestStartsAsync(TestTimeouts.Expected);
+            await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                verification.WaitAsync(TestTimeouts.Expected));
+        }
+        finally
+        {
+            handler.Release();
+        }
+
+        _ = await reopened.PersistentStorage.VerifyAsync(TimeSpan.FromSeconds(10));
+        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+    }
+
+    [Fact]
     public async Task ShouldTimeOutARemoteRangeReadWithoutCacheAdmission()
     {
         using var directory = new TemporaryDirectory();
