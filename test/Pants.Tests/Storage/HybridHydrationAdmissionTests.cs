@@ -1,3 +1,5 @@
+using Cntryl.Pants.Support.Failpoints;
+
 namespace Cntryl.Pants.Storage;
 
 public sealed class HybridHydrationAdmissionTests
@@ -115,6 +117,41 @@ public sealed class HybridHydrationAdmissionTests
         Assert.Equal(["a.sst", "b.sst"], store.Evicted);
         Assert.Equal(500, manager.Ledger.ReservedBytes);
         Assert.True(manager.Ledger.ChargedBytes <= 1000);
+    }
+
+    [Fact]
+    public async Task ShouldReportOnlyPlannedSstsWhileHighWatermarkEvictionIsBlocked()
+    {
+        var store = new FakeHybridCacheStore(sstSizeBytes: 90);
+        var failpoints = new BlockingHybridEvictionFailpointHandler();
+        using var manager = new HybridCacheManager(1000, failpoints);
+        manager.BindStore(store);
+        await manager.EnsureLocalSstsAsync(
+            store,
+            Enumerable.Range(0, 10).Select(static index => $"{index}.sst"),
+            CancellationToken.None);
+        failpoints.Arm();
+
+        var eviction = Task.Run(async () =>
+            await manager.EvictIfNeededAsync(store, CancellationToken.None));
+        try
+        {
+            await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
+
+            var pending = manager.GetMetrics(store).PendingEvictions;
+
+            Assert.Equal(1, pending);
+            Assert.True(pending < store.Hydrated.Count);
+        }
+        finally
+        {
+            failpoints.Release();
+        }
+
+        await eviction;
+
+        Assert.Single(store.Evicted);
+        Assert.Equal(0, manager.GetMetrics(store).PendingEvictions);
     }
 
     [Fact]
