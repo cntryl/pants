@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudHybridCacheTests
 {
-    const long LocalCacheBudgetBytes = 280 * 1024;
+    const long LocalCacheBudgetBytes = 560 * 1024;
 
     [Fact]
     public async Task ShouldEvictProvenSstsAndAcceptWritesWhileProviderGarbageCollectionIsUnavailable()
@@ -24,7 +24,7 @@ public sealed class PantsCloudHybridCacheTests
             await PutAndFlushAsync(database, $"residue-{index}", index);
         }
 
-        Assert.Empty(LocalSsts(cache.Path));
+        Assert.Single(LocalSsts(cache.Path));
         Assert.True(handler.GetObjectPaths("/sst/").Count(static path => path.EndsWith(
             ".sst",
             StringComparison.Ordinal)) >= 6);
@@ -33,7 +33,7 @@ public sealed class PantsCloudHybridCacheTests
         Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
 
         await PutAndFlushAsync(database, "write-after-residue", 7);
-        Assert.Empty(LocalSsts(cache.Path));
+        Assert.Single(LocalSsts(cache.Path));
         await AssertReadableAsync(database, "residue-5");
         await AssertReadableAsync(database, "write-after-residue");
     }

@@ -92,3 +92,27 @@ append fails, Pants releases the reservation only after truncating the WAL to
 its previous length and flushing that rollback. If rollback cannot be proven,
 the writer is fenced and the reservation remains charged until the runtime is
 discarded; on reopen, the ledger measures any retained WAL bytes from storage.
+
+## Hybrid Flush Headroom
+
+Hybrid writes also reserve their future SST output before the WAL is touched.
+Admission computes a conservative V4 SST bound for each affected column family,
+including data blocks, Bloom filters, sparse and trie indexes, range tombstones,
+compression expansion, block trailers, metadata, and the footer. The combined
+bound across a transaction's families must fit within half of the configured
+local budget. An oversized transaction is rejected before append, including
+when its operations are spilled.
+
+Each family output claim stays charged while its operations remain in the
+mutable memtable. Freezing transfers the claims to that flush generation; a
+successful manifest publication releases them, after which the resident SST is
+counted by the ledger. WAL, spill, hydration, and compaction admission all see
+these claims, so they cannot consume space already promised to a flush.
+Cloud-durable SST eviction is planned against the admission operation's actual
+ceiling and is performed only when removing the full planned set makes the
+request fit.
+
+Startup recovery remains a separate path. Recovery checkpoints still use the
+recovery working-set policy and can stage past the soft local-cache budget;
+that path is not covered by the live-write flush-headroom guarantee and remains
+part of the open local-budget work.

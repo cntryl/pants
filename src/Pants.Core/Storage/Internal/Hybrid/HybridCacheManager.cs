@@ -35,6 +35,12 @@ sealed class HybridCacheManager : IDisposable
     public long CompactionStagingWindowBytes => Math.Max(1, _policy.MaximumLocalBytes / 2);
 
     /// <summary>
+    ///     Maximum encoded SST output one hybrid transaction may promise before it is split across
+    ///     flushes.
+    /// </summary>
+    public long MemtableFlushWindowBytes => Math.Max(1, _policy.MaximumLocalBytes / 2);
+
+    /// <summary>
     ///     Binds the store the ledger measures resident bytes from. The manager is constructed
     ///     before the store exists, so this closes that loop once during startup.
     /// </summary>
@@ -50,17 +56,16 @@ sealed class HybridCacheManager : IDisposable
         Ledger.Reserve(kind, estimateBytes);
 
     /// <summary>
-    ///     Reserves a flush's output, evicting to make room and proceeding regardless if that is not
-    ///     enough.
+    ///     Reserves output space for a flush whose memtable was recovered without a live admission
+    ///     claim. Accepted writes reserve this capacity before their WAL append and carry it through
+    ///     publication, so normal flushes do not need a second reservation.
     /// </summary>
     /// <remarks>
     ///     A flush is the only thing that turns a full memtable into an SST, and write admission
-    ///     stalls on level-0 debt, so refusing it for space would be a permanent wedge rather than a
-    ///     delay. Eviction is tried first because a hybrid database can drop local copies of SSTs
-    ///     already durable in the cloud; if that still leaves too little, the flush proceeds and the
-    ///     overshoot is bounded by one memtable-sized output. The bytes stay charged either way, so
-    ///     concurrent callers still see the true figure and are refused correctly. Compaction does
-    ///     not take this path: it stages through <see cref="ReserveCompactionStagingAsync" />.
+    ///     stalls on level-0 debt, so a recovered memtable first evicts cloud-durable local SSTs and
+    ///     then fails with no-space if its output still cannot fit. Accepted memtables retain a
+    ///     separate output claim, which WAL, spill, hydration, and compaction reservations all see.
+    ///     Compaction stages through <see cref="ReserveCompactionStagingAsync" />.
     /// </remarks>
     public async ValueTask<StorageBudgetLedger.StorageReservation> ReserveFlushAsync(
         IHybridCacheStore store,
@@ -72,10 +77,13 @@ sealed class HybridCacheManager : IDisposable
             return reservation;
         }
 
-        await EvictIfNeededAsync(store, cancellationToken).ConfigureAwait(false);
-        return Ledger.TryReserve(StorageAdmissionKind.Flush, estimateBytes, out reservation)
-            ? reservation
-            : Ledger.ReserveUnconditionally(estimateBytes);
+        await EvictToFitAsync(
+                store,
+                estimateBytes,
+                StorageAdmissionKind.Flush,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return Ledger.Reserve(StorageAdmissionKind.Flush, estimateBytes);
     }
 
     /// <summary>
@@ -98,7 +106,12 @@ sealed class HybridCacheManager : IDisposable
             return reservation;
         }
 
-        await EvictToFitAsync(store, windowBytes, cancellationToken).ConfigureAwait(false);
+        await EvictToFitAsync(
+                store,
+                windowBytes,
+                StorageAdmissionKind.Compaction,
+                cancellationToken)
+            .ConfigureAwait(false);
         return Ledger.Reserve(StorageAdmissionKind.Compaction, windowBytes);
     }
 
@@ -134,15 +147,107 @@ sealed class HybridCacheManager : IDisposable
     public bool RequiresEviction(IHybridCacheStore store) =>
         _policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Normal;
 
-    public void EnsureWriteAdmitted(IHybridCacheStore store, RuntimeState state)
+    /// <summary>
+    ///     Makes room for a transaction's WAL record and future SST output before the WAL is
+    ///     touched. The encoded-output limit keeps one transaction within the cloud memtable
+    ///     window, including transactions backed by the spill store.
+    /// </summary>
+    public async ValueTask EnsureWriteCapacityAsync(
+        IHybridCacheStore store,
+        CommitPayload payload,
+        PantsPerformanceGoal performanceGoal,
+        PantsDurability durability,
+        CancellationToken cancellationToken)
     {
-        if (_policy.GetWatermark(store.LocalCommittedBytes) != HybridStorageWatermark.Emergency)
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Operations.Count == 0)
         {
             return;
         }
 
-        throw new PantsNoSpaceException(
-            "The hybrid local cache is at its emergency watermark and cannot admit writes.");
+        var footprints = new Dictionary<ColumnFamilyIdentity, SstFlushFootprint>(
+            ColumnFamilyIdentityComparer.Instance);
+        var walOperationBytes = 0L;
+        payload.Operations.ForEach(operation =>
+        {
+            if (!footprints.TryGetValue(operation.Family, out var footprint))
+            {
+                footprint = new SstFlushFootprint();
+                footprints.Add(operation.Family, footprint);
+            }
+
+            var keyLength = operation.Key.Length;
+            var valueLength = operation.Value?.Length;
+            var rangeEndLength = operation.EndExclusive?.Length;
+            footprint.Add(
+                keyLength,
+                valueLength ?? 0,
+                rangeEndLength ?? 0,
+                operation.Kind == CommitOperationKind.DeleteRange);
+
+            if (durability != PantsDurability.BestEffort)
+            {
+                walOperationBytes = checked(walOperationBytes + (payload.IsSpilled
+                    ? WalCodec.MeasureWorstCaseSpilledMutationFrameBytes(
+                        keyLength,
+                        valueLength,
+                        rangeEndLength)
+                    : WalCodec.MeasureTransactionBatchOperation(
+                        keyLength,
+                        valueLength,
+                        rangeEndLength)));
+            }
+        });
+
+        var flushOutputBytes = footprints.Values.Sum(footprint =>
+            footprint.MeasureUpperBound(performanceGoal));
+        if (flushOutputBytes > MemtableFlushWindowBytes)
+        {
+            throw new PantsNoSpaceException(
+                $"The transaction's {flushOutputBytes}-byte SST output bound exceeds the " +
+                $"hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
+        }
+
+        var walBytes = 0L;
+        if (durability != PantsDurability.BestEffort)
+        {
+            if (payload.IsSpilled)
+            {
+                var beginMarker = WalCodec.EncodeTransactionMarker(
+                    WalOperation.TransactionBegin,
+                    0,
+                    0,
+                    0);
+                var commitMarker = WalCodec.EncodeTransactionMarker(
+                    WalOperation.TransactionCommit,
+                    0,
+                    0,
+                    0);
+                walBytes = checked(
+                    WalCodec.MeasureEncodedFrameBytes(beginMarker.Length) +
+                    WalCodec.MeasureEncodedFrameBytes(commitMarker.Length) +
+                    walOperationBytes);
+            }
+            else
+            {
+                var batchPayloadBytes = checked(
+                    WalCodec.TransactionBatchRecordOverhead + walOperationBytes);
+                walBytes = WalCodec.MeasureEncodedFrameBytes(checked((int)batchPayloadBytes));
+            }
+        }
+
+        var requiredBytes = checked(flushOutputBytes + walBytes);
+        const StorageAdmissionKind admissionKind = StorageAdmissionKind.Wal;
+        await EvictToFitAsync(store, requiredBytes, admissionKind, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (Ledger.GetAvailableBytes(admissionKind) < requiredBytes)
+        {
+            throw new PantsNoSpaceException(
+                $"The hybrid local cache cannot admit {requiredBytes} bytes for the transaction: " +
+                $"{Ledger.ChargedBytes} of {_policy.MaximumLocalBytes} bytes are already charged.");
+        }
     }
 
     public async ValueTask EvictIfNeededAsync(
@@ -198,6 +303,7 @@ sealed class HybridCacheManager : IDisposable
     async ValueTask EvictToFitAsync(
         IHybridCacheStore store,
         long requiredBytes,
+        StorageAdmissionKind admissionKind,
         CancellationToken cancellationToken)
     {
         await _evictionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -207,10 +313,11 @@ sealed class HybridCacheManager : IDisposable
                 .Where(candidate => !IsProtected(candidate.Name))
                 .ToArray();
             var projectedBytes = Ledger.ChargedBytes;
+            var ceiling = Ledger.GetAdmissionCeilingBytes(admissionKind);
             var planned = new List<HybridLocalSst>();
             foreach (var candidate in candidates)
             {
-                if (checked(projectedBytes + requiredBytes) <= _policy.MaximumLocalBytes)
+                if (checked(projectedBytes + requiredBytes) <= ceiling)
                 {
                     break;
                 }
@@ -219,9 +326,14 @@ sealed class HybridCacheManager : IDisposable
                 projectedBytes = Math.Max(0, projectedBytes - candidate.SizeBytes);
             }
 
-            if (checked(projectedBytes + requiredBytes) > _policy.MaximumLocalBytes)
+            if (checked(projectedBytes + requiredBytes) > ceiling)
             {
                 // Evicting cannot make the window fit, so keep the local cache warm.
+                return;
+            }
+
+            if (planned.Count == 0)
+            {
                 return;
             }
 

@@ -34,7 +34,13 @@ sealed class StorageBudgetLedger
     ///     Bytes a <paramref name="kind" /> operation could still reserve right now.
     /// </summary>
     public long GetAvailableBytes(StorageAdmissionKind kind) =>
-        Math.Max(0, GetCeilingBytes(kind) - ChargedBytes);
+        Math.Max(0, GetAdmissionCeilingBytes(kind) - ChargedBytes);
+
+    /// <summary>
+    ///     The hard charged-byte limit for <paramref name="kind" />, even when current charges
+    ///     already exceed it.
+    /// </summary>
+    public long GetAdmissionCeilingBytes(StorageAdmissionKind kind) => GetCeilingBytes(kind);
 
     /// <summary>
     ///     Reserves <paramref name="estimateBytes" /> or throws.
@@ -107,7 +113,9 @@ sealed class StorageBudgetLedger
     /// </summary>
     long GetCeilingBytes(StorageAdmissionKind kind) => kind switch
     {
-        StorageAdmissionKind.Flush or StorageAdmissionKind.Compaction =>
+        StorageAdmissionKind.FlushHeadroom or
+        StorageAdmissionKind.Flush or
+        StorageAdmissionKind.Compaction =>
             _policy.MaximumLocalBytes,
         _ => _policy.MaximumLocalBytes *
             HybridStorageBudgetPolicy.EmergencyWatermarkPercent / 100

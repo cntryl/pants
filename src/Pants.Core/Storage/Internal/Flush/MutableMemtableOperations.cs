@@ -41,6 +41,11 @@ sealed class MutableMemtableOperations
         return family;
     }
 
+    public IReadOnlyList<WalMutation> SnapshotFamily(uint columnFamilyId) =>
+        _families.TryGetValue(columnFamilyId, out var family)
+            ? family.ToArray()
+            : [];
+
     public IReadOnlyList<WalMutation> SnapshotAll() => _families.Values
         .SelectMany(static family => family)
         .OrderBy(static operation => operation.Sequence)

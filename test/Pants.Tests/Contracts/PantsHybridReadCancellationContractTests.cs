@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsHybridReadCancellationContractTests
 {
-    const long LocalBudgetBytes = 280 * 1024;
+    const long LocalBudgetBytes = 560 * 1024;
     static readonly TimeSpan PromptCancellationTimeout = TimeSpan.FromSeconds(1);
 
     [Fact]
@@ -118,13 +118,28 @@ public sealed class PantsHybridReadCancellationContractTests
             new RuntimeDependencies(failpoints));
         try
         {
-            await using var writer = await database.Transactions.BeginAsync(
+            await using (var writer = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 97));
+                await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+            }
+
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            var firstSstName = Path.GetFileName(Assert.Single(Directory.GetFiles(
+                Path.Combine(path, "cloud_store", "sst"),
+                "*.sst")));
+
+            await using var evictor = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
-            writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 97));
-            await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+            evictor.Put("eviction-window"u8.ToArray(), CreateValue(256 * 1024, 98));
+            await evictor.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-            Assert.Empty(Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"));
+            Assert.DoesNotContain(
+                Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"),
+                file => Path.GetFileName(file) == firstSstName);
             return database;
         }
         catch

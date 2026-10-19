@@ -9,6 +9,10 @@ sealed record FrozenMemtableFlush(
     ulong FrontierSequence,
     long SizeBytes)
 {
+    public long FlushOutputBoundBytes { get; init; }
+
+    public bool HasReservedFlushHeadroom { get; init; }
+
     public string SstName =>
         $"{ColumnFamilyId:000000}_00_{SstSequence:00000000000000000000}.sst";
 }

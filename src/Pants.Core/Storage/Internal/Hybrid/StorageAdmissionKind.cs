@@ -10,6 +10,7 @@ enum StorageAdmissionKind
     TransactionSpill,
     RecoverySpool,
     Hydration,
+    FlushHeadroom,
     Flush,
     Compaction
 }
