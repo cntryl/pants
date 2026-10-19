@@ -13,6 +13,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
 
     public Func<string, int, CancellationToken, ValueTask>? BeforeGetAsync { get; set; }
 
+    public Func<CancellationToken, ValueTask>? BeforeNextPutAsync { get; set; }
+
     public async ValueTask<CloudObject?> GetAsync(
         string objectKey,
         CancellationToken cancellationToken)
@@ -54,13 +56,20 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
         }
     }
 
-    public ValueTask<bool> PutAsync(
+    public async ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var beforePut = BeforeNextPutAsync;
+        BeforeNextPutAsync = null;
+        if (beforePut is not null)
+        {
+            await beforePut(cancellationToken).ConfigureAwait(false);
+        }
+
         lock (_gate)
         {
             var exists = _objects.TryGetValue(objectKey, out var current);
@@ -76,13 +85,13 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
             };
             if (!accepted)
             {
-                return ValueTask.FromResult(false);
+                return false;
             }
 
             _objects[objectKey] = (
                 data.ToArray(),
                 exists ? checked(current.Version + 1) : 1);
-            return ValueTask.FromResult(true);
+            return true;
         }
     }
 

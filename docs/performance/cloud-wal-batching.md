@@ -6,8 +6,13 @@ the publication catalog is updated with one conditional transition and one exact
 batch. Local WAL acknowledgements and deletion happen only after that authoritative boundary.
 
 The drain path splits recovered backlog by writer epoch. Lease authority is checked before remote
-publication and again before every local acknowledgement. CloudStrict continues to await the whole
-drain, while CloudAsync retains bounded scheduling through the existing queue and deadline controls.
+publication, after segment uploads, before each catalog write, and again before every local
+acknowledgement. If ownership changes during an upload or catalog read, the publisher leaves the
+epoch-scoped segment unreferenced and does not acknowledge the batch. CloudStrict continues to await
+the whole drain, while CloudAsync retains bounded scheduling through the existing queue and deadline
+controls. Uncontended provider batches perform three remote lease reads (before upload, after upload,
+and before catalog publication); catalog CAS retries add a read before each retry write. The object
+request counts below exclude these lease reads.
 
 Provider-store tests count requests for three segments:
 
