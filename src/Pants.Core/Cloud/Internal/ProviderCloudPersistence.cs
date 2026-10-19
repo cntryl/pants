@@ -83,6 +83,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             CaptureSstRetentionProofAsync,
             () => CloudSstReferenceReader.ReadLocalProtectedNames(_localRoot),
             _lease.EnsureValid,
+            _lease.ValidateRemoteAsync,
             failpoints ?? NullPantsFailpointHandler.Instance);
         _walRetirement = new ProviderWalRetirement(
             walStore,
