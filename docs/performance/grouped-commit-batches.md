@@ -2,6 +2,10 @@
 
 Issue #34 extends the existing bounded commit coalescer to BestEffort and CloudAsync without pooling command completions or adding dependencies. CloudStrict remains isolated. CloudAsync groups append at the existing local Buffered WAL boundary, publish one immutable database version, complete callers, and schedule cloud sealing through the existing controller.
 
+Provider-cloud writes also perform one shared-lease read immediately before each local WAL append; a
+coalesced batch performs one read for the whole group. The simulated-cloud measurements below do
+not include provider-network latency for this check.
+
 Measurements used .NET 10.0.11 on the same Apple M5 machine. Candidate and immediate pre-change results are BenchmarkDotNet `ShortRun` jobs with three measured iterations. Rows marked noisy by BenchmarkDotNet are not used to justify the change.
 
 ## Write-heavy workloads
