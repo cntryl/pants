@@ -9,11 +9,13 @@ namespace Cntryl.Pants.Cloud.Internal;
 sealed class ProviderSstPublisher(
     ICloudObjectStore sstStore,
     Action ensureLeaseValid,
+    Func<CancellationToken, ValueTask> validateRemoteLeaseAsync,
     SstPublicationAdmission? admission = null)
 {
     public const int VerificationRangeBytes = 64 * 1024;
 
     readonly Dictionary<string, ulong> _proven = new(StringComparer.Ordinal);
+    readonly Func<CancellationToken, ValueTask> _validateRemoteLeaseAsync = validateRemoteLeaseAsync;
 
     public bool IsProven(string name) => _proven.ContainsKey(name);
 
@@ -110,6 +112,7 @@ sealed class ProviderSstPublisher(
         CancellationToken cancellationToken)
     {
         ensureLeaseValid();
+        await _validateRemoteLeaseAsync(cancellationToken).ConfigureAwait(false);
         var created = await sstStore.PutAsync(
             objectKey,
             local,

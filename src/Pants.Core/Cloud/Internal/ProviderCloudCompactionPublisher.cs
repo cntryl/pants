@@ -22,7 +22,11 @@ sealed class ProviderCloudCompactionPublisher
         _controlStore = controlStore;
         _lease = lease;
         _failpoints = failpoints;
-        _sstPublisher = new ProviderSstPublisher(sstStore, lease.EnsureValid, admission);
+        _sstPublisher = new ProviderSstPublisher(
+            sstStore,
+            lease.EnsureValid,
+            lease.ValidateRemoteAsync,
+            admission);
     }
 
     public async ValueTask PublishAsync(

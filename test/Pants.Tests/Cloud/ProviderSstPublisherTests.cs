@@ -9,7 +9,7 @@ public sealed class ProviderSstPublisherTests
     {
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(store, static () => { });
+        var publisher = CreatePublisher(store);
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
@@ -25,15 +25,55 @@ public sealed class ProviderSstPublisherTests
     }
 
     [Fact]
+    public async Task ShouldRejectSstUploadAfterSuccessorTakesRemoteLeaseAtWriteBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new TestCloudObjectStore();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "predecessor",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+
+        async ValueTask ValidateRemoteAuthorityAsync(CancellationToken cancellationToken)
+        {
+            leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10)));
+            await lease.ValidateRemoteAsync(cancellationToken);
+        }
+
+        var publisher = new ProviderSstPublisher(
+            store,
+            lease.EnsureValid,
+            ValidateRemoteAuthorityAsync);
+        var path = WriteLocal(directory.Path, "a.sst", 128);
+
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None).AsTask());
+
+        Assert.Equal(0, store.PutCount);
+        Assert.Null(await store.HeadAsync(PantsCloudObjectLayout.SstPrefix + "a.sst", CancellationToken.None));
+        Assert.False(lease.IsHealthy);
+    }
+
+    [Fact]
     public async Task ShouldIdentifyAlreadyPublishedSstByHeadWithoutDownloadingIt()
     {
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore();
         var path = WriteLocal(directory.Path, "a.sst", 100_000);
-        await new ProviderSstPublisher(store, static () => { })
+        await CreatePublisher(store)
             .EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
         store.ResetCounters();
-        var restarted = new ProviderSstPublisher(store, static () => { });
+        var restarted = CreatePublisher(store);
 
         await restarted.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
         await restarted.EnsurePublishedAsync("a.sst", null, [], CancellationToken.None);
@@ -46,7 +86,7 @@ public sealed class ProviderSstPublisherTests
     [Fact]
     public async Task ShouldFailWhenRemoteOnlySstIsMissing()
     {
-        var publisher = new ProviderSstPublisher(new RangeCountingCloudObjectStore(), static () => { });
+        var publisher = CreatePublisher(new RangeCountingCloudObjectStore());
 
         await Assert.ThrowsAsync<PantsRecoveryFailedException>(async () =>
             await publisher.EnsurePublishedAsync("gone.sst", null, [], CancellationToken.None));
@@ -58,7 +98,7 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore { ChangeVersionOnRangeRead = true };
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
-        var publisher = new ProviderSstPublisher(store, static () => { });
+        var publisher = CreatePublisher(store);
 
         await Assert.ThrowsAsync<PantsFencedException>(async () =>
             await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None));
@@ -71,9 +111,8 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(64L * 1024 * 1024);
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
+        var publisher = CreatePublisher(
             store,
-            static () => { },
             SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
@@ -89,12 +128,11 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore();
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
-        await new ProviderSstPublisher(store, static () => { })
+        await CreatePublisher(store)
             .EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
         var budget = new ResourceBudget(64L * 1024 * 1024);
-        var restarted = new ProviderSstPublisher(
+        var restarted = CreatePublisher(
             store,
-            static () => { },
             SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
 
         await restarted.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
@@ -109,10 +147,7 @@ public sealed class ProviderSstPublisherTests
         var budget = new ResourceBudget(16L * 1024 * 1024);
         var gate = new MaintenanceMemoryGate();
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
-            store,
-            static () => { },
-            SstPublicationAdmission.Gated(budget, gate));
+        var publisher = CreatePublisher(store, SstPublicationAdmission.Gated(budget, gate));
         var path = WriteLocal(directory.Path, "a.sst", 100_000);
         var compactionRound = await gate.EnterAsync(CancellationToken.None);
         var merge = budget.Reserve(budget.Limit);
@@ -137,10 +172,7 @@ public sealed class ProviderSstPublisherTests
         var budget = new ResourceBudget(16L * 1024 * 1024);
         var gate = new MaintenanceMemoryGate();
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
-            store,
-            static () => { },
-            SstPublicationAdmission.Gated(budget, gate));
+        var publisher = CreatePublisher(store, SstPublicationAdmission.Gated(budget, gate));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
         var original = File.ReadAllBytes(path);
         using (await gate.EnterAsync(CancellationToken.None))
@@ -167,9 +199,8 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(512 * 1024);
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
+        var publisher = CreatePublisher(
             store,
-            static () => { },
             SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
@@ -186,10 +217,7 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(512 * 1024);
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
-            store,
-            static () => { },
-            SstPublicationAdmission.WithinCompactionRound(budget));
+        var publisher = CreatePublisher(store, SstPublicationAdmission.WithinCompactionRound(budget));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await publisher.PublishOutputAsync("a.sst", path, CancellationToken.None);
@@ -205,10 +233,7 @@ public sealed class ProviderSstPublisherTests
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(64L * 1024 * 1024);
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(
-            store,
-            static () => { },
-            SstPublicationAdmission.WithinCompactionRound(budget));
+        var publisher = CreatePublisher(store, SstPublicationAdmission.WithinCompactionRound(budget));
         var path = WriteLocal(directory.Path, "a.sst", 300_000);
 
         await publisher.PublishOutputAsync("a.sst", path, CancellationToken.None);
@@ -226,7 +251,7 @@ public sealed class ProviderSstPublisherTests
     {
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore { ChangeVersionOnRangeRead = true };
-        var publisher = new ProviderSstPublisher(store, static () => { });
+        var publisher = CreatePublisher(store);
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
 
         await Assert.ThrowsAsync<PantsFencedException>(async () =>
@@ -238,7 +263,7 @@ public sealed class ProviderSstPublisherTests
     {
         using var directory = new TemporaryDirectory();
         var store = new RangeCountingCloudObjectStore();
-        var publisher = new ProviderSstPublisher(store, static () => { });
+        var publisher = CreatePublisher(store);
         var first = WriteLocal(directory.Path, "first.sst", 100_000);
         await publisher.PublishOutputAsync("a.sst", first, CancellationToken.None);
         var second = WriteLocal(directory.Path, "second.sst", 100_000);
@@ -256,4 +281,13 @@ public sealed class ProviderSstPublisherTests
         File.WriteAllBytes(path, System.Security.Cryptography.RandomNumberGenerator.GetBytes(bytes));
         return path;
     }
+
+    static ProviderSstPublisher CreatePublisher(
+        ICloudObjectStore store,
+        SstPublicationAdmission? admission = null) =>
+        new(
+            store,
+            static () => { },
+            static _ => ValueTask.CompletedTask,
+            admission);
 }

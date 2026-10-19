@@ -74,6 +74,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _sstPublisher = new ProviderSstPublisher(
             sstStore,
             lease.EnsureValid,
+            lease.ValidateRemoteAsync,
             sstPublicationAdmission);
         _controlStore = controlStore;
         _lease = lease;
