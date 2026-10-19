@@ -142,7 +142,8 @@ delete. WAL catalog recovery repairs, mirror convergence, epoch fencing, batch p
 retirement revalidate the lease before each conditional catalog write. The pre-acquisition epoch
 floor lookup reads both catalog copies without repairing or converging them. WAL retirement also
 revalidates before deleting each retired segment. When the stored lease has moved to a successor,
-validation stops the pending write or delete.
+validation stops the pending write or delete. Cloud startup revalidates before creating its local
+cache root and before staging each remote metadata or whole-object WAL copy into that cache.
 
 ## Shutdown lifecycle and error severity
 
