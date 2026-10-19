@@ -7,13 +7,13 @@ namespace Cntryl.Pants.Storage.Internal.Recovery;
 /// </summary>
 /// <remarks>
 ///     The target is derived from both budgets. The memtable size limit (itself carved from the
-///     memory budget) bounds recovered memory; where a local-storage budget applies, half of its
-///     free space at replay start bounds each checkpoint, so a checkpoint never needs more disk than
-///     the database has left. A transaction is applied whole, so it cannot be split across
-///     checkpoints: beyond a generous multiple of the memory target it is a resource failure.
-///     A hybrid cache may allow checkpoint publication to exceed its current local budget, so that
-///     soft budget must not reject the transaction itself. Neither resource limit is corruption,
-///     so salvage never truncates the WAL to get past it.
+///     memory budget) bounds recovered memory; where a local-storage budget applies, half its free
+///     space at replay start determines when to checkpoint. A transaction is applied whole, so it
+///     cannot be split across checkpoints: beyond a generous multiple of the memory target it is a
+///     resource failure. A hybrid cache may allow a checkpoint to exceed its current soft local
+///     budget, so that budget must not reject the transaction itself. In strict capacity mode, a
+///     transaction beyond disk capacity is a no-space failure. Neither resource failure is
+///     corruption, so salvage never truncates the WAL to get past it.
 /// </remarks>
 sealed class RecoveryCheckpointer
 {

@@ -74,7 +74,7 @@ In hybrid mode, current local-cache headroom lowers the checkpoint target, but
 it does not reject an otherwise recoverable transaction. Checkpoint staging is
 charged to the local-storage ledger and may proceed past that soft cache budget,
 because recovery must publish to release its working set; later hybrid
-maintenance can evict older cloud-durable SSTs. The recovery spool for split transactions remains
-budgeted separately and fails with a resource error if its bytes cannot be
-reserved. Neither resource failure is treated as WAL corruption or salvaged by
-truncating acknowledged records.
+maintenance can evict older cloud-durable SSTs. The recovery spool for split
+transactions remains budgeted separately and fails with a resource error if its
+bytes cannot be reserved. Neither resource failure is treated as WAL corruption
+or salvaged by truncating acknowledged records.
