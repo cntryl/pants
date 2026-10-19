@@ -133,12 +133,12 @@ RFC 3339 timestamp with an explicit offset, and `epoch`/`checksum` must be plain
 anything else is `LeaseIndeterminate`. Heartbeats run at one third of TTL, bounded between
 1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
 release still validates the writer epoch/owner token, so a resumed old owner remains fenced.
-Provider metadata mirrors and DDL registry mutations re-read the shared lease identity immediately
-before each conditional control-object write, so ownership changed after the current object was read
-is rejected before the CAS. Provider SST uploads also re-read the shared lease immediately before
-each conditional object create. Provider SST garbage collection revalidates the remote lease after
-checking retention guards and immediately before each version-conditional delete. When the stored
-lease has moved to a successor, validation stops the pass before the delete.
+Provider metadata mirrors, compaction intent writes, and DDL registry mutations re-read the shared
+lease identity immediately before each conditional control-object write, so ownership changed after
+the current object was read is rejected before the CAS. Provider SST uploads also re-read the shared
+lease immediately before each conditional object create. Provider SST garbage collection revalidates
+the remote lease after checking retention guards and immediately before each version-conditional
+delete. When the stored lease has moved to a successor, validation stops the pass before the delete.
 
 ## Shutdown lifecycle and error severity
 
