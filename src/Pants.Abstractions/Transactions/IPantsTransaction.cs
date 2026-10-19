@@ -39,6 +39,15 @@ public interface IPantsTransaction : IAsyncDisposable
     ///     Requires the key to match <paramref name="expectedValue" /> at the transaction snapshot and
     ///     remain unchanged through commit. A null value asserts that the key is absent.
     /// </summary>
+    /// <remarks>
+    ///     Assertion key and value bytes use the transaction memory pool and are not spilled to disk.
+    ///     Pants may spill staged write intents to make room, but an assertion that still cannot fit
+    ///     throws <see cref="PantsResourceLimitException" /> and is not added to the transaction.
+    ///     Previously staged writes remain available to commit.
+    /// </remarks>
+    /// <exception cref="PantsResourceLimitException">
+    ///     The assertion cannot be admitted after staged write intents are spilled.
+    /// </exception>
     void AssertValue(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte>? expectedValue);
