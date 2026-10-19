@@ -5,19 +5,23 @@ sealed class WalRuntimeService(
     ILocalWalStore? walStore,
     IFailpointHandler failpoints,
     WalMetricsRecorder metrics,
-    Action? validateCloudWriteAuthority = null)
+    Action? validateCloudWriteAuthority = null,
+    Func<CancellationToken, ValueTask>? validateCloudWalAppendAuthorityAsync = null)
     : ChannelRuntimeService<WalRuntimeRequest, WalRuntimeResult>(capacity)
 {
     readonly WalMetricsRecorder _metrics = metrics;
+    readonly Func<CancellationToken, ValueTask>? _validateCloudWalAppendAuthorityAsync =
+        validateCloudWalAppendAuthorityAsync;
 
     public async ValueTask<WalCommitResult> AppendCommitAsync(
         CommitPayload payload,
         RuntimeState state,
         PantsDurability durability,
+        OperationDeadline deadline = default,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(
-                new AppendWalCommitRuntimeRequest(payload, state, durability),
+                new AppendWalCommitRuntimeRequest(payload, state, durability, deadline),
                 cancellationToken)
             .ConfigureAwait(false);
         return result.Commit ??
@@ -41,6 +45,7 @@ sealed class WalRuntimeService(
         RuntimeState state,
         PantsDurability durability,
         Failpoint beforeSync,
+        OperationDeadline deadline = default,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(
@@ -48,7 +53,8 @@ sealed class WalRuntimeService(
                     commits,
                     state,
                     durability,
-                    beforeSync),
+                    beforeSync,
+                    deadline),
                 cancellationToken)
             .ConfigureAwait(false);
         return result.CommitGroup ??
@@ -110,8 +116,16 @@ sealed class WalRuntimeService(
                     throw new PantsInternalException("A WAL runtime request requires local storage.");
         return request switch
         {
-            AppendWalCommitRuntimeRequest append => AppendCommit(store, append),
-            AppendWalCommitGroupRuntimeRequest group => AppendCommitGroup(store, group),
+            AppendWalCommitRuntimeRequest append => AppendCommitWithAuthorityCheckAsync(
+                store,
+                append,
+                append.Deadline,
+                cancellationToken),
+            AppendWalCommitGroupRuntimeRequest group => AppendCommitGroupWithAuthorityCheckAsync(
+                store,
+                group,
+                group.Deadline,
+                cancellationToken),
             FlushWalDurabilityRuntimeRequest flush => FlushDurabilityBoundary(store, flush),
             SealCloudWalRuntimeRequest => ValueTask.FromResult(
                 new WalRuntimeResult(store.SealActiveWalForCloud(
@@ -127,6 +141,50 @@ sealed class WalRuntimeService(
             _ => throw new PantsInternalException(
                 $"Unknown WAL runtime request '{request.GetType().Name}'.")
         };
+    }
+
+    ValueTask<WalRuntimeResult> AppendCommitWithAuthorityCheckAsync(
+        ILocalWalStore store,
+        AppendWalCommitRuntimeRequest request,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        _validateCloudWalAppendAuthorityAsync is null
+            ? AppendCommit(store, request)
+            : AppendCommitAfterAuthorityCheckAsync(store, request, deadline, cancellationToken);
+
+    async ValueTask<WalRuntimeResult> AppendCommitAfterAuthorityCheckAsync(
+        ILocalWalStore store,
+        AppendWalCommitRuntimeRequest request,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken)
+    {
+        await deadline.RunAsync(
+                _validateCloudWalAppendAuthorityAsync!,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return await AppendCommit(store, request).ConfigureAwait(false);
+    }
+
+    ValueTask<WalRuntimeResult> AppendCommitGroupWithAuthorityCheckAsync(
+        ILocalWalStore store,
+        AppendWalCommitGroupRuntimeRequest request,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken) =>
+        _validateCloudWalAppendAuthorityAsync is null
+            ? AppendCommitGroup(store, request)
+            : AppendCommitGroupAfterAuthorityCheckAsync(store, request, deadline, cancellationToken);
+
+    async ValueTask<WalRuntimeResult> AppendCommitGroupAfterAuthorityCheckAsync(
+        ILocalWalStore store,
+        AppendWalCommitGroupRuntimeRequest request,
+        OperationDeadline deadline,
+        CancellationToken cancellationToken)
+    {
+        await deadline.RunAsync(
+                _validateCloudWalAppendAuthorityAsync!,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return await AppendCommitGroup(store, request).ConfigureAwait(false);
     }
 
     ValueTask<WalRuntimeResult> AppendCommit(

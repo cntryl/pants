@@ -11,6 +11,7 @@ sealed class CommitCoalescer(
         RuntimeState,
         PantsDurability,
         Failpoint,
+        OperationDeadline,
         ValueTask<WalCommitGroupResult>> appendGroupAsync,
     Action<RuntimeState, TransactionIntentOperation, long> applyOperation)
 {
@@ -123,7 +124,17 @@ sealed class CommitCoalescer(
         var walDurability = durability == PantsDurability.CloudAsync
             ? PantsDurability.Buffered
             : durability;
-        var result = await appendGroupAsync(group, state, walDurability, beforeSync)
+        var deadline = prepared[0].Command.Deadline;
+        for (var index = 1; index < prepared.Count; index++)
+        {
+            var candidate = prepared[index].Command.Deadline;
+            if (candidate.Remaining < deadline.Remaining)
+            {
+                deadline = candidate;
+            }
+        }
+
+        var result = await appendGroupAsync(group, state, walDurability, beforeSync, deadline)
             .ConfigureAwait(false);
         if (durability == PantsDurability.Sync)
         {

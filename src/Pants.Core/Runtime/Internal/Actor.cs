@@ -771,7 +771,8 @@ sealed class Actor : IAsyncDisposable
                 _diskStore,
                 _failpoints,
                 _walMetrics,
-                EnsureCloudWriteAuthorityValid);
+                EnsureCloudWriteAuthorityValid,
+                _cloudLease is null ? null : ValidateCloudWalAppendAuthorityAsync);
             _flushRuntime = new FlushRuntimeService(
                 options.CoordinatorQueueCapacity,
                 _diskStore,
@@ -2620,11 +2621,12 @@ sealed class Actor : IAsyncDisposable
             _options.FlushAfterWalRecords == 0,
             _options.MemtableSizeLimitBytes,
             _telemetry,
-            (commits, state, durability, beforeSync) => _walRuntime.AppendCommitGroupAsync(
+            (commits, state, durability, beforeSync, deadline) => _walRuntime.AppendCommitGroupAsync(
                 commits,
                 state,
                 durability,
-                beforeSync),
+                beforeSync,
+                deadline),
             (state, operation, sequence) =>
             {
                 ApplyOperation(state, operation, sequence);
@@ -3181,7 +3183,8 @@ sealed class Actor : IAsyncDisposable
                 state,
                 durability is PantsDurability.CloudAsync or PantsDurability.CloudStrict
                     ? PantsDurability.Buffered
-                    : durability)
+                    : durability,
+                deadline)
             .ConfigureAwait(false);
         try
         {
@@ -5006,6 +5009,15 @@ sealed class Actor : IAsyncDisposable
     {
         EnsureCloudLeaseValid();
         _cloudDdlCoordinator?.EnsureAuthorityResolved();
+    }
+
+    async ValueTask ValidateCloudWalAppendAuthorityAsync(CancellationToken cancellationToken)
+    {
+        EnsureCloudWriteAuthorityValid();
+        if (_cloudLease is not null)
+        {
+            await _cloudLease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     void ThrowIfCommitApplicationFailed()
