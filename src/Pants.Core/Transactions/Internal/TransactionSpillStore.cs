@@ -14,6 +14,7 @@ sealed class TransactionSpillStore : IDisposable
     readonly Lock _lifetimeGate = new();
     readonly List<TransactionSpillRun> _runs = [];
     readonly ulong _transactionId;
+    readonly Func<string, Stream>? _readStreamFactory;
     int _activeReadViews;
     bool _disposeRequested;
     int _disposed;
@@ -35,13 +36,15 @@ sealed class TransactionSpillStore : IDisposable
         long transactionId,
         ColumnFamilyIdentity family,
         StorageBudgetLedger? ledger = null,
-        SpillRunRetirement? retirement = null)
+        SpillRunRetirement? retirement = null,
+        Func<string, Stream>? readStreamFactory = null)
     {
         _directory = Path.Combine(databasePath, "txn");
         _transactionId = checked((ulong)transactionId);
         _family = family;
         _ledger = ledger;
         _retirement = retirement ?? new SpillRunRetirement(new FileSystemSpillFileRemover());
+        _readStreamFactory = readStreamFactory;
     }
 
     static ReadOnlySpan<byte> RunMagic => "MDGTXN01"u8;
@@ -194,6 +197,15 @@ sealed class TransactionSpillStore : IDisposable
             startInclusive,
             endExclusive,
             direction);
+
+    internal Stream OpenRunReadStream(TransactionSpillRun run) =>
+        _readStreamFactory?.Invoke(run.Path) ?? new FileStream(
+            run.Path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            16 * 1_024,
+            FileOptions.RandomAccess);
 
     internal void LookupLatest(
         IReadOnlyList<TransactionSpillRun> runs,

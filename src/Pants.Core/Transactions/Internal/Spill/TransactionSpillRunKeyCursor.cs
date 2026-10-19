@@ -7,16 +7,17 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     readonly ulong _dataEnd;
     readonly byte[]? _endExclusive;
     readonly bool _reverse;
-    readonly List<(ulong Start, ulong End)> _reverseChunks;
+    readonly ulong[] _reverseFrameOffsets;
+    readonly IReadOnlyList<ulong> _reverseOffsets;
+    readonly TransactionSpillRun _run;
     readonly byte[]? _startInclusive;
     readonly TransactionSpillStore _store;
-    readonly FileStream _stream;
     ulong _cursor;
     int _disposed;
     bool _exhausted;
     int _nextReverseChunk;
+    int _nextReverseFrame;
     byte[]? _previousKey;
-    IEnumerator<byte[]> _reverseKeys = Enumerable.Empty<byte[]>().GetEnumerator();
 
     internal TransactionSpillRunKeyCursor(
         TransactionSpillStore store,
@@ -26,45 +27,37 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         PantsScanDirection direction)
     {
         _store = store;
+        _run = run;
         _startInclusive = startInclusive?.ToArray();
         _endExclusive = endExclusive?.ToArray();
         _reverse = direction == PantsScanDirection.Reverse;
         try
         {
-            _stream = new FileStream(
-                run.Path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                16 * 1_024,
-                FileOptions.RandomAccess);
-            var header = store.ReadRunHeader(_stream, run);
+            using var stream = store.OpenRunReadStream(run);
+            var header = store.ReadRunHeader(stream, run);
             _dataEnd = header.OrdinalTableOffset;
             _exhausted = header.RecordCount == 0;
             if (_reverse)
             {
-                var starts = TransactionSpillStore.ReadSparseOffsets(_stream, header);
-                var chunks = new List<(ulong Start, ulong End)>(starts.Count);
-                for (var index = 0; index < starts.Count; index++)
-                {
-                    chunks.Add((
-                        starts[index],
-                        index + 1 < starts.Count ? starts[index + 1] : header.OrdinalTableOffset));
-                }
-
-                _reverseChunks = chunks;
-                _nextReverseChunk = chunks.Count;
+                _reverseOffsets = TransactionSpillStore.ReadSparseOffsets(stream, header);
+                _reverseFrameOffsets = new ulong[Math.Min(
+                    TransactionSpillStore.SparseIndexStride,
+                    run.RecordCount)];
+                _nextReverseChunk = _reverseOffsets.Count;
                 _cursor = TransactionSpillStore.RunHeaderLength;
             }
             else
             {
-                _reverseChunks = [];
-                _cursor = TransactionSpillStore.FindSparseStart(_stream, header, _startInclusive);
+                _reverseOffsets = [];
+                _reverseFrameOffsets = [];
+                _cursor = TransactionSpillStore.FindSparseStart(
+                    stream,
+                    header,
+                    _startInclusive);
             }
         }
         catch (Exception exception)
         {
-            _stream?.Dispose();
             throw TransactionSpillStore.MapReadException(exception);
         }
     }
@@ -103,22 +96,16 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
 
     public void Reset() => throw new NotSupportedException();
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
-        {
-            _reverseKeys.Dispose();
-            _stream.Dispose();
-        }
-    }
+    public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
 
     byte[]? NextForwardKey()
     {
+        using var stream = _store.OpenRunReadStream(_run);
         while (_cursor < _dataEnd)
         {
-            _stream.Position = checked((long)_cursor);
-            var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(_stream);
-            var nextCursor = checked((ulong)_stream.Position);
+            stream.Position = checked((long)_cursor);
+            var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(stream);
+            var nextCursor = checked((ulong)stream.Position);
             if (nextCursor > _dataEnd || nextCursor <= _cursor)
             {
                 throw PantsException.Create(
@@ -151,10 +138,15 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     {
         while (true)
         {
-            if (_reverseKeys.MoveNext())
+            if (_nextReverseFrame != 0)
             {
-                var key = _reverseKeys.Current;
-                if (_previousKey is not null && ByteArrayComparer.Instance.Equals(_previousKey, key))
+                var offset = _reverseFrameOffsets[--_nextReverseFrame];
+                using var stream = _store.OpenRunReadStream(_run);
+                stream.Position = checked((long)offset);
+                var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(stream);
+                if (!IsInBounds(key) ||
+                    (_previousKey is not null &&
+                     ByteArrayComparer.Instance.Equals(_previousKey, key)))
                 {
                     continue;
                 }
@@ -177,33 +169,50 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
             return false;
         }
 
-        _nextReverseChunk--;
-        var chunk = _reverseChunks[_nextReverseChunk];
-        var cursor = chunk.Start;
-        var keys = new List<byte[]>();
-        while (cursor < chunk.End)
+        var chunkIndex = --_nextReverseChunk;
+        var chunkStart = _reverseOffsets[chunkIndex];
+        var chunkEnd = chunkIndex + 1 < _reverseOffsets.Count
+            ? _reverseOffsets[chunkIndex + 1]
+            : _dataEnd;
+        var cursor = chunkStart;
+        var frameCount = 0;
+        using (var stream = _store.OpenRunReadStream(_run))
         {
-            _stream.Position = checked((long)cursor);
-            var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(_stream);
-            var nextCursor = checked((ulong)_stream.Position);
-            if (nextCursor > chunk.End || nextCursor <= cursor)
+            while (cursor < chunkEnd)
             {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    "Transaction spill sparse chunk does not align to operation frames.");
-            }
+                if (frameCount == _reverseFrameOffsets.Length)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        "Transaction spill sparse chunk exceeds its operation stride.");
+                }
 
-            cursor = nextCursor;
-            if (IsInBounds(key) &&
-                (keys.Count == 0 || !ByteArrayComparer.Instance.Equals(keys[^1], key)))
-            {
-                keys.Add(key);
+                _reverseFrameOffsets[frameCount++] = cursor;
+                stream.Position = checked((long)cursor);
+                _ = _store.ReadOperationPrimaryKeyFrame(stream);
+                var nextCursor = checked((ulong)stream.Position);
+                if (nextCursor > chunkEnd || nextCursor <= cursor)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        "Transaction spill sparse chunk does not align to operation frames.");
+                }
+
+                cursor = nextCursor;
             }
         }
 
-        keys.Reverse();
-        _reverseKeys.Dispose();
-        _reverseKeys = keys.GetEnumerator();
+        var expectedFrameCount = Math.Min(
+            TransactionSpillStore.SparseIndexStride,
+            _run.RecordCount - (chunkIndex * TransactionSpillStore.SparseIndexStride));
+        if (cursor != chunkEnd || frameCount != expectedFrameCount)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "Transaction spill sparse chunk has an invalid operation count.");
+        }
+
+        _nextReverseFrame = frameCount;
         return true;
     }
 
