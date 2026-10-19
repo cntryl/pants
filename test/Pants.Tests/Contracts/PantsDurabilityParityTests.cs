@@ -180,6 +180,57 @@ public sealed class PantsDurabilityParityTests
         }
     }
 
+    [Fact]
+    public async Task ShouldAllowRetryAfterProvenPreWalRejectionForSpilledTransaction()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new OneShotFailpointHandler(
+            Failpoint.BeforeWalAppend,
+            static failpoint => new PantsNoSpaceException($"No space at {failpoint}."));
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithTransactionMemoryPool(1024);
+        var firstValue = new string('f', 900);
+        var secondValue = new string('s', 900);
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(handler)))
+        {
+            await using (var rejected = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                rejected.Put("first"u8.ToArray(), TestBytes.FromString(firstValue));
+                rejected.Put("second"u8.ToArray(), TestBytes.FromString(secondValue));
+                Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+
+                var error = await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                    rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
+                Assert.Equal(PantsErrorCode.NoSpace, error.Code);
+            }
+
+            Assert.Null(await ReadAsync(database, "first"));
+            Assert.Null(await ReadAsync(database, "second"));
+
+            await using (var retry = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                retry.Put("first"u8.ToArray(), TestBytes.FromString(firstValue));
+                retry.Put("second"u8.ToArray(), TestBytes.FromString(secondValue));
+                await retry.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            Assert.Equal(firstValue, await ReadAsync(database, "first"));
+            Assert.Equal(secondValue, await ReadAsync(database, "second"));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        Assert.Equal(firstValue, await ReadAsync(reopened, "first"));
+        Assert.Equal(secondValue, await ReadAsync(reopened, "second"));
+    }
+
     /// <summary>
     ///     Only a failure proven to precede any WAL byte leaves the writer usable; failures after the
     ///     first byte fence it (see <c>PantsWalWriterFencingTests</c>).

@@ -26,10 +26,11 @@ failures are also outcome-unknown once WAL I/O has begun and the writer is fence
 restores the previous file length: the rollback itself is not known to be durable. The original
 storage failure remains the exception cause for diagnosis, while the public error tells callers not
 to retry the mutation before reconciliation. Failures proven to precede all WAL effects keep their
-ordinary rejection classification. The runtime may still finish accepted work. For an apply failure
-after coalesced WAL append, the current writer is fenced and readers continue to see the previously
-published state across column families. Reopen replays the durable WAL group; reconcile its members
-before retrying any mutation.
+ordinary rejection classification. A capacity rejection proven to precede WAL effects leaves the
+writer usable, so the caller may retry after correcting the cause. The runtime may still finish accepted
+work. For an apply failure after coalesced WAL append, the current writer is fenced and readers continue
+to see the previously published state across column families. Reopen replays the durable WAL group;
+reconcile its members before retrying any mutation.
 
 Transactions whose WAL representation spans multiple records use begin, mutation, and commit-marker
 records. Replay applies their mutations only after the complete matching commit marker, preserving
