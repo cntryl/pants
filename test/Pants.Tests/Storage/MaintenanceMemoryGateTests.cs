@@ -45,7 +45,7 @@ public sealed class MaintenanceMemoryGateTests
         await Task.Delay(TimeSpan.FromMilliseconds(20));
 
         using (await SstPublicationAdmission.Gated(budget, gate)
-                   .AdmitAsync(64L * 1024 * 1024, CancellationToken.None)
+                   .AdmitAsync(192L * 1024, CancellationToken.None)
                    .AsTask()
                    .WaitAsync(TestTimeouts.Expected))
         {

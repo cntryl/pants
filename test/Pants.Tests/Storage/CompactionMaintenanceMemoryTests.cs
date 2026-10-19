@@ -89,7 +89,7 @@ public sealed class CompactionMaintenanceMemoryTests
         var budget = new ResourceBudget(4L * 1024 * 1024);
         var gate = new MaintenanceMemoryGate();
         var publication = await SstPublicationAdmission.Gated(budget, gate)
-            .AdmitAsync(64L * 1024 * 1024, CancellationToken.None);
+            .AdmitAsync(960L * 1024, CancellationToken.None);
 
         var compaction = store.CompactAsync(
                 state,
@@ -120,7 +120,7 @@ public sealed class CompactionMaintenanceMemoryTests
         var gate = new MaintenanceMemoryGate();
         var inputs = SstNames(directory.Path);
         using (await SstPublicationAdmission.Gated(budget, gate)
-                   .AdmitAsync(64L * 1024 * 1024, CancellationToken.None))
+                   .AdmitAsync(960L * 1024, CancellationToken.None))
         {
             using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>

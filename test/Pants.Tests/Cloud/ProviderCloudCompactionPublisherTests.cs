@@ -32,6 +32,52 @@ public sealed class ProviderCloudCompactionPublisherTests
     }
 
     [Fact]
+    public async Task ShouldRetainCompactionIntentAndRetryWhenOutputEnvelopeExceedsMaintenancePool()
+    {
+        using var cache = new TemporaryDirectory();
+        var (intent, output) = WriteCompactionState(cache.Path, 200_000);
+        using var lease = await AcquireLeaseAsync();
+        var sstStore = new RangeCountingCloudObjectStore();
+        var controlStore = new ScriptedCloudObjectStore();
+        var undersizedBudget = new ResourceBudget(512 * 1024);
+        var blockedPublisher = new ProviderCloudCompactionPublisher(
+            cache.Path,
+            sstStore,
+            controlStore,
+            lease,
+            NullPantsFailpointHandler.Instance,
+            SstPublicationAdmission.WithinCompactionRound(undersizedBudget));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            blockedPublisher.PublishAsync([OutputName], CancellationToken.None).AsTask());
+
+        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
+        var outputPath = Path.Combine(cache.Path, "sst", OutputName);
+        Assert.Equal(intent, File.ReadAllBytes(Path.Combine(cache.Path, "intent_log.json")));
+        Assert.True(controlStore.Contains(intentKey));
+        Assert.Equal(intent, controlStore.Read(intentKey));
+        Assert.Equal(output, File.ReadAllBytes(outputPath));
+        Assert.Equal(0, sstStore.Puts);
+        Assert.Equal(0, undersizedBudget.Current);
+
+        var retryBudget = new ResourceBudget(2 * 1024 * 1024);
+        var retryPublisher = new ProviderCloudCompactionPublisher(
+            cache.Path,
+            sstStore,
+            controlStore,
+            lease,
+            NullPantsFailpointHandler.Instance,
+            SstPublicationAdmission.WithinCompactionRound(retryBudget));
+        await retryPublisher.PublishAsync([OutputName], CancellationToken.None);
+
+        Assert.Equal(1, sstStore.Puts);
+        Assert.Equal(output, File.ReadAllBytes(outputPath));
+        Assert.Equal(intent, controlStore.Read(intentKey));
+        Assert.Equal(ImmutablePublicationEnvelope.For(output.Length), retryBudget.Peak);
+        Assert.Equal(0, retryBudget.Current);
+    }
+
+    [Fact]
     public async Task ShouldFenceCompactionIntentWriteWhenSuccessorTakesLeaseDuringPreCasRead()
     {
         using var cache = new TemporaryDirectory();
