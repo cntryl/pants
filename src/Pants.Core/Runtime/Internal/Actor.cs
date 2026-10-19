@@ -341,7 +341,7 @@ sealed class Actor : IAsyncDisposable
             CaptureCleanup(_loopCancellation.Dispose);
         }
 
-        var failure = loopFailure ?? workerDisposalFailure ?? cleanupFailure;
+        var failure = workerDisposalFailure ?? loopFailure ?? cleanupFailure;
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
