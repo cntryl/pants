@@ -159,7 +159,8 @@ sealed class TransactionSpillStore : IDisposable
     }
 
     public TransactionIntentReadView CreateReadView(
-        IReadOnlyList<TransactionIntentOperation> residentOperations)
+        IReadOnlyList<TransactionIntentOperation> residentOperations,
+        TransactionMemoryPool memoryPool)
     {
         ArgumentNullException.ThrowIfNull(residentOperations);
         lock (_lifetimeGate)
@@ -168,7 +169,11 @@ sealed class TransactionSpillStore : IDisposable
             _activeReadViews = checked(_activeReadViews + 1);
             try
             {
-                return new TransactionIntentReadView(this, _runs.ToArray(), residentOperations);
+                return new TransactionIntentReadView(
+                    this,
+                    _runs,
+                    residentOperations,
+                    memoryPool);
             }
             catch
             {

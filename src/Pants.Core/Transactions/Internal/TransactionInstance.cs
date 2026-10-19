@@ -509,8 +509,7 @@ sealed class TransactionInstance : IPantsTransaction
         long? coveringRangeSequence;
         lock (_gate)
         {
-            using var intents = CreateIntentReadView();
-            var lookup = intents.LookupLatest(key);
+            var lookup = LookupLatestIntent(key);
             if (lookup is not null)
             {
                 return (lookup.IsDeleted ? null : lookup.Value?.ToArray(), true);
@@ -586,7 +585,23 @@ sealed class TransactionInstance : IPantsTransaction
             : new ReadOnlyMemory<byte>(value.ToArray());
 
     TransactionIntentReadView CreateIntentReadView() =>
-        _spillStore?.CreateReadView(_intentLog) ?? new TransactionIntentReadView(_intentLog);
+        _spillStore?.CreateReadView(_intentLog, _database.TransactionMemoryPool) ??
+        new TransactionIntentReadView(
+            null,
+            [],
+            _intentLog,
+            _database.TransactionMemoryPool);
+
+    TransactionIntentLookup? LookupLatestIntent(ReadOnlySpan<byte> key)
+    {
+        var latest = _spillStore?.LatestBefore(ulong.MaxValue, key);
+        foreach (var operation in _intentLog)
+        {
+            TransactionIntentLookup.Consider(ref latest, operation, key);
+        }
+
+        return latest;
+    }
 
     void StageIntent(TransactionIntentOperation operation, long bytes)
     {

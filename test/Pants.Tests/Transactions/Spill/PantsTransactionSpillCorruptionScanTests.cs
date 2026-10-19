@@ -7,7 +7,7 @@ public sealed class PantsTransactionSpillCorruptionScanTests
 {
     const int RunHeaderLength = 48;
     const int OrdinalTableOffsetPosition = 20;
-    const long ForwardPoolBytes = 1_024;
+    const long ForwardPoolBytes = 1_536;
     const long ReversePoolBytes = 4_096;
     const int ReverseRecordCount = 40;
     const int ForwardRecordCount = 6;
@@ -23,7 +23,7 @@ public sealed class PantsTransactionSpillCorruptionScanTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         PutSmallRows(transaction, "row", ForwardRecordCount);
-        transaction.Put("zz:spill-trigger"u8.ToArray(), Enumerable.Repeat((byte)'z', 900).ToArray());
+        transaction.Put("zz:spill-trigger"u8.ToArray(), Enumerable.Repeat((byte)'z', 1_300).ToArray());
         var run = Assert.Single(FindRunFiles(directory.Path));
         Assert.Equal(ForwardRecordCount, CountDataFrames(run));
 
@@ -119,7 +119,7 @@ public sealed class PantsTransactionSpillCorruptionScanTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         PutSmallRows(transaction, "row", ForwardRecordCount);
-        transaction.Put("zz:spill-trigger"u8.ToArray(), Enumerable.Repeat((byte)'z', 900).ToArray());
+        transaction.Put("zz:spill-trigger"u8.ToArray(), Enumerable.Repeat((byte)'z', 1_300).ToArray());
         var run = Assert.Single(FindRunFiles(directory.Path));
 
         var scan = await transaction.ScanAsync(new PantsScanQuery
