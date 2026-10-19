@@ -7,18 +7,21 @@ sealed class CloudSstGarbageCollector
     readonly IFailpointHandler _failpoints;
     readonly Func<IReadOnlySet<string>> _readLocalProtectedNames;
     readonly ICloudObjectStore _sstStore;
+    readonly Func<CancellationToken, ValueTask> _validateRemoteAuthorityAsync;
 
     public CloudSstGarbageCollector(
         ICloudObjectStore sstStore,
         Func<CancellationToken, ValueTask<CloudSstRetentionProof>> captureProofAsync,
         Func<IReadOnlySet<string>> readLocalProtectedNames,
         Action ensureAuthority,
+        Func<CancellationToken, ValueTask> validateRemoteAuthorityAsync,
         IFailpointHandler failpoints)
     {
         _sstStore = sstStore;
         _captureProofAsync = captureProofAsync;
         _readLocalProtectedNames = readLocalProtectedNames;
         _ensureAuthority = ensureAuthority;
+        _validateRemoteAuthorityAsync = validateRemoteAuthorityAsync;
         _failpoints = failpoints;
     }
 
@@ -80,8 +83,9 @@ sealed class CloudSstGarbageCollector
                     return false;
                 }
 
-                _ensureAuthority();
                 _failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
+                _ensureAuthority();
+                await _validateRemoteAuthorityAsync(cancellationToken).ConfigureAwait(false);
                 var outcome = await _sstStore.DeleteAsync(
                     objectKey,
                     new PantsCloudObjectDeleteCondition.IfVersion(objectIdentity.Version),

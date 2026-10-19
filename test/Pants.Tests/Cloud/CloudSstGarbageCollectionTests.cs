@@ -25,6 +25,7 @@ public sealed class CloudSstGarbageCollectionTests
                 [])),
             () => new HashSet<string>(StringComparer.Ordinal),
             static () => { },
+            static _ => ValueTask.CompletedTask,
             NullPantsFailpointHandler.Instance);
 
         Assert.True(await collector.CollectAsync(CancellationToken.None));
@@ -264,6 +265,49 @@ public sealed class CloudSstGarbageCollectionTests
     }
 
     [Fact]
+    public async Task ShouldRejectRemoteSstDeletionAfterSuccessorTakesLeaseAtDeleteBoundary()
+    {
+        const string name = "000000_01_00000000000000000001.sst";
+        var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+        var sstStore = new TestCloudObjectStore();
+        sstStore.Seed(objectKey, "obsolete"u8.ToArray());
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "predecessor",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var failpoints = new CloudCompactionFailpointHandler();
+        failpoints.ArmCallback(
+            Failpoint.BeforeCloudSstGarbageCollectionDelete,
+            () => leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10))));
+        var collector = new CloudSstGarbageCollector(
+            sstStore,
+            _ => ValueTask.FromResult(new CloudSstRetentionProof(
+                new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<uint, ulong> { [0] = 2 },
+                [])),
+            () => new HashSet<string>(StringComparer.Ordinal),
+            lease.EnsureValid,
+            lease.ValidateRemoteAsync,
+            failpoints);
+
+        var complete = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.False(complete);
+        Assert.NotNull(await sstStore.HeadAsync(objectKey, CancellationToken.None));
+        Assert.False(lease.IsHealthy);
+    }
+
+    [Fact]
     public void ShouldRecoverQuarantineLeftByCrashedSimulatedCollection()
     {
         using var directory = new TemporaryDirectory();
@@ -299,6 +343,7 @@ public sealed class CloudSstGarbageCollectionTests
             [])),
         () => new HashSet<string>(StringComparer.Ordinal),
         ensureAuthority,
+        static _ => ValueTask.CompletedTask,
         NullPantsFailpointHandler.Instance);
 
     static async Task VerifyProviderCollectionAsync()
