@@ -1,3 +1,4 @@
+using Cntryl.Pants.Observability;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -24,6 +25,9 @@ public sealed class PantsTelemetryContractTests
         Assert.True(metrics.CurrentSequence > 0);
         Assert.Equal(metrics.CurrentSequence, metrics.WalLastSyncedSequence);
         Assert.True(metrics.WalLocalDurableSequence >= metrics.WalLastSyncedSequence);
+        Assert.True(metrics.WalRetainedBytes > 0);
+        Assert.Equal(1, metrics.WalRetainedSegments);
+        Assert.Equal(PantsWalRetirementBlockedCause.None, metrics.WalRetirementBlockedCause);
     }
 
     [Fact]

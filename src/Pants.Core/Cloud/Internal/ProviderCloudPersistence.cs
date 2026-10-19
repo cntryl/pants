@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Observability;
 using Cntryl.Pants.Storage.Internal;
+using Cntryl.Pants.Storage.Internal.Wal;
 
 namespace Cntryl.Pants.Cloud.Internal;
 
@@ -11,6 +13,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     /// </summary>
     public const int WalRecoveryPageBytes = 4 * 1024 * 1024;
     public const ulong MaximumWholeObjectWalRecoveryBytes = 256UL * 1024 * 1024;
+    public const ulong MaximumRetainedWalBytes = 2UL * 1024 * 1024 * 1024;
+    public const int MaximumRetainedWalSegments = 16_384;
 
     static readonly string[] MetadataFiles =
     [
@@ -46,6 +50,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ProviderSstPublisher _sstPublisher;
     readonly ProviderWalRetirement _walRetirement;
     readonly ulong _writerEpoch;
+    readonly string? _localWalCacheId;
+    readonly ulong _maximumRetainedWalBytes;
+    readonly int _maximumRetainedWalSegments;
+    readonly WalRetirementDiagnostics _walRetirementDiagnostics;
     int _disposed;
     int _persistenceAnomaly;
 
@@ -58,8 +66,14 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         IFailpointHandler? failpoints = null,
         SstPublicationAdmission? sstPublicationAdmission = null,
         WalRetirementSettings? walRetirementSettings = null,
-        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
+        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null,
+        string? localWalCacheId = null,
+        WalRetirementDiagnostics? walRetirementDiagnostics = null,
+        ulong maximumRetainedWalBytes = MaximumRetainedWalBytes,
+        int maximumRetainedWalSegments = MaximumRetainedWalSegments)
     {
+        ArgumentOutOfRangeException.ThrowIfZero(maximumRetainedWalBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRetainedWalSegments);
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
         var retirementSettings = walRetirementSettings ?? WalRetirementSettings.Standalone();
@@ -81,6 +95,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _controlStore = controlStore;
         _lease = lease;
         _writerEpoch = lease.Epoch;
+        _localWalCacheId = localWalCacheId;
+        _maximumRetainedWalBytes = maximumRetainedWalBytes;
+        _maximumRetainedWalSegments = maximumRetainedWalSegments;
+        _walRetirementDiagnostics = walRetirementDiagnostics ?? new WalRetirementDiagnostics();
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         _sstGarbageCollector = new CloudSstGarbageCollector(
             _sstStore,
@@ -98,7 +116,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             lease,
             retirementSettings,
             failpointHandler,
-            () => Volatile.Write(ref _persistenceAnomaly, 1));
+            () => Volatile.Write(ref _persistenceAnomaly, 1),
+            _walRetirementDiagnostics);
     }
 
     public bool HasPersistenceAnomaly => Volatile.Read(ref _persistenceAnomaly) != 0;
@@ -137,6 +156,15 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         if (batchEpoch > _writerEpoch)
         {
             throw new PantsFencedException("A WAL segment from a future cloud lease cannot be published.");
+        }
+
+        for (var index = 1; index < segments.Count; index++)
+        {
+            if (segments[index].SegmentId != checked(segments[index - 1].SegmentId + 1))
+            {
+                throw new PantsCorruptionException(
+                    "A cloud WAL publication batch must contain consecutive segment identities.");
+            }
         }
 
         var publications = new ProviderPublishedWalSegment[segments.Count];
@@ -197,6 +225,59 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             }
 
             var updatedSegments = new SortedDictionary<ulong, ProviderPublishedWalSegment>(catalog.Segments);
+            var nextSegmentId = catalog.NextSegmentId;
+            var walHistoryStartSegmentId = catalog.WalHistoryStartSegmentId;
+            if (nextSegmentId == 0)
+            {
+                nextSegmentId = catalog.Segments.Count == 0
+                    ? await ReadNextWalSegmentIdAsync(cancellationToken).ConfigureAwait(false)
+                    : checked(catalog.Segments.Keys.Max() + 1);
+            }
+
+            var firstNewPublication = publications.FirstOrDefault(publication =>
+                !catalog.Segments.ContainsKey(publication.SegmentId) &&
+                publication.SegmentId >= nextSegmentId);
+            if (firstNewPublication is not null &&
+                firstNewPublication.SegmentId > nextSegmentId)
+            {
+                var durableHistoryStart = await ReadNextWalSegmentIdAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                var nextAfterHistoryPrefix = durableHistoryStart;
+                foreach (var segmentId in catalog.Segments.Keys.Where(id => id >= durableHistoryStart))
+                {
+                    if (segmentId != nextAfterHistoryPrefix)
+                    {
+                        break;
+                    }
+
+                    nextAfterHistoryPrefix = checked(nextAfterHistoryPrefix + 1);
+                }
+
+                if (firstNewPublication.SegmentId == nextAfterHistoryPrefix)
+                {
+                    // The durable manifest covers the skipped identity range. Preserve older
+                    // catalog entries for background object retirement while continuing at the
+                    // manifest boundary.
+                    nextSegmentId = nextAfterHistoryPrefix;
+                    walHistoryStartSegmentId = Math.Max(
+                        walHistoryStartSegmentId,
+                        durableHistoryStart);
+                }
+                else
+                {
+                    read.Dispose();
+                    var retirement = await _walRetirement.RetireAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (retirement.RetiredSegments == 0)
+                    {
+                        throw new PantsCorruptionException(
+                            $"Cloud WAL segment {firstNewPublication.SegmentId} cannot be published before missing segment {nextSegmentId}.");
+                    }
+
+                    continue;
+                }
+            }
+
             var changed = false;
             foreach (var publication in publications)
             {
@@ -211,7 +292,27 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     continue;
                 }
 
+                if (publication.SegmentId != nextSegmentId)
+                {
+                    if (publication.SegmentId < nextSegmentId)
+                    {
+                        // The catalog's durable identity high-water mark survives prefix
+                        // retirement. A stale local copy is already published and retired.
+                        continue;
+                    }
+
+                    throw new PantsCorruptionException(
+                        $"Cloud WAL segment {publication.SegmentId} cannot be published before missing segment {nextSegmentId}.");
+                }
+
+                if (publication.WriterEpoch < catalog.MinimumLocalWalWriterEpoch)
+                {
+                    throw new PantsFencedException(
+                        $"Predecessor-only WAL segment {publication.SegmentId} is outside the shared cache recovery authority.");
+                }
+
                 updatedSegments.Add(publication.SegmentId, publication);
+                nextSegmentId = checked(nextSegmentId + 1);
                 changed = true;
             }
 
@@ -221,8 +322,52 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 return;
             }
 
+            if (updatedSegments.Count > _maximumRetainedWalSegments)
+            {
+                _walRetirementDiagnostics.SetBlockedCause(
+                    PantsWalRetirementBlockedCause.RetainedWalSegmentLimit);
+                throw new PantsNoSpaceException(
+                    $"Cloud WAL history retention is blocked by " +
+                    $"{PantsWalRetirementBlockedCause.RetainedWalSegmentLimit}: " +
+                    $"publishing these segments would retain {updatedSegments.Count}, above the " +
+                    $"{_maximumRetainedWalSegments}-segment limit.");
+            }
+
+            ulong retainedWalBytes;
+            try
+            {
+                retainedWalBytes = updatedSegments.Values.Aggregate(
+                    0UL,
+                    static (total, segment) => checked(total + segment.SizeBytes));
+            }
+            catch (OverflowException exception)
+            {
+                _walRetirementDiagnostics.SetBlockedCause(
+                    PantsWalRetirementBlockedCause.RetainedWalByteLimit);
+                throw new PantsNoSpaceException(
+                    "Cloud WAL history retention exceeded the supported byte accounting range.",
+                    exception);
+            }
+
+            if (retainedWalBytes > _maximumRetainedWalBytes)
+            {
+                _walRetirementDiagnostics.SetBlockedCause(
+                    PantsWalRetirementBlockedCause.RetainedWalByteLimit);
+                throw new PantsNoSpaceException(
+                    $"Cloud WAL history retention is blocked by " +
+                    $"{PantsWalRetirementBlockedCause.RetainedWalByteLimit}: " +
+                    $"publishing these segments would retain {retainedWalBytes} bytes, above the " +
+                    $"{_maximumRetainedWalBytes}-byte limit.");
+            }
+
             using var serializedCatalog = _catalogWriteAdmission.Serialize(
-                catalog with { FencingEpoch = _writerEpoch, Segments = updatedSegments },
+                catalog with
+                {
+                    FencingEpoch = _writerEpoch,
+                    NextSegmentId = nextSegmentId,
+                    WalHistoryStartSegmentId = walHistoryStartSegmentId,
+                    Segments = updatedSegments
+                },
                 JsonOptions);
             var bytes = serializedCatalog.Bytes;
             await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
@@ -243,6 +388,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     await _catalog.ConvergeMirrorAsync(bytes, readback.Version, cancellationToken)
                         .ConfigureAwait(false);
                     _lease.EnsureValid();
+                    _walRetirementDiagnostics.SetBlockedCause(
+                        PantsWalRetirementBlockedCause.None);
                     return;
                 }
 
@@ -273,6 +420,32 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
 
         await CollectObsoleteSstsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Publishes recovery checkpoint outputs with exact, identity-pinned byte verification
+    ///     before making their manifest authoritative. Recovery may evict these local files only
+    ///     after this method completes.
+    /// </summary>
+    public async ValueTask PublishRecoveryCheckpointAsync(
+        IReadOnlyList<string> sstNames,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sstNames);
+        foreach (var name in sstNames)
+        {
+            var localPath = Path.Combine(_localRoot, "sst", ValidateSstName(name));
+            if (!File.Exists(localPath))
+            {
+                throw new PantsRecoveryFailedException(
+                    $"Recovery checkpoint SST '{name}' is missing before cloud publication.");
+            }
+
+            await _sstPublisher.PublishOutputAsync(name, localPath, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await MirrorMetadataAndSstsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken)
@@ -525,6 +698,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
 
         var activeManifest = useRemoteMetadata ? remoteManifest : localManifest ?? remoteManifest;
+        var remoteNextWalSegmentId = activeManifest?.WalHistoryStart ?? 1;
 
         foreach (var file in activeManifest?.Files ?? [])
         {
@@ -588,7 +762,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return new ProviderCloudHydrationResult(
                 new Dictionary<ulong, ProviderPublishedWalSegment>(),
                 0,
-                metadataSalvage);
+                metadataSalvage,
+                NextWalSegmentId: remoteNextWalSegmentId);
         }
 
         var requiresSalvage = metadataSalvage;
@@ -663,7 +838,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             catalog.Segments,
             cloudDurableSequence,
             requiresSalvage,
-            remoteSegments);
+            remoteSegments,
+            catalog.NextSegmentId == 0 ? remoteNextWalSegmentId : catalog.NextSegmentId);
     }
 
     /// <summary>
@@ -798,7 +974,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         }
     }
 
-    public async ValueTask FenceWalCatalogAsync(CancellationToken cancellationToken)
+    public async ValueTask<bool> FenceWalCatalogAsync(CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
         for (var attempt = 0; attempt < 8; attempt++)
@@ -811,13 +987,57 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 throw new PantsFencedException("The cloud WAL catalog has a newer fencing epoch.");
             }
 
-            if (catalog.FencingEpoch == _writerEpoch)
+            var canRecoverLocalTail = _localWalCacheId is null ||
+                                      catalog.LocalWalCacheId is null ||
+                                      StringComparer.Ordinal.Equals(
+                                          catalog.LocalWalCacheId,
+                                          _localWalCacheId);
+            var minimumLocalWalWriterEpoch = catalog.MinimumLocalWalWriterEpoch;
+            if (_localWalCacheId is not null &&
+                catalog.LocalWalCacheId is not null &&
+                !StringComparer.Ordinal.Equals(catalog.LocalWalCacheId, _localWalCacheId) &&
+                catalog.LocalWalCacheEpoch != 0)
             {
-                return;
+                if (catalog.LocalWalCacheEpoch == ulong.MaxValue)
+                {
+                    throw new PantsResourceLimitException(
+                        "The local WAL cache recovery epoch is exhausted.");
+                }
+
+                minimumLocalWalWriterEpoch = Math.Max(
+                    minimumLocalWalWriterEpoch,
+                    checked(catalog.LocalWalCacheEpoch + 1));
+            }
+
+            var nextSegmentId = catalog.NextSegmentId;
+            if (nextSegmentId == 0)
+            {
+                nextSegmentId = catalog.Segments.Count == 0
+                    ? await ReadNextWalSegmentIdAsync(cancellationToken).ConfigureAwait(false)
+                    : checked(catalog.Segments.Keys.Max() + 1);
+            }
+
+            var updatedCatalog = catalog with
+            {
+                FencingEpoch = _writerEpoch,
+                NextSegmentId = nextSegmentId,
+                LocalWalCacheId = _localWalCacheId ?? catalog.LocalWalCacheId,
+                LocalWalCacheEpoch = _localWalCacheId is null
+                    ? catalog.LocalWalCacheEpoch
+                    : _writerEpoch,
+                MinimumLocalWalWriterEpoch = minimumLocalWalWriterEpoch
+            };
+            if (catalog.FencingEpoch == updatedCatalog.FencingEpoch &&
+                catalog.NextSegmentId == updatedCatalog.NextSegmentId &&
+                StringComparer.Ordinal.Equals(catalog.LocalWalCacheId, updatedCatalog.LocalWalCacheId) &&
+                catalog.LocalWalCacheEpoch == updatedCatalog.LocalWalCacheEpoch &&
+                catalog.MinimumLocalWalWriterEpoch == updatedCatalog.MinimumLocalWalWriterEpoch)
+            {
+                return canRecoverLocalTail;
             }
 
             using var serializedCatalog = _catalogWriteAdmission.Serialize(
-                catalog with { FencingEpoch = _writerEpoch },
+                updatedCatalog,
                 JsonOptions);
             var bytes = serializedCatalog.Bytes;
             await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
@@ -843,7 +1063,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
                 await _catalog.ConvergeMirrorAsync(bytes, readback.Version, cancellationToken)
                     .ConfigureAwait(false);
-                return;
+                return canRecoverLocalTail;
             }
         }
 
@@ -1130,6 +1350,25 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     internal static ProviderWalCatalog DecodeCatalogForFloor(ReadOnlySpan<byte> bytes) =>
         DecodeCatalog(bytes);
 
+    async ValueTask<ulong> ReadNextWalSegmentIdAsync(CancellationToken cancellationToken)
+    {
+        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        {
+            _lease.EnsureValid();
+            var remote = await _controlStore.GetAsync(
+                PantsCloudObjectLayout.MetadataPrefix + fileName,
+                cancellationToken).ConfigureAwait(false);
+            if (remote is null)
+            {
+                continue;
+            }
+
+            return CloudManifestReader.DecodeManifest(remote.Data.Span).WalHistoryStart;
+        }
+
+        return 1;
+    }
+
     static ProviderWalCatalog DecodeCatalog(ReadOnlySpan<byte> bytes)
     {
         try
@@ -1148,9 +1387,47 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     "Cloud WAL catalog fencing epoch must be nonzero.");
             }
 
+            if ((catalog.LocalWalCacheId is null && catalog.LocalWalCacheEpoch != 0) ||
+                (catalog.LocalWalCacheId is not null &&
+                 (catalog.LocalWalCacheId.Length == 0 ||
+                  catalog.LocalWalCacheEpoch > catalog.FencingEpoch)) ||
+                catalog.MinimumLocalWalWriterEpoch > catalog.FencingEpoch)
+            {
+                throw new PantsCorruptionException(
+                    "Cloud WAL catalog local-cache recovery authority is invalid.");
+            }
+
+            ulong? previousSegmentId = null;
             foreach (var (segmentId, segment) in catalog.Segments)
             {
                 ValidateSegment(segmentId, segment, catalog.FencingEpoch);
+                if (previousSegmentId.HasValue &&
+                    segmentId != checked(previousSegmentId.Value + 1) &&
+                    segmentId > catalog.WalHistoryStartSegmentId)
+                {
+                    throw new PantsCorruptionException(
+                        "Cloud WAL catalog entries are not a contiguous history suffix.");
+                }
+
+                previousSegmentId = segmentId;
+            }
+
+            if (catalog.Segments.Count > 0)
+            {
+                var inferredNextSegmentId = checked(catalog.Segments.Keys.Max() + 1);
+                if (catalog.NextSegmentId != 0 &&
+                    (catalog.NextSegmentId < inferredNextSegmentId ||
+                     catalog.NextSegmentId > inferredNextSegmentId &&
+                     catalog.NextSegmentId > catalog.WalHistoryStartSegmentId))
+                {
+                    throw new PantsCorruptionException(
+                        "Cloud WAL catalog next segment identity precedes its published suffix.");
+                }
+
+                if (catalog.NextSegmentId == 0)
+                {
+                    catalog = catalog with { NextSegmentId = inferredNextSegmentId };
+                }
             }
 
             return catalog;

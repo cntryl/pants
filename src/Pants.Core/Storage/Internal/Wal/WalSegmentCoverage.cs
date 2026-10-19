@@ -1,21 +1,21 @@
 namespace Cntryl.Pants.Storage.Internal.Wal;
 
 /// <summary>
-///     Decides whether every mutation in a sealed WAL segment is already durable in a manifest SST,
-///     using the same rule recovery uses to skip replayed mutations.
+///     Decides whether every committed transaction in a sealed WAL segment is below the durable
+///     per-family flush frontier, using the same boundary recovery uses to skip replay.
 /// </summary>
 static class WalSegmentCoverage
 {
-    /// <param name="persistedFamilySequences">Largest SST-covered sequence per column family.</param>
+    /// <param name="flushedThrough">Durable commit-sequence frontier per column family.</param>
     /// <param name="activeFamilyIds">Families that still exist; mutations of others are covered.</param>
     /// <param name="scratchDirectory">Where large open transactions spool while being evaluated.</param>
     public static WalSegmentCoverageResult Evaluate(
         ReadOnlySpan<byte> segmentBytes,
-        IReadOnlyDictionary<uint, ulong> persistedFamilySequences,
+        IReadOnlyDictionary<uint, ulong> flushedThrough,
         IReadOnlySet<uint> activeFamilyIds,
         string scratchDirectory)
     {
-        ArgumentNullException.ThrowIfNull(persistedFamilySequences);
+        ArgumentNullException.ThrowIfNull(flushedThrough);
         ArgumentNullException.ThrowIfNull(activeFamilyIds);
         ulong minimumEpoch = ulong.MaxValue;
         ulong maximumEpoch = 0;
@@ -29,11 +29,10 @@ static class WalSegmentCoverage
                 maximumEpoch = Math.Max(maximumEpoch, record.WriterEpoch);
                 recovery.Accept(
                     record,
-                    (mutation, _) =>
+                    (mutation, commitSequence) =>
                     {
                         if (activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
-                            mutation.Sequence > persistedFamilySequences.GetValueOrDefault(
-                                mutation.ColumnFamilyId))
+                            commitSequence > flushedThrough.GetValueOrDefault(mutation.ColumnFamilyId))
                         {
                             covered = false;
                         }
@@ -46,41 +45,41 @@ static class WalSegmentCoverage
     }
 
     /// <summary>
-    ///     Picks the covered segments that are safe to delete. A retained segment holding a lower
-    ///     writer epoch than a deleted earlier one could be a stale writer's record that only the
-    ///     deleted segment's higher epoch kept ignored, so that earlier segment is retained too.
+    ///     Picks only the covered oldest prefix. A retained segment holding a lower writer epoch
+    ///     than a deleted earlier one could be a stale writer's record that only the deleted
+    ///     segment's higher epoch kept ignored, so that earlier segment is retained too.
     /// </summary>
     /// <param name="orderedSegments">Segment results in ascending segment order.</param>
     public static bool[] SelectPrunable(IReadOnlyList<WalSegmentCoverageResult> orderedSegments)
     {
         ArgumentNullException.ThrowIfNull(orderedSegments);
-        var prunable = orderedSegments.Select(static segment => segment.Covered).ToArray();
-        bool changed;
-        do
+        var prefixLength = 0;
+        while (prefixLength < orderedSegments.Count && orderedSegments[prefixLength].Covered)
         {
-            changed = false;
-            for (var retained = 0; retained < prunable.Length; retained++)
-            {
-                if (prunable[retained])
-                {
-                    continue;
-                }
+            prefixLength++;
+        }
 
-                for (var earlier = 0; earlier < retained; earlier++)
+        for (var candidate = 0; candidate < prefixLength; candidate++)
+        {
+            for (var retained = prefixLength; retained < orderedSegments.Count; retained++)
+            {
+                if (orderedSegments[candidate].MaximumWriterEpoch >
+                    orderedSegments[retained].MinimumWriterEpoch)
                 {
-                    if (prunable[earlier] &&
-                        orderedSegments[earlier].MaximumWriterEpoch >
-                        orderedSegments[retained].MinimumWriterEpoch)
-                    {
-                        prunable[earlier] = false;
-                        changed = true;
-                    }
+                    prefixLength = candidate;
+                    break;
                 }
             }
-        }
-        while (changed);
 
-        return prunable;
+            if (candidate >= prefixLength)
+            {
+                break;
+            }
+        }
+
+        return Enumerable.Range(0, orderedSegments.Count)
+            .Select(index => index < prefixLength)
+            .ToArray();
     }
 }
 

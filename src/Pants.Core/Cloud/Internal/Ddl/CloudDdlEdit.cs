@@ -84,8 +84,8 @@ static class CloudDdlEdit
         {
             "CreateColumnFamily" =>
                 family is not null &&
-                !family.DeletedAt.HasValue &&
-                StringComparer.Ordinal.Equals(family.Name, GetRequiredString(value, "name")),
+                StringComparer.Ordinal.Equals(family.Name, GetRequiredString(value, "name")) &&
+                family.CreatedAt == GetRequiredUInt64(value, "created_at"),
             "DropColumnFamily" => family?.DeletedAt.HasValue == true,
             "DropColumnFamilyAt" =>
                 family?.DeletedAt.HasValue == true &&

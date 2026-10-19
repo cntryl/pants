@@ -3,9 +3,12 @@ using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Cntryl.Pants.Observability;
+using Cntryl.Pants.Storage.Internal.Wal;
 
 namespace Cntryl.Pants.Storage.Internal;
 
@@ -40,7 +43,9 @@ sealed class LocalDiskStore :
     readonly FileStream _lockStream;
     IDisposable? _rootTrust;
     bool _localWalPruningEnabled = true;
+    bool _walReplayDeferred;
     IReadOnlyList<IRemoteWalSegment> _remoteWalSegments = [];
+    Action<IReadOnlyList<string>>? _recoveryCheckpointPublisher;
     long? _recoveryCheckpointBytes;
     RecoveryCheckpointer? _recoveryCheckpoints;
     StorageBudgetLedger? _localStorageLedger;
@@ -102,6 +107,13 @@ sealed class LocalDiskStore :
     int _walPendingWrites;
     int _walRecords;
     bool _walDirectoryPersistenceAnomaly;
+    long _walRetainedBytes;
+    int _walRetainedSegments;
+    readonly long _walRetentionBudgetBytes;
+    readonly int _walRetentionSegmentLimit;
+    readonly WalRetirementDiagnostics _walRetirementDiagnostics;
+    bool _validateLocalWalHistoryContinuity = true;
+    ulong? _localWalHistoryValidationStartSegmentId;
     FileStream _walStream;
     readonly WalIoState _walIo = new();
 
@@ -119,7 +131,10 @@ sealed class LocalDiskStore :
         PantsBlockCachePolicy blockCachePolicy,
         long blockCacheBytes,
         string[] retainedStartupResiduePaths,
-        IAsyncSstSourceFactory? remoteSstSourceFactory)
+        IAsyncSstSourceFactory? remoteSstSourceFactory,
+        long walRetentionBudgetBytes,
+        int walRetentionSegmentLimit,
+        WalRetirementDiagnostics walRetirementDiagnostics)
     {
         RootPath = root;
         _walDirectory = Path.Combine(root, "wal");
@@ -144,6 +159,14 @@ sealed class LocalDiskStore :
         _remoteSstSourceFactory = remoteSstSourceFactory;
         BlockCacheCapacityBytes = blockCacheBytes;
         _walStream = walStream;
+        _walRetentionBudgetBytes = walRetentionBudgetBytes;
+        _walRetentionSegmentLimit = walRetentionSegmentLimit;
+        _walRetirementDiagnostics = walRetirementDiagnostics;
+        var retainedWalPaths = EnumerateSealedWalSegmentPaths(_walDirectory).ToArray();
+        _walRetainedBytes = retainedWalPaths.Sum(static path => new FileInfo(path).Length) +
+                            GetExistingFileBytes(_walPath);
+        _walRetainedSegments = checked(
+            retainedWalPaths.Length + (_walStream.Length == 0 ? 0 : 1));
         _bufferedSync = new BufferedWalSyncScheduler(
             BufferedWalSyncScheduler.DefaultMaximumDelay,
             BufferedWalSyncScheduler.DefaultMaximumBytes,
@@ -277,6 +300,35 @@ sealed class LocalDiskStore :
             }
         }
     }
+
+    public long WalRetainedBytes
+    {
+        get
+        {
+            lock (_walStateGate)
+            {
+                return _walRetainedBytes;
+            }
+        }
+    }
+
+    public int WalRetainedSegments
+    {
+        get
+        {
+            lock (_walStateGate)
+            {
+                return _walRetainedSegments;
+            }
+        }
+    }
+
+    public long WalRetentionByteLimitBytes => _walRetentionBudgetBytes;
+
+    public int WalRetentionSegmentLimit => _walRetentionSegmentLimit;
+
+    public PantsWalRetirementBlockedCause WalRetirementBlockedCause =>
+        _walRetirementDiagnostics.BlockedCause;
 
     /// <summary>
     ///     Bytes of published SSTs currently resident locally.
@@ -670,7 +722,7 @@ sealed class LocalDiskStore :
             plan,
             frozen.FrontierSequence,
             true);
-        CompleteFrozenFlush(frozen);
+        CompleteFrozenFlush(frozen, persistenceAnomaly);
         return new FlushPublicationResult(persistenceAnomaly);
     }
 
@@ -689,10 +741,13 @@ sealed class LocalDiskStore :
             StorageBudgetLedger.StorageReservation? walAdmission = null;
             var flushHeadroomAdmission = new List<FlushHeadroomClaim>();
             var walLength = _walStream.Length;
+            var previousSequence = checked((long)_nextSequence);
             var reservedSequence = checked((long)_nextSequence);
             var unflushedCommitSequence = _unflushedCommitSequence;
             var walRecords = _walRecords;
             var mutableOperationSequence = _mutableOperations.LastSequence;
+            var retainedWalBytes = _walRetainedBytes;
+            var retainedWalSegments = _walRetainedSegments;
             var durabilityState = CaptureWalDurabilityState();
             try
             {
@@ -717,11 +772,13 @@ sealed class LocalDiskStore :
                     RollBackWalAppend(
                         state,
                         walLength,
-                        reservedSequence,
+                        previousSequence,
                         unflushedCommitSequence,
                         walRecords,
                         mutableOperationSequence,
                         durabilityState);
+                    _walRetainedBytes = retainedWalBytes;
+                    _walRetainedSegments = retainedWalSegments;
                     walAdmission?.Dispose();
                     ReleaseFlushHeadroom(flushHeadroomAdmission);
                 }
@@ -776,6 +833,7 @@ sealed class LocalDiskStore :
             StorageBudgetLedger.StorageReservation? walAdmission = null;
             var flushHeadroomAdmission = new List<FlushHeadroomClaim>();
             var walLength = _walStream.Length;
+            var previousSequence = checked((long)_nextSequence);
             var reservedSequence = commits[^1].ExpectedSequence;
             if (reservedSequence < state.Sequence)
             {
@@ -786,6 +844,8 @@ sealed class LocalDiskStore :
             var unflushedCommitSequence = _unflushedCommitSequence;
             var walRecords = _walRecords;
             var mutableOperationSequence = _mutableOperations.LastSequence;
+            var retainedWalBytes = _walRetainedBytes;
+            var retainedWalSegments = _walRetainedSegments;
             var durabilityState = CaptureWalDurabilityState();
             try
             {
@@ -815,6 +875,7 @@ sealed class LocalDiskStore :
                         walBytes = checked(walBytes + WalCodec.MeasureEncodedFrameBytes(payload.Length));
                     }
 
+                    EnsureWalRetentionAdmission(walBytes);
                     walAdmission = _localStorageLedger?.Reserve(StorageAdmissionKind.Wal, walBytes);
                     _walIo.BeginTransition();
                     WalCodec.AppendFrames(
@@ -825,6 +886,12 @@ sealed class LocalDiskStore :
                     Interlocked.Add(
                         ref _walBytesWrittenTotal,
                         payloads.Sum(static payload => checked((long)payload.Length + 2 * sizeof(uint))));
+                    _walRetainedBytes = checked(_walRetainedBytes + walBytes);
+                    if (walLength == 0)
+                    {
+                        _walRetainedSegments = checked(_walRetainedSegments + 1);
+                    }
+
                     var appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
                     metrics?.RecordAppend(appendElapsed);
                     _walRecords = checked(_walRecords + prepared.Count);
@@ -868,11 +935,13 @@ sealed class LocalDiskStore :
                     RollBackWalCommitGroup(
                         state,
                         walLength,
-                        reservedSequence,
+                        previousSequence,
                         unflushedCommitSequence,
                         walRecords,
                         mutableOperationSequence,
                         durabilityState);
+                    _walRetainedBytes = retainedWalBytes;
+                    _walRetainedSegments = retainedWalSegments;
                     walAdmission?.Dispose();
                     ReleaseFlushHeadroom(flushHeadroomAdmission);
                 }
@@ -980,7 +1049,7 @@ sealed class LocalDiskStore :
         {
             try
             {
-                File.Delete(path);
+                DeleteRetainedWalSegment(path);
             }
             catch
             {
@@ -1803,12 +1872,26 @@ sealed class LocalDiskStore :
         TimeSpan? leaseTimeToLive = null,
         TimeProvider? leaseTimeProvider = null,
         IReadOnlyList<IRemoteWalSegment>? remoteWalSegments = null,
+        ulong remoteNextWalSegmentId = 1,
+        IReadOnlySet<ulong>? authorizedWalSegmentIds = null,
+        bool allowLocalWalTailRecovery = true,
         long? recoveryCheckpointBytes = null,
-        HybridCacheManager? hybridCache = null)
+        HybridCacheManager? hybridCache = null,
+        bool deferWalReplay = false,
+        WalRetirementDiagnostics? walRetirementDiagnostics = null,
+        long? maxWalRetentionBytes = null,
+        int maxWalRetentionSegments = 16_384,
+        bool validateLocalWalHistoryContinuity = true,
+        ulong? localWalHistoryValidationStartSegmentId = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
             throw new PantsInvalidArgumentException("DataDirectory must not be empty.");
+        }
+
+        if (maxWalRetentionBytes is <= 0 || maxWalRetentionSegments <= 0)
+        {
+            throw new PantsInvalidArgumentException("WAL retention limits must be positive.");
         }
 
         var root = Path.GetFullPath(directory);
@@ -1869,6 +1952,7 @@ sealed class LocalDiskStore :
             AtomicStagedFile.CreateDirectoryDurably(
                 walDirectory,
                 () => failpointHandler.Hit(Failpoint.BeforeWalDirectorySync));
+            _ = GetOrCreateWalCacheIdentity(root);
             var sstDirectory = Path.Combine(root, "sst");
             AtomicStagedFile.CreateDirectoryDurably(sstDirectory);
             AtomicStagedFile.CreateDirectoryDurably(Path.Combine(sstDirectory, ".flush-staging"));
@@ -1897,6 +1981,7 @@ sealed class LocalDiskStore :
             }
 
             var manifest = manifestLoad.Manifest;
+            InitializeFlushFrontiers(manifest, manifestLoad.LegacyFlushFrontiers);
             lease.EnsureValid();
             var recoveryMetadata = ValidateRecoveryMetadata(
                 root,
@@ -1920,10 +2005,24 @@ sealed class LocalDiskStore :
             AtomicStagedFile.CreateDirectoryDurably(
                 Path.Combine(root, "sst", ".flush-staging"),
                 () => failpointHandler.Hit(Failpoint.BeforeFlushStagingDirectorySync));
-            AdvanceNextWalSequencePastSealedSegments(
+            if (!allowLocalWalTailRecovery)
+            {
+                DiscardUnpublishedLocalWalTail(
+                    walDirectory,
+                    root,
+                    manifest,
+                    authorizedWalSegmentIds ?? new HashSet<ulong>(),
+                    lease,
+                    failpointHandler);
+            }
+
+            RecoverPendingWalSeal(root, walDirectory, manifest, lease, failpointHandler);
+            AdvanceNextWalSegmentIdPastSealedSegments(
                 walDirectory,
                 manifest,
-                remoteWalSegments);
+                remoteWalSegments,
+                remoteNextWalSegmentId);
+            PruneRetiredWalSegments(walDirectory, manifest.WalHistoryStart, lease);
             lease.EnsureValid();
             walStream = new FileStream(
                 Path.Combine(walDirectory, "wal.log"),
@@ -1946,19 +2045,27 @@ sealed class LocalDiskStore :
                 blockCachePolicy,
                 blockCacheBytes,
                 retainedStartupResiduePaths,
-                remoteSstSourceFactory)
+                remoteSstSourceFactory,
+                maxWalRetentionBytes ?? hybridCache?.Ledger.GetAdmissionCeilingBytes(
+                    Cntryl.Pants.Storage.Internal.Hybrid.StorageAdmissionKind.Wal) ??
+                Cntryl.Pants.Storage.Internal.Hybrid.HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
+                maxWalRetentionSegments,
+                walRetirementDiagnostics ?? new WalRetirementDiagnostics())
             {
                 _rootTrust = rootTrust,
                 _remoteWalSegments = remoteWalSegments ?? [],
                 _recoveryCheckpointBytes = recoveryCheckpointBytes,
-                _localStorageLedger = hybridCache?.Ledger
+                _localStorageLedger = hybridCache?.Ledger,
+                _walReplayDeferred = deferWalReplay,
+                _validateLocalWalHistoryContinuity = validateLocalWalHistoryContinuity,
+                _localWalHistoryValidationStartSegmentId = localWalHistoryValidationStartSegmentId
             };
             rootTrust = null;
             // Recovery admits its spool and checkpoints against the ledger, which measures the
             // bytes already resident from this store.
             hybridCache?.BindStore(store);
             lease.EnsureValid();
-            store.Recover(state, startupPhases);
+            store.Recover(state, startupPhases, deferWalReplay);
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
@@ -2243,27 +2350,206 @@ sealed class LocalDiskStore :
         return maximum;
     }
 
-    static void AdvanceNextWalSequencePastSealedSegments(
+    static void RecoverPendingWalSeal(
+        string root,
         string walDirectory,
         ManifestState manifest,
-        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments)
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
-        var maximumSegmentId = EnumerateSealedWalSegmentPaths(walDirectory)
-            .Select(static path =>
-                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
-                    ? segmentId
-                    : 0)
-            .Concat((remoteWalSegments ?? []).Select(static segment => segment.SegmentId))
-            .DefaultIfEmpty()
-            .Max();
+        if (manifest.PendingWalSegmentId is not { } segmentId)
+        {
+            return;
+        }
+
+        if (segmentId < manifest.WalHistoryStart || segmentId >= manifest.NextWalSeq)
+        {
+            throw new PantsCorruptionException(
+                "The pending WAL segment reservation is outside the durable WAL history range.");
+        }
+
+        var activePath = Path.Combine(walDirectory, "wal.log");
+        var sealedPath = Path.Combine(walDirectory, $"{segmentId:00000000000000000000}.wal");
+        if (File.Exists(sealedPath))
+        {
+            if (File.Exists(activePath) && new FileInfo(activePath).Length != 0)
+            {
+                throw new PantsCorruptionException(
+                    $"WAL segment reservation {segmentId} has both active and sealed data.");
+            }
+
+            _ = ReadSealedWalSegment(sealedPath, false);
+        }
+        else
+        {
+            if (!File.Exists(activePath) || new FileInfo(activePath).Length == 0)
+            {
+                throw new PantsCorruptionException(
+                    $"Reserved WAL segment {segmentId} has no recoverable bytes.");
+            }
+
+            lease.EnsureValid();
+            File.Move(activePath, sealedPath, false);
+            AtomicStagedFile.FlushDirectory(walDirectory);
+            _ = ReadSealedWalSegment(sealedPath, false);
+        }
+
+        manifest.PendingWalSegmentId = null;
+        PersistManifestCheckpoint(root, manifest, failpoints);
+    }
+
+    static void DiscardUnpublishedLocalWalTail(
+        string walDirectory,
+        string root,
+        ManifestState manifest,
+        IReadOnlySet<ulong> authorizedWalSegmentIds,
+        FileLease lease,
+        IFailpointHandler failpoints)
+    {
+        var changed = false;
+        foreach (var path in EnumerateSealedWalSegmentPaths(walDirectory))
+        {
+            if (!TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) ||
+                authorizedWalSegmentIds.Contains(segmentId))
+            {
+                continue;
+            }
+
+            lease.EnsureValid();
+            File.Delete(path);
+            changed = true;
+        }
+
+        var activePath = Path.Combine(walDirectory, "wal.log");
+        if (File.Exists(activePath) && new FileInfo(activePath).Length != 0)
+        {
+            lease.EnsureValid();
+            using var active = new FileStream(
+                activePath,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.Read);
+            active.SetLength(0);
+            active.Flush(true);
+            changed = true;
+        }
+
+        if (manifest.PendingWalSegmentId.HasValue)
+        {
+            manifest.PendingWalSegmentId = null;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            AtomicStagedFile.FlushDirectory(walDirectory);
+            PersistManifestCheckpoint(root, manifest, failpoints);
+        }
+    }
+
+    public static string GetOrCreateWalCacheIdentity(string root)
+    {
+        var walDirectory = Path.Combine(Path.GetFullPath(root), "wal");
+        AtomicStagedFile.CreateDirectoryDurably(walDirectory);
+        var path = Path.Combine(walDirectory, ".cache-id");
+        if (File.Exists(path))
+        {
+            var existing = File.ReadAllText(path).Trim();
+            if (Guid.TryParseExact(existing, "N", out _))
+            {
+                return existing;
+            }
+
+            throw new PantsCorruptionException("The local WAL cache identity is malformed.");
+        }
+
+        var identity = Guid.NewGuid().ToString("N");
+        AtomicStagedFile.Write(path, Encoding.ASCII.GetBytes(identity));
+        return identity;
+    }
+
+    static void AdvanceNextWalSegmentIdPastSealedSegments(
+        string walDirectory,
+        ManifestState manifest,
+        IReadOnlyList<IRemoteWalSegment>? remoteWalSegments,
+        ulong remoteNextWalSegmentId)
+    {
+        var maximumSegmentId = 0UL;
+        var minimumSegmentId = ulong.MaxValue;
+        var upgradingLegacyReservation = manifest.WalSequenceReservationVersion == 0;
+        if (upgradingLegacyReservation)
+        {
+            // Upgrade the legacy manifest watermark once. New writers durably reserve a segment
+            // identity before rename and never infer a post-upgrade reservation from filenames.
+            foreach (var path in EnumerateSealedWalSegmentPaths(walDirectory))
+            {
+                if (TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId))
+                {
+                    maximumSegmentId = Math.Max(maximumSegmentId, segmentId);
+                    minimumSegmentId = Math.Min(minimumSegmentId, segmentId);
+                }
+            }
+
+            manifest.WalSequenceReservationVersion = 1;
+        }
+        else if (manifest.WalSequenceReservationVersion != 1)
+        {
+            throw new PantsCompatibilityException(
+                $"WAL sequence reservation version {manifest.WalSequenceReservationVersion} is unsupported.");
+        }
+
+        foreach (var segment in remoteWalSegments ?? [])
+        {
+            maximumSegmentId = Math.Max(maximumSegmentId, segment.SegmentId);
+            if (upgradingLegacyReservation)
+            {
+                minimumSegmentId = Math.Min(minimumSegmentId, segment.SegmentId);
+            }
+        }
+
         if (maximumSegmentId == ulong.MaxValue)
         {
             throw new PantsResourceLimitException("The WAL segment sequence is exhausted.");
         }
 
-        manifest.NextWalSeq = Math.Max(
-            manifest.NextWalSeq,
-            checked(maximumSegmentId + 1));
+        var nextSegmentId = Math.Max(
+            checked(maximumSegmentId + 1),
+            remoteNextWalSegmentId);
+        manifest.NextWalSeq = Math.Max(manifest.NextWalSeq, nextSegmentId);
+        if (upgradingLegacyReservation)
+        {
+            var firstRetainedSegment = minimumSegmentId == ulong.MaxValue
+                ? manifest.NextWalSeq
+                : minimumSegmentId;
+            manifest.WalHistoryStart = Math.Max(
+                manifest.WalHistoryStart,
+                firstRetainedSegment);
+        }
+    }
+
+    static void PruneRetiredWalSegments(
+        string walDirectory,
+        ulong historyStart,
+        FileLease lease)
+    {
+        var deleted = false;
+        foreach (var path in EnumerateSealedWalSegmentPaths(walDirectory))
+        {
+            if (!TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) ||
+                segmentId >= historyStart)
+            {
+                continue;
+            }
+
+            lease.EnsureValid();
+            File.Delete(path);
+            deleted = true;
+        }
+
+        if (deleted)
+        {
+            AtomicStagedFile.FlushDirectory(walDirectory);
+        }
     }
 
     public void CreateColumnFamily(ColumnFamilyIdentity identity)
@@ -2480,7 +2766,13 @@ sealed class LocalDiskStore :
             beginSequence,
             _lease.Epoch,
             mutations);
-        return new PreparedWalCommit(sequence, walPayload, mutations);
+        return new PreparedWalCommit(
+            sequence,
+            walPayload,
+            mutations.Select(mutation => mutation with
+            {
+                CommitSequence = checked((ulong)sequence)
+            }).ToArray());
     }
 
     PreparedWalCommit PrepareBestEffortResidentCommit(
@@ -2495,7 +2787,15 @@ sealed class LocalDiskStore :
 
         payload.Operations.Validate();
         var (beginSequence, sequence) = ReserveResidentCommitSequence(payload, state);
-        return new PreparedWalCommit(sequence, [], ReadMutations(payload, beginSequence));
+        return new PreparedWalCommit(
+            sequence,
+            [],
+            ReadMutations(payload, beginSequence)
+                .Select(mutation => mutation with
+                {
+                    CommitSequence = checked((ulong)sequence)
+                })
+                .ToArray());
     }
 
     (ulong BeginSequence, long CommitSequence) ReserveResidentCommitSequence(
@@ -2563,7 +2863,9 @@ sealed class LocalDiskStore :
             }
             else
             {
-                residentMutations = ReadMutations(payload, beginSequence);
+                residentMutations = ReadMutations(payload, beginSequence)
+                    .Select(mutation => mutation with { CommitSequence = commitSequence })
+                    .ToList();
                 AppendDirectTransaction(
                     checked((ulong)payload.TransactionId),
                     beginSequence,
@@ -2588,7 +2890,10 @@ sealed class LocalDiskStore :
             payload.Operations.ForEach(operation =>
                 _mutableOperations.Add(CreateMutation(
                     operation,
-                    checked(beginSequence + operation.Ordinal + 1))));
+                    checked(beginSequence + operation.Ordinal + 1)) with
+                {
+                    CommitSequence = commitSequence
+                }));
         }
 
         _unflushedCommitSequence = commitSequence;
@@ -2993,9 +3298,9 @@ sealed class LocalDiskStore :
             beginSequence,
             _lease.Epoch,
             mutations);
-        walAdmission = _localStorageLedger?.Reserve(
-            StorageAdmissionKind.Wal,
-            WalCodec.MeasureEncodedFrameBytes(payload.Length));
+        var walBytes = WalCodec.MeasureEncodedFrameBytes(payload.Length);
+        EnsureWalRetentionAdmission(walBytes);
+        walAdmission = _localStorageLedger?.Reserve(StorageAdmissionKind.Wal, walBytes);
         var offset = _walStream.Length;
         AppendWalFrame(
             ref offset,
@@ -3034,6 +3339,7 @@ sealed class LocalDiskStore :
                 mutation.RangeEnd?.Length));
         });
 
+        EnsureWalRetentionAdmission(walBytes);
         walAdmission = _localStorageLedger?.Reserve(StorageAdmissionKind.Wal, walBytes);
         var offset = _walStream.Length;
         AppendWalFrame(ref offset, beginMarker, () => _failpoints.Hit(Failpoint.MidWalAppend));
@@ -3128,6 +3434,7 @@ sealed class LocalDiskStore :
 
     void AppendWalFrame(ref long offset, byte[] payload, Action? afterPartialPayload = null)
     {
+        var startsSegment = offset == 0;
         _walIo.BeginTransition();
         WalCodec.AppendFrame(
             _walStream.SafeFileHandle,
@@ -3137,7 +3444,40 @@ sealed class LocalDiskStore :
         var frameBytes = checked((long)payload.Length + 2 * sizeof(uint));
         offset = checked(offset + frameBytes);
         Interlocked.Add(ref _walBytesWrittenTotal, frameBytes);
+        _walRetainedBytes = checked(_walRetainedBytes + frameBytes);
+        if (startsSegment)
+        {
+            _walRetainedSegments = checked(_walRetainedSegments + 1);
+        }
+
         _walRecords = checked(_walRecords + 1);
+    }
+
+    void EnsureWalRetentionAdmission(long additionalBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(additionalBytes);
+        var createsSegment = _walStream.Length == 0 && additionalBytes != 0;
+        var projectedBytes = checked(_walRetainedBytes + additionalBytes);
+        var projectedSegments = checked(_walRetainedSegments + (createsSegment ? 1 : 0));
+        if (projectedBytes > _walRetentionBudgetBytes)
+        {
+            _walRetirementDiagnostics.SetBlockedCause(
+                PantsWalRetirementBlockedCause.RetainedWalByteLimit);
+            throw new PantsNoSpaceException(
+                $"WAL history retention is blocked by {_walRetirementDiagnostics.BlockedCause}: " +
+                $"the commit would retain {projectedBytes} bytes, above the " +
+                $"{_walRetentionBudgetBytes}-byte limit.");
+        }
+
+        if (projectedSegments > _walRetentionSegmentLimit)
+        {
+            _walRetirementDiagnostics.SetBlockedCause(
+                PantsWalRetirementBlockedCause.RetainedWalSegmentLimit);
+            throw new PantsNoSpaceException(
+                $"WAL history retention is blocked by {_walRetirementDiagnostics.BlockedCause}: " +
+                $"the commit would retain {projectedSegments} segments, above the " +
+                $"{_walRetentionSegmentLimit}-segment limit.");
+        }
     }
 
     public FrozenMemtableFlush? FreezeMemtable(
@@ -3211,6 +3551,7 @@ sealed class LocalDiskStore :
         FlushOperations(operations, _unflushedCommitSequence);
         ReleaseMutableFlushHeadroom();
         RotateWal();
+        PruneCoveredWalSegments();
         _mutableOperations.Clear();
     }
 
@@ -3240,6 +3581,7 @@ sealed class LocalDiskStore :
             FlushOperations(familyOperations, _unflushedCommitSequence);
             ReleaseMutableFlushHeadroom(familyId);
             RotateWal();
+            PruneCoveredWalSegments();
             return;
         }
 
@@ -3268,27 +3610,33 @@ sealed class LocalDiskStore :
             ThrowIfWalFenced();
             _lease.EnsureValid();
             _ = SealActiveWalCore(false, null, null);
-            Dictionary<uint, ulong> persistedFamilySequences;
+            Dictionary<uint, ulong> flushedThrough;
             HashSet<uint> activeFamilyIds;
+            ulong historyStart;
+            ulong nextWalSequence;
             lock (_manifestGate)
             {
-                persistedFamilySequences = _manifest.Files
-                    .Where(static file => file.LargestSequence.HasValue)
-                    .GroupBy(static file => file.ColumnFamilyId)
-                    .ToDictionary(
-                        static group => group.Key,
-                        static group => group.Max(file => file.LargestSequence!.Value));
+                flushedThrough = new Dictionary<uint, ulong>(_manifest.FlushedThrough);
                 activeFamilyIds = _familyIds.Values.ToHashSet();
+                historyStart = _manifest.WalHistoryStart;
+                nextWalSequence = _manifest.NextWalSeq;
             }
 
             var segments = EnumerateSealedWalSegmentPaths(_walDirectory)
-                .Where(static path => TryParseSealedWalSegmentId(Path.GetFileName(path), out _))
+                .Where(path =>
+                    TryParseSealedWalSegmentId(Path.GetFileName(path), out var id) && id >= historyStart)
                 .OrderBy(static path =>
                 {
                     _ = TryParseSealedWalSegmentId(Path.GetFileName(path), out var id);
                     return id;
                 })
                 .ToArray();
+            if (segments.Length == 0)
+            {
+                _walRetirementDiagnostics.SetBlockedCause(PantsWalRetirementBlockedCause.None);
+                return;
+            }
+
             var results = new List<WalSegmentCoverageResult>(segments.Length);
             var scratchDirectory = Path.Combine(RootPath, "recovery");
             try
@@ -3297,7 +3645,7 @@ sealed class LocalDiskStore :
                 {
                     results.Add(WalSegmentCoverage.Evaluate(
                         File.ReadAllBytes(segment),
-                        persistedFamilySequences,
+                        flushedThrough,
                         activeFamilyIds,
                         scratchDirectory));
                 }
@@ -3305,20 +3653,45 @@ sealed class LocalDiskStore :
             catch (PantsException)
             {
                 // A segment recovery cannot decode is for recovery to judge; keep everything.
+                _walRetirementDiagnostics.SetBlockedCause(
+                    PantsWalRetirementBlockedCause.InvalidWalSegment);
                 return;
             }
 
             var prunable = WalSegmentCoverage.SelectPrunable(results);
-            var deleted = false;
+            var prefixLength = 0;
+            while (prefixLength < prunable.Length && prunable[prefixLength])
+            {
+                prefixLength++;
+            }
+
+            if (prefixLength == 0)
+            {
+                _walRetirementDiagnostics.SetBlockedCause(
+                    PantsWalRetirementBlockedCause.FamilyFlushFrontier);
+                return;
+            }
+
+            var newHistoryStart = prefixLength < segments.Length
+                ? GetSealedWalSegmentId(segments[prefixLength])
+                : nextWalSequence;
+            if (newHistoryStart <= historyStart)
+            {
+                return;
+            }
+
+            // Publish the retirement boundary before unlinking. A stale or restored file below
+            // this point is no longer part of recovery history.
+            DurablyApplyManifestEdit(CreateManifestEdit(
+                "AdvanceWalHistoryStart",
+                new { start_segment_id = newHistoryStart }));
+            SaveManifestCheckpoint();
+
             try
             {
-                for (var index = 0; index < segments.Length; index++)
+                for (var index = 0; index < prefixLength; index++)
                 {
-                    if (prunable[index])
-                    {
-                        File.Delete(segments[index]);
-                        deleted = true;
-                    }
+                    DeleteRetainedWalSegment(segments[index]);
                 }
             }
             catch
@@ -3327,14 +3700,28 @@ sealed class LocalDiskStore :
                 throw;
             }
 
-            if (deleted)
-            {
-                SyncWalDirectoryAfterPrune();
-            }
+            SyncWalDirectoryAfterPrune();
+            _walRetirementDiagnostics.SetBlockedCause(
+                prefixLength == segments.Length
+                    ? PantsWalRetirementBlockedCause.None
+                    : PantsWalRetirementBlockedCause.FamilyFlushFrontier);
         }
     }
 
-    void CompleteFrozenFlush(FrozenMemtableFlush frozen)
+    void DeleteRetainedWalSegment(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var length = new FileInfo(path).Length;
+        File.Delete(path);
+        _walRetainedBytes = checked(_walRetainedBytes - length);
+        _walRetainedSegments = checked(_walRetainedSegments - 1);
+    }
+
+    void CompleteFrozenFlush(FrozenMemtableFlush frozen, bool preserveAuthoritativeJournal = false)
     {
         lock (_walStateGate)
         {
@@ -3346,6 +3733,24 @@ sealed class LocalDiskStore :
             }
 
             _lease.EnsureValid();
+            if (preserveAuthoritativeJournal)
+            {
+                lock (_manifestGate)
+                {
+                    _lease.EnsureValid();
+                    if (_manifest.LastPersistedSequence < frozen.FrontierSequence)
+                    {
+                        DurablyApplyManifestEditCore(CreateManifestEdit(
+                            "BumpWalSeq",
+                            new { seq = frozen.FrontierSequence }));
+                    }
+                }
+
+                _frozenFlushIds.Remove(frozen.Id);
+                ReleaseFrozenFlushHeadroom(frozen.Id);
+                return;
+            }
+
             lock (_manifestGate)
             {
                 _lease.EnsureValid();
@@ -3376,7 +3781,7 @@ sealed class LocalDiskStore :
         ulong? persistedSequence)
     {
         ThrowIfWalFenced();
-        var plan = BuildFlushPlan(operations);
+        var plan = BuildFlushPlan(operations, flushFrontierSequence: persistedSequence);
         _ = PublishFlushPlan(
             plan,
             persistedSequence,
@@ -3432,6 +3837,16 @@ sealed class LocalDiskStore :
                     next_seq = checked(metadata.SstSequence + 1)
                 }));
             edits.Add(CreateManifestEdit("AddSst", metadata));
+            var throughSequence = flushFrontierSequence ?? familyGroup.Max(static operation =>
+                operation.CommitSequence == 0 ? operation.Sequence : operation.CommitSequence);
+            edits.Add(CreateManifestEdit(
+                "AdvanceFlushFrontier",
+                new
+                {
+                    cf_id = familyGroup.Key,
+                    through_sequence = throughSequence,
+                    sst_name = metadata.Name
+                }));
             intents.Add(CreateIntentEntry(
                 "FlushPublish",
                 new
@@ -3555,10 +3970,36 @@ sealed class LocalDiskStore :
         }
 
         _failpoints.Hit(Failpoint.BeforeWalRotation);
+        ulong segmentId;
+        lock (_manifestGate)
+        {
+            if (_manifest.PendingWalSegmentId is { } pendingSegmentId)
+            {
+                segmentId = pendingSegmentId;
+            }
+            else
+            {
+                if (_manifest.NextWalSeq == ulong.MaxValue)
+                {
+                    throw new PantsResourceLimitException("The WAL segment sequence is exhausted.");
+                }
+
+                segmentId = _manifest.NextWalSeq;
+                _manifest.NextWalSeq = checked(segmentId + 1);
+                _manifest.PendingWalSegmentId = segmentId;
+                _manifest.WalSequenceReservationVersion = 1;
+                SaveManifestCheckpointCore();
+            }
+        }
+
         _walStream.Dispose();
         lock (_manifestGate)
         {
-            var segmentId = _manifest.NextWalSeq;
+            if (_manifest.PendingWalSegmentId != segmentId)
+            {
+                throw new PantsInternalException("The WAL seal lost its durable segment reservation.");
+            }
+
             var fileName = $"{segmentId:00000000000000000000}.wal";
             var sealedPath = Path.Combine(_walDirectory, fileName);
             FileStream? replacementStream = null;
@@ -3573,7 +4014,7 @@ sealed class LocalDiskStore :
                 _failpoints.Hit(Failpoint.BeforeWalSealDirectorySync);
                 AtomicStagedFile.FlushDirectory(_walDirectory);
                 segment = ReadSealedWalSegment(sealedPath, forCloudUpload);
-                _manifest.NextWalSeq = checked(segmentId + 1);
+                _manifest.PendingWalSegmentId = null;
                 SaveManifestCheckpoint();
                 _failpoints.Hit(Failpoint.BeforeWalReplacementWriterCreate);
                 replacementStream = new FileStream(
@@ -3677,6 +4118,17 @@ sealed class LocalDiskStore :
 
         segmentId = 0;
         return false;
+    }
+
+    static ulong GetSealedWalSegmentId(string path)
+    {
+        if (!TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId))
+        {
+            throw new PantsCorruptionException(
+                $"Sealed WAL name '{Path.GetFileName(path)}' is invalid.");
+        }
+
+        return segmentId;
     }
 
     static SealedWalSegment ReadSealedWalSegment(
@@ -4302,7 +4754,43 @@ sealed class LocalDiskStore :
                    $"SST '{safeName}' is not owned by the active manifest.");
     }
 
-    void Recover(RuntimeState state, StartupPhaseRecorder startupPhases)
+    public void ReplayDeferredWal(
+        RuntimeState state,
+        StartupPhaseRecorder startupPhases,
+        Action<IReadOnlyList<string>> publishCheckpoint)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(startupPhases);
+        ArgumentNullException.ThrowIfNull(publishCheckpoint);
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            if (!_walReplayDeferred)
+            {
+                throw new PantsInternalException("WAL replay was not deferred for this store.");
+            }
+
+            _recoveryCheckpointPublisher = publishCheckpoint;
+            try
+            {
+                using (startupPhases.Measure(StartupPhase.WalReplay))
+                {
+                    ReplayWal(state);
+                }
+
+                state.Sequence = checked((long)_nextSequence);
+                RestoreRecoveredWalDurability(state.Sequence);
+                _walStream.Seek(0, SeekOrigin.End);
+                _walReplayDeferred = false;
+            }
+            finally
+            {
+                _recoveryCheckpointPublisher = null;
+            }
+        }
+    }
+
+    void Recover(RuntimeState state, StartupPhaseRecorder startupPhases, bool deferWalReplay)
     {
         RestoreColumnFamilies(state);
         using (startupPhases.Measure(StartupPhase.SstHydration))
@@ -4347,7 +4835,10 @@ sealed class LocalDiskStore :
 
         using (startupPhases.Measure(StartupPhase.WalReplay))
         {
-            ReplayWal(state);
+            if (!deferWalReplay)
+            {
+                ReplayWal(state);
+            }
         }
 
         state.Sequence = checked((long)_nextSequence);
@@ -4355,12 +4846,6 @@ sealed class LocalDiskStore :
 
     void ReplayWal(RuntimeState state)
     {
-        var persistedFamilySequences = _manifest.Files
-            .Where(static file => file.LargestSequence.HasValue)
-            .GroupBy(static file => file.ColumnFamilyId)
-            .ToDictionary(
-                static group => group.Key,
-                static group => group.Max(file => file.LargestSequence!.Value));
         var activeFamilyIds = _familyIds.Values.ToHashSet();
         var sealedSegments = CollectWalReplaySources();
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
@@ -4377,7 +4862,6 @@ sealed class LocalDiskStore :
         {
             ReplayWalSources(
                 state,
-                persistedFamilySequences,
                 activeFamilyIds,
                 sealedSegments,
                 writerEpochFrontiers,
@@ -4391,7 +4875,6 @@ sealed class LocalDiskStore :
 
     void ReplayWalSources(
         RuntimeState state,
-        Dictionary<uint, ulong> persistedFamilySequences,
         HashSet<uint> activeFamilyIds,
         List<WalReplaySource> sealedSegments,
         WalWriterEpochFrontiers writerEpochFrontiers,
@@ -4414,7 +4897,6 @@ sealed class LocalDiskStore :
                     recoveredVersions,
                     writerEpochFrontiers,
                     ref replayOrdinal,
-                    persistedFamilySequences,
                     activeFamilyIds);
             }
 
@@ -4444,7 +4926,6 @@ sealed class LocalDiskStore :
                 recoveredVersions,
                 writerEpochFrontiers,
                 ref replayOrdinal,
-                persistedFamilySequences,
                 activeFamilyIds) == WalReplayOutcome.Salvaged)
         {
             ResetActiveWalAfterSalvage();
@@ -4459,11 +4940,17 @@ sealed class LocalDiskStore :
     List<WalReplaySource> CollectWalReplaySources()
     {
         var sources = new List<WalReplaySource>();
+        var historyStart = Volatile.Read(ref _manifestReadSnapshot).WalHistoryStart;
         var localIds = new HashSet<ulong>();
         foreach (var path in EnumerateSealedWalSegmentPaths(_walDirectory)
                      .Where(static path => Path.GetFileName(path) != "wal.log"))
         {
             var parsed = TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId);
+            if (parsed && segmentId < Volatile.Read(ref _manifestReadSnapshot).WalHistoryStart)
+            {
+                continue;
+            }
+
             sources.Add(new WalReplaySource(
                 Path.GetFileName(path),
                 parsed ? segmentId : ulong.MaxValue,
@@ -4477,6 +4964,11 @@ sealed class LocalDiskStore :
 
         foreach (var remote in _remoteWalSegments)
         {
+            if (remote.SegmentId < historyStart)
+            {
+                continue;
+            }
+
             if (!localIds.Contains(remote.SegmentId))
             {
                 sources.Add(new WalReplaySource(remote.Name, remote.SegmentId, null, remote));
@@ -4487,12 +4979,64 @@ sealed class LocalDiskStore :
             RequireLocalMatchesRemote(local.Path!, remote);
         }
 
-        return
-        [
-            .. sources
-                .OrderBy(static source => source.SegmentId)
-                .ThenBy(static source => source.Name, StringComparer.Ordinal)
-        ];
+        var orderedSources = sources
+            .OrderBy(static source => source.SegmentId)
+            .ThenBy(static source => source.Name, StringComparer.Ordinal)
+            .ToList();
+        if (_validateLocalWalHistoryContinuity)
+        {
+            ValidateLocalWalHistoryContinuity(orderedSources);
+        }
+
+        return orderedSources;
+    }
+
+    void ValidateLocalWalHistoryContinuity(IReadOnlyList<WalReplaySource> sources)
+    {
+        ulong historyStart;
+        ulong nextSegmentId;
+        lock (_manifestGate)
+        {
+            historyStart = _manifest.WalHistoryStart;
+            nextSegmentId = _manifest.NextWalSeq;
+        }
+
+        var validationStart = Math.Max(
+            historyStart,
+            _localWalHistoryValidationStartSegmentId ?? historyStart);
+        var expectedSegmentId = validationStart;
+        foreach (var source in sources)
+        {
+            if (source.SegmentId == ulong.MaxValue ||
+                source.SegmentId < validationStart ||
+                (_localWalHistoryValidationStartSegmentId.HasValue && source.Path is null))
+            {
+                continue;
+            }
+
+            if (source.SegmentId >= nextSegmentId)
+            {
+                throw new PantsCorruptionException(
+                    $"WAL segment {source.SegmentId} is outside the durable segment range " +
+                    $"[{historyStart}, {nextSegmentId}).");
+            }
+
+            if (source.SegmentId != expectedSegmentId)
+            {
+                throw new PantsCorruptionException(
+                    source.SegmentId > expectedSegmentId
+                        ? $"WAL history is missing unretired segment {expectedSegmentId}."
+                        : $"WAL history contains duplicate segment identity {source.SegmentId}.");
+            }
+
+            expectedSegmentId = checked(expectedSegmentId + 1);
+        }
+
+        if (expectedSegmentId != nextSegmentId)
+        {
+            throw new PantsCorruptionException(
+                $"WAL history is missing unretired segment {expectedSegmentId}.");
+        }
     }
 
     static void RequireLocalMatchesRemote(string localPath, IRemoteWalSegment remote)
@@ -4581,7 +5125,6 @@ sealed class LocalDiskStore :
         WalRecoveredVersionTracker recoveredVersions,
         WalWriterEpochFrontiers writerEpochFrontiers,
         ref ulong replayOrdinal,
-        IReadOnlyDictionary<uint, ulong> persistedFamilySequences,
         HashSet<uint> activeFamilyIds)
         => VisitWalStream(
             state,
@@ -4615,8 +5158,8 @@ sealed class LocalDiskStore :
                             var mutation = item.Mutation;
                             return firstSeen.Contains(mutation) &&
                                    activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
-                                   mutation.Sequence > persistedFamilySequences.GetValueOrDefault(
-                                       mutation.ColumnFamilyId);
+                                   item.CommitSequence > Volatile.Read(ref _manifestReadSnapshot)
+                                       .FlushedThrough.GetValueOrDefault(mutation.ColumnFamilyId);
                         })
                         .ToArray();
                     _recoveryCheckpoints?.RequireTransactionFits(
@@ -4625,7 +5168,10 @@ sealed class LocalDiskStore :
                     {
                         ApplyMutations(state, [mutation]);
                         RecordRecoveredMemtableBytes(state, [mutation]);
-                        _mutableOperations.Add(mutation);
+                        _mutableOperations.Add(mutation with
+                        {
+                            CommitSequence = commitSequence
+                        });
                         _unflushedCommitSequence = Math.Max(
                             _unflushedCommitSequence,
                             commitSequence);
@@ -4676,7 +5222,15 @@ sealed class LocalDiskStore :
             () =>
             {
                 _lease.EnsureValid();
+                var existingSsts = _manifest.Files
+                    .Select(static file => file.Name)
+                    .ToHashSet(StringComparer.Ordinal);
                 FlushOperations(_mutableOperations.SnapshotAll(), null);
+                var checkpointSsts = _manifest.Files
+                    .Where(file => !existingSsts.Contains(file.Name))
+                    .Select(static file => file.Name)
+                    .ToArray();
+                _recoveryCheckpointPublisher?.Invoke(checkpointSsts);
             });
         _mutableOperations.Clear();
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
@@ -4828,6 +5382,7 @@ sealed class LocalDiskStore :
 
     void ResetActiveWalAfterSalvage()
     {
+        var activeWalBytes = _walStream.Length;
         _walStream.Dispose();
         RetainCorruptFile(_walPath);
         _walStream = new FileStream(
@@ -4836,6 +5391,11 @@ sealed class LocalDiskStore :
             FileAccess.ReadWrite,
             FileShare.Read);
         _walRecords = 0;
+        if (activeWalBytes != 0)
+        {
+            _walRetainedBytes = checked(_walRetainedBytes - activeWalBytes);
+            _walRetainedSegments = checked(_walRetainedSegments - 1);
+        }
     }
 
     void RestoreColumnFamilies(RuntimeState state)
@@ -5555,14 +6115,22 @@ sealed class LocalDiskStore :
     void SaveManifestCheckpointCore()
     {
         RefreshManifestReadSnapshot();
-        var json = JsonSerializer.SerializeToUtf8Bytes(_manifest, JsonOptions);
+        PersistManifestCheckpoint(RootPath, _manifest, _failpoints);
+    }
+
+    static void PersistManifestCheckpoint(
+        string root,
+        ManifestState manifest,
+        IFailpointHandler failpoints)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
         AtomicStagedFile.Write(
-            _manifestSnapshotPath,
+            Path.Combine(root, "manifest.snapshot.json"),
             json,
-            beforePublish: () => _failpoints.Hit(Failpoint.BeforeManifestCheckpointReplace));
-        AtomicStagedFile.Write(_manifestJournalPath, []);
-        AtomicStagedFile.Write(_manifestPath, json);
-        _failpoints.Hit(Failpoint.AfterManifestCheckpointReplace);
+            beforePublish: () => failpoints.Hit(Failpoint.BeforeManifestCheckpointReplace));
+        AtomicStagedFile.Write(Path.Combine(root, "manifest.journal"), []);
+        AtomicStagedFile.Write(Path.Combine(root, "manifest.json"), json);
+        failpoints.Hit(Failpoint.AfterManifestCheckpointReplace);
     }
 
     void RefreshManifestReadSnapshot() =>
@@ -5571,11 +6139,40 @@ sealed class LocalDiskStore :
     void RotateWal()
     {
         ThrowIfWalFenced();
+        _lease.EnsureValid();
         _failpoints.Hit(Failpoint.BeforeWalRotation);
+        if (_manifest.PendingWalSegmentId.HasValue)
+        {
+            if (_walStream.Length == 0)
+            {
+                throw new PantsCorruptionException(
+                    "The WAL segment reservation has no active bytes to complete before rotation.");
+            }
+
+            _ = SealActiveWalCore(false, null, null);
+        }
+
+        if (_manifest.NextWalSeq == ulong.MaxValue)
+        {
+            throw new PantsResourceLimitException("The WAL segment sequence is exhausted.");
+        }
+
+        var nextSegmentId = checked(_manifest.NextWalSeq + 1);
+        DurablyApplyManifestEdit(CreateManifestEdit(
+            "AdvanceWalHistoryStart",
+            new { start_segment_id = nextSegmentId }));
+        SaveManifestCheckpoint();
+        var activeWalBytes = _walStream.Length;
         _walStream.Dispose();
         using (var truncate = new FileStream(_walPath, FileMode.Create, FileAccess.Write, FileShare.Read))
         {
             truncate.Flush(true);
+        }
+
+        if (activeWalBytes != 0)
+        {
+            _walRetainedBytes = checked(_walRetainedBytes - activeWalBytes);
+            _walRetainedSegments = checked(_walRetainedSegments - 1);
         }
 
         _walStream = new FileStream(_walPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
@@ -5586,7 +6183,7 @@ sealed class LocalDiskStore :
         {
             foreach (var sealedSegment in EnumerateSealedWalSegmentPaths(_walDirectory))
             {
-                File.Delete(sealedSegment);
+                DeleteRetainedWalSegment(sealedSegment);
                 deletedSegment = true;
             }
         }
@@ -5600,6 +6197,8 @@ sealed class LocalDiskStore :
         {
             SyncWalDirectoryAfterPrune();
         }
+
+        _walRetirementDiagnostics.SetBlockedCause(PantsWalRetirementBlockedCause.None);
 
         _failpoints.Hit(Failpoint.AfterWalRotation);
     }
@@ -5700,7 +6299,9 @@ sealed class LocalDiskStore :
 
             if (Directory.Exists(path))
             {
-                if (Directory.EnumerateFileSystemEntries(path).Any())
+                if (Directory.EnumerateFileSystemEntries(path).Any(entry =>
+                        name != "wal" ||
+                        !StringComparer.Ordinal.Equals(Path.GetFileName(entry), ".cache-id")))
                 {
                     return true;
                 }
@@ -5724,7 +6325,7 @@ sealed class LocalDiskStore :
         var sources = new[] { snapshot, legacy }.Where(File.Exists).ToArray();
         if (sources.Length == 0)
         {
-            return new ManifestLoadResult(ManifestState.CreateInitial(), false);
+            return new ManifestLoadResult(ManifestState.CreateInitial(), false, false);
         }
 
         Exception? failure = null;
@@ -5732,15 +6333,20 @@ sealed class LocalDiskStore :
         {
             try
             {
-                var manifest = JsonSerializer.Deserialize<ManifestState>(
-                    PositionalFile.ReadAllBytes(source),
-                    JsonOptions) ?? throw new JsonException("Midge manifest is empty.");
+                var bytes = PositionalFile.ReadAllBytes(source);
+                using var manifestDocument = JsonDocument.Parse(bytes);
+                var rootElement = manifestDocument.RootElement;
+                var hasFlushFrontiers = rootElement.ValueKind == JsonValueKind.Object &&
+                    (rootElement.TryGetProperty("flushed_through", out _) ||
+                     rootElement.TryGetProperty("FlushedThrough", out _));
+                var manifest = JsonSerializer.Deserialize<ManifestState>(bytes, JsonOptions) ??
+                    throw new JsonException("Midge manifest is empty.");
                 if (failure is not null)
                 {
                     state.MarkSalvageMode();
                 }
 
-                return new ManifestLoadResult(manifest, failure is not null);
+                return new ManifestLoadResult(manifest, failure is not null, !hasFlushFrontiers);
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {
@@ -5763,7 +6369,63 @@ sealed class LocalDiskStore :
             }
         }
 
-        return new ManifestLoadResult(ReconstructManifestFromSsts(root), true);
+        return new ManifestLoadResult(ReconstructManifestFromSsts(root), true, true);
+    }
+
+    static void InitializeFlushFrontiers(ManifestState manifest, bool legacyMissingFrontiers)
+    {
+        if (legacyMissingFrontiers)
+        {
+            manifest.FlushedThrough.Clear();
+            manifest.FlushedThrough[0] = 0;
+            foreach (var family in manifest.ColumnFamilies)
+            {
+                manifest.FlushedThrough[family.Id] = family.DeletedAt.HasValue ? ulong.MaxValue : 0;
+            }
+
+            foreach (var familyId in manifest.Files.Select(static file => file.ColumnFamilyId).Distinct())
+            {
+                manifest.FlushedThrough.TryAdd(familyId, 0);
+            }
+
+            return;
+        }
+
+        if (!manifest.FlushedThrough.TryGetValue(0, out var defaultFrontier) ||
+            defaultFrontier == ulong.MaxValue)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest does not retain a live default-family flush frontier.");
+        }
+
+        foreach (var family in manifest.ColumnFamilies)
+        {
+            if (!manifest.FlushedThrough.TryGetValue(family.Id, out var frontier) ||
+                (family.DeletedAt.HasValue != (frontier == ulong.MaxValue)))
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"The manifest flush frontier for family {family.Id} is missing or inconsistent.");
+            }
+        }
+
+        foreach (var familyId in manifest.Files.Select(static file => file.ColumnFamilyId).Distinct())
+        {
+            if (!manifest.FlushedThrough.ContainsKey(familyId))
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"The manifest has SSTs without a flush frontier for family {familyId}.");
+            }
+        }
+
+        if (manifest.WalHistoryStart > manifest.NextWalSeq)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest WAL history start exceeds its next segment sequence.");
+        }
     }
 
     static ManifestState ReconstructManifestFromSsts(string root)
@@ -5815,6 +6477,7 @@ sealed class LocalDiskStore :
                 manifest.NextSstSeqs[familyId] = Math.Max(
                     manifest.NextSstSeqs.GetValueOrDefault(familyId, 1UL),
                     checked(sstSequence + 1));
+                manifest.FlushedThrough.TryAdd(familyId, 0);
             }
             catch (Exception exception) when (exception is IOException or PantsException or OverflowException)
             {
@@ -6571,12 +7234,33 @@ sealed class LocalDiskStore :
                             Name = name,
                             CreatedAt = createdAt
                         });
+                        if (!manifest.FlushedThrough.TryAdd(id, 0) &&
+                            manifest.FlushedThrough[id] != 0)
+                        {
+                            throw PantsException.Create(
+                                PantsErrorCode.Corruption,
+                                $"Column family {id} has prior flush authority and cannot be recreated.");
+                        }
                     }
                     else if (existing.DeletedAt.HasValue)
                     {
+                        var recreateFrontier = Math.Max(
+                            existing.DropSequence.GetValueOrDefault(),
+                            manifest.LastPersistedSequence);
+                        if (recreateFrontier == ulong.MaxValue)
+                        {
+                            throw PantsException.Create(
+                                PantsErrorCode.Corruption,
+                                $"Column family {id} cannot be recreated beyond the sequence space.");
+                        }
+
+                        manifest.FlushedThrough[id] = recreateFrontier;
                         existing.Name = name;
                         existing.CreatedAt = createdAt;
                         existing.DeletedAt = null;
+                        existing.DropSequence = null;
+                        existing.DroppedSstNames = [];
+                        existing.Reclaimed = false;
                     }
 
                     break;
@@ -6617,6 +7301,44 @@ sealed class LocalDiskStore :
                     manifest.NextSstSeqs[id] = Math.Max(
                         manifest.NextSstSeqs.GetValueOrDefault(id),
                         sequence);
+                    break;
+                }
+            case "AdvanceFlushFrontier":
+                {
+                    var id = GetRequiredUInt32(value, "cf_id");
+                    var throughSequence = GetRequiredUInt64(value, "through_sequence");
+                    var sstName = ValidateSstName(GetRequiredString(value, "sst_name"));
+                    var family = manifest.ColumnFamilies.SingleOrDefault(candidate => candidate.Id == id);
+                    if ((id != 0 && family is null) || family?.DeletedAt is not null ||
+                        throughSequence == ulong.MaxValue ||
+                        !manifest.FlushedThrough.TryGetValue(id, out var currentFrontier) ||
+                        currentFrontier == ulong.MaxValue || throughSequence < currentFrontier ||
+                        manifest.Files.SingleOrDefault(file => file.Name == sstName) is not { } output ||
+                        output.ColumnFamilyId != id ||
+                        !output.LargestSequence.HasValue ||
+                        output.LargestSequence.Value > throughSequence)
+                    {
+                        throw PantsException.Create(
+                            PantsErrorCode.Corruption,
+                            $"Flush frontier for family {id} is invalid or not backed by its SST.");
+                    }
+
+                    manifest.FlushedThrough[id] = throughSequence;
+                    break;
+                }
+            case "AdvanceWalHistoryStart":
+                {
+                    var start = GetRequiredUInt64(value, "start_segment_id");
+                    if (start < manifest.WalHistoryStart ||
+                        start > manifest.NextWalSeq && start != checked(manifest.NextWalSeq + 1))
+                    {
+                        throw PantsException.Create(
+                            PantsErrorCode.Corruption,
+                            "The WAL history start regressed or exceeds the next segment sequence.");
+                    }
+
+                    manifest.WalHistoryStart = start;
+                    manifest.NextWalSeq = Math.Max(manifest.NextWalSeq, start);
                     break;
                 }
             case "SetCloudCheckpoint":
@@ -6664,6 +7386,7 @@ sealed class LocalDiskStore :
         }
 
         family.DeletedAt = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        manifest.FlushedThrough[id] = ulong.MaxValue;
         family.DropSequence = dropSequence;
         family.DroppedSstNames = droppedNames.Length == 0
             ? manifest.Files
@@ -6686,6 +7409,8 @@ sealed class LocalDiskStore :
         "Batch" => 8,
         "DropColumnFamilyAt" => 10,
         "ReclaimColumnFamily" => 11,
+        "AdvanceFlushFrontier" => 12,
+        "AdvanceWalHistoryStart" => 13,
         _ => throw PantsException.Create(
             PantsErrorCode.Corruption,
             $"The manifest edit '{variant}' is unknown.")
@@ -6904,7 +7629,10 @@ sealed class LocalDiskStore :
         long Bytes,
         StorageBudgetLedger.StorageReservation Reservation);
 
-    sealed record ManifestLoadResult(ManifestState Manifest, bool PreserveUnownedSsts);
+    sealed record ManifestLoadResult(
+        ManifestState Manifest,
+        bool PreserveUnownedSsts,
+        bool LegacyFlushFrontiers);
 
     sealed record RecoveryMetadataResult(bool ClearRecoveredIntents, bool PreserveUnownedSsts);
 }

@@ -60,6 +60,103 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
     }
 
     [Fact]
+    public async Task ShouldGroupDisjointAssertInsertAndStrictSyncCommitsAtOneWalSync()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        var family = database.ColumnFamilies.DefaultFamily;
+        await using var asserted = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        await using var inserted = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        await using var strict = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        asserted.AssertValue("assert-absent"u8.ToArray(), null);
+        asserted.Put("asserted-write"u8.ToArray(), "asserted"u8.ToArray());
+        inserted.Insert("inserted-write"u8.ToArray(), "inserted"u8.ToArray());
+        strict.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+        strict.Put("strict-write"u8.ToArray(), "strict"u8.ToArray());
+        var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+        var commits = new[] { asserted, inserted, strict }
+            .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
+            .ToArray();
+        failpoints.ReleaseRuntimeBarrier();
+        var before = await barrier.WaitAsync(TestTimeouts.Expected);
+        await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
+
+        var after = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(before.WalFsyncCount + 1, after.WalFsyncCount);
+        Assert.Equal(before.WalAppendCount + 1, after.WalAppendCount);
+        Assert.Equal(before.DurabilityWaitersFannedOutTotal + 3, after.DurabilityWaitersFannedOutTotal);
+        await using var reader = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadOnly);
+        Assert.Null(await reader.GetAsync("assert-absent"u8.ToArray()));
+        Assert.Equal("asserted", TestBytes.ToText((await reader.GetAsync("asserted-write"u8.ToArray()))!.Value));
+        Assert.Equal("inserted", TestBytes.ToText((await reader.GetAsync("inserted-write"u8.ToArray()))!.Value));
+        Assert.Equal("strict", TestBytes.ToText((await reader.GetAsync("strict-write"u8.ToArray()))!.Value));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldSplitLaterValidationConflictAfterEarlierGroupedCommit(bool assertionConflict)
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        var family = database.ColumnFamilies.DefaultFamily;
+        await using var earlier = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        await using var later = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        earlier.Put("shared-validation-key"u8.ToArray(), "earlier"u8.ToArray());
+        if (assertionConflict)
+        {
+            later.AssertValue("shared-validation-key"u8.ToArray(), null);
+            later.Put("later-assertion-write"u8.ToArray(), "later"u8.ToArray());
+        }
+        else
+        {
+            later.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
+            later.Put("shared-validation-key"u8.ToArray(), "later"u8.ToArray());
+        }
+
+        var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+        var earlierCommit = earlier.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        var laterCommit = later.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        failpoints.ReleaseRuntimeBarrier();
+        var before = await barrier.WaitAsync(TestTimeouts.Expected);
+
+        await earlierCommit.WaitAsync(TestTimeouts.Expected);
+        var conflict = await Assert.ThrowsAsync<PantsWriteConflictException>(
+            () => laterCommit.WaitAsync(TestTimeouts.Expected));
+        Assert.Equal(PantsErrorCode.WriteConflict, conflict.Code);
+        var after = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(before.WalFsyncCount + 1, after.WalFsyncCount);
+        Assert.Equal(before.WalAppendCount + 1, after.WalAppendCount);
+        await using var reader = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "earlier",
+            TestBytes.ToText((await reader.GetAsync("shared-validation-key"u8.ToArray()))!.Value));
+        Assert.Null(await reader.GetAsync("later-assertion-write"u8.ToArray()));
+    }
+
+    [Fact]
     public async Task ShouldPublishBestEffortGroupWithoutWritingWalFrames()
     {
         using var directory = new TemporaryDirectory();

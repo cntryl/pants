@@ -38,6 +38,11 @@ public sealed record PantsRuntimeMetrics
     public long WalLastSyncedSequence { get; init; }
     public long WalLocalDurableSequence { get; init; }
     public long WalCloudDurableSequence { get; init; }
+    public long WalRetainedBytes { get; init; }
+    public int WalRetainedSegments { get; init; }
+    public long WalRetentionByteLimitBytes { get; init; }
+    public int WalRetentionSegmentLimit { get; init; }
+    public PantsWalRetirementBlockedCause WalRetirementBlockedCause { get; init; }
     public int PendingCompactions { get; init; }
     public int CompactingSsts { get; init; }
     public int ActiveCompactions { get; init; }

@@ -9,6 +9,7 @@ public sealed class RecoveryCheckpointCrashTests
     const string DatabaseEnvironmentVariable = "PANTS_RECOVERY_CHECKPOINT_CRASH_DATABASE";
     const string ReadyEnvironmentVariable = "PANTS_RECOVERY_CHECKPOINT_CRASH_READY";
     const string StorageEnvironmentVariable = "PANTS_RECOVERY_CHECKPOINT_CRASH_STORAGE";
+    const string BoundaryEnvironmentVariable = "PANTS_RECOVERY_CHECKPOINT_CRASH_BOUNDARY";
     const int CrashAfterCheckpoint = 2;
     const int TransactionCount = 48;
     const int ValueBytes = 2048;
@@ -31,9 +32,16 @@ public sealed class RecoveryCheckpointCrashTests
 
         var path = Assert.IsType<string>(Environment.GetEnvironmentVariable(DatabaseEnvironmentVariable));
         var readyPath = Assert.IsType<string>(Environment.GetEnvironmentVariable(ReadyEnvironmentVariable));
+        var boundary = Environment.GetEnvironmentVariable(BoundaryEnvironmentVariable);
+        var failpoint = StringComparer.Ordinal.Equals(boundary, "cloud-before-eviction")
+            ? Failpoint.AfterRecoveryCheckpointPublishedBeforeLocalEviction
+            : Failpoint.AfterRecoveryCheckpointPublished;
+        var requiredCount = failpoint == Failpoint.AfterRecoveryCheckpointPublished
+            ? CrashAfterCheckpoint
+            : 1;
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(path, storage == "simulated-cloud").WithMemtableLimits(16 * 1024),
-            new RuntimeDependencies(new CrashAfterCheckpointHandler(readyPath)));
+            new RuntimeDependencies(new CrashAfterCheckpointHandler(readyPath, failpoint, requiredCount)));
 
         Assert.Fail("Recovery finished without reaching the crash checkpoint.");
     }
@@ -56,6 +64,7 @@ public sealed class RecoveryCheckpointCrashTests
         start.Environment[DatabaseEnvironmentVariable] = databasePath;
         start.Environment[ReadyEnvironmentVariable] = readyPath;
         start.Environment[StorageEnvironmentVariable] = simulatedCloud ? "simulated-cloud" : "local";
+        start.Environment[BoundaryEnvironmentVariable] = "after-checkpoint";
         using (var child = await CrashChildProcess.StartAndWaitForReadinessAsync(
                    start,
                    "recovery checkpoint crash child",
@@ -74,14 +83,71 @@ public sealed class RecoveryCheckpointCrashTests
             Assert.True(child.ExitCode != 0, await child.DescribeAsync());
         }
 
-        Assert.True(
-            Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst").Length >= CrashAfterCheckpoint,
-            "The child must have published checkpoints before it exited.");
+        if (simulatedCloud)
+        {
+            Assert.Empty(Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst"));
+            Assert.True(
+                Directory.GetFiles(Path.Combine(databasePath, "cloud_store", "sst"), "*.sst").Length >=
+                CrashAfterCheckpoint,
+                "The child must have published and evicted checkpoint SSTs before it exited.");
+        }
+        else
+        {
+            Assert.True(
+                Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst").Length >= CrashAfterCheckpoint,
+                "The child must have published checkpoints before it exited.");
+        }
         Assert.Equal(walBytesBefore, WalBytes(databasePath));
 
         await WaitForLockReleaseAsync(databasePath);
         await ExpireCrashedLeaseAsync(databasePath);
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(databasePath, simulatedCloud));
+        var second = Assert.IsType<IPantsColumnFamily>(
+            await reopened.ColumnFamilies.GetAsync(SecondFamily.Name),
+            false);
+        await AssertEveryTransactionVisibleOnceAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "default");
+        await AssertEveryTransactionVisibleOnceAsync(reopened, second, "second");
+    }
+
+    [Fact]
+    public async Task ShouldRecoverExactlyOnceAfterCloudCheckpointPublicationBeforeLocalEviction()
+    {
+        using var directory = new TemporaryDirectory();
+        var databasePath = Path.Combine(directory.Path, "db");
+        var readyPath = Path.Combine(directory.Path, "checkpoint.ready");
+        WriteUnflushedCrossFamilyTransactions(databasePath);
+
+        var start = CrashChildProcess.CreateStartInfo(
+            typeof(RecoveryCheckpointCrashTests),
+            nameof(ShouldExitAfterDurableRecoveryCheckpointInChild));
+        start.Environment[DatabaseEnvironmentVariable] = databasePath;
+        start.Environment[ReadyEnvironmentVariable] = readyPath;
+        start.Environment[StorageEnvironmentVariable] = "simulated-cloud";
+        start.Environment[BoundaryEnvironmentVariable] = "cloud-before-eviction";
+        using (var child = await CrashChildProcess.StartAndWaitForReadinessAsync(
+                   start,
+                   "cloud recovery checkpoint publication child",
+                   databasePath,
+                   readyPath))
+        {
+            try
+            {
+                await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
+            }
+            finally
+            {
+                child.TryKillProcessTree();
+            }
+
+            Assert.True(child.ExitCode != 0, await child.DescribeAsync());
+        }
+
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst"));
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(databasePath, "cloud_store", "sst"), "*.sst"));
+
+        await WaitForLockReleaseAsync(databasePath);
+        await ExpireCrashedLeaseAsync(databasePath);
+        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(databasePath, true));
         var second = Assert.IsType<IPantsColumnFamily>(
             await reopened.ColumnFamilies.GetAsync(SecondFamily.Name),
             false);
@@ -227,14 +293,16 @@ public sealed class RecoveryCheckpointCrashTests
         File.Delete(Path.Combine(path, ".midge_leader.lock"));
     }
 
-    sealed class CrashAfterCheckpointHandler(string readyPath) : IFailpointHandler
+    sealed class CrashAfterCheckpointHandler(
+        string readyPath,
+        Failpoint targetFailpoint,
+        int requiredCount) : IFailpointHandler
     {
         int _checkpoints;
 
         public void Hit(Failpoint failpoint)
         {
-            if (failpoint != Failpoint.AfterRecoveryCheckpointPublished ||
-                ++_checkpoints < CrashAfterCheckpoint)
+            if (failpoint != targetFailpoint || ++_checkpoints < requiredCount)
             {
                 return;
             }

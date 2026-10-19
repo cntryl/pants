@@ -13,6 +13,7 @@ public sealed class PantsCloudCrashRecoveryTests
     const string DatabasePathEnvironmentVariable = "PANTS_CLOUD_CRASH_DATABASE_PATH";
     const string ActiveWalScenario = "active-wal";
     const string LocalWalScenario = "local-wal";
+    const string SealedWalScenario = "sealed-wal";
     const string CloudStrictScenario = "cloud-strict";
     const string PublishedSstScenario = "published-sst";
     const string ReadyFileName = "cloud-crash-child.ready";
@@ -32,11 +33,16 @@ public sealed class PantsCloudCrashRecoveryTests
         var options = CreateOptions(
             path,
             StringComparer.Ordinal.Equals(scenario, PublishedSstScenario) ||
-            StringComparer.Ordinal.Equals(scenario, LocalWalScenario));
-        var dependencies = StringComparer.Ordinal.Equals(scenario, LocalWalScenario)
-            ? new RuntimeDependencies(
-                new CrashChildFailpointHandler(Failpoint.BeforeCloudWalUpload))
-            : RuntimeDependencies.Default;
+            StringComparer.Ordinal.Equals(scenario, LocalWalScenario) ||
+            StringComparer.Ordinal.Equals(scenario, SealedWalScenario));
+        var dependencies = scenario switch
+        {
+            LocalWalScenario => new RuntimeDependencies(
+                new CrashChildFailpointHandler(Failpoint.BeforeCloudWalUpload)),
+            SealedWalScenario => new RuntimeDependencies(
+                new CrashChildFailpointHandler(Failpoint.AfterWalSealRename)),
+            _ => RuntimeDependencies.Default
+        };
         await using var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
 
         if (StringComparer.Ordinal.Equals(scenario, PublishedSstScenario))
@@ -65,6 +71,19 @@ public sealed class PantsCloudCrashRecoveryTests
                 Path.Combine(path, "wal"),
                 "*.wal",
                 SearchOption.TopDirectoryOnly));
+            Assert.Empty(Directory.EnumerateFiles(
+                Path.Combine(path, "cloud_store", "wal"),
+                "*.wal",
+                SearchOption.AllDirectories));
+        }
+        else if (StringComparer.Ordinal.Equals(scenario, SealedWalScenario))
+        {
+            await WaitForMetricsAsync(
+                database,
+                static candidate =>
+                    candidate.CurrentSequence >= 1 &&
+                    candidate.WalCloudDurableSequence < candidate.CurrentSequence);
+            await WaitForSealedWalAsync(path);
             Assert.Empty(Directory.EnumerateFiles(
                 Path.Combine(path, "cloud_store", "wal"),
                 "*.wal",
@@ -190,6 +209,46 @@ public sealed class PantsCloudCrashRecoveryTests
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
 
         await AssertValueAsync(reopened, GetScenarioKey(LocalWalScenario), "crash-value");
+    }
+
+    [Fact]
+    public async Task ShouldResumeSealedCloudWalAfterChildAbortsBeforeUploadEnqueue()
+    {
+        using var directory = new TemporaryDirectory();
+        using (var child = await StartReadyCrashChildAsync(directory.Path, SealedWalScenario))
+        {
+            await TerminateCrashChildAsync(child.Process, directory.Path);
+        }
+
+        await ExpireCrashedProcessLeaseAsync(directory.Path);
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "wal"),
+            "*.wal",
+            SearchOption.TopDirectoryOnly));
+        Assert.Empty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+
+        await using (var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
+        {
+            var metrics = await WaitForMetricsAsync(
+                reopened,
+                static candidate =>
+                    candidate.CurrentSequence >= 1 &&
+                    candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+            Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
+            await AssertValueAsync(reopened, GetScenarioKey(SealedWalScenario), "crash-value");
+        }
+
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        RemoveLocalCache(directory.Path);
+
+        await using var cacheless = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        await AssertValueAsync(cacheless, GetScenarioKey(SealedWalScenario), "crash-value");
     }
 
     [Fact]
@@ -448,6 +507,18 @@ public sealed class PantsCloudCrashRecoveryTests
         }
     }
 
+    static async Task WaitForSealedWalAsync(string databasePath)
+    {
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+        while (!Directory.EnumerateFiles(
+                   Path.Combine(databasePath, "wal"),
+                   "*.wal",
+                   SearchOption.TopDirectoryOnly).Any())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
+        }
+    }
+
     static async Task PreparePublishedSstScenarioAsync(IPantsDatabase database)
     {
         for (var index = 0; index < 16; index++)
@@ -527,6 +598,7 @@ public sealed class PantsCloudCrashRecoveryTests
     static bool IsKnownScenario(string? scenario) =>
         StringComparer.Ordinal.Equals(scenario, ActiveWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, LocalWalScenario) ||
+        StringComparer.Ordinal.Equals(scenario, SealedWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, CloudStrictScenario) ||
         StringComparer.Ordinal.Equals(scenario, PublishedSstScenario);
 
@@ -534,6 +606,7 @@ public sealed class PantsCloudCrashRecoveryTests
     {
         ActiveWalScenario => "cloud-async-active-crash-key",
         LocalWalScenario => "cloud-async-local-crash-key",
+        SealedWalScenario => "cloud-async-sealed-crash-key",
         CloudStrictScenario => "cloud-strict-crash-key",
         _ => throw new InvalidOperationException($"Unknown crash scenario '{scenario}'.")
     };

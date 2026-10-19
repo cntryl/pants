@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -31,6 +32,7 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
         var sealedSegment = Assert.Single(sealedSegments);
         var legacyPath = Path.Combine(walDirectory, "wal_000042.log");
         File.Move(sealedSegment, legacyPath);
+        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
@@ -41,6 +43,22 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
         Assert.Equal(
             "legacy-value",
             TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
+    }
+
+    static async Task MarkLegacyWalSequenceReservationVersionAsync(string path)
+    {
+        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        {
+            var manifestPath = Path.Combine(path, fileName);
+            if (!File.Exists(manifestPath))
+            {
+                continue;
+            }
+
+            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
+            manifest["wal_sequence_reservation_version"] = 0;
+            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+        }
     }
 
     static CommitPayload CreateCommitPayload(RuntimeState state)

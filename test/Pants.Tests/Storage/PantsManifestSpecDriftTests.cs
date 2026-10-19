@@ -679,6 +679,12 @@ public sealed class PantsManifestSpecDriftTests
         Assert.Equal("after", resurrectedMeta.GetProperty("name").GetString());
         Assert.Equal(4u, resurrectedMeta.GetProperty("created_at").GetUInt64());
         Assert.False(resurrectedMeta.TryGetProperty("deleted_at", out _));
+        Assert.Equal(
+            3UL,
+            document.RootElement.GetProperty("flushed_through").EnumerateArray()
+                .Single(frontier => frontier.GetProperty("cf_id").GetUInt32() == 1)
+                .GetProperty("through_sequence")
+                .GetUInt64());
     }
 
     // Issue #265 ------------------------------------------------------------

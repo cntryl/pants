@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.Json.Nodes;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -304,6 +305,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
             Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
             frame);
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"), frame);
+        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
 
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
 
@@ -322,6 +324,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await File.WriteAllBytesAsync(
             Path.Combine(directory.Path, "wal", "wal.log"),
             Frame([CreatePut("duplicate", "conflicting", 7, 1)]));
+        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
 
         var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
             OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
@@ -517,8 +520,30 @@ public sealed class PantsWalWriterEpochRecoveryTests
     static Task WriteWalAsync(string path, params byte[][] payloads) =>
         WriteWalFileAsync(path, "wal.log", payloads);
 
-    static Task WriteWalFileAsync(string path, string fileName, params byte[][] payloads) =>
-        File.WriteAllBytesAsync(Path.Combine(path, "wal", fileName), Frame(payloads));
+    static async Task WriteWalFileAsync(string path, string fileName, params byte[][] payloads)
+    {
+        await File.WriteAllBytesAsync(Path.Combine(path, "wal", fileName), Frame(payloads));
+        if (!StringComparer.Ordinal.Equals(fileName, "wal.log"))
+        {
+            await MarkLegacyWalSequenceReservationVersionAsync(path);
+        }
+    }
+
+    static async Task MarkLegacyWalSequenceReservationVersionAsync(string path)
+    {
+        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        {
+            var manifestPath = Path.Combine(path, fileName);
+            if (!File.Exists(manifestPath))
+            {
+                continue;
+            }
+
+            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
+            manifest["wal_sequence_reservation_version"] = 0;
+            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+        }
+    }
 
     static async Task WriteWalWithCorruptTailAsync(string path, params byte[][] payloads)
     {

@@ -1,3 +1,6 @@
+using Cntryl.Pants.Observability;
+using Cntryl.Pants.Storage.Internal.Wal;
+
 namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 
 /// <summary>
@@ -32,6 +35,7 @@ sealed class ProviderWalRetirement
     readonly WalRetirementProgress _progress = new();
     readonly WalSegmentProver _prover;
     readonly WalRetirementSettings _settings;
+    readonly WalRetirementDiagnostics _walRetirementDiagnostics;
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
     readonly ulong _writerEpoch;
@@ -45,7 +49,8 @@ sealed class ProviderWalRetirement
         CloudLeaseCoordinator lease,
         WalRetirementSettings settings,
         IFailpointHandler failpoints,
-        Action markPersistenceAnomaly)
+        Action markPersistenceAnomaly,
+        WalRetirementDiagnostics walRetirementDiagnostics)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(settings.PageBytes, 64);
         _walStore = walStore;
@@ -56,6 +61,7 @@ sealed class ProviderWalRetirement
         _lease = lease;
         _writerEpoch = lease.Epoch;
         _settings = settings;
+        _walRetirementDiagnostics = walRetirementDiagnostics;
         _markPersistenceAnomaly = markPersistenceAnomaly;
         _manifests = new PublishedManifestReader(controlStore, lease.EnsureValid);
         _prover = new WalSegmentProver(
@@ -78,16 +84,22 @@ sealed class ProviderWalRetirement
             using var turn = await PrepareAsync(quantum, cancellationToken).ConfigureAwait(false);
             if (turn.Proven.Count == 0)
             {
+                _walRetirementDiagnostics.SetBlockedCause(turn.BlockedCause);
                 return new WalRetirementResult(turn.Outcome, retired);
             }
 
             switch (await CommitAsync(turn, cancellationToken).ConfigureAwait(false))
             {
                 case CommitResult.Committed:
+                    _walRetirementDiagnostics.SetBlockedCause(turn.BlockedCause);
                     return new WalRetirementResult(turn.Outcome, retired + turn.Proven.Count);
                 case CommitResult.Stale:
+                    _walRetirementDiagnostics.SetBlockedCause(
+                        PantsWalRetirementBlockedCause.MaintenanceBudget);
                     return new WalRetirementResult(WalRetirementOutcome.Yielded, retired);
                 case CommitResult.Deferred:
+                    _walRetirementDiagnostics.SetBlockedCause(
+                        PantsWalRetirementBlockedCause.MaintenanceBudget);
                     return new WalRetirementResult(WalRetirementOutcome.Deferred, retired);
                 case CommitResult.CatalogConflict:
                 default:
@@ -128,11 +140,13 @@ sealed class ProviderWalRetirement
             _progress.RetainOnly(catalog.Segments.Keys);
             var proven = new List<WalSegmentProof>();
             var outcome = WalRetirementOutcome.Settled;
+            var blockedCause = PantsWalRetirementBlockedCause.None;
             foreach (var segment in catalog.Segments.Values.OrderBy(static segment => segment.SegmentId))
             {
                 // The contiguous oldest prefix only: the first segment that cannot retire ends it.
                 if (segment.MaximumSequence > manifest.LastPersistedSequence)
                 {
+                    blockedCause = PantsWalRetirementBlockedCause.FamilyFlushFrontier;
                     break;
                 }
 
@@ -147,6 +161,7 @@ sealed class ProviderWalRetirement
                 {
                     // What is already proven still retires; this segment resumes next turn.
                     outcome = WalRetirementOutcome.Deferred;
+                    blockedCause = PantsWalRetirementBlockedCause.MaintenanceBudget;
                     break;
                 }
 
@@ -159,18 +174,28 @@ sealed class ProviderWalRetirement
                 if (state is WalSegmentProofState.Yielded or WalSegmentProofState.IdentityChanged)
                 {
                     outcome = WalRetirementOutcome.Yielded;
+                    blockedCause = state == WalSegmentProofState.Yielded
+                        ? PantsWalRetirementBlockedCause.MaintenanceBudget
+                        : PantsWalRetirementBlockedCause.InvalidWalSegment;
+                }
+                else if (state == WalSegmentProofState.Uncovered)
+                {
+                    blockedCause = PantsWalRetirementBlockedCause.FamilyFlushFrontier;
                 }
 
                 break;
             }
 
-            var turn = new RetirementTurn(outcome, proven, manifest, catalogRead);
+            var turn = new RetirementTurn(outcome, proven, blockedCause, manifest, catalogRead);
             catalogRead = null;
             return turn;
         }
         catch (Exception exception) when (IsDeferral(exception, cancellationToken))
         {
-            return RetirementTurn.Deferred;
+            return new RetirementTurn(
+                WalRetirementOutcome.Deferred,
+                [],
+                PantsWalRetirementBlockedCause.MaintenanceBudget);
         }
         finally
         {
@@ -230,10 +255,28 @@ sealed class ProviderWalRetirement
             catalog.Segments
                 .Where(entry => !retiredIds.Contains(entry.Key))
                 .ToDictionary());
+        var nextSegmentId = catalog.NextSegmentId;
+        if (nextSegmentId == 0)
+        {
+            nextSegmentId = catalog.Segments.Count == 0
+                ? Math.Max(1UL, turn.Manifest!.Manifest.WalHistoryStart)
+                : checked(catalog.Segments.Keys.Max() + 1);
+        }
+
+        nextSegmentId = Math.Max(nextSegmentId, turn.Manifest!.Manifest.WalHistoryStart);
+        var walHistoryStartSegmentId = Math.Max(
+            catalog.WalHistoryStartSegmentId,
+            turn.Manifest!.Manifest.WalHistoryStart);
+
         ProviderWalCatalogSerializedBytes encodedCatalog;
         try
         {
-            encodedCatalog = _encodeCatalog(catalog with { Segments = retained });
+            encodedCatalog = _encodeCatalog(catalog with
+            {
+                NextSegmentId = nextSegmentId,
+                WalHistoryStartSegmentId = walHistoryStartSegmentId,
+                Segments = retained
+            });
         }
         catch (Exception exception) when (IsDeferral(exception, cancellationToken))
         {
@@ -370,6 +413,7 @@ sealed class ProviderWalRetirement
     sealed record RetirementTurn(
         WalRetirementOutcome Outcome,
         IReadOnlyList<WalSegmentProof> Proven,
+        PantsWalRetirementBlockedCause BlockedCause = PantsWalRetirementBlockedCause.None,
         PublishedManifest? Manifest = null,
         WalCatalogRead? CatalogRead = null) : IDisposable
     {

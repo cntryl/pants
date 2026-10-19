@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -52,6 +53,90 @@ public sealed class RecoveryCheckpointTests
         }
 
         Assert.Equal(CommitCount, count);
+    }
+
+    [Fact]
+    public async Task ShouldReplayInterleavedTransactionMutationMissingFromNewerCheckpointAfterReopen()
+    {
+        using var directory = new TemporaryDirectory();
+        using (LocalDiskStore.Open(directory.Path, NewState()))
+        {
+        }
+
+        var lateValue = TestBytes.FromString("late-commit");
+        var checkpointValue = new byte[ValueBytes];
+        var records = new byte[][]
+        {
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 7, 1, 1),
+            WalCodec.EncodeTransactionMutation(
+                new WalMutation(
+                    0,
+                    WalOperation.Put,
+                    TestBytes.FromString("late-key"),
+                    lateValue,
+                    2,
+                    null,
+                    null),
+                7,
+                1),
+            WalCodec.EncodeTransactionBatch(
+                8,
+                2,
+                1,
+                [new WalMutation(
+                    0,
+                    WalOperation.Put,
+                    TestBytes.FromString("checkpoint-key"),
+                    checkpointValue,
+                    3,
+                    null,
+                    null)]),
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 7, 5, 1)
+        };
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "wal", "wal.log"),
+            Frame(records));
+
+        using (LocalDiskStore.Open(
+                   directory.Path,
+                   NewState(),
+                   recoveryCheckpointBytes: 1024))
+        {
+        }
+
+        Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        using (var manifest = JsonDocument.Parse(
+                   await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json"))))
+        {
+            Assert.Equal(
+                4UL,
+                Assert.Single(manifest.RootElement.GetProperty("flushed_through").EnumerateArray())
+                    .GetProperty("through_sequence")
+                    .GetUInt64());
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            "late-commit",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync(TestBytes.FromString("late-key")))));
+        Assert.Equal(
+            ValueBytes,
+            Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync(TestBytes.FromString("checkpoint-key"))).Length);
+
+        await using var scan = await reader.ScanAsync(new PantsScanQuery());
+        var count = 0;
+        await foreach (var _ in scan)
+        {
+            count++;
+        }
+
+        Assert.Equal(2, count);
     }
 
     [Fact]
@@ -151,12 +236,29 @@ public sealed class RecoveryCheckpointTests
             }
         }
 
-        var sstsBefore = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst").Length;
+        var localSstsBefore = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst").Length;
+        var cloudSstsBefore = simulatedCloud
+            ? Directory.GetFiles(
+                Path.Combine(directory.Path, "cloud_store", "sst"),
+                "*.sst").Length
+            : 0;
         await using (var checkpointed = await PantsDatabase.OpenAsync(options.WithMemtableLimits(16 * 1024)))
         {
-            Assert.True(
-                Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst").Length > sstsBefore,
-                "Replay should have published checkpoints.");
+            if (simulatedCloud)
+            {
+                Assert.True(
+                    Directory.GetFiles(Path.Combine(directory.Path, "cloud_store", "sst"), "*.sst").Length >
+                    cloudSstsBefore,
+                    "Replay should publish cloud checkpoints before evicting their local SSTs.");
+            }
+            else
+            {
+                Assert.True(
+                    Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst").Length >
+                    localSstsBefore,
+                    "Replay should have published local checkpoints.");
+            }
+
             Assert.Null(await ReadAsync(checkpointed, doomed));
         }
 

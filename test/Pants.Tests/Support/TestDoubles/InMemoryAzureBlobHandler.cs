@@ -108,6 +108,21 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         }
     }
 
+    public long WalStoredBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _objects
+                    .Where(static pair =>
+                        pair.Key.Contains("/wal/", StringComparison.Ordinal) &&
+                        pair.Key.EndsWith(".wal", StringComparison.Ordinal))
+                    .Sum(static pair => (long)pair.Value.Data.Length);
+            }
+        }
+    }
+
     public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
         Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
 

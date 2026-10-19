@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cntryl.Pants.Observability;
+using Cntryl.Pants.Storage.Internal.Wal;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -58,6 +60,172 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldPublishOnlyTheLongestContiguousWalPrefix()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(3, epoch, 3, "3.wal", [3])],
+            CancellationToken.None).AsTask());
+
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(2, epoch, 2, "2.wal", [2])],
+            CancellationToken.None);
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(3, epoch, 3, "3.wal", [3])],
+            CancellationToken.None);
+
+        var catalogObject = await walStore.GetAsync(
+            PantsCloudObjectLayout.WalCatalogObjectKey,
+            CancellationToken.None);
+        var catalog = ProviderCloudPersistence.DecodeCatalogForFloor(
+            Assert.IsType<CloudObject>(catalogObject).Data.Span);
+        Assert.Equal([1UL, 2UL, 3UL], catalog.Segments.Keys);
+        Assert.Equal(4UL, catalog.NextSegmentId);
+    }
+
+    [Fact]
+    public async Task ShouldRefuseWalPublicationAtTheRetainedSegmentLimitBeforeCatalogAdvance()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var diagnostics = new WalRetirementDiagnostics();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease,
+            walRetirementDiagnostics: diagnostics,
+            maximumRetainedWalSegments: 1);
+
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+            CancellationToken.None);
+        await Assert.ThrowsAsync<PantsNoSpaceException>(() => persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(2, epoch, 2, "2.wal", [2])],
+            CancellationToken.None).AsTask());
+
+        var catalogObject = await walStore.GetAsync(
+            PantsCloudObjectLayout.WalCatalogObjectKey,
+            CancellationToken.None);
+        var catalog = ProviderCloudPersistence.DecodeCatalogForFloor(
+            Assert.IsType<CloudObject>(catalogObject).Data.Span);
+        Assert.Equal([1UL], catalog.Segments.Keys);
+        Assert.Equal(PantsWalRetirementBlockedCause.RetainedWalSegmentLimit,
+            diagnostics.BlockedCause);
+    }
+
+    [Fact]
+    public async Task ShouldAllowSameCacheTailRecoveryAndFenceItAfterAnotherCacheTakesOver()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var firstLease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "first-holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var firstEpoch = await firstLease.AcquireAsync(CancellationToken.None);
+        var walStore = new CountingCloudObjectStore();
+        var controlStore = new TestCloudObjectStore();
+        var firstPersistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            controlStore,
+            firstLease,
+            localWalCacheId: "cache-a");
+        Assert.True(await firstPersistence.FenceWalCatalogAsync(CancellationToken.None));
+        await firstPersistence.PublishWalBatchAsync(
+            [new SealedWalSegment(1, firstEpoch, 1, "1.wal", [1])],
+            CancellationToken.None);
+
+        clock.UtcNow += TimeSpan.FromSeconds(11);
+        using var sameCacheLease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "same-cache-recovery",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var sameCacheEpoch = await sameCacheLease.AcquireAsync(firstEpoch, CancellationToken.None);
+        var sameCachePersistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            controlStore,
+            sameCacheLease,
+            localWalCacheId: "cache-a");
+        Assert.True(await sameCachePersistence.FenceWalCatalogAsync(CancellationToken.None));
+        await sameCachePersistence.PublishWalBatchAsync(
+            [new SealedWalSegment(2, firstEpoch, 2, "2.wal", [2])],
+            CancellationToken.None);
+
+        clock.UtcNow += TimeSpan.FromSeconds(11);
+        using var differentCacheLease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "different-cache-holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var differentCacheEpoch = await differentCacheLease.AcquireAsync(
+            sameCacheEpoch,
+            CancellationToken.None);
+        var differentCachePersistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            controlStore,
+            differentCacheLease,
+            localWalCacheId: "cache-b");
+        Assert.False(await differentCachePersistence.FenceWalCatalogAsync(CancellationToken.None));
+
+        await Assert.ThrowsAsync<PantsFencedException>(() => differentCachePersistence.PublishWalBatchAsync(
+            [new SealedWalSegment(3, firstEpoch, 3, "3.wal", [3])],
+            CancellationToken.None).AsTask());
+        await differentCachePersistence.PublishWalBatchAsync(
+            [new SealedWalSegment(3, differentCacheEpoch, 3, "3.wal", [33])],
+            CancellationToken.None);
+
+        var catalogObject = await walStore.GetAsync(
+            PantsCloudObjectLayout.WalCatalogObjectKey,
+            CancellationToken.None);
+        var catalog = ProviderCloudPersistence.DecodeCatalogForFloor(
+            Assert.IsType<CloudObject>(catalogObject).Data.Span);
+        Assert.Equal([1UL, 2UL, 3UL], catalog.Segments.Keys);
+        Assert.Equal(differentCacheEpoch, catalog.MinimumLocalWalWriterEpoch);
+    }
+
+    [Fact]
     public async Task ShouldRejectWalCatalogPublicationBeforeAuthorityWriteWhenSharedPoolCannotFitIt()
     {
         using var cache = new TemporaryDirectory();
@@ -108,10 +276,10 @@ public sealed class ProviderCloudPersistenceTests
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
             persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(100, epoch, 100, "100.wal", [1])],
+                [new SealedWalSegment(41, epoch, 41, "41.wal", [1])],
                 CancellationToken.None).AsTask());
 
-        Assert.NotNull(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 100)));
+        Assert.NotNull(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 41)));
         Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey));
         Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogMirrorObjectKey));
         Assert.Equal(200 * 1024, budget.Current);
@@ -119,7 +287,7 @@ public sealed class ProviderCloudPersistenceTests
 
         maintenancePressure.Dispose();
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(100, epoch, 100, "100.wal", [1])],
+            [new SealedWalSegment(41, epoch, 41, "41.wal", [1])],
             CancellationToken.None);
 
         using var publishedCatalog = JsonDocument.Parse(
