@@ -243,12 +243,13 @@ public sealed class RecoveryCheckpointTests
 
         using (var hybridCache = new HybridCacheManager(walBytesBefore + 32 * 1024))
         {
-            Assert.Throws<PantsNoSpaceException>(() => LocalDiskStore.Open(
+            var exception = Assert.Throws<PantsNoSpaceException>(() => LocalDiskStore.Open(
                 directory.Path,
                 NewState(),
                 recoveryPolicy: PantsRecoveryPolicy.Salvage,
                 recoveryCheckpointBytes: 1024 * 1024,
                 hybridCache: hybridCache));
+            Assert.Contains("WAL recovery spool", exception.Message);
         }
 
         Assert.Equal(walBytesBefore, WalBytes(directory.Path));
