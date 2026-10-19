@@ -372,6 +372,7 @@ public sealed class PantsHybridStorageTests
         await using (var database = await OpenAsync(directory.Path))
         {
             await PutAsync(database, "large-cloud-transaction", value);
+            Assert.Empty(LocalSsts(directory.Path));
         }
 
         await using var reopened = await OpenAsync(directory.Path);
