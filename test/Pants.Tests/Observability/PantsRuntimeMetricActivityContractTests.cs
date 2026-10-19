@@ -390,22 +390,24 @@ public sealed class PantsRuntimeMetricActivityContractTests
             Failpoint.BeforeHybridSstEviction);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-hybrid-eviction/")
-            .WithSimulatedCloudLocalStorageBudget(280 * 1024)
+            .WithSimulatedCloudLocalStorageBudget(560 * 1024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
         var value = new byte[256 * 1024];
         new Random(17).NextBytes(value);
-        await using (var transaction = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
-                         PantsTransactionMode.ReadWrite))
-        {
-            transaction.Put("evict"u8.ToArray(), value);
-            await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
-        }
-
-        var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
+        await CommitCloudValueAsync(
+            database,
+            database.ColumnFamilies.DefaultFamily,
+            "evict"u8.ToArray(),
+            value);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        var write = CommitCloudValueAsync(
+            database,
+            database.ColumnFamilies.DefaultFamily,
+            "next-window"u8.ToArray(),
+            value).AsTask();
         Task<PantsRuntimeMetrics>? metricsRequest = null;
         try
         {
@@ -419,13 +421,14 @@ public sealed class PantsRuntimeMetricActivityContractTests
         finally
         {
             failpoint.Release();
-            await flush.WaitAsync(TestTimeouts.Expected);
+            await write.WaitAsync(TestTimeouts.Expected);
             if (metricsRequest is not null)
             {
                 _ = await metricsRequest.WaitAsync(TestTimeouts.Expected);
             }
         }
 
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridPendingEvictions);
     }
 
@@ -440,6 +443,19 @@ public sealed class PantsRuntimeMetricActivityContractTests
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
         await transaction.CommitAsync(PantsWriteOptions.Sync);
+    }
+
+    static async ValueTask CommitCloudValueAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily family,
+        ReadOnlyMemory<byte> key,
+        ReadOnlyMemory<byte> value)
+    {
+        await using var transaction = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(key, value);
+        await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
     }
 
     static async ValueTask CommitAndFlushAsync(IPantsDatabase database, string key)

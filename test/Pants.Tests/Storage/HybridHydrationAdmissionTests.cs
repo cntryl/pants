@@ -36,9 +36,8 @@ public sealed class HybridHydrationAdmissionTests
     }
 
     /// <summary>
-    ///     A flush is the only thing that turns a full memtable into an SST, and writes stall on
-    ///     level-0 debt, so refusing it for space would wedge the engine rather than degrade it. It
-    ///     evicts to make room and, failing that, proceeds with its bounded, memtable-sized output.
+    ///     A flush must fit in capacity already preserved for its output. If eviction cannot make
+    ///     that capacity available, admitting the output anyway would violate the local budget.
     /// </summary>
     [Fact]
     public async Task ShouldEvictToAdmitFlushRatherThanRefuseIt()
@@ -58,7 +57,7 @@ public sealed class HybridHydrationAdmissionTests
     }
 
     [Fact]
-    public async Task ShouldProceedWithFlushWhenEvictionCannotFreeEnough()
+    public async Task ShouldRejectFlushWhenEvictionCannotFreeEnough()
     {
         var store = new FakeHybridCacheStore(sstSizeBytes: 300, evictable: false);
         using var manager = new HybridCacheManager(1000);
@@ -68,9 +67,11 @@ public sealed class HybridHydrationAdmissionTests
             ["a.sst", "b.sst", "c.sst"],
             CancellationToken.None);
 
-        using var reservation = await manager.ReserveFlushAsync(store, 5000, CancellationToken.None);
+        await Assert.ThrowsAsync<PantsNoSpaceException>(async () =>
+            await manager.ReserveFlushAsync(store, 5000, CancellationToken.None));
 
-        Assert.Equal(5000, manager.Ledger.ReservedBytes);
+        Assert.Equal(0, manager.Ledger.ReservedBytes);
+        Assert.Equal(900, manager.Ledger.ChargedBytes);
     }
 
     /// <summary>

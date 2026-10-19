@@ -69,6 +69,9 @@ sealed class LocalDiskStore :
     readonly PantsRecoveryPolicy _recoveryPolicy;
     readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
     readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
+    readonly Dictionary<uint, List<FlushHeadroomClaim>> _mutableFlushHeadroom = [];
+    readonly Dictionary<long, List<FlushHeadroomClaim>> _frozenFlushHeadroom = [];
+    readonly List<FlushHeadroomClaim> _unresolvedFlushHeadroom = [];
 
     readonly HashSet<string> _snapshotPinnedObsoleteFiles = new(StringComparer.Ordinal);
     readonly string _sstDirectory;
@@ -358,6 +361,7 @@ sealed class LocalDiskStore :
         _bufferedSync.Dispose();
         _readerCache.Dispose();
         _asyncReaderCache.Dispose();
+        ReleaseAllFlushHeadroom();
         _walStream.Dispose();
         _lease.Dispose();
         _lockStream.Dispose();
@@ -654,6 +658,7 @@ sealed class LocalDiskStore :
             ThrowIfDisposed();
             ThrowIfDurableWalFenced(durability);
             StorageBudgetLedger.StorageReservation? walAdmission = null;
+            var flushHeadroomAdmission = new List<FlushHeadroomClaim>();
             var walLength = _walStream.Length;
             var reservedSequence = checked((long)_nextSequence);
             var unflushedCommitSequence = _unflushedCommitSequence;
@@ -668,9 +673,11 @@ sealed class LocalDiskStore :
                     durability,
                     out reservedSequence,
                     metrics,
-                    ref walAdmission);
+                    ref walAdmission,
+                    ref flushHeadroomAdmission);
                 _walIo.CompleteTransition();
                 walAdmission?.Dispose();
+                CommitFlushHeadroom(flushHeadroomAdmission);
                 return result;
             }
             catch (Exception appendFailure)
@@ -687,9 +694,11 @@ sealed class LocalDiskStore :
                         mutableOperationSequence,
                         durabilityState);
                     walAdmission?.Dispose();
+                    ReleaseFlushHeadroom(flushHeadroomAdmission);
                 }
                 catch (Exception rollbackFailure)
                 {
+                    RetainUnresolvedFlushHeadroom(flushHeadroomAdmission);
                     var uncertainty = new WalCommitRollbackException(
                         appendFailure,
                         rollbackFailure);
@@ -736,6 +745,7 @@ sealed class LocalDiskStore :
             ThrowIfDurableWalFenced(durability);
             _lease.EnsureValid();
             StorageBudgetLedger.StorageReservation? walAdmission = null;
+            var flushHeadroomAdmission = new List<FlushHeadroomClaim>();
             var walLength = _walStream.Length;
             var reservedSequence = commits[^1].ExpectedSequence;
             if (reservedSequence < state.Sequence)
@@ -762,6 +772,9 @@ sealed class LocalDiskStore :
                             "The coalesced WAL sequence did not match its preflight plan.");
                     }
                 }
+
+                flushHeadroomAdmission.AddRange(ReserveFlushHeadroom(
+                    prepared.SelectMany(static commit => commit.Mutations)));
 
                 if (durability != PantsDurability.BestEffort)
                 {
@@ -816,6 +829,7 @@ sealed class LocalDiskStore :
 
                 _walIo.CompleteTransition();
                 walAdmission?.Dispose();
+                CommitFlushHeadroom(flushHeadroomAdmission);
                 return new WalCommitGroupResult(commits.Count);
             }
             catch (Exception groupFailure)
@@ -831,9 +845,11 @@ sealed class LocalDiskStore :
                         mutableOperationSequence,
                         durabilityState);
                     walAdmission?.Dispose();
+                    ReleaseFlushHeadroom(flushHeadroomAdmission);
                 }
                 catch (Exception rollbackFailure)
                 {
+                    RetainUnresolvedFlushHeadroom(flushHeadroomAdmission);
                     var uncertainty = new WalCommitGroupRollbackException(
                         groupFailure,
                         rollbackFailure);
@@ -2351,6 +2367,7 @@ sealed class LocalDiskStore :
                     });
                 DurablyApplyManifestEditCore(edit);
                 _ = _mutableOperations.DetachFamily(id);
+                ReleaseMutableFlushHeadroom(id);
                 _unflushedCommitSequence = _mutableOperations.Count == 0
                     ? _manifest.LastPersistedSequence
                     : checked(_mutableOperations.LastSequence + 1);
@@ -2416,6 +2433,7 @@ sealed class LocalDiskStore :
         out long reservedSequence,
         WalMetricsRecorder? metrics,
         ref StorageBudgetLedger.StorageReservation? walAdmission,
+        ref List<FlushHeadroomClaim> flushHeadroomAdmission,
         bool flushBufferedWrites = true)
     {
         ThrowIfDisposed();
@@ -2437,6 +2455,8 @@ sealed class LocalDiskStore :
         {
             RequireTransactionFitsRecoveryEnvelope(payload, beginSequence);
         }
+
+        flushHeadroomAdmission.AddRange(ReserveFlushHeadroom(payload));
 
         reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
         var commitSequence = (ulong)reservedSequence;
@@ -2692,6 +2712,192 @@ sealed class LocalDiskStore :
         _walLocalDurableSequence = Math.Max(_walLocalDurableSequence, sequence);
     }
 
+    List<FlushHeadroomClaim> ReserveFlushHeadroom(CommitPayload payload)
+    {
+        if (_localStorageLedger is null)
+        {
+            return [];
+        }
+
+        var footprintByFamily = new Dictionary<uint, SstFlushFootprint>();
+        payload.Operations.ForEach(operation =>
+        {
+            if (!_familyIds.TryGetValue(operation.Family, out var familyId))
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.InvalidArgument,
+                    $"Column family '{operation.Family.Name}' is not active in persistent storage.");
+            }
+
+            AddFlushFootprint(
+                footprintByFamily,
+                operation.Key.Length,
+                operation.Value?.Length ?? 0,
+                operation.EndExclusive?.Length ?? 0,
+                operation.Kind == CommitOperationKind.DeleteRange,
+                familyId);
+        });
+
+        return ReserveFlushHeadroom(footprintByFamily);
+    }
+
+    List<FlushHeadroomClaim> ReserveFlushHeadroom(IEnumerable<WalMutation> operations)
+    {
+        if (_localStorageLedger is null)
+        {
+            return [];
+        }
+
+        var footprintByFamily = new Dictionary<uint, SstFlushFootprint>();
+        foreach (var operation in operations)
+        {
+            AddFlushFootprint(
+                footprintByFamily,
+                operation.Key.Length,
+                operation.Value?.Length ?? 0,
+                operation.RangeEnd?.Length ?? 0,
+                operation.Operation == WalOperation.DeleteRange,
+                operation.ColumnFamilyId);
+        }
+
+        return ReserveFlushHeadroom(footprintByFamily);
+    }
+
+    static void AddFlushFootprint(
+        Dictionary<uint, SstFlushFootprint> footprintByFamily,
+        int keyLength,
+        int valueLength,
+        int rangeEndLength,
+        bool isRangeTombstone,
+        uint familyId)
+    {
+        if (!footprintByFamily.TryGetValue(familyId, out var footprint))
+        {
+            footprint = new SstFlushFootprint();
+            footprintByFamily.Add(familyId, footprint);
+        }
+
+        footprint.Add(keyLength, valueLength, rangeEndLength, isRangeTombstone);
+    }
+
+    List<FlushHeadroomClaim> ReserveFlushHeadroom(
+        Dictionary<uint, SstFlushFootprint> footprintByFamily)
+    {
+        var claims = new List<FlushHeadroomClaim>(footprintByFamily.Count);
+        try
+        {
+            foreach (var (familyId, footprint) in footprintByFamily)
+            {
+                var bytes = footprint.MeasureUpperBound(_performanceGoal);
+                claims.Add(new FlushHeadroomClaim(
+                    familyId,
+                    bytes,
+                    _localStorageLedger!.Reserve(StorageAdmissionKind.FlushHeadroom, bytes)));
+            }
+
+            return claims;
+        }
+        catch
+        {
+            ReleaseFlushHeadroom(claims);
+            throw;
+        }
+    }
+
+    void CommitFlushHeadroom(List<FlushHeadroomClaim> claims)
+    {
+        foreach (var claim in claims)
+        {
+            if (!_mutableFlushHeadroom.TryGetValue(claim.FamilyId, out var familyClaims))
+            {
+                familyClaims = [];
+                _mutableFlushHeadroom.Add(claim.FamilyId, familyClaims);
+            }
+
+            familyClaims.Add(claim);
+        }
+
+        claims.Clear();
+    }
+
+    static void ReleaseFlushHeadroom(List<FlushHeadroomClaim> claims)
+    {
+        foreach (var claim in claims)
+        {
+            claim.Reservation.Dispose();
+        }
+
+        claims.Clear();
+    }
+
+    void RetainUnresolvedFlushHeadroom(List<FlushHeadroomClaim> claims)
+    {
+        _unresolvedFlushHeadroom.AddRange(claims);
+        claims.Clear();
+    }
+
+    void ReleaseMutableFlushHeadroom(uint? familyId = null)
+    {
+        var familyIds = familyId is { } selected
+            ? [selected]
+            : _mutableFlushHeadroom.Keys.ToArray();
+        foreach (var id in familyIds)
+        {
+            if (_mutableFlushHeadroom.Remove(id, out var claims))
+            {
+                ReleaseFlushHeadroom(claims);
+            }
+        }
+    }
+
+    void ReleaseFrozenFlushHeadroom(long flushId)
+    {
+        if (_frozenFlushHeadroom.Remove(flushId, out var claims))
+        {
+            ReleaseFlushHeadroom(claims);
+        }
+    }
+
+    StorageBudgetLedger.StorageReservation? ReserveUnclaimedFlushHeadroom(
+        IReadOnlyList<WalMutation> operations)
+    {
+        if (_localStorageLedger is null)
+        {
+            return null;
+        }
+
+        var unclaimedBytes = 0L;
+        foreach (var familyGroup in operations.GroupBy(static operation => operation.ColumnFamilyId))
+        {
+            var outputBound = SstFlushFootprint.MeasureUpperBound(familyGroup, _performanceGoal);
+            var claimedBytes = _mutableFlushHeadroom.TryGetValue(familyGroup.Key, out var claims)
+                ? claims.Sum(static claim => claim.Bytes)
+                : 0;
+            unclaimedBytes = checked(unclaimedBytes + Math.Max(0, outputBound - claimedBytes));
+        }
+
+        return unclaimedBytes == 0
+            ? null
+            : _localStorageLedger.Reserve(StorageAdmissionKind.Flush, unclaimedBytes);
+    }
+
+    void ReleaseAllFlushHeadroom()
+    {
+        foreach (var claims in _mutableFlushHeadroom.Values)
+        {
+            ReleaseFlushHeadroom(claims);
+        }
+
+        foreach (var claims in _frozenFlushHeadroom.Values)
+        {
+            ReleaseFlushHeadroom(claims);
+        }
+
+        ReleaseFlushHeadroom(_unresolvedFlushHeadroom);
+        _mutableFlushHeadroom.Clear();
+        _frozenFlushHeadroom.Clear();
+    }
+
     void AppendDirectTransaction(
         ulong transactionId,
         ulong beginSequence,
@@ -2884,6 +3090,13 @@ sealed class LocalDiskStore :
             _reservedFlushSstSequences[familyId] = checked(sstSequence + 1);
             var id = checked(++_nextFrozenFlushId);
             _frozenFlushIds.Add(id);
+            var headroomClaims = _mutableFlushHeadroom.Remove(familyId, out var claims)
+                ? claims
+                : [];
+            var outputBoundBytes = headroomClaims.Count > 0
+                ? headroomClaims.Sum(static claim => claim.Bytes)
+                : SstFlushFootprint.MeasureUpperBound(operations, _performanceGoal);
+            _frozenFlushHeadroom[id] = headroomClaims;
             return new FrozenMemtableFlush(
                 id,
                 identity,
@@ -2891,7 +3104,11 @@ sealed class LocalDiskStore :
                 operations,
                 sstSequence,
                 frontierSequence,
-                sizeBytes);
+                sizeBytes)
+            {
+                FlushOutputBoundBytes = outputBoundBytes,
+                HasReservedFlushHeadroom = headroomClaims.Count > 0
+            };
         }
     }
 
@@ -2906,7 +3123,10 @@ sealed class LocalDiskStore :
             return;
         }
 
-        FlushOperations(_mutableOperations.SnapshotAll(), _unflushedCommitSequence);
+        var operations = _mutableOperations.SnapshotAll();
+        using var fallbackHeadroom = ReserveUnclaimedFlushHeadroom(operations);
+        FlushOperations(operations, _unflushedCommitSequence);
+        ReleaseMutableFlushHeadroom();
         RotateWal();
         _mutableOperations.Clear();
     }
@@ -2923,21 +3143,25 @@ sealed class LocalDiskStore :
                 $"Column family '{identity.Name}' is not active in persistent storage.");
         }
 
-        var familyOperations = _mutableOperations.DetachFamily(familyId);
+        var familyOperations = _mutableOperations.SnapshotFamily(familyId);
         if (familyOperations.Count == 0)
         {
             SaveManifestCheckpoint();
             return;
         }
 
+        using var familyHeadroom = ReserveUnclaimedFlushHeadroom(familyOperations);
+        familyOperations = _mutableOperations.DetachFamily(familyId);
         if (_mutableOperations.Count == 0)
         {
             FlushOperations(familyOperations, _unflushedCommitSequence);
+            ReleaseMutableFlushHeadroom(familyId);
             RotateWal();
             return;
         }
 
         FlushOperations(familyOperations, null);
+        ReleaseMutableFlushHeadroom(familyId);
         _unflushedCommitSequence = checked(_mutableOperations.LastSequence + 1);
         PruneCoveredWalSegments();
     }
@@ -3054,11 +3278,13 @@ sealed class LocalDiskStore :
                 _lease.EnsureValid();
                 RotateWal();
                 _frozenFlushIds.Remove(frozen.Id);
+                ReleaseFrozenFlushHeadroom(frozen.Id);
                 return;
             }
 
             _frozenFlushIds.Remove(frozen.Id);
             PruneCoveredWalSegments();
+            ReleaseFrozenFlushHeadroom(frozen.Id);
         }
     }
 
@@ -6589,6 +6815,11 @@ sealed class LocalDiskStore :
     }
 
     sealed record JournalRecord(byte Type, byte[] Payload);
+
+    sealed record FlushHeadroomClaim(
+        uint FamilyId,
+        long Bytes,
+        StorageBudgetLedger.StorageReservation Reservation);
 
     sealed record ManifestLoadResult(ManifestState Manifest, bool PreserveUnownedSsts);
 

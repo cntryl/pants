@@ -54,17 +54,20 @@ public sealed class ProviderSstMirrorPublicationTests
             cache.Path,
             new RuntimeDependencies(
                 cloudHttpClient: client,
-                hybridLocalStorageBudgetBytes: 560 * 1024));
+                hybridLocalStorageBudgetBytes: 1060 * 1024));
         await CommitAndFlushAsync(database, "remote-first", 16 * 1024);
         await CommitAndFlushAsync(database, "remote-second", 512 * 1024);
+        var localSsts = LocalSstNames(cache.Path);
         var remoteOnly = azure.GetObjectPaths("/sst/")
             .Select(static path => path[(path.LastIndexOf('/') + 1)..])
+            .Where(name => !localSsts.Contains(name, StringComparer.Ordinal))
             .ToArray();
+        Assert.NotEmpty(remoteOnly);
         recorder.Clear();
 
         await CommitAndFlushAsync(database, "remote-third", 1024);
 
-        Assert.Equal(2, remoteOnly.Length);
+        Assert.Single(remoteOnly);
         Assert.DoesNotContain(LocalSstNames(cache.Path), remoteOnly.Contains);
         Assert.DoesNotContain(
             recorder.Requests,

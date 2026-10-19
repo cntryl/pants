@@ -3093,10 +3093,6 @@ sealed class Actor : IAsyncDisposable
         if (_diskStore is not null)
         {
             DeferObsoleteFileCollectionUntilSnapshotsRelease(state);
-            if (payload.Operations.Count != 0)
-            {
-                _hybridCache?.EnsureWriteAdmitted(_diskStore, state);
-            }
 
             var storageChanged = false;
             await _garbageCollectionWorker
@@ -3146,6 +3142,16 @@ sealed class Actor : IAsyncDisposable
         if (payload.Operations.Count != 0)
         {
             await RelieveWritePressureAsync(state, payload, deadline).ConfigureAwait(false);
+            if (_hybridCache is not null && _diskStore is not null)
+            {
+                await _hybridCache.EnsureWriteCapacityAsync(
+                        _diskStore,
+                        payload,
+                        _options.PerformanceGoal,
+                        durability,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
@@ -4902,8 +4908,8 @@ sealed class Actor : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Schedules a frozen memtable for publication, holding a local-disk reservation for its
-    ///     encoded size until the resulting SST has been published.
+    ///     Schedules a frozen memtable for publication. Live memtables transfer their pre-admitted
+    ///     output claim to the flush; recovered memtables acquire a checked reservation here.
     /// </summary>
     async ValueTask<Task<FrozenFlushRuntimeResult>> ScheduleFrozenFlushWithReservationAsync(
         FrozenMemtableFlush frozen,
@@ -4916,9 +4922,18 @@ sealed class Actor : IAsyncDisposable
                 .ConfigureAwait(false);
         }
 
+        if (frozen.HasReservedFlushHeadroom)
+        {
+            return await _flushRuntime
+                .ScheduleFrozenFlushAsync(frozen, publicationPlan)
+                .ConfigureAwait(false);
+        }
+
         var reservation = await _hybridCache.ReserveFlushAsync(
                 _diskStore,
-                frozen.SizeBytes,
+                frozen.FlushOutputBoundBytes > 0
+                    ? frozen.FlushOutputBoundBytes
+                    : frozen.SizeBytes,
                 CancellationToken.None)
             .ConfigureAwait(false);
         try

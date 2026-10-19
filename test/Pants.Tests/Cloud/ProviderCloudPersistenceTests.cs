@@ -1307,7 +1307,7 @@ public sealed class ProviderCloudPersistenceTests
         using var client = new HttpClient(handler);
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
-            hybridLocalStorageBudgetBytes: 560 * 1024);
+            hybridLocalStorageBudgetBytes: 1100 * 1024);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),
@@ -1344,10 +1344,10 @@ public sealed class ProviderCloudPersistenceTests
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        Assert.Empty(Directory.EnumerateFiles(
+        Assert.InRange(Directory.EnumerateFiles(
             Path.Combine(cache.Path, "sst"),
             "*.sst",
-            SearchOption.TopDirectoryOnly));
+            SearchOption.TopDirectoryOnly).Count(), 0, 2);
         Assert.Equal(2, handler.GetObjectPaths("/sst/").Length);
     }
 

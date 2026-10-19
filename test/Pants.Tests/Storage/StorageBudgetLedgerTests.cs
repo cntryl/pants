@@ -106,4 +106,18 @@ public sealed class StorageBudgetLedgerTests
         Assert.Throws<PantsNoSpaceException>(() =>
             ledger.Reserve(StorageAdmissionKind.Compaction, 100));
     }
+
+    [Fact]
+    public void ShouldKeepAcceptedFlushHeadroomUnavailableToWalAndCompaction()
+    {
+        var resident = 0L;
+        var ledger = new StorageBudgetLedger(new HybridStorageBudgetPolicy(Budget), () => resident);
+        using var headroom = ledger.Reserve(StorageAdmissionKind.FlushHeadroom, 600);
+
+        Assert.Throws<PantsNoSpaceException>(() =>
+            ledger.Reserve(StorageAdmissionKind.Wal, 381));
+        Assert.Throws<PantsNoSpaceException>(() =>
+            ledger.Reserve(StorageAdmissionKind.Compaction, 401));
+        Assert.Equal(600, ledger.ReservedBytes);
+    }
 }
