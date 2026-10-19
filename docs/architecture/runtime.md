@@ -133,6 +133,9 @@ RFC 3339 timestamp with an explicit offset, and `epoch`/`checksum` must be plain
 anything else is `LeaseIndeterminate`. Heartbeats run at one third of TTL, bounded between
 1 ms and 10 seconds. Expiry only makes a successor eligible: every renewal, publication, and
 release still validates the writer epoch/owner token, so a resumed old owner remains fenced.
+Provider metadata mirrors re-read the shared lease identity immediately before each conditional
+control-object write, so ownership changed after the current object was read is rejected before the
+metadata CAS.
 
 ## Shutdown lifecycle and error severity
 

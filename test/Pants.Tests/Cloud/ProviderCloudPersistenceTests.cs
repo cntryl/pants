@@ -423,6 +423,58 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldNotMirrorControlMetadataAfterSuccessorTakesLeaseDuringPreCasRead()
+    {
+        using var cache = new TemporaryDirectory();
+        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "format"u8.ToArray());
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero,
+            () => losses++);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var controlStore = new SnapshotConsistencyCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            controlStore,
+            lease);
+        var getStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseGet = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var metadataKey = PantsCloudObjectLayout.MetadataPrefix + "FORMAT";
+        controlStore.BeforeGetAsync = async (objectKey, _, cancellationToken) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, metadataKey))
+            {
+                getStarted.TrySetResult();
+                await releaseGet.Task.WaitAsync(cancellationToken);
+            }
+        };
+
+        var mirror = persistence.MirrorMetadataAndSstsAsync(CancellationToken.None).AsTask();
+        await getStarted.Task.WaitAsync(TestTimeouts.Expected);
+        leaseStore.Seed(new CloudLeaseRecord(
+            "successor",
+            epoch + 1,
+            "successor-token",
+            clock.UtcNow,
+            clock.UtcNow + TimeSpan.FromSeconds(10)));
+        releaseGet.TrySetResult();
+
+        await Assert.ThrowsAsync<PantsFencedException>(() => mirror);
+
+        Assert.Null(controlStore.GetData(metadataKey));
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, losses);
+    }
+
+    [Fact]
     public async Task ShouldRejectStaleDdlCasGivenSuccessorClaimsRegistryDuringRequest()
     {
         using var firstCache = new TemporaryDirectory();

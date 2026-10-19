@@ -909,6 +909,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             }
         }
 
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var published = await _controlStore.PutAsync(
             objectKey,
             data,
