@@ -16,6 +16,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     public const ulong MaximumRetainedWalBytes = 2UL * 1024 * 1024 * 1024;
     public const int MaximumRetainedWalSegments = 16_384;
 
+    const int DdlRegistryReadbackRangeBytes = 64 * 1024;
+
     static readonly string[] MetadataFiles =
     [
         "manifest.snapshot.json",
@@ -46,7 +48,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
     readonly ProviderWalCatalogStore _catalog;
-    readonly ProviderWalCatalogWriteAdmission _catalogWriteAdmission;
+    readonly ResourceBudget _authorityMetadataBudget;
+    readonly CloudMetadataWriteAdmission _catalogWriteAdmission;
     readonly ProviderSstPublisher _sstPublisher;
     readonly ProviderWalRetirement _walRetirement;
     readonly ulong _writerEpoch;
@@ -66,7 +69,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         IFailpointHandler? failpoints = null,
         SstPublicationAdmission? sstPublicationAdmission = null,
         WalRetirementSettings? walRetirementSettings = null,
-        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null,
+        CloudMetadataWriteAdmission? catalogWriteAdmission = null,
         string? localWalCacheId = null,
         WalRetirementDiagnostics? walRetirementDiagnostics = null,
         ulong maximumRetainedWalBytes = MaximumRetainedWalBytes,
@@ -77,8 +80,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
         var retirementSettings = walRetirementSettings ?? WalRetirementSettings.Standalone();
+        _authorityMetadataBudget = retirementSettings.Budget;
         _catalogWriteAdmission = catalogWriteAdmission ??
-                                 new ProviderWalCatalogWriteAdmission(retirementSettings.Budget);
+                                 new CloudMetadataWriteAdmission(retirementSettings.Budget);
         _catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => DecodeCatalog(bytes.Span),
@@ -527,15 +531,32 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        var current = await _controlStore.GetAsync(
+        using var reads = new ProviderCloudControlMetadataReadSet(
+            _controlStore,
+            _authorityMetadataBudget);
+        var current = await reads.ReadAsync(
             PantsCloudObjectLayout.DdlRegistryObjectKey,
             cancellationToken).ConfigureAwait(false);
         _lease.EnsureValid();
-        return current is null
-            ? null
-            : new CloudDdlRegistryObject(
+        if (current is null)
+        {
+            return null;
+        }
+
+        var reservation = reads.TransferReservations();
+        try
+        {
+            return new CloudDdlRegistryObject(
                 CloudDdlJson.DeserializeRegistry(current.Data.Span),
-                current.Version);
+                current.Version,
+                current.Data,
+                reservation);
+        }
+        catch
+        {
+            reservation.Dispose();
+            throw;
+        }
     }
 
     public async ValueTask FenceDdlRegistryAsync(
@@ -545,12 +566,23 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _lease.EnsureValid();
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = await _controlStore.GetAsync(
-                PantsCloudObjectLayout.DdlRegistryObjectKey,
-                cancellationToken).ConfigureAwait(false);
-            _lease.EnsureValid();
-            var baseline = current?.Data.ToArray() ?? CloudDdlJson.SerializeRegistry(bootstrap);
-            var fencedBytes = CloudDdlFence.Encode(baseline, _writerEpoch);
+            using var current = await ReadDdlRegistryAsync(cancellationToken).ConfigureAwait(false);
+            if (current is null)
+            {
+                CloudDdlJson.ValidateRegistry(bootstrap);
+            }
+
+            using var bootstrapBytes = current is null
+                ? _catalogWriteAdmission.Serialize(
+                    bootstrap,
+                    CloudDdlJson.Options,
+                    "Cloud DDL registry")
+                : null;
+            var baseline = current?.Data ?? bootstrapBytes!.Bytes;
+            using var publicationReservation = _catalogWriteAdmission.AdmitExisting(
+                checked((long)baseline.Length + (sizeof(ulong) * 8) + 2),
+                "Cloud DDL registry fence");
+            var fencedBytes = CloudDdlFence.Encode(baseline.Span, _writerEpoch);
             if (current?.Data.Span.SequenceEqual(fencedBytes) == true)
             {
                 return;
@@ -570,18 +602,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 continue;
             }
 
-            var readback = await _controlStore.GetAsync(
-                               PantsCloudObjectLayout.DdlRegistryObjectKey,
-                               cancellationToken).ConfigureAwait(false) ??
-                           throw new PantsLeaseIndeterminateException(
-                               "The cloud DDL registry fence was acknowledged without an authoritative object.");
-            _lease.EnsureValid();
-            if (!readback.Data.Span.SequenceEqual(fencedBytes))
-            {
-                throw new PantsCorruptionException(
-                    "The cloud DDL registry fence read back different bytes.");
-            }
-
+            await VerifyDdlRegistryReadbackAsync(fencedBytes, cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -592,14 +614,21 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     public async ValueTask<bool> CompareExchangeDdlRegistryAsync(
         CloudDdlRegistry registry,
         string? expectedVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? beforeSubmission = null)
     {
         _lease.EnsureValid();
-        var data = CloudDdlJson.SerializeRegistry(registry);
+        CloudDdlJson.ValidateRegistry(registry);
+        using var data = _catalogWriteAdmission.Serialize(
+            registry,
+            CloudDdlJson.Options,
+            "Cloud DDL registry");
+        beforeSubmission?.Invoke();
         await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+        _lease.EnsureValid();
         var published = await _controlStore.PutAsync(
             PantsCloudObjectLayout.DdlRegistryObjectKey,
-            data,
+            data.Bytes,
             expectedVersion is null
                 ? new PantsCloudObjectWriteCondition.IfAbsent()
                 : new PantsCloudObjectWriteCondition.IfVersion(expectedVersion),
@@ -610,19 +639,117 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return false;
         }
 
-        var readback = await _controlStore.GetAsync(
-                           PantsCloudObjectLayout.DdlRegistryObjectKey,
-                           cancellationToken).ConfigureAwait(false) ??
-                       throw new PantsLeaseIndeterminateException(
-                           "The cloud DDL registry CAS was acknowledged without an authoritative object.");
+        await VerifyDdlRegistryReadbackAsync(data.Bytes, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    async ValueTask VerifyDdlRegistryReadbackAsync(
+        ReadOnlyMemory<byte> expectedBytes,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await VerifyDdlRegistryReadbackCoreAsync(expectedBytes, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (PantsResourceLimitException exception)
+        {
+            throw new PantsLeaseIndeterminateException(
+                "The cloud DDL registry may have been published but could not be verified within " +
+                "the resource envelope.",
+                exception);
+        }
+    }
+
+    async ValueTask VerifyDdlRegistryReadbackCoreAsync(
+        ReadOnlyMemory<byte> expectedBytes,
+        CancellationToken cancellationToken)
+    {
+        const string objectKey = PantsCloudObjectLayout.DdlRegistryObjectKey;
+        var metadata = await _controlStore.HeadAsync(objectKey, cancellationToken)
+            .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
+            "The cloud DDL registry publication was acknowledged without an authoritative object.");
         _lease.EnsureValid();
-        if (!readback.Data.Span.SequenceEqual(data))
+        if (metadata.SizeBytes != checked((ulong)expectedBytes.Length))
         {
             throw new PantsCorruptionException(
-                "The cloud DDL registry CAS read back different bytes.");
+                "The cloud DDL registry readback has a different byte length.");
         }
 
-        return true;
+        if (expectedBytes.IsEmpty)
+        {
+            return;
+        }
+
+        for (var offset = 0; offset < expectedBytes.Length;)
+        {
+            var length = Math.Min(DdlRegistryReadbackRangeBytes, expectedBytes.Length - offset);
+            CloudObject? range;
+            try
+            {
+                range = _controlStore is CloudObjectStore builtInStore
+                    ? await builtInStore.GetRangeAsync(
+                            objectKey,
+                            checked((ulong)offset),
+                            length,
+                            metadata,
+                            cancellationToken)
+                        .ConfigureAwait(false)
+                    : await _controlStore.GetRangeAsync(
+                            objectKey,
+                            checked((ulong)offset),
+                            length,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+            }
+            catch (PantsNotSupportedException exception)
+            {
+                if (metadata.SizeBytes > ProviderCloudControlMetadataReadSet.MaximumWholeObjectBytes)
+                {
+                    throw new PantsResourceLimitException(
+                        "The cloud DDL registry is too large for a store without bounded ranged reads.",
+                        exception);
+                }
+
+                range = await _controlStore.GetAsync(objectKey, cancellationToken).ConfigureAwait(false);
+                _lease.EnsureValid();
+                if (range is null || !StringComparer.Ordinal.Equals(range.Version, metadata.Version) ||
+                    range.Data.Length != expectedBytes.Length)
+                {
+                    throw new PantsBusyException(
+                        "The cloud DDL registry changed during publication readback.");
+                }
+
+                if (!range.Data.Span.SequenceEqual(expectedBytes.Span))
+                {
+                    throw new PantsCorruptionException(
+                        "The cloud DDL registry read back different bytes after publication.");
+                }
+
+                return;
+            }
+
+            _lease.EnsureValid();
+            if (range is null || !StringComparer.Ordinal.Equals(range.Version, metadata.Version))
+            {
+                throw new PantsBusyException(
+                    "The cloud DDL registry changed during publication readback.");
+            }
+
+            if (range.Data.Length != length)
+            {
+                throw new PantsIOException(
+                    "The cloud DDL registry did not return the requested readback range.");
+            }
+
+            if (!range.Data.Span.SequenceEqual(expectedBytes.Span.Slice(offset, length)))
+            {
+                throw new PantsCorruptionException(
+                    "The cloud DDL registry read back different bytes after publication.");
+            }
+
+            offset += length;
+        }
     }
 
     public static async ValueTask<ProviderCloudHydrationResult> HydrateLocalCacheAsync(
@@ -635,7 +762,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken,
         ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes,
         ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
-        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null,
+        CloudMetadataWriteAdmission? catalogWriteAdmission = null,
         ResourceBudget? controlMetadataMemoryBudget = null)
     {
         using var controlMetadataReads = new ProviderCloudControlMetadataReadSet(

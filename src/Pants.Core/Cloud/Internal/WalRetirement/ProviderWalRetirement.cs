@@ -27,7 +27,7 @@ sealed class ProviderWalRetirement
     const int MaximumCatalogAttempts = 8;
 
     readonly ProviderWalCatalogStore _catalog;
-    readonly Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> _encodeCatalog;
+    readonly Func<ProviderWalCatalog, CloudMetadataSerializedBytes> _encodeCatalog;
     readonly IFailpointHandler _failpoints;
     readonly CloudLeaseCoordinator _lease;
     readonly PublishedManifestReader _manifests;
@@ -45,7 +45,7 @@ sealed class ProviderWalRetirement
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         ProviderWalCatalogStore catalog,
-        Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> encodeCatalog,
+        Func<ProviderWalCatalog, CloudMetadataSerializedBytes> encodeCatalog,
         CloudLeaseCoordinator lease,
         WalRetirementSettings settings,
         IFailpointHandler failpoints,
@@ -268,7 +268,7 @@ sealed class ProviderWalRetirement
             catalog.WalHistoryStartSegmentId,
             turn.Manifest!.Manifest.WalHistoryStart);
 
-        ProviderWalCatalogSerializedBytes encodedCatalog;
+        CloudMetadataSerializedBytes encodedCatalog;
         try
         {
             encodedCatalog = _encodeCatalog(catalog with

@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 static class CloudDdlJson
 {
-    static readonly JsonSerializerOptions Options = new()
+    internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -57,7 +57,7 @@ static class CloudDdlJson
         }
     }
 
-    static void ValidateRegistry(CloudDdlRegistry registry)
+    internal static void ValidateRegistry(CloudDdlRegistry registry)
     {
         if (registry.ColumnFamilies is null || registry.Operations is null)
         {

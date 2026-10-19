@@ -12,5 +12,6 @@ interface ICloudDdlAuthority
     ValueTask<bool> CompareExchangeDdlRegistryAsync(
         CloudDdlRegistry registry,
         string? expectedVersion,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Action? beforeSubmission = null);
 }
