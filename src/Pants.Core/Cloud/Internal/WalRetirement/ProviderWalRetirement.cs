@@ -240,6 +240,7 @@ sealed class ProviderWalRetirement
         using var serializedCatalog = encodedCatalog;
         var bytes = serializedCatalog.Bytes;
         // From the CAS on, an outcome is no longer a clean deferral: failures surface.
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var published = await _walStore.PutAsync(
             PantsCloudObjectLayout.WalCatalogObjectKey,
             bytes,

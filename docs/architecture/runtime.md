@@ -139,8 +139,8 @@ the current object was read is rejected before the CAS. Provider SST uploads als
 lease immediately before each conditional object create. Provider SST garbage collection revalidates
 the remote lease after checking retention guards and immediately before each version-conditional
 delete. WAL catalog epoch fencing and batch publication also revalidate the lease before each
-catalog CAS. When the stored lease has moved to a successor, validation stops the pending write or
-delete.
+catalog CAS, including catalog retirement. When the stored lease has moved to a successor,
+validation stops the pending write or delete.
 
 ## Shutdown lifecycle and error severity
 
