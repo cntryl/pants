@@ -4322,9 +4322,9 @@ sealed class LocalDiskStore :
                         throw new StorageException($"Manifest SST '{file.Name}' is missing.");
                     }
 
-                    var remoteReader = OpenUncachedAsyncSstReaderAsync(file, CancellationToken.None)
-                        .AsTask().GetAwaiter().GetResult();
-                    remoteReader.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    // Cloud hydration already checked this object's existence and manifest size.
+                    // Keep remote block metadata lazy so startup does not fetch the same SST's
+                    // footer, index, filter, and trie before the database has a reader for it.
                 }
                 catch (Exception exception) when (
                     _recoveryPolicy == PantsRecoveryPolicy.Salvage &&

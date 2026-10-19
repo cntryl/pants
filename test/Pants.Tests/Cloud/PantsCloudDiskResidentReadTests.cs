@@ -128,6 +128,113 @@ public sealed class PantsCloudDiskResidentReadTests
     }
 
     [Fact]
+    public async Task ShouldOpenColdProviderCacheWithOneSstMetadataReadAndNoSstRanges()
+    {
+        using var sourceCache = new TemporaryDirectory();
+        using var coldCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = new PantsCloudStorageLocation(
+            new PantsAzureBlobProvider(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=test")),
+            "cold-start-metadata");
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var options = PantsOpenOptions.Cloud(sourceCache.Path, location)
+            .WithBackgroundCompaction(false);
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            writer.Put("cold-start-key"u8.ToArray(), "cold-start-value"u8.ToArray());
+            await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        var manifestSstCount = handler.GetObjectPaths("/sst/")
+            .Count(static path => path.EndsWith(".sst", StringComparison.Ordinal));
+        Assert.True(manifestSstCount > 0);
+        handler.ResetSstReadMetrics();
+
+        var coldOptions = PantsOpenOptions.Cloud(coldCache.Path, location)
+            .WithBackgroundCompaction(false);
+        await using var coldDatabase = await PantsDatabase.OpenForTestingAsync(
+            coldOptions,
+            dependencies);
+
+        Assert.Equal(manifestSstCount, handler.SstMetadataReads);
+        Assert.Equal(0, handler.SstRangeReads);
+        Assert.Equal(0, handler.SstFullReads);
+
+        await using var reader = await coldDatabase.Transactions.BeginAsync(
+            coldDatabase.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "cold-start-value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("cold-start-key"u8.ToArray()))));
+        Assert.True(handler.SstRangeReads > 0);
+    }
+
+    [Fact]
+    public async Task ShouldReportColdSstCorruptionOnFirstReadAfterMetadataOnlyOpen()
+    {
+        using var sourceCache = new TemporaryDirectory();
+        using var coldCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = new PantsCloudStorageLocation(
+            new PantsAzureBlobProvider(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=test")),
+            "cold-start-corruption");
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var options = PantsOpenOptions.Cloud(sourceCache.Path, location)
+            .WithBackgroundCompaction(false);
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            writer.Put("corrupt-cold-key"u8.ToArray(), "corrupt-cold-value"u8.ToArray());
+            await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        var sstPath = Assert.Single(
+            handler.GetObjectPaths("/sst/"),
+            static path => path.EndsWith(".sst", StringComparison.Ordinal));
+        var sstName = Path.GetFileName(sstPath);
+        var sstLength = new FileInfo(Path.Combine(sourceCache.Path, "sst", sstName)).Length;
+        handler.ResetSstReadMetrics();
+
+        var coldOptions = PantsOpenOptions.Cloud(coldCache.Path, location)
+            .WithBackgroundCompaction(false);
+        await using var coldDatabase = await PantsDatabase.OpenForTestingAsync(
+            coldOptions,
+            dependencies);
+
+        Assert.Equal(1, handler.SstMetadataReads);
+        Assert.Equal(0, handler.SstRangeReads);
+
+        handler.ReplaceObjectText(sstPath, new string('x', checked((int)sstLength)));
+        await using var reader = await coldDatabase.Transactions.BeginAsync(
+            coldDatabase.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            reader.GetAsync("corrupt-cold-key"u8.ToArray()).AsTask());
+        Assert.True(handler.SstRangeReads > 0);
+    }
+
+    [Fact]
     public async Task ShouldReadAColdCloudPointWithoutHydratingTheWholeSst()
     {
         using var directory = new TemporaryDirectory();

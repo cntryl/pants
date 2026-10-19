@@ -25,6 +25,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     int _replaceSstOnNextRange;
     int _sstDeleteAttempts;
     int _sstFullReads;
+    int _sstMetadataReads;
     long _sstRangeBytes;
     int _sstRangeReads;
     int _unconditionalSstDeleteAttempts;
@@ -86,6 +87,8 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     public int SstFullReads => Volatile.Read(ref _sstFullReads);
 
+    public int SstMetadataReads => Volatile.Read(ref _sstMetadataReads);
+
     public int SstRangeReads => Volatile.Read(ref _sstRangeReads);
 
     public long SstRangeBytes => Volatile.Read(ref _sstRangeBytes);
@@ -114,6 +117,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     public void ResetSstReadMetrics()
     {
         Volatile.Write(ref _sstFullReads, 0);
+        Volatile.Write(ref _sstMetadataReads, 0);
         Volatile.Write(ref _sstRangeReads, 0);
         Volatile.Write(ref _sstRangeBytes, 0);
     }
@@ -313,6 +317,13 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
         if (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head)
         {
+            if (request.Method == HttpMethod.Head &&
+                key.Contains("/sst/", StringComparison.Ordinal) &&
+                key.EndsWith(".sst", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _sstMetadataReads);
+            }
+
             lock (_gate)
             {
                 if (!_objects.TryGetValue(key, out var value))

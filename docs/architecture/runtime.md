@@ -36,6 +36,12 @@ cancellation token. Shutdown preparation is governed by the explicit timeout pas
 `ShutdownAsync` (or `ShutdownTimeout` during disposal), while work already admitted before caller
 abandonment remains owned until it reaches a terminal runtime state.
 
+Provider-cloud startup checks each manifest SST with one metadata request for existence and size.
+It does not open a cold remote SST reader or fetch footer, index, filter, trie, or data-block ranges
+just to validate a file that no caller has opened. The first read pins the remote object identity and
+fetches the required ranges; malformed or replaced content is then returned as a typed read error.
+Local SST copies remain validated during recovery.
+
 Persistence work runs through bounded, single-purpose services. Typed,
 immutable requests cross the `WalRuntimeService`, `FlushRuntimeService`, and
 `CompactionRuntimeService` boundaries; the coordinator remains the sole owner
