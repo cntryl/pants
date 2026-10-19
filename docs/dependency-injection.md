@@ -121,6 +121,7 @@ locations. Explicit locations override the shared location for that object class
     "Kind": "Cloud",
     "Path": "data/cache",
     "Cloud": {
+      "LocalStorageBudgetBytes": 1073741824,
       "Shared": {
         "Prefix": "catalog/",
         "Provider": {
@@ -136,6 +137,11 @@ locations. Explicit locations override the shared location for that object class
   }
 }
 ```
+
+`Cloud:LocalStorageBudgetBytes` sets the maximum local cache size for provider-cloud storage. It
+must be greater than zero; when omitted, Pants uses 2 GiB. Direct `PantsOpenOptions` callers can
+set the same limit with `WithCloudLocalStorageBudget(bytes)`. Runtime metrics expose the effective
+limit as `HybridMaximumLocalBytes`.
 
 Cloud provider kinds are `AwsS3`, `S3Compatible`, `AzureBlob`, `Gcs`, and `OciObjectStorage`.
 OCI uses `Namespace`, `Bucket`, and `Region`; `Endpoint` optionally overrides the derived OCI S3

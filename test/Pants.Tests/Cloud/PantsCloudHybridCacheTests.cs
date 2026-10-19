@@ -13,10 +13,12 @@ public sealed class PantsCloudHybridCacheTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(cache.Path),
-            new RuntimeDependencies(
-                cloudHttpClient: client,
-                hybridLocalStorageBudgetBytes: LocalCacheBudgetBytes));
+            CreateOptions(cache.Path)
+                .WithCloudLocalStorageBudget(LocalCacheBudgetBytes),
+            new RuntimeDependencies(cloudHttpClient: client));
+        Assert.Equal(
+            LocalCacheBudgetBytes,
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridMaximumLocalBytes);
         handler.FailSstList = true;
 
         for (var index = 0; index < 6; index++)
@@ -36,6 +38,19 @@ public sealed class PantsCloudHybridCacheTests
         Assert.Single(LocalSsts(cache.Path));
         await AssertReadableAsync(database, "residue-5");
         await AssertReadableAsync(database, "write-after-residue");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ShouldRejectNonPositiveProviderCloudLocalStorageBudget(long bytes)
+    {
+        using var cache = new TemporaryDirectory();
+
+        var exception = Assert.Throws<PantsInvalidArgumentException>(() =>
+            CreateOptions(cache.Path).WithCloudLocalStorageBudget(bytes));
+
+        Assert.Contains("greater than zero", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     static PantsOpenOptions CreateOptions(string path) =>

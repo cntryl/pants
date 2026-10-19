@@ -572,6 +572,7 @@ sealed class Actor : IAsyncDisposable
 
                     hybridCache = new HybridCacheManager(
                         dependencies.HybridLocalStorageBudgetBytes ??
+                        cloud.LocalStorageBudgetBytes ??
                         HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                         dependencies.Failpoints);
                     diskStore = LocalDiskStore.Open(

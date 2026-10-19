@@ -12,7 +12,10 @@ public abstract record PantsStorageConfiguration
 
     public sealed record Cloud(
         string LocalCachePath,
-        PantsCloudStorageTopology Topology) : PantsStorageConfiguration;
+        PantsCloudStorageTopology Topology) : PantsStorageConfiguration
+    {
+        public long? LocalStorageBudgetBytes { get; init; }
+    }
 
     public sealed record SimulatedCloud(
         string LocalCachePath,

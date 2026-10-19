@@ -67,6 +67,43 @@ public sealed class PantsOptionsPatternTests
     }
 
     [Fact]
+    public async Task AddPantsMapsProviderCloudLocalStorageBudgetIntoOpenOptions()
+    {
+        const long localStorageBudgetBytes = 16 * 1024 * 1024;
+        using var directory = new TemporaryDirectory();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Pants:Storage:Kind"] = "Cloud",
+                ["Pants:Storage:Path"] = directory.Path,
+                ["Pants:Storage:Cloud:LocalStorageBudgetBytes"] =
+                    localStorageBudgetBytes.ToString(CultureInfo.InvariantCulture),
+                ["Pants:Storage:Cloud:Shared:Prefix"] = "database",
+                ["Pants:Storage:Cloud:Shared:Provider:Kind"] = "AzureBlob",
+                ["Pants:Storage:Cloud:Shared:Provider:Account"] = "account",
+                ["Pants:Storage:Cloud:Shared:Provider:Container"] = "container",
+                ["Pants:Storage:Cloud:Shared:Provider:Endpoint"] = "https://storage.example.test",
+                ["Pants:Storage:Cloud:Shared:Provider:Credential:Kind"] = "AzureSasToken",
+                ["Pants:Storage:Cloud:Shared:Provider:Credential:Token"] = "sig=test"
+            })
+            .Build();
+        var factory = new CapturingDatabaseFactory();
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton<IPantsDatabaseFactory>(factory);
+        services.AddPants().BindConfiguration("Pants");
+
+        await using var serviceProvider = services.BuildServiceProvider();
+        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        var database = await serviceProvider
+            .GetRequiredService<IPantsDatabaseProvider>()
+            .GetDatabaseAsync();
+
+        var storage = Assert.IsType<PantsStorageConfiguration.Cloud>(database.Options.Storage);
+        Assert.Equal(localStorageBudgetBytes, storage.LocalStorageBudgetBytes);
+    }
+
+    [Fact]
     public void AddPantsValidatesBoundConfigurationAtStartup()
     {
         var configuration = new ConfigurationBuilder()
@@ -553,4 +590,37 @@ public sealed class PantsOptionsPatternTests
             Secret = "secret",
             Path = "credentials.json"
         };
+
+    sealed class CapturingDatabaseFactory : IPantsDatabaseFactory
+    {
+        public ValueTask<IPantsDatabase> OpenAsync(
+            PantsOpenOptions options,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IPantsDatabase>(new CapturedDatabase(options));
+    }
+
+    sealed class CapturedDatabase(PantsOpenOptions options) : IPantsDatabase
+    {
+        public PantsOpenOptions Options { get; } = options;
+
+        public PantsDatabaseCapabilities Capabilities => throw new NotSupportedException();
+
+        public IPantsColumnFamilyCatalog ColumnFamilies => throw new NotSupportedException();
+
+        public IPantsTransactionFactory Transactions => throw new NotSupportedException();
+
+        public IPantsDatabaseMaintenance Maintenance => throw new NotSupportedException();
+
+        public IPantsDatabaseDiagnostics Diagnostics => throw new NotSupportedException();
+
+        public IPantsPersistentStorage? PersistentStorage => throw new NotSupportedException();
+
+        public IPantsCloudDatabase? Cloud => throw new NotSupportedException();
+
+        public ValueTask ShutdownAsync(
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }
