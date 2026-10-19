@@ -29,6 +29,48 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
+    public async Task ShouldFlushWhenCombinedSmallCloudFamiliesReachTheHybridMemtableThreshold()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "combined-memtable-pressure/")
+            .WithSimulatedCloudLocalStorageBudget(1024 * 1024)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(32L * 1024 * 1024))
+            .WithMemtableLimits(4L * 1024 * 1024);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        var families = new List<IPantsColumnFamily>();
+        for (var index = 0; index < 4; index++)
+        {
+            families.Add(await database.ColumnFamilies.CreateAsync($"small-{index}"));
+        }
+
+        for (var index = 0; index < families.Count; index++)
+        {
+            await PutAsync(
+                database,
+                families[index],
+                $"key-{index}",
+                CreateValue(64 * 1024, 160 + index));
+            if (index < families.Count - 1)
+            {
+                Assert.Empty(LocalSsts(directory.Path));
+            }
+        }
+
+        Assert.Equal(families.Count, LocalSsts(directory.Path).Length);
+        for (var index = 0; index < families.Count; index++)
+        {
+            await using var reader = await database.Transactions.BeginAsync(
+                families[index],
+                PantsTransactionMode.ReadOnly);
+            Assert.Equal(
+                64 * 1024,
+                Assert.IsType<ReadOnlyMemory<byte>>(
+                    await reader.GetAsync(TestBytes.FromString($"key-{index}"))).Length);
+        }
+    }
+
+    [Fact]
     public async Task ShouldEvictCloudDurableSstToAdmitNextFlushWindow()
     {
         using var directory = new TemporaryDirectory();
@@ -38,13 +80,14 @@ public sealed class PantsHybridStorageTests
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-        Assert.Single(LocalSsts(directory.Path));
+        var firstSst = Assert.Single(LocalSsts(directory.Path));
         Assert.Single(CloudSsts(directory.Path));
 
         await PutAsync(database, "next-window", CreateValue(120 * 1024, 19));
 
-        Assert.Empty(LocalSsts(directory.Path));
-        Assert.Single(CloudSsts(directory.Path));
+        Assert.DoesNotContain(firstSst, LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
+        Assert.Equal(2, CloudSsts(directory.Path).Length);
         Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).HybridFreeBytes > 0);
     }
 
@@ -59,10 +102,11 @@ public sealed class PantsHybridStorageTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-        Assert.Single(LocalSsts(directory.Path));
+        var pressureSst = Assert.Single(LocalSsts(directory.Path));
         await PutAsync(database, "admitted", CreateValue(120 * 1024, 24));
 
-        Assert.Empty(LocalSsts(directory.Path));
+        Assert.DoesNotContain(pressureSst, LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
         Assert.Equal(value, Assert.IsType<ReadOnlyMemory<byte>>(
             await snapshot.GetAsync("pressure"u8.ToArray())).ToArray());
         Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).NoSpaceEvents);
@@ -451,7 +495,7 @@ public sealed class PantsHybridStorageTests
 
         failpoints.Release();
         await PutAsync(database, "resumed", CreateValue(120 * 1024, 106));
-        Assert.Empty(LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         Assert.Single(LocalSsts(directory.Path));
     }
@@ -460,15 +504,16 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldContinueWritesAfterSnapshotVisibleCacheEviction()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path, 560 * 1024);
         await PutAsync(database, "pressure", CreateValue(120 * 1024, 29));
         var snapshot = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        var pressureSst = Assert.Single(LocalSsts(directory.Path));
+        await PutAsync(database, "admitted", CreateValue(240 * 1024, 30));
+        Assert.DoesNotContain(pressureSst, LocalSsts(directory.Path));
         Assert.Single(LocalSsts(directory.Path));
-        await PutAsync(database, "admitted", CreateValue(120 * 1024, 30));
-        Assert.Empty(LocalSsts(directory.Path));
 
         Assert.Equal(
             120 * 1024,
@@ -510,9 +555,10 @@ public sealed class PantsHybridStorageTests
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "evicted", CreateValue(120 * 1024, 31));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-        Assert.Single(LocalSsts(directory.Path));
+        var evictedSst = Assert.Single(LocalSsts(directory.Path));
         await PutAsync(database, "force-eviction", CreateValue(120 * 1024, 32));
-        Assert.Empty(LocalSsts(directory.Path));
+        Assert.DoesNotContain(evictedSst, LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -520,7 +566,7 @@ public sealed class PantsHybridStorageTests
         var value = await reader.GetAsync("evicted"u8.ToArray());
 
         Assert.Equal(120 * 1024, Assert.IsType<ReadOnlyMemory<byte>>(value).Length);
-        Assert.Empty(LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
     }
 
     [Fact]
@@ -557,7 +603,7 @@ public sealed class PantsHybridStorageTests
         var failpoints = new HybridEvictionFailpointHandler(
             Failpoint.BeforeCloudUpload);
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path),
+            CreateOptions(directory.Path, 560 * 1024),
             new RuntimeDependencies(failpoints));
         await PutAsync(database, "retained", CreateValue(120 * 1024, 41));
 
@@ -579,7 +625,7 @@ public sealed class PantsHybridStorageTests
         using var directory = new TemporaryDirectory();
         var failpoints = new HybridEvictionFailpointHandler(Failpoint.AfterCloudUpload);
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path),
+            CreateOptions(directory.Path, 560 * 1024),
             new RuntimeDependencies(failpoints));
         await PutAsync(database, "ordered", CreateValue(120 * 1024, 47));
 
@@ -594,7 +640,7 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldEvictLocalSstGivenAPreFlushSnapshotCanReadItsMemtableRoot()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await OpenAsync(directory.Path);
+        await using var database = await OpenAsync(directory.Path, 560 * 1024);
         await PutAsync(database, "pinned", CreateValue(120 * 1024, 43));
         await using var snapshot = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -602,9 +648,10 @@ public sealed class PantsHybridStorageTests
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
+        var pinnedSst = Assert.Single(LocalSsts(directory.Path));
+        await PutAsync(database, "newer", CreateValue(240 * 1024, 44));
+        Assert.DoesNotContain(pinnedSst, LocalSsts(directory.Path));
         Assert.Single(LocalSsts(directory.Path));
-        await PutAsync(database, "newer", CreateValue(120 * 1024, 44));
-        Assert.Empty(LocalSsts(directory.Path));
         var value = await snapshot.GetAsync("pinned"u8.ToArray());
         Assert.Equal(120 * 1024, Assert.IsType<ReadOnlyMemory<byte>>(value).Length);
     }
@@ -621,7 +668,8 @@ public sealed class PantsHybridStorageTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await PutAsync(database, "newer", CreateValue(120 * 1024, 59));
-        Assert.Empty(LocalSsts(directory.Path));
+        Assert.DoesNotContain(pinnedSst, LocalSsts(directory.Path));
+        Assert.Single(LocalSsts(directory.Path));
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
@@ -749,10 +797,11 @@ public sealed class PantsHybridStorageTests
 
         await write;
         var localSstsAfterAdmission = LocalSsts(directory.Path);
-        Assert.InRange(localSstsAfterAdmission.Length, 1, localSstsBeforeAdmission.Length - 1);
-        Assert.All(
-            localSstsAfterAdmission,
-            sst => Assert.Contains(sst, localSstsBeforeAdmission));
+        var retainedPriorSsts = localSstsAfterAdmission
+            .Where(localSstsBeforeAdmission.Contains)
+            .ToArray();
+        Assert.InRange(retainedPriorSsts.Length, 1, localSstsBeforeAdmission.Length - 1);
+        Assert.Equal(retainedPriorSsts.Length + 1, localSstsAfterAdmission.Length);
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridPendingEvictions);
@@ -804,6 +853,19 @@ public sealed class PantsHybridStorageTests
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(TestBytes.FromString(key), value);
+        await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+    }
+
+    static async ValueTask PutAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily family,
+        string key,
+        ReadOnlyMemory<byte> value)
+    {
+        await using var transaction = await database.Transactions.BeginAsync(
+            family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), value);
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);

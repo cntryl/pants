@@ -3768,7 +3768,12 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        if (operationFamilies.Any(family =>
+        var combinedHybridMemtablePressure = _cloudPersistence is not null &&
+                                             _hybridCache is not null &&
+                                             state.ActiveMemtableBytes.Values.Sum() >=
+                                             _hybridCache.CombinedMemtableFlushThresholdBytes;
+        if (combinedHybridMemtablePressure ||
+            operationFamilies.Any(family =>
                 state.ActiveMemtableBytes.GetValueOrDefault(family) >=
                 _options.MemtableFlushThresholdBytes))
         {

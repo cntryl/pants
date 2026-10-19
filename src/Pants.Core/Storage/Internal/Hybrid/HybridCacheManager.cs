@@ -41,6 +41,11 @@ sealed class HybridCacheManager : IDisposable
     public long MemtableFlushWindowBytes => Math.Max(1, _policy.MaximumLocalBytes / 2);
 
     /// <summary>
+    ///     Aggregate active cloud memtable bytes that trigger a flush across column families.
+    /// </summary>
+    public long CombinedMemtableFlushThresholdBytes => Math.Max(1, _policy.MaximumLocalBytes / 4);
+
+    /// <summary>
     ///     Binds the store the ledger measures resident bytes from. The manager is constructed
     ///     before the store exists, so this closes that loop once during startup.
     /// </summary>
