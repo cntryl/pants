@@ -31,6 +31,13 @@ Online verification (`IPantsPersistentStorage.VerifyAsync`) is classified with t
 - `PantsStorageVerificationOutcome.FromReport(report)` for a completed report.
 - `PantsStorageVerificationOutcome.FromException(exception)` for a `PantsException`.
 
+For an open provider-cloud database, verification reads each manifest-owned SST through its
+identity-pinned remote source. It checks the whole-file checksum in bounded 64 KiB ranges, then
+validates the SST footer, metadata, index, and data blocks with additional ranges. It does not
+hydrate those SSTs into the local cache, so verification can cover a remote SST set larger than the
+configured local storage budget. The caller's deadline and cancellation token also bound these
+remote reads.
+
 The underlying rules are also available as extension methods. Both overloads are named
 `GetVerificationOutcomeKind`, one on `PantsEngineHealth` and one on `PantsErrorCode`.
 

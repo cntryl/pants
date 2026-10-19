@@ -92,6 +92,7 @@ sealed class Actor : IAsyncDisposable
 
     readonly RuntimeState _state;
     readonly StorageVerificationDelegate _storageVerifier;
+    readonly bool _usesRemoteSstVerification;
     readonly RuntimeTelemetry _telemetry;
     OnlineVerificationBarrier? _verificationBarrier;
     readonly VerificationBarrierResponseDelegate _verificationBarrierResponse;
@@ -117,6 +118,7 @@ sealed class Actor : IAsyncDisposable
         CloudWalUploadTracker cloudWalUploads,
         CloudFlushRetryScheduler cloudFlushRetries,
         StorageVerificationDelegate storageVerifier,
+        bool usesRemoteSstVerification,
         VerificationBarrierResponseDelegate verificationBarrierResponse,
         IFailpointHandler failpoints,
         TimeProvider runtimeTimeProvider,
@@ -142,6 +144,7 @@ sealed class Actor : IAsyncDisposable
         _cloudWalUploads = cloudWalUploads;
         _cloudFlushRetries = cloudFlushRetries;
         _storageVerifier = storageVerifier;
+        _usesRemoteSstVerification = usesRemoteSstVerification;
         _verificationBarrierResponse = verificationBarrierResponse;
         _failpoints = failpoints;
         _runtimeTimeProvider = runtimeTimeProvider;
@@ -669,6 +672,15 @@ sealed class Actor : IAsyncDisposable
                 throw PantsException.Create(PantsErrorCode.NotSupported, "Unknown storage backend.");
         }
 
+        var usesRemoteSstVerification = dependencies.UsesDefaultStorageVerifier &&
+                                        diskStore?.RemoteSstSourceFactory is not null;
+        if (usesRemoteSstVerification)
+        {
+            var remoteSstSourceFactory = diskStore!.RemoteSstSourceFactory!;
+            storageVerifier = (path, token) =>
+                Storage.Internal.StorageVerifier.VerifyPathAsync(path, remoteSstSourceFactory, token);
+        }
+
         var actor = new Actor(
             options,
             backgroundCompactionEnabled,
@@ -677,6 +689,7 @@ sealed class Actor : IAsyncDisposable
             cloudWalUploads,
             cloudFlushRetries,
             storageVerifier,
+            usesRemoteSstVerification,
             verificationBarrierResponse,
             failpoints,
             runtimeTimeProvider,
@@ -1951,7 +1964,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         var verification = Task.Factory.StartNew(
-                () => RunStorageVerificationAsync(barrier),
+                () => RunStorageVerificationAsync(barrier, linked.Token),
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
                 TaskScheduler.Default)
@@ -2014,7 +2027,8 @@ sealed class Actor : IAsyncDisposable
                             LayoutBusy: true);
                     }
 
-                    if (_hybridCache is not null && _diskStore is not null)
+                    if (_hybridCache is not null && _diskStore is not null &&
+                        !_usesRemoteSstVerification)
                     {
                         await EnsureHybridSstsLocalAsync(
                                 _diskStore.GetManifestSstNames(),
@@ -2075,11 +2089,12 @@ sealed class Actor : IAsyncDisposable
     }
 
     async Task<PantsStorageVerificationReport> RunStorageVerificationAsync(
-        OnlineVerificationBarrier barrier)
+        OnlineVerificationBarrier barrier,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var report = await _storageVerifier(barrier.Path!, CancellationToken.None)
+            var report = await _storageVerifier(barrier.Path!, cancellationToken)
                 .ConfigureAwait(false);
             return report with
             {

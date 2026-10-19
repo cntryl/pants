@@ -20,6 +20,7 @@ sealed class RuntimeDependencies
         CloudWalRetirementQuantum = cloudWalRetirementQuantum;
         WorkerDisposalTimeout = workerDisposalTimeout;
         Failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
+        UsesDefaultStorageVerifier = storageVerifier is null;
         StorageVerifier = storageVerifier ?? Storage.Internal.StorageVerifier.VerifyPathAsync;
         LeaseHeartbeatInterval = leaseHeartbeatInterval;
         CloudHttpClient = cloudHttpClient;
@@ -52,6 +53,8 @@ sealed class RuntimeDependencies
     public TimeSpan? CloudWalRetirementQuantum { get; }
 
     public StorageVerificationDelegate StorageVerifier { get; }
+
+    public bool UsesDefaultStorageVerifier { get; }
 
     public TimeSpan? LeaseHeartbeatInterval { get; }
 

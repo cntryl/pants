@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal.Sst;
 
 namespace Cntryl.Pants.Storage.Internal;
 
@@ -13,17 +14,24 @@ static class StorageVerifier
 
     public static async ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
         string path,
+        CancellationToken cancellationToken) =>
+        await VerifyPathAsync(path, null, cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
+        string path,
+        IAsyncSstSourceFactory? remoteSstSourceFactory,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         cancellationToken.ThrowIfCancellationRequested();
         return await Task.Run(
-            () => VerifyPath(path, cancellationToken),
+            () => VerifyPath(path, remoteSstSourceFactory, cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
     static PantsStorageVerificationReport VerifyPath(
         string path,
+        IAsyncSstSourceFactory? remoteSstSourceFactory,
         CancellationToken cancellationToken)
     {
         string root;
@@ -83,52 +91,62 @@ static class StorageVerifier
             cancellationToken.ThrowIfCancellationRequested();
             var safeName = ValidateFileName(file.Name);
             var sstPath = Path.Combine(root, "sst", safeName);
-            if (!File.Exists(sstPath))
+            if (remoteSstSourceFactory is not null)
             {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Manifest SST '{safeName}' is missing.");
+                var verified = VerifyRemoteSst(remoteSstSourceFactory, file, cancellationToken);
+                bytesVerified = checked(bytesVerified + verified.Bytes);
+                dataBlocksVerified = checked(dataBlocksVerified + verified.DataBlocks);
             }
+            else
+            {
+                if (!File.Exists(sstPath))
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{safeName}' is missing.");
+                }
 
-            var bytes = File.ReadAllBytes(sstPath);
-            if (checked((ulong)bytes.Length) != file.SizeBytes)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Manifest SST '{safeName}' has an unexpected length.");
-            }
+                var bytes = File.ReadAllBytes(sstPath);
+                if (checked((ulong)bytes.Length) != file.SizeBytes)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{safeName}' has an unexpected length.");
+                }
 
-            if (file.ContentCrc32C is not { } expectedCrc)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Manifest SST '{safeName}' is missing its content checksum.");
-            }
+                if (file.ContentCrc32C is not { } expectedCrc)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{safeName}' is missing its content checksum.");
+                }
 
-            if (DiskFormat.Crc32C(bytes) != expectedCrc)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Manifest SST '{safeName}' content checksum does not match.");
-            }
+                if (DiskFormat.Crc32C(bytes) != expectedCrc)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{safeName}' content checksum does not match.");
+                }
 
-            SstContents contents;
-            try
-            {
-                contents = SstCodec.Decode(bytes);
-                SstManifestMetadataValidator.Validate(contents, file, "Manifest SST");
-            }
-            catch (PantsException exception)
-            {
-                throw PantsException.Create(
-                    PantsErrorCode.Corruption,
-                    $"Manifest SST '{safeName}' is structurally corrupt.",
-                    exception);
+                SstContents contents;
+                try
+                {
+                    contents = SstCodec.Decode(bytes);
+                    SstManifestMetadataValidator.Validate(contents, file, "Manifest SST");
+                }
+                catch (PantsException exception)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{safeName}' is structurally corrupt.",
+                        exception);
+                }
+
+                bytesVerified = checked(bytesVerified + bytes.Length);
+                dataBlocksVerified = checked(dataBlocksVerified + contents.DataBlockCount);
             }
 
             ownedSsts.Add(safeName);
-            bytesVerified = checked(bytesVerified + bytes.Length);
-            dataBlocksVerified = checked(dataBlocksVerified + contents.DataBlockCount);
             sstFilesVerified++;
         }
 
@@ -220,6 +238,160 @@ static class StorageVerifier
             true,
             health,
             warnings);
+    }
+
+    static (long Bytes, int DataBlocks) VerifyRemoteSst(
+        IAsyncSstSourceFactory sourceFactory,
+        FileMeta file,
+        CancellationToken cancellationToken)
+    {
+        if (file.ContentCrc32C is not { } expectedCrc)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                $"Manifest SST '{file.Name}' is missing its content checksum.");
+        }
+
+        IAsyncSstSource? source = sourceFactory.OpenAsync(file, cancellationToken)
+            .AsTask().GetAwaiter().GetResult();
+        if (source is null)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                $"Manifest SST '{file.Name}' is missing.");
+        }
+
+        try
+        {
+            var length = source.Length;
+            if (length < 0 || checked((ulong)length) != file.SizeBytes)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"Manifest SST '{file.Name}' has an unexpected length.");
+            }
+
+            const int verificationRangeBytes = 64 * 1024;
+            uint checksum = 0;
+            for (long offset = 0; offset < length;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var rangeLength = checked((int)Math.Min(verificationRangeBytes, length - offset));
+                var bytes = source.ReadExactlyAsync(offset, rangeLength, cancellationToken)
+                    .AsTask().GetAwaiter().GetResult();
+                if (bytes.Length != rangeLength)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        $"Manifest SST '{file.Name}' returned a short verification range.");
+                }
+
+                checksum = DiskFormat.Crc32CAppend(checksum, bytes);
+                offset += rangeLength;
+            }
+
+            if (checksum != expectedCrc)
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.Corruption,
+                    $"Manifest SST '{file.Name}' content checksum does not match.");
+            }
+
+            var opening = AsyncSstReader.OpenAsync(source, file, cancellationToken).AsTask();
+            source = null;
+            var reader = opening.GetAwaiter().GetResult();
+            try
+            {
+                byte[]? smallestKey = null;
+                byte[]? largestKey = null;
+                byte[]? previousKey = null;
+                ulong? previousSequence = null;
+                ulong? smallestSequence = null;
+                ulong? largestSequence = null;
+
+                void ObserveKey(byte[] key)
+                {
+                    if (smallestKey is null || ByteArrayComparer.Instance.Compare(key, smallestKey) < 0)
+                    {
+                        smallestKey = key;
+                    }
+
+                    if (largestKey is null || ByteArrayComparer.Instance.Compare(key, largestKey) > 0)
+                    {
+                        largestKey = key;
+                    }
+                }
+
+                void ObserveSequence(ulong sequence)
+                {
+                    smallestSequence = smallestSequence is null
+                        ? sequence
+                        : Math.Min(smallestSequence.Value, sequence);
+                    largestSequence = largestSequence is null
+                        ? sequence
+                        : Math.Max(largestSequence.Value, sequence);
+                }
+
+                foreach (var tombstone in reader.RangeTombstones)
+                {
+                    ObserveKey(tombstone.Start);
+                    ObserveKey(tombstone.End);
+                    ObserveSequence(tombstone.Sequence);
+                }
+
+                for (var blockIndex = 0; blockIndex < reader.DataBlockCount; blockIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var block = reader.ReadDataBlockAsync(blockIndex, cancellationToken)
+                        .AsTask().GetAwaiter().GetResult();
+                    var entries = SstCodec.DecodeDataBlock(block);
+                    if (entries.Count == 0 ||
+                        !entries[0].Key.AsSpan().SequenceEqual(reader.GetFirstKey(blockIndex)))
+                    {
+                        throw new PantsCorruptionException(
+                            "SST index first key does not match its data block.");
+                    }
+
+                    foreach (var entry in entries)
+                    {
+                        if (previousKey is not null)
+                        {
+                            var comparison = ByteArrayComparer.Instance.Compare(previousKey, entry.Key);
+                            if (comparison > 0 ||
+                                (comparison == 0 && previousSequence < entry.Sequence))
+                            {
+                                throw new PantsCorruptionException(
+                                    "SST data entries are not in canonical key and sequence order.");
+                            }
+                        }
+
+                        ObserveKey(entry.Key);
+                        ObserveSequence(entry.Sequence);
+                        previousKey = entry.Key;
+                        previousSequence = entry.Sequence;
+                    }
+                }
+
+                SstManifestMetadataValidator.ValidateRemoteContents(
+                    file,
+                    reader.SmallestKey,
+                    reader.LargestKey,
+                    smallestKey,
+                    largestKey,
+                    smallestSequence,
+                    largestSequence,
+                    "Manifest SST");
+                return (length, reader.DataBlockCount);
+            }
+            finally
+            {
+                reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+        }
+        finally
+        {
+            source?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
     }
 
     static (long Records, long Bytes, long? Boundary) VerifyWal(
