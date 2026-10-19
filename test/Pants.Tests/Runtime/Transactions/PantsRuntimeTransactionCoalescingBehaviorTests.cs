@@ -179,6 +179,94 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
     }
 
     [Fact]
+    public async Task ShouldRollBackAndRecoverWholeCoalescedApplyAcrossColumnFamilies()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler(
+            Failpoint.AfterCoalescedCommitOperationApply,
+            failAtHit: 2);
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoints)))
+        {
+            var secondaryFamily = await database.ColumnFamilies.CreateAsync("secondary");
+            await using var first = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            first.Put("default-first"u8.ToArray(), "first"u8.ToArray());
+            await using var second = await database.Transactions.BeginAsync(
+                secondaryFamily,
+                PantsTransactionMode.ReadWrite);
+            second.Put("secondary"u8.ToArray(), "second"u8.ToArray());
+            await using var third = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            third.Put("default-last"u8.ToArray(), "last"u8.ToArray());
+
+            var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+            await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+            var commits = new[]
+            {
+                first.CommitAsync(PantsWriteOptions.Sync).AsTask(),
+                second.CommitAsync(PantsWriteOptions.Sync).AsTask(),
+                third.CommitAsync(PantsWriteOptions.Sync).AsTask()
+            };
+            failpoints.ReleaseRuntimeBarrier();
+            _ = await barrier.WaitAsync(TestTimeouts.Expected);
+
+            foreach (var commit in commits)
+            {
+                var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                    () => commit.WaitAsync(TestTimeouts.Expected));
+                Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
+            }
+
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.Equal(1, metrics.WalAppendCount);
+            Assert.Equal(1, metrics.WalFsyncCount);
+
+            await using (var defaultReader = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadOnly))
+            {
+                Assert.Null(await defaultReader.GetAsync("default-first"u8.ToArray()));
+                Assert.Null(await defaultReader.GetAsync("default-last"u8.ToArray()));
+            }
+
+            await using var failedSecondaryReader = await database.Transactions.BeginAsync(
+                secondaryFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.Null(await failedSecondaryReader.GetAsync("secondary"u8.ToArray()));
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using (var defaultReader = await reopened.Transactions.BeginAsync(
+                         reopened.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal(
+                "first",
+                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                    await defaultReader.GetAsync("default-first"u8.ToArray()))));
+            Assert.Equal(
+                "last",
+                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                    await defaultReader.GetAsync("default-last"u8.ToArray()))));
+        }
+
+        var reopenedSecondary = await reopened.ColumnFamilies.GetAsync("secondary") ??
+                                throw new InvalidOperationException("The secondary family was not recovered.");
+        await using var recoveredSecondaryReader = await reopened.Transactions.BeginAsync(
+            reopenedSecondary,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "second",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await recoveredSecondaryReader.GetAsync("secondary"u8.ToArray()))));
+    }
+
+    [Fact]
     public async Task ShouldReportUnknownAndFenceSuffixGivenPostDurabilityApplyFailure()
     {
         using var directory = new TemporaryDirectory();
