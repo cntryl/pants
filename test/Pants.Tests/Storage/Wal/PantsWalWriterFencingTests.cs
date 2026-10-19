@@ -35,13 +35,16 @@ public sealed class PantsWalWriterFencingTests
             failpoints.Arm(
                 Enum.Parse<Failpoint>(failpointName),
                 static failpoint => new PantsNoSpaceException($"No space at {failpoint}."));
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+            var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                 CommitAsync(database, PantsWriteOptions.Sync, static transaction =>
                 {
                     transaction.Put(Key("overwritten"), Value("ghost"));
                     transaction.Delete(Key("deleted"));
                     transaction.Insert(Key("inserted"), Value("ghost"));
                 }));
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
+            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
 
             Assert.Equal(walLength, new FileInfo(walPath).Length);
             Assert.Equal(
@@ -85,8 +88,10 @@ public sealed class PantsWalWriterFencingTests
         var failpoints = new ArmableFailpointHandler();
         await using (var database = await OpenAsync(directory.Path, failpoints))
         {
-            failpoints.Arm(Enum.Parse<Failpoint>(failpointName));
-            await Assert.ThrowsAnyAsync<PantsException>(() =>
+            failpoints.Arm(
+                Enum.Parse<Failpoint>(failpointName),
+                static failpoint => new PantsNoSpaceException($"No space at {failpoint}."));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
                 CommitAsync(database, PantsWriteOptions.Sync, static transaction =>
                     transaction.Put(Key("rejected"), Value("ghost"))));
 

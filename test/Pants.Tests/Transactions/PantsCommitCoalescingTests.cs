@@ -207,7 +207,9 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in commits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
+                var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                    () => commit.WaitAsync(TestTimeouts.Expected));
+                Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
             }
 
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -329,7 +331,9 @@ public sealed class PantsCommitCoalescingTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
+            var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                () => commit.WaitAsync(TestTimeouts.Expected));
+            Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -337,7 +341,7 @@ public sealed class PantsCommitCoalescingTests
         Assert.Equal(0, metrics.WalFlushCount);
         Assert.Equal(0, metrics.WalFsyncCount);
         Assert.Equal(1, metrics.NoSpaceEvents);
-        Assert.Equal(commits.Length, metrics.WriteStallsNoSpaceTotal);
+        Assert.Equal(0, metrics.WriteStallsNoSpaceTotal);
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -382,13 +386,17 @@ public sealed class PantsCommitCoalescingTests
         failpoints.ReleaseRuntimeBarrier();
         _ = await barrier.WaitAsync(TestTimeouts.Expected);
 
-        await Assert.ThrowsAsync<PantsNoSpaceException>(() => firstCommit.WaitAsync(TestTimeouts.Expected));
-        await Assert.ThrowsAsync<PantsNoSpaceException>(() => secondCommit.WaitAsync(TestTimeouts.Expected));
+        var firstUnknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+            () => firstCommit.WaitAsync(TestTimeouts.Expected));
+        Assert.IsType<PantsNoSpaceException>(firstUnknown.InnerException);
+        var secondUnknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+            () => secondCommit.WaitAsync(TestTimeouts.Expected));
+        Assert.IsType<PantsNoSpaceException>(secondUnknown.InnerException);
         await Assert.ThrowsAsync<PantsFencedException>(() => bufferedCommit.WaitAsync(TestTimeouts.Expected));
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(1, metrics.NoSpaceEvents);
-        Assert.Equal(2, metrics.WriteStallsNoSpaceTotal);
+        Assert.Equal(0, metrics.WriteStallsNoSpaceTotal);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -429,7 +437,9 @@ public sealed class PantsCommitCoalescingTests
 
         foreach (var commit in commits)
         {
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
+            var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                () => commit.WaitAsync(TestTimeouts.Expected));
+            Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -484,7 +494,9 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
+                var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                    () => commit.WaitAsync(TestTimeouts.Expected));
+                Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
             }
 
             await using var fenced = await database.Transactions.BeginAsync(
@@ -540,7 +552,9 @@ public sealed class PantsCommitCoalescingTests
 
             foreach (var commit in failedCommits)
             {
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() => commit.WaitAsync(TestTimeouts.Expected));
+                var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                    () => commit.WaitAsync(TestTimeouts.Expected));
+                Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
             }
 
             await using var fenced = await database.Transactions.BeginAsync(

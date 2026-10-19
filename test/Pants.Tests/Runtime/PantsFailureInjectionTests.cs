@@ -78,7 +78,8 @@ public sealed class PantsFailureInjectionTests
             transaction.Put("first"u8.ToArray(), "one"u8.ToArray());
             transaction.Put("second"u8.ToArray(), "two"u8.ToArray());
 
-            await Assert.ThrowsAsync<PantsIOException>(() => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                () => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(
