@@ -38,13 +38,20 @@ sealed class SstPublicationAdmission
 
     /// <summary>
     ///     Reserves the publication envelope of a <paramref name="sizeBytes" /> SST. Compaction
-    ///     partitions are sized to fit; an SST whose envelope exceeds the whole pool (a flush output
-    ///     sized by its memtable, an indivisible oversized entry, or a degenerate pool) claims the
-    ///     entire pool rather than becoming permanently inadmissible.
+    ///     partitions are sized to fit. When the envelope exceeds the whole pool, admission fails
+    ///     before the caller reads the SST; its local output and compaction intent remain available
+    ///     for retry with a larger pool or a smaller partition.
     /// </summary>
     public async ValueTask<IDisposable> AdmitAsync(long sizeBytes, CancellationToken cancellationToken)
     {
-        var bytes = Math.Min(ImmutablePublicationEnvelope.For(sizeBytes), _budget.Limit);
+        var bytes = ImmutablePublicationEnvelope.For(sizeBytes);
+        if (bytes > _budget.Limit)
+        {
+            throw PantsException.ResourceLimit(
+                $"Publishing an SST of {sizeBytes} bytes needs a {bytes}-byte maintenance " +
+                $"envelope; the pool holds {_budget.Limit} bytes.");
+        }
+
         if (_gate is null)
         {
             return _budget.Reserve(bytes);

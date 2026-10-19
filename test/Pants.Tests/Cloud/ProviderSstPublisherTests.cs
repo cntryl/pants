@@ -194,7 +194,7 @@ public sealed class ProviderSstPublisherTests
     }
 
     [Fact]
-    public async Task ShouldClaimWholeMaintenancePoolForFlushOutputLargerThanItsEnvelope()
+    public async Task ShouldRetainFlushOutputWhenPublicationEnvelopeExceedsMaintenancePool()
     {
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(512 * 1024);
@@ -203,28 +203,56 @@ public sealed class ProviderSstPublisherTests
             store,
             SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate()));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
+        var original = File.ReadAllBytes(path);
 
-        await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None).AsTask());
 
-        Assert.True(publisher.IsProven("a.sst"));
-        Assert.Equal(budget.Limit, budget.Peak);
+        Assert.False(publisher.IsProven("a.sst"));
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Equal(0, store.Puts);
+        Assert.Equal(0, store.WholeGets);
+        Assert.Equal(0, store.RangeGets);
+        Assert.Equal(0, budget.Peak);
         Assert.Equal(0, budget.Current);
+
+        var retryBudget = new ResourceBudget(2 * 1024 * 1024);
+        var retry = CreatePublisher(
+            store,
+            SstPublicationAdmission.Gated(retryBudget, new MaintenanceMemoryGate()));
+        await retry.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+
+        Assert.True(retry.IsProven("a.sst"));
+        Assert.Equal(1, store.Puts);
+        Assert.Equal(ImmutablePublicationEnvelope.For(original.Length), retryBudget.Peak);
+        Assert.Equal(0, retryBudget.Current);
     }
 
     [Fact]
-    public async Task ShouldClaimWholeMaintenancePoolForCompactionOutputLargerThanItsEnvelope()
+    public async Task ShouldRetainCompactionOutputWhenPublicationEnvelopeExceedsMaintenancePool()
     {
         using var directory = new TemporaryDirectory();
         var budget = new ResourceBudget(512 * 1024);
         var store = new RangeCountingCloudObjectStore();
         var publisher = CreatePublisher(store, SstPublicationAdmission.WithinCompactionRound(budget));
         var path = WriteLocal(directory.Path, "a.sst", 200_000);
+        var original = File.ReadAllBytes(path);
 
-        await publisher.PublishOutputAsync("a.sst", path, CancellationToken.None);
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            publisher.PublishOutputAsync("a.sst", path, CancellationToken.None).AsTask());
+
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Equal(0, store.TotalCalls);
+        Assert.Equal(0, budget.Peak);
+        Assert.Equal(0, budget.Current);
+
+        var retryBudget = new ResourceBudget(2 * 1024 * 1024);
+        var retry = CreatePublisher(store, SstPublicationAdmission.WithinCompactionRound(retryBudget));
+        await retry.PublishOutputAsync("a.sst", path, CancellationToken.None);
 
         Assert.Equal(1, store.Puts);
-        Assert.Equal(budget.Limit, budget.Peak);
-        Assert.Equal(0, budget.Current);
+        Assert.Equal(ImmutablePublicationEnvelope.For(original.Length), retryBudget.Peak);
+        Assert.Equal(0, retryBudget.Current);
     }
 
     [Fact]
