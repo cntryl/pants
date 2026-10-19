@@ -322,6 +322,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 return;
             }
 
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var published = await _controlStore.PutAsync(
                 PantsCloudObjectLayout.DdlRegistryObjectKey,
                 fencedBytes,
@@ -361,6 +362,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     {
         _lease.EnsureValid();
         var data = CloudDdlJson.SerializeRegistry(registry);
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var published = await _controlStore.PutAsync(
             PantsCloudObjectLayout.DdlRegistryObjectKey,
             data,

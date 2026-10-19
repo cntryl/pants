@@ -544,6 +544,59 @@ public sealed class ProviderCloudPersistenceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task ShouldRejectDdlRegistryMutationWhenRemoteLeaseAlreadyMoved(bool fenceRegistry)
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero,
+            () => losses++);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var controlStore = new TestCloudObjectStore();
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            controlStore,
+            lease);
+        leaseStore.Seed(new CloudLeaseRecord(
+            "successor",
+            epoch + 1,
+            "successor-token",
+            clock.UtcNow,
+            clock.UtcNow + TimeSpan.FromSeconds(10)));
+
+        if (fenceRegistry)
+        {
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                persistence.FenceDdlRegistryAsync(new CloudDdlRegistry(), CancellationToken.None).AsTask());
+        }
+        else
+        {
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                persistence.CompareExchangeDdlRegistryAsync(
+                    new CloudDdlRegistry { Epoch = epoch },
+                    null,
+                    CancellationToken.None).AsTask());
+        }
+
+        Assert.Null(await controlStore.GetAsync(
+            PantsCloudObjectLayout.DdlRegistryObjectKey,
+            CancellationToken.None));
+        Assert.Equal(0, controlStore.PutCount);
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, losses);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task ShouldPreserveCommittedDdlCasGivenSuccessorClaimAlreadyStarted(
         bool registryExists)
     {
