@@ -77,6 +77,74 @@ public sealed class PantsCloudWalRetirementTests
     }
 
     [Fact]
+    public async Task ShouldNotReportShutdownCompleteWhileDeferredWorkerCleanupStillOwnsCloudLease()
+    {
+        using var cache = new TemporaryDirectory();
+        using var successorCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var database = await OpenAsync(
+            cache.Path,
+            client,
+            workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
+            leaseTimeToLive: TimeSpan.FromMilliseconds(500));
+        try
+        {
+            await CommitAsync(database, "lease-held-through-retry");
+            handler.BlockWalRangeReadsThroughCancellationFailure();
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await handler.WaitForBlockedWalRangeReadAsync();
+
+            var firstFailure = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                database.ShutdownAsync(TestTimeouts.Expected).AsTask());
+            Assert.Equal(PantsErrorCode.Timeout, firstFailure.Code);
+
+            var retryFailure = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                database.ShutdownAsync(TimeSpan.FromMilliseconds(100)).AsTask());
+            Assert.Equal(PantsErrorCode.Timeout, retryFailure.Code);
+
+            // The retry must keep waiting for the worker that owns the cloud lease. A completed
+            // shutdown result here would claim disposal succeeded while deferred cleanup is live.
+            IPantsDatabase? competingDatabase = null;
+            try
+            {
+                competingDatabase = await OpenAsync(
+                    successorCache.Path,
+                    client,
+                    leaseTimeToLive: TimeSpan.FromMilliseconds(500));
+            }
+            catch (PantsLeaseHeldException)
+            {
+            }
+
+            if (competingDatabase is not null)
+            {
+                await competingDatabase.DisposeAsync();
+            }
+
+            Assert.Null(competingDatabase);
+        }
+        finally
+        {
+            handler.ReleaseWalRangeReads();
+            try
+            {
+                await database.ShutdownAsync(TestTimeouts.Expected);
+            }
+            catch (Exception)
+            {
+                // Release unblocks deferred cleanup; the test reports the observed shutdown result.
+            }
+        }
+
+        await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
+            successorCache.Path,
+            client,
+            TimeSpan.FromMilliseconds(500));
+        await AssertValueAsync(recovered, "lease-held-through-retry");
+    }
+
+    [Fact]
     public async Task ShouldNotDelayCloudStrictCommitWhileWalRetirementWaitsOnProvider()
     {
         using var cache = new TemporaryDirectory();
