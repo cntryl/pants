@@ -5354,7 +5354,7 @@ sealed class LocalDiskStore :
                     state.MarkSalvageMode();
                 }
 
-                return new ManifestLoadResult(manifest, false);
+                return new ManifestLoadResult(manifest, failure is not null);
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {
