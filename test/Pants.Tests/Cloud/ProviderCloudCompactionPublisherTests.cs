@@ -31,6 +31,61 @@ public sealed class ProviderCloudCompactionPublisherTests
         Assert.Equal(0, budget.Current);
     }
 
+    [Fact]
+    public async Task ShouldFenceCompactionIntentWriteWhenSuccessorTakesLeaseDuringPreCasRead()
+    {
+        using var cache = new TemporaryDirectory();
+        _ = WriteCompactionState(cache.Path, 128);
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "predecessor",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var controlStore = new SnapshotConsistencyCloudObjectStore();
+        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
+        var getStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseGet = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controlStore.BeforeGetAsync = async (objectKey, _, cancellationToken) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, intentKey))
+            {
+                getStarted.TrySetResult();
+                await releaseGet.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var publisher = new ProviderCloudCompactionPublisher(
+            cache.Path,
+            new RangeCountingCloudObjectStore(),
+            controlStore,
+            lease,
+            NullPantsFailpointHandler.Instance);
+
+        var publication = publisher.PublishAsync([], CancellationToken.None).AsTask();
+        try
+        {
+            await getStarted.Task.WaitAsync(TestTimeouts.Expected);
+            leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            releaseGet.TrySetResult();
+        }
+
+        await Assert.ThrowsAsync<PantsFencedException>(() => publication);
+
+        Assert.Null(controlStore.GetData(intentKey));
+        Assert.False(lease.IsHealthy);
+    }
+
     static (byte[] Intent, byte[] Output) WriteCompactionState(string root, int outputBytes)
     {
         var intent = "{\"entries\":[]}"u8.ToArray();

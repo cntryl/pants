@@ -58,7 +58,7 @@ sealed class ProviderCloudCompactionPublisher
         var objectKey = PantsCloudObjectLayout.MetadataPrefix + IntentFileName;
         var current = await _controlStore.GetAsync(objectKey, cancellationToken)
             .ConfigureAwait(false);
-        _lease.EnsureValid();
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var published = await _controlStore.PutAsync(
             objectKey,
             data,
