@@ -4,4 +4,5 @@ sealed record AppendWalCommitGroupRuntimeRequest(
     IReadOnlyList<WalCommitGroupEntry> Commits,
     RuntimeState State,
     PantsDurability Durability,
-    Failpoint BeforeSync) : WalRuntimeRequest;
+    Failpoint BeforeSync,
+    OperationDeadline Deadline = default) : WalRuntimeRequest;

@@ -49,7 +49,7 @@ public sealed class CommitCoalescerTests
             true,
             1_024,
             telemetry,
-            (commits, _, _, _) =>
+            (commits, _, _, _, _) =>
             {
                 appendCalls++;
                 appended = commits;
@@ -112,7 +112,7 @@ public sealed class CommitCoalescerTests
             true,
             1_024,
             telemetry,
-            (commits, _, durability, _) =>
+            (commits, _, durability, _, _) =>
             {
                 appendedDurability = durability;
                 return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
@@ -148,7 +148,7 @@ public sealed class CommitCoalescerTests
             true,
             1_024,
             new RuntimeTelemetry(),
-            (commits, _, durability, _) =>
+            (commits, _, durability, _, _) =>
             {
                 appendedDurability = durability;
                 return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
@@ -179,7 +179,7 @@ public sealed class CommitCoalescerTests
             enabled,
             memtableSizeLimitBytes,
             new RuntimeTelemetry(),
-            static (_, _, _, _) => throw new InvalidOperationException("Append was not expected."),
+            static (_, _, _, _, _) => throw new InvalidOperationException("Append was not expected."),
             static (_, _, _) => { });
 
     static RuntimeState CreateState() =>
