@@ -112,6 +112,7 @@ sealed class LocalDiskStore :
     readonly long _walRetentionBudgetBytes;
     readonly int _walRetentionSegmentLimit;
     readonly WalRetirementDiagnostics _walRetirementDiagnostics;
+    readonly ResourceBudget? _flushWorkingMemoryBudget;
     bool _validateLocalWalHistoryContinuity = true;
     ulong? _localWalHistoryValidationStartSegmentId;
     FileStream _walStream;
@@ -134,7 +135,8 @@ sealed class LocalDiskStore :
         IAsyncSstSourceFactory? remoteSstSourceFactory,
         long walRetentionBudgetBytes,
         int walRetentionSegmentLimit,
-        WalRetirementDiagnostics walRetirementDiagnostics)
+        WalRetirementDiagnostics walRetirementDiagnostics,
+        ResourceBudget? flushWorkingMemoryBudget)
     {
         RootPath = root;
         _walDirectory = Path.Combine(root, "wal");
@@ -162,6 +164,7 @@ sealed class LocalDiskStore :
         _walRetentionBudgetBytes = walRetentionBudgetBytes;
         _walRetentionSegmentLimit = walRetentionSegmentLimit;
         _walRetirementDiagnostics = walRetirementDiagnostics;
+        _flushWorkingMemoryBudget = flushWorkingMemoryBudget;
         var retainedWalPaths = EnumerateSealedWalSegmentPaths(_walDirectory).ToArray();
         _walRetainedBytes = retainedWalPaths.Sum(static path => new FileInfo(path).Length) +
                             GetExistingFileBytes(_walPath);
@@ -280,6 +283,10 @@ sealed class LocalDiskStore :
     public long BlockCacheUsedBytes => _blockCache.UsedBytes;
 
     public long BlockCacheCapacityBytes { get; }
+
+    public long FlushWorkingMemoryLimitBytes => _flushWorkingMemoryBudget?.Limit ?? 0;
+
+    public long FlushWorkingMemoryPeakBytes => _flushWorkingMemoryBudget?.Peak ?? 0;
 
     public long WalBytesWrittenTotal => Interlocked.Read(ref _walBytesWrittenTotal);
 
@@ -648,7 +655,7 @@ sealed class LocalDiskStore :
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         CompactAsync(
@@ -687,6 +694,7 @@ sealed class LocalDiskStore :
         _lease.EnsureValid();
         _failpoints.Hit(Failpoint.BeforeFlushBuild);
         _lease.EnsureValid();
+        using var workingMemory = ReserveFlushWorkingMemory(frozen.Operations);
         return BuildFlushPlan(
             frozen.Operations,
             frozen.ColumnFamilyId,
@@ -1882,7 +1890,8 @@ sealed class LocalDiskStore :
         long? maxWalRetentionBytes = null,
         int maxWalRetentionSegments = 16_384,
         bool validateLocalWalHistoryContinuity = true,
-        ulong? localWalHistoryValidationStartSegmentId = null)
+        ulong? localWalHistoryValidationStartSegmentId = null,
+        long? flushWorkingMemoryLimitBytes = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -1892,6 +1901,11 @@ sealed class LocalDiskStore :
         if (maxWalRetentionBytes is <= 0 || maxWalRetentionSegments <= 0)
         {
             throw new PantsInvalidArgumentException("WAL retention limits must be positive.");
+        }
+
+        if (flushWorkingMemoryLimitBytes is <= 0)
+        {
+            throw new PantsInvalidArgumentException("Flush working-memory limit must be positive.");
         }
 
         var root = Path.GetFullPath(directory);
@@ -2050,7 +2064,10 @@ sealed class LocalDiskStore :
                     Cntryl.Pants.Storage.Internal.Hybrid.StorageAdmissionKind.Wal) ??
                 Cntryl.Pants.Storage.Internal.Hybrid.HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                 maxWalRetentionSegments,
-                walRetirementDiagnostics ?? new WalRetirementDiagnostics())
+                walRetirementDiagnostics ?? new WalRetirementDiagnostics(),
+                flushWorkingMemoryLimitBytes is null
+                    ? null
+                    : new ResourceBudget(flushWorkingMemoryLimitBytes.Value))
             {
                 _rootTrust = rootTrust,
                 _remoteWalSegments = remoteWalSegments ?? [],
@@ -3246,6 +3263,19 @@ sealed class LocalDiskStore :
         }
     }
 
+    IDisposable? ReserveFlushWorkingMemory(IEnumerable<WalMutation> operations)
+    {
+        var budget = _flushWorkingMemoryBudget;
+        if (budget is null)
+        {
+            return null;
+        }
+
+        var requiredBytes = SstFlushFootprint.MeasureWorkingSetUpperBound(
+            operations);
+        return budget.Reserve(requiredBytes);
+    }
+
     StorageBudgetLedger.StorageReservation? ReserveUnclaimedFlushHeadroom(
         IReadOnlyList<WalMutation> operations)
     {
@@ -3546,6 +3576,8 @@ sealed class LocalDiskStore :
             return;
         }
 
+        using var workingMemory = ReserveFlushWorkingMemory(
+            _mutableOperations.EnumerateOperations());
         var operations = _mutableOperations.SnapshotAll();
         using var fallbackHeadroom = ReserveUnclaimedFlushHeadroom(operations);
         FlushOperations(operations, _unflushedCommitSequence);
@@ -3567,6 +3599,8 @@ sealed class LocalDiskStore :
                 $"Column family '{identity.Name}' is not active in persistent storage.");
         }
 
+        using var workingMemory = ReserveFlushWorkingMemory(
+            _mutableOperations.EnumerateOperations(familyId));
         var familyOperations = _mutableOperations.SnapshotFamily(familyId);
         if (familyOperations.Count == 0)
         {
@@ -4283,7 +4317,7 @@ sealed class LocalDiskStore :
         CloudCompactionOutputPublisher? outputPublisher,
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default)
     {
@@ -4344,7 +4378,7 @@ sealed class LocalDiskStore :
         bool continueCompacting,
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs,
         CompactionOutputStaging? staging,
         CancellationToken cancellationToken)
     {
@@ -4401,12 +4435,13 @@ sealed class LocalDiskStore :
         bool flushMutableOperations,
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs,
         CompactionOutputStaging? staging,
         CancellationToken cancellationToken,
         bool drainDebt = false)
     {
         var compactionBudget = memory?.Budget;
+        using var inputProtectionScope = new CompactionInputProtectionScope();
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         ThrowIfWalFenced();
@@ -4463,13 +4498,14 @@ sealed class LocalDiskStore :
                 hasCompactionPlan = true;
                 if (prepareInputs is not null)
                 {
-                    await prepareInputs(
+                    var inputProtection = await prepareInputs(
                             plan.Inputs
                                 .Select(static input => input.Name)
                                 .Distinct(StringComparer.Ordinal)
                                 .ToArray(),
                             cancellationToken)
                         .ConfigureAwait(false);
+                    inputProtectionScope.Add(inputProtection);
                 }
 
                 // The merge walks level-0 sources one stream per file and each sorted, disjoint
@@ -5553,12 +5589,30 @@ sealed class LocalDiskStore :
         Interlocked.Add(ref _sstBytesWrittenTotal, sizeBytes);
 
         _failpoints.Hit(outputDurableFailpoint);
-        var allKeys = entries.Select(entry => entry.Key)
-            .Concat(ranges.SelectMany(range => new[] { range.Start, range.End }))
-            .OrderBy(key => key, ByteArrayComparer.Instance)
-            .ToList();
-        var allSequences = entries.Select(entry => entry.Sequence).Concat(ranges.Select(range => range.Sequence))
-            .ToList();
+        var (smallestKey, largestKey) = SstCodec.GetKeyBounds(entries, ranges);
+        ulong? smallestSequence = null;
+        ulong? largestSequence = null;
+
+        void IncludeSequence(ulong value)
+        {
+            smallestSequence = smallestSequence is null
+                ? value
+                : Math.Min(smallestSequence.Value, value);
+            largestSequence = largestSequence is null
+                ? value
+                : Math.Max(largestSequence.Value, value);
+        }
+
+        foreach (var entry in entries)
+        {
+            IncludeSequence(entry.Sequence);
+        }
+
+        foreach (var range in ranges)
+        {
+            IncludeSequence(range.Sequence);
+        }
+
         var metadata = new FileMeta
         {
             Name = name,
@@ -5567,11 +5621,11 @@ sealed class LocalDiskStore :
             ContentCrc32C = contentCrc32C,
             ColumnFamilyId = familyId,
             SstSequence = sequence,
-            SmallestKey = allKeys.Count == 0 ? null : allKeys[0].ToArray(),
-            LargestKey = allKeys.Count == 0 ? null : allKeys[^1].ToArray(),
+            SmallestKey = smallestKey?.ToArray(),
+            LargestKey = largestKey?.ToArray(),
             KeyBoundsComplete = true,
-            SmallestSequence = allSequences.Count == 0 ? null : allSequences.Min(),
-            LargestSequence = allSequences.Count == 0 ? null : allSequences.Max(),
+            SmallestSequence = smallestSequence,
+            LargestSequence = largestSequence,
             Sublevel = 0
         };
         return new StagedSstOutput(metadata, stagingPath, finalPath);

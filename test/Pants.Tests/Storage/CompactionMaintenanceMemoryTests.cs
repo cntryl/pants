@@ -9,6 +9,77 @@ namespace Cntryl.Pants.Storage;
 public sealed class CompactionMaintenanceMemoryTests
 {
     [Fact]
+    public async Task ShouldProtectEachForcedCompactionPassThroughItsPublication()
+    {
+        using var directory = new TemporaryDirectory();
+        var configuration = new PantsCompactionConfiguration(
+            L0FileCountTrigger: 2,
+            LevelMultiplier: 2,
+            L1TargetSizeBytes: 128,
+            TargetSstSizeBytes: 80,
+            BackgroundEnabled: false);
+        await using (var database = await PantsDatabase.OpenAsync(
+                         PantsOpenOptions.Local(directory.Path)
+                             .WithBackgroundCompaction(false)
+                             .WithCompaction(configuration)))
+        {
+            for (var batch = 0; batch < 2; batch++)
+            {
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
+                    PantsTransactionMode.ReadWrite);
+                for (var key = 0; key < 2; key++)
+                {
+                    transaction.Put(
+                        TestBytes.FromString($"lease-{batch}-{key}"),
+                        new byte[512]);
+                }
+
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            }
+        }
+
+        var state = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            compaction: configuration,
+            targetSstSizeBytes: configuration.TargetSstSizeBytes!.Value);
+        var activeLeases = 0;
+        var acquiredLeases = 0;
+        var releasedLeases = 0;
+        var publishedPasses = 0;
+
+        var result = await store.CompactAsync(
+            state,
+            true,
+            null,
+            false,
+            publicationCompleted: _ =>
+            {
+                Assert.True(Volatile.Read(ref activeLeases) > 0);
+                Interlocked.Increment(ref publishedPasses);
+            },
+            prepareInputs: (_, _) =>
+            {
+                Interlocked.Increment(ref activeLeases);
+                Interlocked.Increment(ref acquiredLeases);
+                return ValueTask.FromResult<IDisposable?>(
+                    new TestLease(() =>
+                    {
+                        Interlocked.Decrement(ref activeLeases);
+                        Interlocked.Increment(ref releasedLeases);
+                    }));
+            });
+
+        Assert.True(result.PublicationCount >= 3);
+        Assert.Equal(result.PublicationCount, publishedPasses);
+        Assert.Equal(acquiredLeases, releasedLeases);
+        Assert.Equal(0, activeLeases);
+    }
+
+    [Fact]
     public async Task ShouldWaitForInFlightWholePoolPublicationInsteadOfFailingCompaction()
     {
         using var directory = new TemporaryDirectory();
@@ -103,4 +174,11 @@ public sealed class CompactionMaintenanceMemoryTests
             .Select(static path => Path.GetFileName(path))
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    sealed class TestLease(Action release) : IDisposable
+    {
+        Action? _release = release;
+
+        public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+    }
 }

@@ -4,6 +4,6 @@ Pants profiles keys while writing each SST and applies Midge's pinned decision r
 
 `Sparse` remains the historical on-disk name for the complete binary block-first-key index. Every SST persists that index. Structured SSTs additionally persist Midge's flat prefix-compressed trie and select it with metadata discriminant `1`; small, high-entropy, or highly divergent SSTs select the binary index with discriminant `0` and omit the trie footer handle.
 
-Readers validate the metadata/footer combination, trie graph, child ordering, block IDs, and reconstructed keys against the canonical binary index before using a trie. The persisted choice is therefore self-describing and cannot silently change correctness: both formats retain the same ordered data blocks and block bloom filters.
+Readers validate the metadata/footer combination, trie graph, child ordering, block IDs, and reconstructed keys against the persisted binary index. Trie SSTs use the validated trie to select a floor block for point reads; sparse SSTs use the binary first-key index. Both formats retain the same ordered data blocks and block bloom filters.
 
-Selection is intentionally write-time-only. There is no public configuration switch because Midge exposes this as an internal optimization, and keeping the tuner deterministic preserves cross-engine format behavior.
+The trie lookup is part of the current reader path, but the persisted trie choice alone does not establish a workload speedup. There is no public configuration switch because Midge exposes this as an internal optimization, and keeping the tuner deterministic preserves cross-engine format behavior. Compare the trie and binary candidate selectors under the M06 workload suite before changing the tuner or making performance claims.

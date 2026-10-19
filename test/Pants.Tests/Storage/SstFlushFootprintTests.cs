@@ -2,6 +2,33 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class SstFlushFootprintTests
 {
+    [Fact]
+    public void ShouldComputeSstKeyBoundsFromUnsortedPointsAndRangeTombstones()
+    {
+        var entries = new[]
+        {
+            new SstEntry("point-z"u8.ToArray(), "z"u8.ToArray(), 9, null, false),
+            new SstEntry("point-a"u8.ToArray(), "a"u8.ToArray(), 4, null, false)
+        };
+        var ranges = new[]
+        {
+            new RangeTombstone("range-m"u8.ToArray(), "range-x"u8.ToArray(), 7)
+        };
+
+        var (smallestKey, largestKey) = SstCodec.GetKeyBounds(entries, ranges);
+
+        Assert.True(smallestKey is not null && "point-a"u8.SequenceEqual(smallestKey));
+        Assert.True(largestKey is not null && "range-x"u8.SequenceEqual(largestKey));
+
+        var contents = SstCodec.Decode(SstCodec.Encode(
+            entries,
+            ranges,
+            PantsPerformanceGoal.Latency));
+
+        Assert.Equal(2, contents.Entries.Count);
+        Assert.Single(contents.RangeTombstones);
+    }
+
     [Theory]
     [InlineData(PantsPerformanceGoal.Latency)]
     [InlineData(PantsPerformanceGoal.Throughput)]

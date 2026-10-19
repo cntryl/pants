@@ -454,7 +454,8 @@ sealed class Actor : IAsyncDisposable
                     leaseTimeToLive: options.LeaseTimeToLive,
                     leaseTimeProvider: runtimeTimeProvider,
                     recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                    walRetirementDiagnostics: walRetirementDiagnostics);
+                    walRetirementDiagnostics: walRetirementDiagnostics,
+                    flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -502,7 +503,8 @@ sealed class Actor : IAsyncDisposable
                         deferWalReplay: true,
                         walRetirementDiagnostics: walRetirementDiagnostics,
                         validateLocalWalHistoryContinuity: true,
-                        localWalHistoryValidationStartSegmentId: simulatedHydration.NextWalSegmentId);
+                        localWalHistoryValidationStartSegmentId: simulatedHydration.NextWalSegmentId,
+                        flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulatedRoot,
                         diskStore.WriterEpoch,
@@ -654,7 +656,8 @@ sealed class Actor : IAsyncDisposable
                         validateLocalWalHistoryContinuity: allowLocalWalTailRecovery,
                         localWalHistoryValidationStartSegmentId: allowLocalWalTailRecovery
                             ? hydration.NextWalSegmentId
-                            : null);
+                            : null,
+                        flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
                         objectStores.Sst,
@@ -1660,19 +1663,11 @@ sealed class Actor : IAsyncDisposable
                                 inputs,
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        using var inputProtection = await ProtectCompactionInputsAsync(
-                                inputs,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                        await deadline.RunAsync(
-                                token => EnsureHybridSstsLocalForMaintenanceAsync(inputs, token),
-                                cancellationToken)
-                            .ConfigureAwait(false);
                         var result = await deadline.RunMutationAsync(
                                 token => _compactionRuntime.DrainDebtAsync(
                                     state,
                                     _cloudCompactionOutputPublisher,
-                                    prepareInputs: EnsureHybridSstsLocalForMaintenanceAsync,
+                                    prepareInputs: PrepareCompactionInputsAsync,
                                     staging: staging?.Staging,
                                     cancellationToken: token),
                                 cancellationToken)
@@ -3192,6 +3187,7 @@ sealed class Actor : IAsyncDisposable
         if (RequiresWriteAdmission(payload))
         {
             ThrowIfCloudWalUploadWriteStalled();
+            ThrowIfCriticalL0WriteAdmissionStalled(state, GetCommitFamilies(payload));
         }
 
         if (!state.ActiveTransactions.Remove(payload.TransactionId))
@@ -4396,19 +4392,13 @@ sealed class Actor : IAsyncDisposable
                 inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
-        using var inputProtection = await ProtectCompactionInputsAsync(
-                inputs,
-                CancellationToken.None)
-            .ConfigureAwait(false);
-        await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
-            .ConfigureAwait(false);
         var result = await _compactionRuntime
             .CompactAsync(
                 state,
                 false,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalForMaintenanceAsync,
+                PrepareCompactionInputsAsync,
                 staging?.Staging)
             .ConfigureAwait(false);
 
@@ -4471,19 +4461,13 @@ sealed class Actor : IAsyncDisposable
                 inputs,
                 CancellationToken.None)
             .ConfigureAwait(false);
-        using var inputProtection = await ProtectCompactionInputsAsync(
-                inputs,
-                CancellationToken.None)
-            .ConfigureAwait(false);
-        await EnsureHybridSstsLocalForMaintenanceAsync(inputs, CancellationToken.None)
-            .ConfigureAwait(false);
         var result = await _compactionRuntime
             .CompactAsync(
                 state,
                 true,
                 _cloudCompactionOutputPublisher,
                 !UsesBackgroundImmutableFlushes,
-                EnsureHybridSstsLocalForMaintenanceAsync,
+                PrepareCompactionInputsAsync,
                 staging?.Staging)
             .ConfigureAwait(false);
         if (!UsesBackgroundImmutableFlushes)
@@ -4821,6 +4805,25 @@ sealed class Actor : IAsyncDisposable
             ? ValueTask.FromResult<IDisposable?>(null)
             : ProtectAsync(_hybridCache, names, cancellationToken);
 
+    async ValueTask<IDisposable?> PrepareCompactionInputsAsync(
+        IReadOnlyList<string> names,
+        CancellationToken cancellationToken)
+    {
+        var protection = await ProtectCompactionInputsAsync(names, cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            await EnsureHybridSstsLocalForMaintenanceAsync(names, cancellationToken)
+                .ConfigureAwait(false);
+            return protection;
+        }
+        catch
+        {
+            protection?.Dispose();
+            throw;
+        }
+    }
+
     static async ValueTask<IDisposable?> ProtectAsync(
         HybridCacheManager hybridCache,
         IReadOnlyList<string> names,
@@ -4868,11 +4871,10 @@ sealed class Actor : IAsyncDisposable
                     ValidateActiveFamily(state, family);
                 }
 
-                return ValueTask.FromResult(
-                    MemtableWritePressure.IsStalled(_options, state, families));
+                return ValueTask.FromResult(GetWriteAdmissionStall(state, families));
             },
             cancellationToken).ConfigureAwait(false);
-        if (!stalled)
+        if (stalled is null)
         {
             foreach (var family in families)
             {
@@ -4882,9 +4884,59 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        _telemetry.RecordWriteStallMemory();
-        throw new PantsWriteStallException(
-            "Writes are stalled until the bounded immutable memtable pipeline makes progress.");
+        ThrowWriteAdmissionStall(stalled.Value);
+    }
+
+    void ThrowIfCriticalL0WriteAdmissionStalled(
+        RuntimeState state,
+        IReadOnlyList<ColumnFamilyIdentity> families)
+    {
+        var stalled = GetWriteAdmissionStall(state, families);
+        // Generic queue/memory pressure is admitted through the preflight path, which can
+        // legitimately race an already-admitted commit. Recheck only the hard L0 ceiling here:
+        // its slot must be enforced before the commit reaches the WAL.
+        if (stalled is { IsCompaction: true })
+        {
+            ThrowWriteAdmissionStall(stalled.Value);
+        }
+    }
+
+    WriteAdmissionStall? GetWriteAdmissionStall(
+        RuntimeState state,
+        IReadOnlyList<ColumnFamilyIdentity> families)
+    {
+        foreach (var family in families)
+        {
+            if (MemtableWritePressure.HasCriticalL0Debt(_options, state, family))
+            {
+                var usage = MemtableWritePressure.GetL0SlotUsage(state, family);
+                var ceiling = MemtableWritePressure.GetL0HardCeiling(_options);
+                return new WriteAdmissionStall(
+                    true,
+                    $"Writes are stalled for column family '{family.Name}' by critical L0 debt " +
+                    $"({usage}/{ceiling} slots).");
+            }
+        }
+
+        return MemtableWritePressure.IsStalled(_options, state, families)
+            ? new WriteAdmissionStall(
+                false,
+                "Writes are stalled until the bounded immutable memtable pipeline makes progress.")
+            : null;
+    }
+
+    void ThrowWriteAdmissionStall(WriteAdmissionStall stalled)
+    {
+        if (stalled.IsCompaction)
+        {
+            _telemetry.RecordWriteStallCompaction();
+        }
+        else
+        {
+            _telemetry.RecordWriteStallMemory();
+        }
+
+        throw new PantsWriteStallException(stalled.Message);
     }
 
     bool IsCommitWriteStalled(RuntimeState state, CommitPayload payload)
@@ -4898,6 +4950,8 @@ sealed class Actor : IAsyncDisposable
         IReadOnlyList<ColumnFamilyIdentity> families) =>
         families.Count != 0 &&
         MemtableWritePressure.IsStalled(_options, state, families);
+
+    readonly record struct WriteAdmissionStall(bool IsCompaction, string Message);
 
     static ColumnFamilyIdentity[] GetCommitFamilies(CommitPayload payload) =>
         GetOperationFamilies(payload)

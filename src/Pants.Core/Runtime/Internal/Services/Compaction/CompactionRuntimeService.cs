@@ -18,7 +18,7 @@ sealed class CompactionRuntimeService(
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
         bool flushMutableOperations = true,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
@@ -34,7 +34,7 @@ sealed class CompactionRuntimeService(
     public ValueTask<CompactionResult> DrainDebtAsync(
         RuntimeState state,
         CloudCompactionOutputPublisher? outputPublisher,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(

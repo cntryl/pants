@@ -11,7 +11,7 @@ interface ILocalCompactionStore
         CloudCompactionOutputPublisher? outputPublisher,
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default);
 
@@ -22,7 +22,7 @@ interface ILocalCompactionStore
         bool flushMutableOperations,
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
-        Func<IReadOnlyList<string>, CancellationToken, ValueTask>? prepareInputs = null,
+        Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
         CancellationToken cancellationToken = default);
 }

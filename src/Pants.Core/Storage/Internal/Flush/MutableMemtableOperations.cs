@@ -51,6 +51,22 @@ sealed class MutableMemtableOperations
         .OrderBy(static operation => operation.Sequence)
         .ToArray();
 
+    public IEnumerable<WalMutation> EnumerateOperations(uint? columnFamilyId = null)
+    {
+        foreach (var (familyId, operations) in _families)
+        {
+            if (columnFamilyId is not null && familyId != columnFamilyId.Value)
+            {
+                continue;
+            }
+
+            foreach (var operation in operations)
+            {
+                yield return operation;
+            }
+        }
+    }
+
     public void TruncateAfter(ulong sequence)
     {
         foreach (var pair in _families.ToArray())

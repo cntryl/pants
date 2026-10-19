@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
 
@@ -160,5 +161,65 @@ public sealed class PantsSstIndexTuningTests
 
         Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(bytes));
         Assert.Equal(entries.Length, contents.Entries.Count);
+    }
+
+    [Fact]
+    public async Task ShouldReadEmptyKeyAndThreeHundredLevelSharedPrefixAfterFlushVerificationAndReopen()
+    {
+        using var directory = new TemporaryDirectory();
+        var prefix = Enumerable.Repeat((byte)'p', 300).ToArray();
+        var keys = Enumerable.Range(0, 300)
+            .Select(index => prefix.Concat(Encoding.UTF8.GetBytes($"{index:D4}")).ToArray())
+            .ToArray();
+        var values = Enumerable.Range(0, keys.Length)
+            .Select(index => TestBytes.FromString($"value-{index}"))
+            .ToArray();
+
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            writer.Put(ReadOnlyMemory<byte>.Empty, TestBytes.FromString("empty-key"));
+            for (var index = 0; index < keys.Length; index++)
+            {
+                writer.Put(keys[index], values[index]);
+            }
+
+            await writer.CommitAsync(PantsWriteOptions.Sync);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+
+            var sstPath = Assert.Single(Directory.EnumerateFiles(
+                Path.Combine(directory.Path, "sst"),
+                "*.sst"));
+            Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(File.ReadAllBytes(sstPath)));
+
+            var report = await database.PersistentStorage!.VerifyAsync(TestTimeouts.Expected);
+            Assert.True(report.Authoritative);
+            Assert.Equal(1, report.SstFilesVerified);
+
+            await using var reader = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.Equal(
+                "empty-key",
+                TestBytes.ToText((await reader.GetAsync(ReadOnlyMemory<byte>.Empty))!.Value));
+            for (var index = 0; index < keys.Length; index++)
+            {
+                Assert.Equal(values[index], (await reader.GetAsync(keys[index]))!.Value.ToArray());
+            }
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+        await using var reopenedReader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "empty-key",
+            TestBytes.ToText((await reopenedReader.GetAsync(ReadOnlyMemory<byte>.Empty))!.Value));
+        for (var index = 0; index < keys.Length; index++)
+        {
+            Assert.Equal(values[index], (await reopenedReader.GetAsync(keys[index]))!.Value.ToArray());
+        }
     }
 }

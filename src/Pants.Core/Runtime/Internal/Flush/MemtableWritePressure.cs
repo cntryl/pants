@@ -44,10 +44,22 @@ static class MemtableWritePressure
         RuntimeState state,
         ColumnFamilyIdentity identity)
     {
+        var active = state.ActiveMemtableBytes.GetValueOrDefault(identity) > 0;
+        var slotUsage = GetL0SlotUsage(state, identity);
+        var ceiling = GetL0HardCeiling(options);
+
+        // A filling active generation already owns its slot and must be allowed to finish. Once
+        // it is frozen, that slot moves to the immutable queue and the next generation is blocked.
+        return slotUsage > ceiling || (slotUsage == ceiling && !active);
+    }
+
+    public static long GetL0SlotUsage(RuntimeState state, ColumnFamilyIdentity identity)
+    {
         var published = state.PublishedL0FileCounts.GetValueOrDefault(identity.Id);
         var queued = state.ImmutableMemtableFlushes.Values.Count(flush =>
             flush.Frozen.ColumnFamily == identity);
-        return published + queued >= GetL0HardCeiling(options);
+        var active = state.ActiveMemtableBytes.GetValueOrDefault(identity) > 0 ? 1 : 0;
+        return checked((long)published + queued + active);
     }
 
     /// <summary>Whether any family holds every level-0 slot it is entitled to.</summary>
