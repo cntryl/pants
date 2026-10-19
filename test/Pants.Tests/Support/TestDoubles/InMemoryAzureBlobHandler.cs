@@ -185,6 +185,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     int _walRangeReadFailures;
     int _failedWalRangeReads;
+    int _throwOnWalRangeReadCancellation;
     TaskCompletionSource? _walRangeReadGate;
     TaskCompletionSource _walRangeReadBlocked =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -199,9 +200,17 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     public void BlockWalRangeReads()
     {
         _walRangeReadBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Volatile.Write(ref _throwOnWalRangeReadCancellation, 0);
         Volatile.Write(
             ref _walRangeReadGate,
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    }
+
+    /// <summary>Holds ranged WAL reads through cancellation and faults one cancellation callback.</summary>
+    public void BlockWalRangeReadsThroughCancellationFailure()
+    {
+        BlockWalRangeReads();
+        Volatile.Write(ref _throwOnWalRangeReadCancellation, 1);
     }
 
     public Task WaitForBlockedWalRangeReadAsync() =>
@@ -230,7 +239,17 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             if (Volatile.Read(ref _walRangeReadGate) is { } walGate)
             {
                 _walRangeReadBlocked.TrySetResult();
-                await walGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (Volatile.Read(ref _throwOnWalRangeReadCancellation) != 0)
+                {
+                    using var registration = cancellationToken.Register(
+                        static () => throw new InvalidOperationException(
+                            "Injected WAL range cancellation callback failure."));
+                    await walGate.Task.ConfigureAwait(false);
+                }
+                else
+                {
+                    await walGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (Interlocked.Decrement(ref _walRangeReadFailures) >= 0)
