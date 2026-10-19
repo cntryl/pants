@@ -21,6 +21,7 @@ public sealed class CloudSstGarbageCollectionTests
             store,
             _ => ValueTask.FromResult(new CloudSstRetentionProof(
                 new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<uint, ulong> { [0] = 7 },
                 [])),
             () => new HashSet<string>(StringComparer.Ordinal),
@@ -29,6 +30,66 @@ public sealed class CloudSstGarbageCollectionTests
             NullPantsFailpointHandler.Instance);
 
         Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.NotNull(await store.HeadAsync(objectKey, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ShouldCollectPartialCompactionOutputGivenGuardedMissingSiblingProof()
+    {
+        var store = new TestCloudObjectStore();
+        const string name = "000000_01_00000000000000000007.sst";
+        var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+        store.Seed(objectKey, "partial output"u8.ToArray());
+        var identity = await store.HeadAsync(objectKey, CancellationToken.None);
+        var protectedNames = new HashSet<string>(StringComparer.Ordinal) { name };
+        var partialOutputVersions = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [name] = identity!.Version
+        };
+        var collector = new CloudSstGarbageCollector(
+            store,
+            _ => ValueTask.FromResult(new CloudSstRetentionProof(
+                protectedNames,
+                partialOutputVersions,
+                new Dictionary<uint, ulong> { [0] = 7 },
+                [])),
+            () => new HashSet<string>(StringComparer.Ordinal),
+            static () => { },
+            static _ => ValueTask.CompletedTask,
+            NullPantsFailpointHandler.Instance);
+
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Null(await store.HeadAsync(objectKey, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ShouldRetainPartialCompactionOutputWhenItsObservedIdentityChanges()
+    {
+        var store = new TestCloudObjectStore();
+        const string name = "000000_01_00000000000000000007.sst";
+        var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+        store.Seed(objectKey, "partial output"u8.ToArray());
+        var identity = await store.HeadAsync(objectKey, CancellationToken.None);
+        var protectedNames = new HashSet<string>(StringComparer.Ordinal) { name };
+        var partialOutputVersions = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [name] = identity!.Version + "-changed"
+        };
+        var collector = new CloudSstGarbageCollector(
+            store,
+            _ => ValueTask.FromResult(new CloudSstRetentionProof(
+                protectedNames,
+                partialOutputVersions,
+                new Dictionary<uint, ulong> { [0] = 7 },
+                [])),
+            () => new HashSet<string>(StringComparer.Ordinal),
+            static () => { },
+            static _ => ValueTask.CompletedTask,
+            NullPantsFailpointHandler.Instance);
+
+        Assert.False(await collector.CollectAsync(CancellationToken.None));
 
         Assert.NotNull(await store.HeadAsync(objectKey, CancellationToken.None));
     }
@@ -293,6 +354,7 @@ public sealed class CloudSstGarbageCollectionTests
             sstStore,
             _ => ValueTask.FromResult(new CloudSstRetentionProof(
                 new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<uint, ulong> { [0] = 2 },
                 [])),
             () => new HashSet<string>(StringComparer.Ordinal),
@@ -339,6 +401,7 @@ public sealed class CloudSstGarbageCollectionTests
         store,
         _ => ValueTask.FromResult(new CloudSstRetentionProof(
             new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<uint, ulong> { [0] = 100 },
             [])),
         () => new HashSet<string>(StringComparer.Ordinal),

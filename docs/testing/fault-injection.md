@@ -18,6 +18,11 @@ exception was thrown. For example, a failed atomic transaction must reopen as
 fully present or fully absent; a durable but unpublished SST may remain as
 conservative residue and must be safely reusable on retry.
 
+For provider partitioned compaction, fail a later output upload and reopen after
+removing the local SST cache. Assert that the inputs remain authoritative, any
+partially uploaded output is reclaimed, and all seeded keys remain readable. A
+complete uploaded output set must remain available for successor adoption.
+
 Use `TemporaryDirectory` for every persistent scenario and reopen through a new
 database instance after the injected failure. Never delete uncertain files in a
 test handler: Pants intentionally prefers a recoverable storage leak over unsafe

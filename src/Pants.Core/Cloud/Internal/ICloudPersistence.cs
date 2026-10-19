@@ -10,6 +10,8 @@ interface ICloudPersistence : ICloudDdlAuthority, IAsyncDisposable
 
     ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken);
 
+    ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken);
+
     ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken);
 
     /// <summary>

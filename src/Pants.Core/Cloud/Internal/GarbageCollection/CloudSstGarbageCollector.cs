@@ -46,7 +46,10 @@ sealed class CloudSstGarbageCollector
                     continue;
                 }
 
-                if (proof.ProtectedNames.Contains(name) ||
+                var isPartialCompactionOutput = proof.PartialCompactionOutputVersions.TryGetValue(
+                    name,
+                    out var expectedPartialOutputVersion);
+                if ((proof.ProtectedNames.Contains(name) && !isPartialCompactionOutput) ||
                     _readLocalProtectedNames().Contains(name))
                 {
                     continue;
@@ -56,11 +59,10 @@ sealed class CloudSstGarbageCollector
                     !proof.RemoteNextSstSequences.TryGetValue(
                         sstIdentity.ColumnFamilyId,
                         out var nextSequence) ||
-                    sstIdentity.Sequence >= nextSequence)
+                    (!isPartialCompactionOutput && sstIdentity.Sequence >= nextSequence))
                 {
-                    // A successor may still allocate this name from the
-                    // authoritative manifest. Retention is the only safe
-                    // action until every remote manifest advances past it.
+                    // A successor may still allocate this name from the authoritative manifest.
+                    // A guarded partial-output proof is the only reason to bypass that frontier.
                     continue;
                 }
 
@@ -75,6 +77,12 @@ sealed class CloudSstGarbageCollector
                 {
                     encounteredAnomaly = true;
                     continue;
+                }
+
+                if (isPartialCompactionOutput &&
+                    !StringComparer.Ordinal.Equals(objectIdentity.Version, expectedPartialOutputVersion))
+                {
+                    return false;
                 }
 
                 if (!await VerifyProofAsync(proof, cancellationToken).ConfigureAwait(false) ||
