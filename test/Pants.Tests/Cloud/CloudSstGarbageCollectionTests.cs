@@ -79,6 +79,81 @@ public sealed class CloudSstGarbageCollectionTests
     }
 
     [Fact]
+    public async Task ShouldKeepOpenSnapshotReadableAfterSuccessorCompactsAndCollectsCloudSsts()
+    {
+        using var firstCache = new TemporaryDirectory();
+        using var successorCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var monotonic = new ManualSchedulingTimeProvider();
+        var wallClock = new ManualClock(
+            new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var options = PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation())
+            .WithBackgroundCompaction(false)
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+        var dependencies = new RuntimeDependencies(
+            cloudHttpClient: client,
+            leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
+            runtimeTimeProvider: monotonic,
+            leaseClock: wallClock);
+        await using var original = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        await CommitAndFlushAsync(original, "snapshot-takeover/key");
+        var originalSst = Assert.Single(handler.GetObjectPaths("/sst/"));
+        await using var snapshot = await original.Transactions.BeginAsync(
+            original.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        handler.BlockLeaseWrites();
+        try
+        {
+            monotonic.Advance(TimeSpan.FromMilliseconds(100));
+            await handler.WaitForBlockedLeaseWriteAsync();
+            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            Assert.False(original.PersistentStorage!.IsPrimaryLeaseHealthy);
+            wallClock.UtcNow += TimeSpan.FromSeconds(3);
+        }
+        finally
+        {
+            handler.ReleaseLeaseWrites();
+        }
+
+        var successorOptions = PantsOpenOptions.Cloud(successorCache.Path, CreateAzureLocation())
+            .WithBackgroundCompaction(false)
+            .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+        await using var successor = await PantsDatabase.OpenForTestingAsync(
+            successorOptions,
+            new RuntimeDependencies(
+                cloudHttpClient: client,
+                leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
+                runtimeTimeProvider: monotonic,
+                leaseClock: wallClock));
+        Assert.True(successor.PersistentStorage!.IsPrimaryLeaseHealthy);
+        await using (var rewrite = await successor.Transactions.BeginAsync(
+                         successor.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            rewrite.Put("snapshot-takeover/key"u8.ToArray(), "new"u8.ToArray());
+            await rewrite.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+
+        await successor.Maintenance.FlushAsync(successor.ColumnFamilies.DefaultFamily);
+        await successor.Maintenance.CompactAllAsync();
+
+        Assert.DoesNotContain(originalSst, handler.GetObjectPaths("/sst/"), StringComparer.Ordinal);
+        Assert.Equal(
+            "value",
+            TestBytes.ToText((await snapshot.GetAsync("snapshot-takeover/key"u8.ToArray()))!.Value));
+        await using var current = await successor.Transactions.BeginAsync(
+            successor.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "new",
+            TestBytes.ToText((await current.GetAsync("snapshot-takeover/key"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldCollectOrphanedCloudObjectsAfterCompaction()
     {
         await VerifyProviderCollectionAsync();

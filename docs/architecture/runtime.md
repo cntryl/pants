@@ -73,6 +73,11 @@ level, cache, bloom, data-block, and cloud-hydration decisions for that read.
 Flush and compaction publication uses durable intent records followed by
 manifest edits. Immutable snapshots pin obsolete SSTs conservatively. GC only
 removes those files after the final transaction or scan snapshot is released.
+For provider-cloud databases, a successor may take the writer lease, compact,
+and collect the old remote SST object while a fenced predecessor still has an
+open transaction. The predecessor's snapshot continues to read its pinned local
+cache view; losing write authority does not invalidate reads from that snapshot.
+Disposing the transaction releases its local snapshot pin.
 
 Transactions and scans must be disposed to release their snapshot pins and any
 transaction spill files. Pants does not evict a live snapshot or use garbage
