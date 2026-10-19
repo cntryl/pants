@@ -42,6 +42,27 @@ sealed class TestCloudObjectStore : ICloudObjectStore
         return ValueTask.FromResult(metadata);
     }
 
+    public ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        if (_version is null || !StringComparer.Ordinal.Equals(_objectKey, objectKey) ||
+            offset >= (ulong)Data.Length)
+        {
+            return ValueTask.FromResult<CloudObject?>(null);
+        }
+
+        var start = checked((int)offset);
+        var count = Math.Min(length, Data.Length - start);
+        return ValueTask.FromResult<CloudObject?>(new CloudObject(
+            Data.Slice(start, count),
+            _version));
+    }
+
     public async ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,

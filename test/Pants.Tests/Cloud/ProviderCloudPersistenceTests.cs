@@ -42,9 +42,9 @@ public sealed class ProviderCloudPersistenceTests
 
         await persistence.PublishWalBatchAsync(segments, CancellationToken.None);
 
-        // Three segments, one catalog CAS, and one mirror convergence.
+        // Three segment verifications and one catalog publication readback; mirror checks use HEAD.
         Assert.Equal(5, walStore.PutCount);
-        Assert.Equal(7, walStore.GetCount);
+        Assert.Equal(4, walStore.GetCount);
         Assert.True(walStore.PayloadBytesCopied > 3);
         var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
             cache.Path,

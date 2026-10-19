@@ -42,7 +42,7 @@ public sealed class ProviderWalRetirementTests
     public async Task ShouldBoundRetirementMemoryByMaintenancePoolIndependentOfSegmentSize()
     {
         const int largestFrame = 3 * PageBytes;
-        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 4L * largestFrame + 1024);
+        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 6L * largestFrame + 1024);
         harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
         var records = Enumerable.Range(0, 256)
             .Select(index => new WalTestRecord(
@@ -90,9 +90,13 @@ public sealed class ProviderWalRetirementTests
         harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
         var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 64, 900));
         harness.ResetRequests();
-        harness.Wal.BeforeRangeRead = (_, _) =>
+        harness.Wal.BeforeRangeRead = (key, _) =>
         {
-            harness.Clock.Advance(TimeSpan.FromMilliseconds(10));
+            if (key == segment.ObjectKey)
+            {
+                harness.Clock.Advance(TimeSpan.FromMilliseconds(10));
+            }
+
             return ValueTask.CompletedTask;
         };
 
@@ -116,9 +120,9 @@ public sealed class ProviderWalRetirementTests
         var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 64, 900));
         harness.ResetRequests();
         var reads = 0;
-        harness.Wal.BeforeRangeRead = (_, _) => ++reads % 3 == 0
-            ? ValueTask.FromException(new PantsTimeoutException("The provider timed out."))
-            : ValueTask.CompletedTask;
+        harness.Wal.BeforeRangeRead = (key, _) => key == segment.ObjectKey && ++reads % 3 == 0
+                ? ValueTask.FromException(new PantsTimeoutException("The provider timed out."))
+                : ValueTask.CompletedTask;
 
         var attempts = await harness.RetireUntilRetiredAsync(result =>
         {
@@ -225,7 +229,8 @@ public sealed class ProviderWalRetirementTests
         Assert.Equal([1UL, 2UL], harness.CatalogSegmentIds());
         Assert.DoesNotContain(
             harness.Wal.Requests,
-            static request => request.Operation == StoreOperation.GetRange);
+            static request => request.Operation == StoreOperation.GetRange &&
+                              request.ObjectKey.EndsWith(".wal", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -253,10 +258,14 @@ public sealed class ProviderWalRetirementTests
         var covering = harness.PublishSst("covering.sst", 0, "a-", "a-~");
         harness.PublishManifest([covering]);
         var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 2));
-        harness.Wal.BeforeRangeRead = (_, _) =>
+        harness.Wal.BeforeRangeRead = (key, _) =>
         {
-            harness.PublishManifest([covering, harness.PublishSst("flushed.sst", 0, "b-0", "b-9")]);
-            harness.Wal.BeforeRangeRead = null;
+            if (key == segment.ObjectKey)
+            {
+                harness.PublishManifest([covering, harness.PublishSst("flushed.sst", 0, "b-0", "b-9")]);
+                harness.Wal.BeforeRangeRead = null;
+            }
+
             return ValueTask.CompletedTask;
         };
 
@@ -421,9 +430,13 @@ public sealed class ProviderWalRetirementTests
         }
 
         public void AdvanceClockOnEveryRangeRead() =>
-            Wal.BeforeRangeRead = (_, _) =>
+            Wal.BeforeRangeRead = (key, _) =>
             {
-                Clock.Advance(TimeSpan.FromMilliseconds(10));
+                if (key.EndsWith(".wal", StringComparison.Ordinal))
+                {
+                    Clock.Advance(TimeSpan.FromMilliseconds(10));
+                }
+
                 return ValueTask.CompletedTask;
             };
 

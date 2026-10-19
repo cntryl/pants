@@ -360,6 +360,15 @@ sealed class Actor : IAsyncDisposable
         // through one first-in, first-out gate.
         var maintenanceMemoryBudget = new ResourceBudget(options.CompactionMemoryPoolBytes);
         var maintenanceMemoryGate = new MaintenanceMemoryGate();
+        var walRetirementSettings = new WalRetirementSettings(
+            maintenanceMemoryBudget,
+            maintenanceMemoryGate,
+            WalRetirementSettings.DefaultPageBytes,
+            dependencies.CloudWalRetirementQuantum ?? WalRetirementSettings.DefaultQuantum,
+            runtimeTimeProvider);
+        var catalogReadAdmission = new ProviderWalCatalogReadAdmission(
+            maintenanceMemoryBudget,
+            maintenanceMemoryGate);
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
@@ -513,7 +522,8 @@ sealed class Actor : IAsyncDisposable
                                 token => new ProviderWalCatalogStore(
                                         objectStores.Wal,
                                         static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-                                        static () => { })
+                                        static () => { },
+                                        catalogReadAdmission)
                                     .ReadFencingEpochAsync(token),
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -534,7 +544,8 @@ sealed class Actor : IAsyncDisposable
                                     objectStores.Sst,
                                     objectStores.Control,
                                     options.RecoveryPolicy,
-                                    token),
+                                    token,
+                                    catalogReadAdmission: catalogReadAdmission),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -580,13 +591,7 @@ sealed class Actor : IAsyncDisposable
                         cloudLease,
                         dependencies.Failpoints,
                         mirrorPublicationAdmission,
-                        new WalRetirementSettings(
-                            maintenanceMemoryBudget,
-                            maintenanceMemoryGate,
-                            WalRetirementSettings.DefaultPageBytes,
-                            dependencies.CloudWalRetirementQuantum ??
-                            WalRetirementSettings.DefaultQuantum,
-                            runtimeTimeProvider));
+                        walRetirementSettings);
                     cloudPersistence = providerPersistence;
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,

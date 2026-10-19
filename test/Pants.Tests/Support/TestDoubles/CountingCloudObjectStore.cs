@@ -4,9 +4,15 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
 {
     readonly Dictionary<string, (byte[] Data, string Version)> _objects = new(StringComparer.Ordinal);
     int _getCount;
+    int _rangeGetCount;
     int _putCount;
+    int _largestRangeBytes;
 
     public int GetCount => Volatile.Read(ref _getCount);
+
+    public int RangeGetCount => Volatile.Read(ref _rangeGetCount);
+
+    public int LargestRangeBytes => Volatile.Read(ref _largestRangeBytes);
 
     public int PutCount => Volatile.Read(ref _putCount);
 
@@ -29,6 +35,28 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         return ValueTask.FromResult(_objects.TryGetValue(objectKey, out var value)
             ? new CloudObjectMetadata(checked((ulong)value.Data.Length), value.Version, null, null)
             : null);
+    }
+
+    public ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        Interlocked.Increment(ref _rangeGetCount);
+        UpdateLargestRange(length);
+        if (!_objects.TryGetValue(objectKey, out var value) || offset >= (ulong)value.Data.Length)
+        {
+            return ValueTask.FromResult<CloudObject?>(null);
+        }
+
+        var start = checked((int)offset);
+        var count = Math.Min(length, value.Data.Length - start);
+        return ValueTask.FromResult<CloudObject?>(new CloudObject(
+            value.Data.AsMemory(start, count),
+            value.Version));
     }
 
     public ValueTask<bool> PutAsync(
@@ -69,6 +97,19 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
             ? _objects.Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal)).ToArray()
             : [];
         return ValueTask.FromResult(new CloudObjectListPage(keys, null));
+    }
+
+    void UpdateLargestRange(int candidate)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _largestRangeBytes);
+            if (candidate <= current ||
+                Interlocked.CompareExchange(ref _largestRangeBytes, candidate, current) == current)
+            {
+                return;
+            }
+        }
     }
 
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(

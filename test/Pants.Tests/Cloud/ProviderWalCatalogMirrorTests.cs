@@ -122,6 +122,89 @@ public sealed class ProviderWalCatalogMirrorTests
     }
 
     [Fact]
+    public async Task ShouldReadCatalogCopiesThroughBoundedRanges()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new CountingCloudObjectStore();
+        await PublishAsync(cache.Path, walStore);
+        var getsBeforeRead = walStore.GetCount;
+        var rangesBeforeRead = walStore.RangeGetCount;
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { });
+
+        using var read = await catalog.ReadAsync(false, CancellationToken.None);
+
+        Assert.NotNull(read.Catalog);
+        Assert.Equal(getsBeforeRead, walStore.GetCount);
+        Assert.True(walStore.RangeGetCount > rangesBeforeRead);
+        Assert.InRange(walStore.LargestRangeBytes, 1, 64 * 1024);
+    }
+
+    [Fact]
+    public async Task ShouldRejectOversizedCatalogBeforeRangeReadOrRepair()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new CountingCloudObjectStore();
+        var oversized = new byte[4096];
+        await WriteAsync(walStore, Primary, oversized);
+        await WriteAsync(walStore, Mirror, "{}"u8.ToArray());
+        var getsBeforeRead = walStore.GetCount;
+        var rangesBeforeRead = walStore.RangeGetCount;
+        var putsBeforeRead = walStore.PutCount;
+        var budget = new ResourceBudget(1024);
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { },
+            new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(getsBeforeRead, walStore.GetCount);
+        Assert.Equal(rangesBeforeRead, walStore.RangeGetCount);
+        Assert.Equal(putsBeforeRead, walStore.PutCount);
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldKeepCatalogMemoryChargedUntilCallerDisposesRead()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new CountingCloudObjectStore();
+        await PublishAsync(cache.Path, walStore);
+        var primaryMetadata = await walStore.HeadAsync(Primary, CancellationToken.None);
+        var mirrorMetadata = await walStore.HeadAsync(Mirror, CancellationToken.None);
+        Assert.NotNull(primaryMetadata);
+        Assert.NotNull(mirrorMetadata);
+        var required = checked(
+            (long)(primaryMetadata.SizeBytes + mirrorMetadata.SizeBytes) * 16);
+        var budget = new ResourceBudget(required);
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { },
+            new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
+
+        var read = await catalog.ReadAsync(false, CancellationToken.None);
+        Assert.NotNull(read.Catalog);
+        Assert.Equal(required, budget.Current);
+        var rangesAfterFirstRead = walStore.RangeGetCount;
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(rangesAfterFirstRead, walStore.RangeGetCount);
+        Assert.Equal(required, budget.Current);
+
+        read.Dispose();
+
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
     public async Task ShouldOpenFreshBucketWithNeitherCatalogNorWalObjects()
     {
         using var cache = new TemporaryDirectory();
