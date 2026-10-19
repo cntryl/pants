@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using Cntryl.Pants.Storage.Internal.IO;
+using Cntryl.Pants.Storage.Internal.Wal;
 
 namespace Cntryl.Pants.Runtime.Internal;
 
@@ -62,6 +63,7 @@ sealed class Actor : IAsyncDisposable
     DatabaseVersion _currentVersion = null!;
     int _deferredCompactionScheduled;
     readonly LocalDiskStore? _diskStore;
+    readonly WalRetirementDiagnostics _walRetirementDiagnostics;
     int _disposed;
     readonly IFailpointHandler _failpoints;
     FlushRuntimeService _flushRuntime = null!;
@@ -137,7 +139,8 @@ sealed class Actor : IAsyncDisposable
         CancellationTokenSource? cloudLeaseCancellation,
         Task? cloudLeaseHeartbeat,
         long walCloudDurableSequence,
-        HybridCacheManager? hybridCache)
+        HybridCacheManager? hybridCache,
+        WalRetirementDiagnostics walRetirementDiagnostics)
     {
         _options = options;
         _backgroundCompactionEnabled = backgroundCompactionEnabled;
@@ -150,6 +153,7 @@ sealed class Actor : IAsyncDisposable
         _verificationBarrierResponse = verificationBarrierResponse;
         _failpoints = failpoints;
         _runtimeTimeProvider = runtimeTimeProvider;
+        _walRetirementDiagnostics = walRetirementDiagnostics;
         _runtimeResponses = runtimeResponses;
         _scanMemoryBudget = scanMemoryBudget;
         _compactionMemory = compactionMemory;
@@ -423,6 +427,7 @@ sealed class Actor : IAsyncDisposable
         Task? cloudLeaseHeartbeat = null;
         HybridCacheManager? hybridCache = null;
         var walCloudDurableSequence = 0L;
+        var walRetirementDiagnostics = new WalRetirementDiagnostics();
 
         switch (options.Storage)
         {
@@ -448,7 +453,8 @@ sealed class Actor : IAsyncDisposable
                     leaseClock: leaseClock,
                     leaseTimeToLive: options.LeaseTimeToLive,
                     leaseTimeProvider: runtimeTimeProvider,
-                    recoveryCheckpointBytes: options.MemtableSizeLimitBytes);
+                    recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                    walRetirementDiagnostics: walRetirementDiagnostics);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -490,8 +496,13 @@ sealed class Actor : IAsyncDisposable
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,
+                        remoteNextWalSegmentId: simulatedHydration.NextWalSegmentId,
                         recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                        hybridCache: hybridCache);
+                        hybridCache: hybridCache,
+                        deferWalReplay: true,
+                        walRetirementDiagnostics: walRetirementDiagnostics,
+                        validateLocalWalHistoryContinuity: true,
+                        localWalHistoryValidationStartSegmentId: simulatedHydration.NextWalSegmentId);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulatedRoot,
                         diskStore.WriterEpoch,
@@ -505,13 +516,6 @@ sealed class Actor : IAsyncDisposable
                         simulatedPersistence,
                         diskStore,
                         dependencies.Failpoints);
-                    using (startupPhases.Measure(StartupPhase.IntentReconciliation))
-                    {
-                        await cloudDdlCoordinator
-                            .ReconcileStartupAsync(state, cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-
                     cloudMode = true;
                 }
                 catch
@@ -599,6 +603,28 @@ sealed class Actor : IAsyncDisposable
                         cloud.LocalStorageBudgetBytes ??
                         HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                         dependencies.Failpoints);
+                    var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
+                        maintenanceMemoryBudget,
+                        maintenanceMemoryGate);
+                    var localWalCacheId = LocalDiskStore.GetOrCreateWalCacheIdentity(
+                        cloud.LocalCachePath);
+                    providerPersistence = new ProviderCloudPersistence(
+                        cloud.LocalCachePath,
+                        objectStores.Wal,
+                        objectStores.Sst,
+                        objectStores.Control,
+                        cloudLease,
+                        dependencies.Failpoints,
+                        mirrorPublicationAdmission,
+                        walRetirementSettings,
+                        catalogWriteAdmission,
+                        localWalCacheId,
+                        walRetirementDiagnostics);
+                    cloudPersistence = providerPersistence;
+                    var allowLocalWalTailRecovery = await cloudStartupDeadline.RunMutationAsync(
+                            providerPersistence.FenceWalCatalogAsync,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     diskStore = LocalDiskStore.Open(
                         cloud.LocalCachePath,
                         state,
@@ -618,22 +644,17 @@ sealed class Actor : IAsyncDisposable
                         leaseClock,
                         options.LeaseTimeToLive,
                         remoteWalSegments: hydration.RemoteWalSegments,
+                        remoteNextWalSegmentId: hydration.NextWalSegmentId,
+                        authorizedWalSegmentIds: hydration.PublishedWalSegments.Keys.ToHashSet(),
+                        allowLocalWalTailRecovery: allowLocalWalTailRecovery,
                         recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                        hybridCache: hybridCache);
-                    var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
-                        maintenanceMemoryBudget,
-                        maintenanceMemoryGate);
-                    providerPersistence = new ProviderCloudPersistence(
-                        cloud.LocalCachePath,
-                        objectStores.Wal,
-                        objectStores.Sst,
-                        objectStores.Control,
-                        cloudLease,
-                        dependencies.Failpoints,
-                        mirrorPublicationAdmission,
-                        walRetirementSettings,
-                        catalogWriteAdmission);
-                    cloudPersistence = providerPersistence;
+                        hybridCache: hybridCache,
+                        deferWalReplay: true,
+                        walRetirementDiagnostics: walRetirementDiagnostics,
+                        validateLocalWalHistoryContinuity: allowLocalWalTailRecovery,
+                        localWalHistoryValidationStartSegmentId: allowLocalWalTailRecovery
+                            ? hydration.NextWalSegmentId
+                            : null);
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
                         objectStores.Sst,
@@ -643,23 +664,11 @@ sealed class Actor : IAsyncDisposable
                         SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget))
                         .PublishAsync;
                     compactionOutputPartitionTargetBytes = mirrorPublicationAdmission.PartitionTargetBytes;
-                    await cloudStartupDeadline.RunMutationAsync(
-                            providerPersistence.FenceWalCatalogAsync,
-                            cancellationToken)
-                        .ConfigureAwait(false);
                     cloudDdlCoordinator = new CloudDdlCoordinator(
                         cloud.LocalCachePath,
                         providerPersistence,
                         diskStore,
                         dependencies.Failpoints);
-                    using (startupPhases.Measure(StartupPhase.IntentReconciliation))
-                    {
-                        await cloudStartupDeadline.RunMutationAsync(
-                                token => cloudDdlCoordinator.ReconcileStartupAsync(state, token),
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-
                     walCloudDurableSequence = checked((long)hydration.CloudDurableSequence);
                     cloudLeaseCancellation = new CancellationTokenSource();
                     cloudLeaseHeartbeat = RunCloudLeaseHeartbeatAsync(
@@ -730,7 +739,8 @@ sealed class Actor : IAsyncDisposable
             cloudLeaseCancellation,
             cloudLeaseHeartbeat,
             walCloudDurableSequence,
-            hybridCache);
+            hybridCache,
+            walRetirementDiagnostics);
         await actor.FinishStartupAsync(options, telemetry, dependencies, startupPhases, cancellationToken)
             .ConfigureAwait(false);
         return actor;
@@ -758,6 +768,34 @@ sealed class Actor : IAsyncDisposable
                 var recoveryDeadline = OperationDeadline.FromBudget(
                     options.RuntimeResponseTimeout,
                     _runtimeTimeProvider);
+                _diskStore.ReplayDeferredWal(
+                    _state,
+                    startupPhases,
+                    checkpointSsts =>
+                    {
+                        Func<CancellationToken, ValueTask> publication =
+                            _cloudPersistence is ProviderCloudPersistence provider
+                                ? token => provider.PublishRecoveryCheckpointAsync(checkpointSsts, token)
+                                : _cloudPersistence.MirrorMetadataAndSstsAsync;
+                        recoveryDeadline.RunMutationAsync(publication, cancellationToken)
+                            .AsTask().GetAwaiter().GetResult();
+                        _failpoints.Hit(Failpoint.AfterRecoveryCheckpointPublishedBeforeLocalEviction);
+                        foreach (var name in checkpointSsts)
+                        {
+                            _diskStore.EvictLocalSst(name);
+                        }
+                    });
+                if (_cloudDdlCoordinator is not null)
+                {
+                    using (startupPhases.Measure(StartupPhase.IntentReconciliation))
+                    {
+                        await recoveryDeadline.RunMutationAsync(
+                                token => _cloudDdlCoordinator.ReconcileStartupAsync(_state, token),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+
                 SealedWalSegment? recoveredSegment;
                 try
                 {
@@ -870,7 +908,8 @@ sealed class Actor : IAsyncDisposable
                 _cloudMemtableSegments,
                 _hybridCache,
                 _scanMemoryBudget,
-                _runtimeResponses);
+                _runtimeResponses,
+                _walRetirementDiagnostics);
             _publishedRuntimeMetrics = _runtimeMetricsSnapshotFactory.Create(
                 _state,
                 Volatile.Read(ref _walCloudDurableSequence));
@@ -2777,7 +2816,8 @@ sealed class Actor : IAsyncDisposable
                     state,
                     command,
                     groupDurability,
-                    stagedBytesByFamily))
+                    stagedBytesByFamily,
+                    preparedCommands))
             {
                 stopIndex = index;
                 break;
@@ -3679,9 +3719,16 @@ sealed class Actor : IAsyncDisposable
             segments = _diskStore.GetSealedWalSegmentsForCloudPublication();
         }
 
-        foreach (var epochBatch in segments.GroupBy(static segment => segment.WriterEpoch))
+        for (var start = 0; start < segments.Count;)
         {
-            var batch = epochBatch.ToArray();
+            var writerEpoch = segments[start].WriterEpoch;
+            var end = start + 1;
+            while (end < segments.Count && segments[end].WriterEpoch == writerEpoch)
+            {
+                end++;
+            }
+
+            var batch = segments.Skip(start).Take(end - start).ToArray();
             foreach (var segment in batch)
             {
                 _cloudWalUploads.Admit(segment);
@@ -3689,6 +3736,7 @@ sealed class Actor : IAsyncDisposable
 
             EnsureCloudWriteAuthorityValid();
             await PublishCloudWalBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+            start = end;
         }
     }
 

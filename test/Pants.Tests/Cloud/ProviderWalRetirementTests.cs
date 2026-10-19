@@ -40,6 +40,26 @@ public sealed class ProviderWalRetirementTests
     }
 
     [Fact]
+    public async Task ShouldKeepTheNextWalIdentityAfterTheCatalogBecomesEmpty()
+    {
+        await using var harness = await RetirementHarness.CreateAsync();
+        harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
+        await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 2));
+
+        var retired = await harness.Persistence.RetireCoveredWalAsync(CancellationToken.None);
+
+        Assert.Equal(1, retired.RetiredSegments);
+        Assert.Empty(harness.CatalogSegmentIds());
+        var emptyCatalog = ProviderCloudPersistence.DecodeCatalogForFloor(
+            harness.Wal.Read(PantsCloudObjectLayout.WalCatalogObjectKey));
+        Assert.Equal(2UL, emptyCatalog.NextSegmentId);
+
+        await harness.PublishSegmentAsync(2, RetirementHarness.Records("b-", 2));
+
+        Assert.Equal([2UL], harness.CatalogSegmentIds());
+    }
+
+    [Fact]
     public async Task ShouldBoundRetirementMemoryByMaintenancePoolIndependentOfSegmentSize()
     {
         const int largestFrame = 3 * PageBytes;

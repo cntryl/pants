@@ -62,6 +62,7 @@ enum Failpoint
     AfterManifestJournalSync,
     BeforeManifestCheckpointReplace,
     AfterManifestCheckpointReplace,
+    AfterRecoveryCheckpointPublishedBeforeLocalEviction,
     AfterRecoveryCheckpointPublished,
     BeforeManifestJournalRepairReplace,
     BeforeIntentLogReplace,

@@ -216,6 +216,7 @@ public sealed class PantsHybridStorageTests
             using var first = CreateCommitPayload(state, 1, "admitted", firstValue);
             _ = store.AppendCommit(first, state, PantsDurability.Sync);
             var walBytesAfterFirstCommit = WalBytes(directory.Path);
+            var sequenceAfterFirstCommit = state.Sequence;
 
             using (hybridCache.Ledger.Reserve(StorageAdmissionKind.FlushHeadroom, 80 * 1024))
             {
@@ -242,6 +243,7 @@ public sealed class PantsHybridStorageTests
                     static () => { }));
 
                 Assert.Equal(walBytesAfterFirstCommit, WalBytes(directory.Path));
+                Assert.Equal(sequenceAfterFirstCommit, state.Sequence);
             }
 
             using var afterRejection = CreateCommitPayload(

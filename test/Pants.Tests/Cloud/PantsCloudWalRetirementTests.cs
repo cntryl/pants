@@ -160,6 +160,19 @@ public sealed class PantsCloudWalRetirementTests
         await CommitAsync(database, "committed-during-retirement").WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(2, ReadCatalogSegmentCount(handler));
+        using (var catalog = JsonDocument.Parse(
+                   handler.GetObjectText("/wal/publication-catalog.v1.json")))
+        {
+            var root = catalog.RootElement;
+            Assert.Equal(3UL, root.GetProperty("wal_history_start_segment_id").GetUInt64());
+            Assert.Equal(4UL, root.GetProperty("next_segment_id").GetUInt64());
+            Assert.Equal(
+                ["1", "3"],
+                root.GetProperty("segments").EnumerateObject()
+                    .Select(static segment => segment.Name)
+                    .ToArray());
+        }
+
         handler.ReleaseWalRangeReads();
         await TestWait.UntilAsync(
             () => ReadCatalogSegmentCount(handler) == 1,

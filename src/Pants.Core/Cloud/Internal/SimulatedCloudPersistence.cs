@@ -45,6 +45,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
         Directory.CreateDirectory(_cloudRoot);
         _catalog = LoadCatalog(_cloudRoot) ?? WalPublicationCatalog.Empty(writerEpoch);
+        if (_catalog.NextSegmentId == 0)
+        {
+            _catalog.NextSegmentId = ReadNextWalSegmentId(_cloudRoot);
+        }
+
         if (_catalog.FencingEpoch > writerEpoch)
         {
             throw PantsException.Create(
@@ -184,7 +189,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         {
             return new SimulatedCloudHydrationResult(
                 0,
-                false);
+                false,
+                1);
         }
 
         var localManifest = CloudManifestReader.ReadManifest(root);
@@ -205,6 +211,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
 
         var activeManifest = localManifest ?? remoteManifest;
+        var remoteNextWalSegmentId = activeManifest?.WalHistoryStart ?? 1;
 
         var localSstDirectory = Path.Combine(root, "sst");
         Directory.CreateDirectory(localSstDirectory);
@@ -238,7 +245,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var catalog = LoadCatalog(cloudRoot);
         if (catalog is null)
         {
-            return new SimulatedCloudHydrationResult(0, false);
+            return new SimulatedCloudHydrationResult(0, false, remoteNextWalSegmentId);
         }
 
         var localWalDirectory = Path.Combine(root, "wal");
@@ -275,7 +282,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         return new SimulatedCloudHydrationResult(
             catalog.FencingEpoch,
-            requiresSalvage);
+            requiresSalvage,
+            catalog.NextSegmentId == 0 ? remoteNextWalSegmentId : catalog.NextSegmentId);
     }
 
     public void PublishWal(SealedWalSegment segment) => PublishWalBatch([segment]);
@@ -300,7 +308,75 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 "A WAL segment from a future writer epoch cannot be published.");
         }
 
-        var publications = segments.Select(segment => new PublishedWalSegment
+        var nextSegmentId = _catalog.NextSegmentId;
+        var historyStartSegmentId = CloudControlMetadataSnapshot
+            .Capture(_localRoot, MetadataFiles)
+            .AuthoritativeManifest?.WalHistoryStart ?? 1;
+        var publishableSegments = new List<SealedWalSegment>(segments.Count);
+        for (var index = 0; index < segments.Count; index++)
+        {
+            var segment = segments[index];
+            if (index > 0 && segment.SegmentId != checked(segments[index - 1].SegmentId + 1))
+            {
+                throw new PantsCorruptionException(
+                    "A simulated-cloud WAL publication batch must contain consecutive segment identities.");
+            }
+
+            if (_catalog.Segments.TryGetValue(segment.SegmentId, out var published))
+            {
+                var candidate = new PublishedWalSegment
+                {
+                    SegmentId = segment.SegmentId,
+                    WriterEpoch = segment.WriterEpoch,
+                    MaximumSequence = segment.MaximumSequence,
+                    SizeBytes = checked((ulong)segment.Bytes.Length),
+                    ContentCrc32C = DiskFormat.Crc32C(segment.Bytes),
+                    ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
+                        segment.WriterEpoch,
+                        segment.SegmentId)
+                };
+                if (!published.Equals(candidate))
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Fenced,
+                        $"Cloud WAL segment {segment.SegmentId} conflicts with its publication catalog entry.");
+                }
+
+                continue;
+            }
+
+            if (segment.SegmentId < nextSegmentId)
+            {
+                // A durable catalog high-water mark survives retirement. A local segment
+                // left behind by a crash after remote retirement is already authoritative.
+                continue;
+            }
+
+            if (segment.SegmentId > nextSegmentId &&
+                segment.SegmentId == historyStartSegmentId)
+            {
+                nextSegmentId = segment.SegmentId;
+                _catalog.WalHistoryStartSegmentId = Math.Max(
+                    _catalog.WalHistoryStartSegmentId,
+                    historyStartSegmentId);
+            }
+
+            if (segment.SegmentId != nextSegmentId)
+            {
+                throw new PantsCorruptionException(
+                    $"Cloud WAL segment {segment.SegmentId} cannot be published before missing segment {nextSegmentId}.");
+            }
+
+            nextSegmentId = checked(nextSegmentId + 1);
+            publishableSegments.Add(segment);
+        }
+
+        if (publishableSegments.Count == 0)
+        {
+            return;
+        }
+
+        var publications = publishableSegments.Select(segment => new PublishedWalSegment
         {
             SegmentId = segment.SegmentId,
             WriterEpoch = segment.WriterEpoch,
@@ -330,7 +406,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
             AtomicStagedFile.Write(
                 ResolveObjectPath(_cloudRoot, publication.ObjectKey),
-                segments[index].Bytes);
+                publishableSegments[index].Bytes);
             changed = true;
         }
 
@@ -349,6 +425,10 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         {
             FormatVersion = _catalog.FormatVersion,
             FencingEpoch = _catalog.FencingEpoch,
+            NextSegmentId = nextSegmentId,
+            WalHistoryStartSegmentId = Math.Max(
+                _catalog.WalHistoryStartSegmentId,
+                historyStartSegmentId),
             Segments = updatedSegments
         };
         SaveCatalog(updatedCatalog);
@@ -542,6 +622,24 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             "Both cloud WAL publication catalog copies are unusable.");
     }
 
+    static ulong ReadNextWalSegmentId(string cloudRoot)
+    {
+        var nextSegmentId = 1UL;
+        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        {
+            var path = Path.Combine(cloudRoot, "metadata", fileName);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            var manifest = CloudManifestReader.DecodeManifest(File.ReadAllBytes(path));
+            nextSegmentId = Math.Max(nextSegmentId, manifest.WalHistoryStart);
+        }
+
+        return nextSegmentId;
+    }
+
     static WalPublicationCatalog? TryDecodeCatalog(byte[]? bytes, out PantsException? error)
     {
         error = null;
@@ -560,9 +658,37 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 throw new JsonException("Cloud WAL catalog header is invalid.");
             }
 
+            ulong? previousSegmentId = null;
             foreach (var (segmentId, publication) in catalog.Segments)
             {
                 ValidatePublication(segmentId, publication, catalog.FencingEpoch);
+                if (previousSegmentId.HasValue &&
+                    segmentId != checked(previousSegmentId.Value + 1) &&
+                    segmentId > catalog.WalHistoryStartSegmentId)
+                {
+                    throw new PantsCorruptionException(
+                        "Simulated-cloud WAL catalog entries are not a contiguous history suffix.");
+                }
+
+                previousSegmentId = segmentId;
+            }
+
+            if (catalog.Segments.Count > 0)
+            {
+                var inferredNextSegmentId = checked(catalog.Segments.Keys.Max() + 1);
+                if (catalog.NextSegmentId != 0 &&
+                    (catalog.NextSegmentId < inferredNextSegmentId ||
+                     catalog.NextSegmentId > inferredNextSegmentId &&
+                     catalog.NextSegmentId > catalog.WalHistoryStartSegmentId))
+                {
+                    throw new PantsCorruptionException(
+                        "Simulated-cloud WAL catalog next identity precedes its published suffix.");
+                }
+
+                if (catalog.NextSegmentId == 0)
+                {
+                    catalog.NextSegmentId = inferredNextSegmentId;
+                }
             }
 
             return catalog;
@@ -625,9 +751,27 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return;
         }
 
+        var historyStartChanged = false;
+        if (_catalog.WalHistoryStartSegmentId < manifest.WalHistoryStart)
+        {
+            _catalog.WalHistoryStartSegmentId = manifest.WalHistoryStart;
+            historyStartChanged = true;
+        }
+
+        if (_catalog.NextSegmentId < manifest.WalHistoryStart)
+        {
+            _catalog.NextSegmentId = manifest.WalHistoryStart;
+            historyStartChanged = true;
+        }
+
         var coveredSequence = manifest.LastPersistedSequence;
         if (coveredSequence == 0)
         {
+            if (historyStartChanged)
+            {
+                SaveCatalog();
+            }
+
             return;
         }
 
@@ -636,6 +780,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             .ToArray();
         if (candidates.Length == 0)
         {
+            if (historyStartChanged)
+            {
+                SaveCatalog();
+            }
+
             return;
         }
 
@@ -677,6 +826,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         if (retired.Count == 0)
         {
+            if (historyStartChanged)
+            {
+                SaveCatalog();
+            }
+
             return;
         }
 
@@ -695,6 +849,10 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         {
             _catalog.Segments.Remove(segment.SegmentId);
         }
+
+        _catalog.NextSegmentId = Math.Max(
+            _catalog.NextSegmentId,
+            manifest.WalHistoryStart);
 
         SaveCatalog();
         foreach (var segment in retired)
@@ -833,12 +991,17 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         public ulong FencingEpoch { get; set; }
 
+        public ulong NextSegmentId { get; set; }
+
+        public ulong WalHistoryStartSegmentId { get; set; }
+
         public SortedDictionary<ulong, PublishedWalSegment> Segments { get; set; } = [];
 
         public static WalPublicationCatalog Empty(ulong fencingEpoch) => new()
         {
             FormatVersion = CatalogFormatVersion,
-            FencingEpoch = fencingEpoch
+            FencingEpoch = fencingEpoch,
+            NextSegmentId = 1
         };
     }
 

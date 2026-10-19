@@ -22,7 +22,8 @@ sealed class CommitCoalescer(
         RuntimeState state,
         CommitRuntimeCommand command,
         PantsDurability? groupDurability,
-        Dictionary<ColumnFamilyIdentity, long> stagedBytesByFamily)
+        Dictionary<ColumnFamilyIdentity, long> stagedBytesByFamily,
+        IReadOnlyList<CommitRuntimeCommand>? stagedCommands = null)
     {
         var durability = command.WriteOptions.Durability;
         if (durability is not (PantsDurability.Sync or
@@ -31,9 +32,7 @@ sealed class CommitCoalescer(
                 PantsDurability.CloudAsync) ||
             (groupDurability is { } expectedDurability && durability != expectedDurability) ||
             command.Payload.Operations.Count == 0 ||
-            command.Payload.IsSpilled ||
-            command.Payload.ConflictPolicy != PantsConflictPolicy.LastWriteWins ||
-            command.Payload.Asserts.Values.Any(static assertions => assertions.Count != 0))
+            command.Payload.IsSpilled)
         {
             return false;
         }
@@ -42,11 +41,9 @@ sealed class CommitCoalescer(
             ColumnFamilyIdentityComparer.Instance);
         try
         {
-            var containsInsert = false;
             var walBatchBytes = WalCodec.TransactionBatchRecordOverhead;
             command.Payload.Operations.ForEach(operation =>
             {
-                containsInsert |= operation.InsertOnly;
                 commandBytesByFamily[operation.Family] = checked(
                     commandBytesByFamily.GetValueOrDefault(operation.Family) +
                     CoalescedCommitApplyPreflight.EstimateOperationBytes(operation));
@@ -55,7 +52,9 @@ sealed class CommitCoalescer(
                     operation.Value?.Length,
                     operation.EndExclusive?.Length));
             });
-            if (containsInsert)
+            if (NeedsPriorStateValidation(command) &&
+                stagedCommands is not null &&
+                stagedCommands.Any(staged => ConflictsWithEarlierWrites(command, staged)))
             {
                 return false;
             }
@@ -92,6 +91,77 @@ sealed class CommitCoalescer(
         {
             return false;
         }
+    }
+
+    static bool NeedsPriorStateValidation(CommitRuntimeCommand command)
+    {
+        if (command.Payload.ConflictPolicy == PantsConflictPolicy.AbortOnWriteConflict ||
+            command.Payload.Asserts.Values.Any(static assertions => assertions.Count != 0))
+        {
+            return true;
+        }
+
+        var containsInsert = false;
+        command.Payload.Operations.ForEach(operation => containsInsert |= operation.InsertOnly);
+        return containsInsert;
+    }
+
+    static bool ConflictsWithEarlierWrites(
+        CommitRuntimeCommand candidate,
+        CommitRuntimeCommand earlier)
+    {
+        var conflicts = false;
+        earlier.Payload.Operations.ForEach(earlierOperation =>
+        {
+            candidate.Payload.Operations.ForEach(candidateOperation =>
+            {
+                conflicts |= OperationsOverlap(earlierOperation, candidateOperation);
+            });
+            if (candidate.Payload.Asserts.TryGetValue(earlierOperation.Family, out var assertions))
+            {
+                conflicts |= assertions.Any(assertion =>
+                    OperationContainsKey(earlierOperation, assertion.Key));
+            }
+        });
+        return conflicts;
+    }
+
+    static bool OperationsOverlap(
+        TransactionIntentOperation left,
+        TransactionIntentOperation right)
+    {
+        if (!ColumnFamilyIdentityComparer.Instance.Equals(left.Family, right.Family))
+        {
+            return false;
+        }
+
+        var leftRange = left.Kind == CommitOperationKind.DeleteRange;
+        var rightRange = right.Kind == CommitOperationKind.DeleteRange;
+        if (!leftRange && !rightRange)
+        {
+            return left.Key.AsSpan().SequenceEqual(right.Key);
+        }
+
+        if (leftRange && rightRange)
+        {
+            return left.Key.AsSpan().SequenceCompareTo(right.EndExclusive) < 0 &&
+                   right.Key.AsSpan().SequenceCompareTo(left.EndExclusive) < 0;
+        }
+
+        var range = leftRange ? left : right;
+        var point = leftRange ? right : left;
+        return OperationContainsKey(range, point.Key);
+    }
+
+    static bool OperationContainsKey(TransactionIntentOperation operation, byte[] key)
+    {
+        if (operation.Kind != CommitOperationKind.DeleteRange)
+        {
+            return operation.Key.AsSpan().SequenceEqual(key);
+        }
+
+        return operation.Key.AsSpan().SequenceCompareTo(key) <= 0 &&
+               key.AsSpan().SequenceCompareTo(operation.EndExclusive) < 0;
     }
 
     public static IReadOnlyList<PreparedCoalescedCommit> CreatePreparedCommits(

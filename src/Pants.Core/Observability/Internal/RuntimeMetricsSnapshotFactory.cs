@@ -1,3 +1,5 @@
+using Cntryl.Pants.Storage.Internal.Wal;
+
 namespace Cntryl.Pants.Observability.Internal;
 
 sealed class RuntimeMetricsSnapshotFactory(
@@ -9,7 +11,8 @@ sealed class RuntimeMetricsSnapshotFactory(
     CloudMemtableSegmentTracker? cloudMemtableSegments,
     HybridCacheManager? hybridCache,
     ResourceBudget scanMemoryBudget,
-    RuntimeResponseRegistry runtimeResponses)
+    RuntimeResponseRegistry runtimeResponses,
+    WalRetirementDiagnostics walRetirementDiagnostics)
 {
     int _storageHealth = (int)PantsEngineHealth.Healthy;
 
@@ -94,6 +97,11 @@ sealed class RuntimeMetricsSnapshotFactory(
             WalLastSyncedSequence = diskStore?.WalLastSyncedSequence ?? 0,
             WalLocalDurableSequence = diskStore?.WalLocalDurableSequence ?? 0,
             WalCloudDurableSequence = walCloudDurableSequence,
+            WalRetainedBytes = diskStore?.WalRetainedBytes ?? 0,
+            WalRetainedSegments = diskStore?.WalRetainedSegments ?? 0,
+            WalRetentionByteLimitBytes = diskStore?.WalRetentionByteLimitBytes ?? 0,
+            WalRetentionSegmentLimit = diskStore?.WalRetentionSegmentLimit ?? 0,
+            WalRetirementBlockedCause = walRetirementDiagnostics.BlockedCause,
             PendingCompactions = compactionWorker.QueueDepth,
             CompactingSsts = compactionWorker.CompactingSsts,
             ActiveCompactions = compactionWorker.InFlight,
@@ -213,6 +221,11 @@ sealed class RuntimeMetricsSnapshotFactory(
             WalBytesWrittenTotal = diskStore?.WalBytesWrittenTotal ?? snapshot.WalBytesWrittenTotal,
             SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? snapshot.SstBytesWrittenTotal,
             WalCloudDurableSequence = walCloudDurableSequence,
+            WalRetainedBytes = diskStore?.WalRetainedBytes ?? snapshot.WalRetainedBytes,
+            WalRetainedSegments = diskStore?.WalRetainedSegments ?? snapshot.WalRetainedSegments,
+            WalRetentionByteLimitBytes = diskStore?.WalRetentionByteLimitBytes ?? snapshot.WalRetentionByteLimitBytes,
+            WalRetentionSegmentLimit = diskStore?.WalRetentionSegmentLimit ?? snapshot.WalRetentionSegmentLimit,
+            WalRetirementBlockedCause = walRetirementDiagnostics.BlockedCause,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshotTimes.Length,
             LongLivedSnapshots = snapshotMetrics.LongLivedSnapshots,

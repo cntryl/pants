@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal.Manifest;
+
 namespace Cntryl.Pants.Storage.Internal;
 
 sealed class ManifestState
@@ -12,13 +15,27 @@ sealed class ManifestState
 
     public ulong NextWalSeq { get; set; } = 1;
 
+    [JsonPropertyName("pending_wal_segment_id")]
+    public ulong? PendingWalSegmentId { get; set; }
+
+    [JsonPropertyName("wal_sequence_reservation_version")]
+    public uint WalSequenceReservationVersion { get; set; }
+
     public Dictionary<uint, ulong> NextSstSeqs { get; set; } = [];
+
+    [JsonPropertyName("flushed_through")]
+    [JsonConverter(typeof(FlushFrontierMapConverter))]
+    public Dictionary<uint, ulong> FlushedThrough { get; set; } = new() { [0] = 0 };
+
+    public ulong WalHistoryStart { get; set; } = 1;
 
     public ulong EditCheckpointId { get; set; }
 
     public static ManifestState CreateInitial() => new()
     {
-        NextSstSeqs = new Dictionary<uint, ulong>()
+        NextSstSeqs = new Dictionary<uint, ulong>(),
+        FlushedThrough = new Dictionary<uint, ulong> { [0] = 0 },
+        WalSequenceReservationVersion = 1
     };
 
     /// <summary>
@@ -32,7 +49,11 @@ sealed class ManifestState
         ColumnFamilies = [.. ColumnFamilies.Select(static family => family.Clone())],
         CloudCheckpoint = CloudCheckpoint,
         NextWalSeq = NextWalSeq,
+        PendingWalSegmentId = PendingWalSegmentId,
+        WalSequenceReservationVersion = WalSequenceReservationVersion,
         NextSstSeqs = new Dictionary<uint, ulong>(NextSstSeqs),
+        FlushedThrough = new Dictionary<uint, ulong>(FlushedThrough),
+        WalHistoryStart = WalHistoryStart,
         EditCheckpointId = EditCheckpointId
     };
 
@@ -44,7 +65,11 @@ sealed class ManifestState
         ColumnFamilies = source.ColumnFamilies;
         CloudCheckpoint = source.CloudCheckpoint;
         NextWalSeq = source.NextWalSeq;
+        PendingWalSegmentId = source.PendingWalSegmentId;
+        WalSequenceReservationVersion = source.WalSequenceReservationVersion;
         NextSstSeqs = source.NextSstSeqs;
+        FlushedThrough = source.FlushedThrough;
+        WalHistoryStart = source.WalHistoryStart;
         EditCheckpointId = source.EditCheckpointId;
     }
 }

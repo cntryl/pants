@@ -89,21 +89,120 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     }
 
     [Fact]
-    public void ShouldKeepWalWritableWhenRotationFailsBeforeRename()
+    public void ShouldReuseDurableSegmentReservationWhenRotationFailsBeforeRename()
     {
         using var directory = new TemporaryDirectory();
         var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             new RuntimeTelemetry());
         var failpoints = new ArmableFailpointHandler();
-        using var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints);
-        _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+        using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
+        {
+            _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
 
-        failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
-        _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+            failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
+            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
 
-        Assert.False(store.IsWalFenced);
-        _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+            Assert.False(store.IsWalFenced);
+            _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+            _ = store.RotateActiveLocalWal();
+
+            Assert.True(File.Exists(Path.Combine(
+                directory.Path,
+                "wal",
+                $"{1UL:00000000000000000000}.wal")));
+        }
+
+        var recoveredState = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using var reopened = LocalDiskStore.Open(directory.Path, recoveredState);
+        _ = reopened.AppendCommit(
+            CreateCommitPayload(recoveredState),
+            recoveredState,
+            PantsDurability.Sync);
+        _ = reopened.RotateActiveLocalWal();
+
+        Assert.True(File.Exists(Path.Combine(
+            directory.Path,
+            "wal",
+            $"{2UL:00000000000000000000}.wal")));
+    }
+
+    [Fact]
+    public void ShouldRecoverReservedWalIdentityAcrossCrashBeforeRename()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var failpoints = new ArmableFailpointHandler();
+        using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
+        {
+            _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
+            failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
+
+            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+
+            Assert.True(File.Exists(Path.Combine(directory.Path, "wal", "wal.log")));
+            Assert.False(File.Exists(Path.Combine(
+                directory.Path,
+                "wal",
+                $"{1UL:00000000000000000000}.wal")));
+        }
+
+        var recoveredState = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using var reopened = LocalDiskStore.Open(directory.Path, recoveredState);
+
+        Assert.Equal(state.Sequence, recoveredState.Sequence);
+        Assert.True(File.Exists(Path.Combine(
+            directory.Path,
+            "wal",
+            $"{1UL:00000000000000000000}.wal")));
+        _ = reopened.AppendCommit(
+            CreateCommitPayload(recoveredState),
+            recoveredState,
+            PantsDurability.Sync);
+        _ = reopened.RotateActiveLocalWal();
+
+        Assert.True(File.Exists(Path.Combine(
+            directory.Path,
+            "wal",
+            $"{2UL:00000000000000000000}.wal")));
+    }
+
+    [Fact]
+    public void ShouldRejectMissingUnretiredWalSegmentInsteadOfSkippingItsHistory()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using (var store = LocalDiskStore.Open(directory.Path, state))
+        {
+            _ = store.AppendCommit(
+                CreateCommitPayload(state, "first-segment"u8.ToArray(), "first-value"u8.ToArray()),
+                state,
+                PantsDurability.Sync);
+            _ = store.RotateActiveLocalWal();
+            _ = store.AppendCommit(
+                CreateCommitPayload(state, "second-segment"u8.ToArray(), "second-value"u8.ToArray()),
+                state,
+                PantsDurability.Sync);
+            _ = store.RotateActiveLocalWal();
+        }
+
+        File.Delete(Path.Combine(directory.Path, "wal", $"{1UL:00000000000000000000}.wal"));
+        var recoveredState = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+
+        var exception = Assert.Throws<PantsCorruptionException>(
+            () => LocalDiskStore.Open(directory.Path, recoveredState));
+
+        Assert.Equal(PantsErrorCode.Corruption, exception.Code);
     }
 
     [Fact]
@@ -293,15 +392,18 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             SearchOption.TopDirectoryOnly));
     }
 
-    static CommitPayload CreateCommitPayload(RuntimeState state)
+    static CommitPayload CreateCommitPayload(RuntimeState state) =>
+        CreateCommitPayload(state, "rotation-key"u8.ToArray(), "rotation-value"u8.ToArray());
+
+    static CommitPayload CreateCommitPayload(RuntimeState state, byte[] key, byte[] value)
     {
         var operation = new TransactionIntentOperation(
             0,
             CommitOperationKind.Put,
             DefaultFamily,
-            "rotation-key"u8.ToArray(),
+            key,
             null,
-            "rotation-value"u8.ToArray(),
+            value,
             null,
             null,
             false);
