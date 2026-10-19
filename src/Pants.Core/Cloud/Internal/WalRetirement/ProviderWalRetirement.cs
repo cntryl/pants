@@ -72,7 +72,7 @@ sealed class ProviderWalRetirement
         for (var attempt = 0; attempt < MaximumCatalogAttempts; attempt++)
         {
             _lease.EnsureValid();
-            var turn = await PrepareAsync(quantum, cancellationToken).ConfigureAwait(false);
+            using var turn = await PrepareAsync(quantum, cancellationToken).ConfigureAwait(false);
             if (turn.Proven.Count == 0)
             {
                 return new WalRetirementResult(turn.Outcome, retired);
@@ -101,6 +101,7 @@ sealed class ProviderWalRetirement
         WalRetirementQuantum quantum,
         CancellationToken cancellationToken)
     {
+        WalCatalogRead? catalogRead = null;
         try
         {
             var manifest = await _manifests.ReadAsync(cancellationToken).ConfigureAwait(false);
@@ -109,8 +110,8 @@ sealed class ProviderWalRetirement
                 return RetirementTurn.Settled;
             }
 
-            var read = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
-            if (read.Object is not { } current || read.Catalog is not { } catalog)
+            catalogRead = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
+            if (catalogRead.Version is null || catalogRead.Catalog is not { } catalog)
             {
                 return RetirementTurn.Settled;
             }
@@ -160,11 +161,17 @@ sealed class ProviderWalRetirement
                 break;
             }
 
-            return new RetirementTurn(outcome, proven, manifest, current, catalog);
+            var turn = new RetirementTurn(outcome, proven, manifest, catalogRead);
+            catalogRead = null;
+            return turn;
         }
         catch (Exception exception) when (IsDeferral(exception, cancellationToken))
         {
             return RetirementTurn.Deferred;
+        }
+        finally
+        {
+            catalogRead?.Dispose();
         }
     }
 
@@ -225,7 +232,7 @@ sealed class ProviderWalRetirement
         var published = await _walStore.PutAsync(
             PantsCloudObjectLayout.WalCatalogObjectKey,
             bytes,
-            new PantsCloudObjectWriteCondition.IfVersion(turn.CatalogObject!.Version),
+            new PantsCloudObjectWriteCondition.IfVersion(turn.CatalogRead!.Version!),
             cancellationToken).ConfigureAwait(false);
         if (!published)
         {
@@ -243,7 +250,7 @@ sealed class ProviderWalRetirement
                 "Cloud WAL catalog retirement read back different bytes after CAS.");
         }
 
-        await _catalog.ConvergeMirrorAsync(bytes, cancellationToken).ConfigureAwait(false);
+        await _catalog.ConvergeMirrorAsync(bytes, readback.Version, cancellationToken).ConfigureAwait(false);
         _lease.EnsureValid();
         foreach (var proof in turn.Proven)
         {
@@ -348,9 +355,12 @@ sealed class ProviderWalRetirement
         WalRetirementOutcome Outcome,
         IReadOnlyList<WalSegmentProof> Proven,
         PublishedManifest? Manifest = null,
-        CloudObject? CatalogObject = null,
-        ProviderWalCatalog? Catalog = null)
+        WalCatalogRead? CatalogRead = null) : IDisposable
     {
+        public ProviderWalCatalog? Catalog => CatalogRead?.Catalog;
+
+        public void Dispose() => CatalogRead?.Dispose();
+
         public static RetirementTurn Settled { get; } = new(WalRetirementOutcome.Settled, []);
 
         public static RetirementTurn Deferred { get; } = new(WalRetirementOutcome.Deferred, []);
