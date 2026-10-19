@@ -60,3 +60,21 @@ WAL frames and manifest-journal records use positional, vectored writes through
 `System.IO.RandomAccess`. SST point-read bytes are loaded through positional
 reads rather than a shared mutable `FileStream.Position`. These primitives
 avoid cursor contention and keep offsets explicit at persistence boundaries.
+
+## WAL Transaction Admission and Recovery
+
+WAL-backed transactions are checked against the replay working-set limit before
+sequence reservation or the first WAL write. Resident and spilled operation
+sources use the same estimator; spilled transactions are checked as operations
+are visited, without building a second full mutation array. Recovery applies a
+committed transaction whole and publishes checkpoints when recovered memory
+reaches its target.
+
+In hybrid mode, current local-cache headroom lowers the checkpoint target, but
+it does not reject an otherwise recoverable transaction. Checkpoint staging is
+charged to the local-storage ledger and may proceed past that soft cache budget,
+because recovery must publish to release its working set; later hybrid
+maintenance can evict older cloud-durable SSTs. The recovery spool for split transactions remains
+budgeted separately and fails with a resource error if its bytes cannot be
+reserved. Neither resource failure is treated as WAL corruption or salvaged by
+truncating acknowledged records.

@@ -74,6 +74,60 @@ public sealed class RecoveryCheckpointTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ShouldRejectCommitBeforeWalWhenItExceedsTheRecoveryWorkingSet(bool spillOperations)
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(2 * 1_024 * 1_024))
+            .WithMemtableLimits(16 * 1_024)
+            .WithTransactionMemoryPool(spillOperations ? 1_024 : 256 * 1_024)
+            .WithBackgroundCompaction(false);
+        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            var walBefore = await File.ReadAllBytesAsync(walPath);
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                for (var index = 0; index < 40; index++)
+                {
+                    transaction.Put(
+                        TestBytes.FromString($"oversized-{index:D2}"),
+                        new byte[4 * 1_024]);
+                }
+
+                Assert.Equal(
+                    spillOperations,
+                    Cntryl.Pants.Transactions.Spill.TransactionSpillTestHarness
+                        .FindArtifacts(directory.Path).Length > 0);
+                await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+                    transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
+            }
+
+            Assert.Equal(walBefore, await File.ReadAllBytesAsync(walPath));
+            await using var later = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            later.Put("later"u8.ToArray(), "value"u8.ToArray());
+            await later.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Null(await reader.GetAsync(TestBytes.FromString("oversized-00")));
+        Assert.Equal(
+            "value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("later"u8.ToArray()))));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task ShouldKeepAReplayedDeleteShadowingAFlushedValueAcrossCheckpoints(bool simulatedCloud)
     {
         using var directory = new TemporaryDirectory();
@@ -168,12 +222,14 @@ public sealed class RecoveryCheckpointTests
         };
         for (var index = 0; index < 8; index++)
         {
+            var value = new byte[16 * 1024];
+            new Random(index + 17).NextBytes(value);
             payloads.Add(WalCodec.EncodeTransactionMutation(
                 new WalMutation(
                     0,
                     WalOperation.Put,
                     TestBytes.FromString($"spooled-{index}"),
-                    new byte[16 * 1024],
+                    value,
                     checked((ulong)index + 2),
                     null,
                     null),
