@@ -33,9 +33,9 @@ and the existing operation deadline still cover buffering.
 ## Bounded range reads
 
 Built-in adapters require HTTP 206 and a single `Content-Range` matching the requested byte
-offset and length. Ignored ranges, wrong offsets, malformed range headers, and inconsistent
-declared lengths fail before body consumption. An absent Content-Length and an unknown total
-object length in Content-Range are supported.
+offset and length, including a known total object length that contains the requested range.
+Ignored ranges, unknown totals, wrong offsets, malformed range headers, and inconsistent declared
+lengths fail before body consumption. An absent Content-Length is supported.
 
 Range bodies are read into a requested-length buffer, respecting the configured HttpClient
 response-buffer limit. The reader consumes at most one extra byte to detect an oversized body;

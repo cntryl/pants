@@ -21,6 +21,7 @@ public sealed class CloudProviderRangeContractTests
                          {
                              [], ["invalid"], ["bytes 0-2/10"], ["bytes 2-5/10"],
                              ["items 2-4/10"], ["bytes */10"], ["bytes 2-4/4"],
+                             ["bytes 2-4/*"],
                              ["bytes 2-4/10", "bytes 2-4/10"]
                          })
                 {
@@ -154,27 +155,24 @@ public sealed class CloudProviderRangeContractTests
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task ShouldReadExactRangesAcrossShortReadsWithOptionalLengthHeaders(string provider)
+    public async Task ShouldReadExactRangesAcrossShortReadsWithOptionalContentLengthHeaders(string provider)
     {
-        foreach (var total in new[] { "10", "*" })
+        foreach (var declaredLength in new long?[] { null, 3 })
         {
-            foreach (var declaredLength in new long?[] { null, 3 })
+            using var body = new ObservedStream(3) { MaximumRead = 1 };
+            using var handler = new RangeHandler(() => body, contentRanges: ["bytes 2-4/10"])
             {
-                using var body = new ObservedStream(3) { MaximumRead = 1 };
-                using var handler = new RangeHandler(() => body, contentRanges: [$"bytes 2-4/{total}"])
-                {
-                    DeclaredLength = declaredLength
-                };
-                using var client = new HttpClient(handler);
-                await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
+                DeclaredLength = declaredLength
+            };
+            using var client = new HttpClient(handler);
+            await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
 
-                var value = Assert.IsType<PantsCloudObject>(await store.GetRangeAsync("value", 2, 3));
+            var value = Assert.IsType<PantsCloudObject>(await store.GetRangeAsync("value", 2, 3));
 
-                Assert.Equal("cde"u8.ToArray(), value.Data.ToArray());
-                Assert.Equal(provider.StartsWith("gcs", StringComparison.Ordinal) ? "42" : "\"identity\"", value.Version);
-                Assert.Equal(3, body.BytesRead);
-                Assert.True(body.Disposed);
-            }
+            Assert.Equal("cde"u8.ToArray(), value.Data.ToArray());
+            Assert.Equal(provider.StartsWith("gcs", StringComparison.Ordinal) ? "42" : "\"identity\"", value.Version);
+            Assert.Equal(3, body.BytesRead);
+            Assert.True(body.Disposed);
         }
     }
 
