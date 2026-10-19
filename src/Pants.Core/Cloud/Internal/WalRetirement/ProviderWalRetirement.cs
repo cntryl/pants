@@ -25,6 +25,7 @@ sealed class ProviderWalRetirement
 
     readonly ProviderWalCatalogStore _catalog;
     readonly Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> _encodeCatalog;
+    readonly IFailpointHandler _failpoints;
     readonly CloudLeaseCoordinator _lease;
     readonly PublishedManifestReader _manifests;
     readonly Action _markPersistenceAnomaly;
@@ -43,6 +44,7 @@ sealed class ProviderWalRetirement
         Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> encodeCatalog,
         CloudLeaseCoordinator lease,
         WalRetirementSettings settings,
+        IFailpointHandler failpoints,
         Action markPersistenceAnomaly)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(settings.PageBytes, 64);
@@ -50,6 +52,7 @@ sealed class ProviderWalRetirement
         _sstStore = sstStore;
         _catalog = catalog;
         _encodeCatalog = encodeCatalog;
+        _failpoints = failpoints;
         _lease = lease;
         _writerEpoch = lease.Epoch;
         _settings = settings;
@@ -333,7 +336,8 @@ sealed class ProviderWalRetirement
     {
         try
         {
-            _lease.EnsureValid();
+            _failpoints.Hit(Failpoint.BeforeCloudWalRetirementDelete);
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var outcome = await _walStore.DeleteAsync(
                 proof.Segment.ObjectKey,
                 new PantsCloudObjectDeleteCondition.IfVersion(proof.Version),

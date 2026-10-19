@@ -138,9 +138,9 @@ lease identity immediately before each conditional control-object write, so owne
 the current object was read is rejected before the CAS. Provider SST uploads also re-read the shared
 lease immediately before each conditional object create. Provider SST garbage collection revalidates
 the remote lease after checking retention guards and immediately before each version-conditional
-delete. WAL catalog epoch fencing and batch publication also revalidate the lease before each
-catalog CAS, including catalog retirement. When the stored lease has moved to a successor,
-validation stops the pending write or delete.
+delete. WAL catalog epoch fencing, batch publication, and retirement revalidate the lease before
+each catalog CAS. WAL retirement also revalidates before deleting each retired segment. When the
+stored lease has moved to a successor, validation stops the pending write or delete.
 
 ## Shutdown lifecycle and error severity
 
