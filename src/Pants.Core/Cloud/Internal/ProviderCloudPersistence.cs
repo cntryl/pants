@@ -115,9 +115,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        // One remote check per batch, before any upload or catalog publication: the catalog CAS
-        // only notices a successor that already fenced it, whereas this catches a successor that
-        // has taken the lease object but not yet written the catalog.
+        // Reject already-stale writers before uploading. Checks after uploads and immediately
+        // before each catalog write also catch takeovers while provider operations are in flight.
         await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var batchEpoch = segments[0].WriterEpoch;
         if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
@@ -167,6 +166,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             };
         }
 
+        // Segment objects are immutable and epoch-scoped, so a takeover during upload can leave
+        // unreferenced objects behind. Re-read ownership before changing the catalog that makes
+        // those objects authoritative or allowing the runtime to acknowledge the batch.
+        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+
         for (var attempt = 0; attempt < 8; attempt++)
         {
             using var read = await _catalog.ReadAsync(
@@ -203,13 +207,14 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
             if (!changed)
             {
-                _lease.EnsureValid();
+                await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
                 return;
             }
 
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
                 catalog with { FencingEpoch = _writerEpoch, Segments = updatedSegments },
                 JsonOptions);
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var published = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
