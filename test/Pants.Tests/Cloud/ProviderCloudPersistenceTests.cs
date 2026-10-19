@@ -843,6 +843,70 @@ public sealed class ProviderCloudPersistenceTests
         Assert.Equal(2UL, catalog.RootElement.GetProperty("fencing_epoch").GetUInt64());
     }
 
+    [Fact]
+    public async Task ShouldNotFenceWalCatalogAfterSuccessorTakesLeaseDuringCatalogRead()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "predecessor",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero,
+            () => losses++);
+        var epoch = await lease.AcquireAsync(1, CancellationToken.None);
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var primaryKey = PantsCloudObjectLayout.WalCatalogObjectKey;
+        var mirrorKey = PantsCloudObjectLayout.WalCatalogMirrorObjectKey;
+        var originalCatalogBytes = JsonSerializer.SerializeToUtf8Bytes(
+            new ProviderWalCatalog { FencingEpoch = epoch - 1 },
+            CatalogJsonOptions);
+        walStore.Seed(primaryKey, originalCatalogBytes);
+        walStore.Seed(mirrorKey, originalCatalogBytes);
+        var getStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseGet = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        walStore.BeforeGetAsync = async (objectKey, _, cancellationToken) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, primaryKey))
+            {
+                getStarted.TrySetResult();
+                await releaseGet.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+
+        var fencing = persistence.FenceWalCatalogAsync(CancellationToken.None).AsTask();
+        try
+        {
+            await getStarted.Task.WaitAsync(TestTimeouts.Expected);
+            leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            releaseGet.TrySetResult();
+        }
+
+        await Assert.ThrowsAsync<PantsFencedException>(() => fencing);
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, losses);
+        Assert.Equal(originalCatalogBytes, walStore.GetData(primaryKey));
+        Assert.Equal(originalCatalogBytes, walStore.GetData(mirrorKey));
+    }
+
     static CloudDdlRegistry RegistryWithCreate(string operationId, uint id, string name)
     {
         using var edit = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(new
