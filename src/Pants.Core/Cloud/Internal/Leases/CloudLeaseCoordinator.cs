@@ -2,8 +2,12 @@ namespace Cntryl.Pants.Cloud.Internal.Leases;
 
 sealed class CloudLeaseCoordinator : IDisposable
 {
+    static readonly TimeSpan RenewalReconciliationPollInterval = TimeSpan.FromMilliseconds(50);
+    static readonly TimeSpan RenewalReconciliationMaximumPollInterval = TimeSpan.FromSeconds(1);
+
     readonly IPantsClock _clock;
     readonly TimeSpan _clockSkewTolerance;
+    readonly CancellationTokenSource _disposeCancellation = new();
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly string _holderId;
     readonly TimeSpan _leaseDuration;
@@ -13,6 +17,7 @@ sealed class CloudLeaseCoordinator : IDisposable
     readonly TimeProvider _timeProvider;
     int _activeOperations;
     int _disposed;
+    int _disposeCancellationCompleted;
     ulong _epoch;
 
     /// <summary>
@@ -92,9 +97,21 @@ sealed class CloudLeaseCoordinator : IDisposable
         {
             DisposeWatchdog();
             Volatile.Write(ref _lost, 1);
-            if (Volatile.Read(ref _activeOperations) == 0)
+            try
             {
-                DisposeGate();
+                _disposeCancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The final operation may have already disposed the source.
+            }
+            finally
+            {
+                Volatile.Write(ref _disposeCancellationCompleted, 1);
+                if (Volatile.Read(ref _activeOperations) == 0)
+                {
+                    DisposeGate();
+                }
             }
         }
     }
@@ -235,6 +252,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                 confirmed = await ConfirmIndeterminateRenewalAsync(
                     proposed,
                     error,
+                    renewedAt,
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -350,6 +368,7 @@ sealed class CloudLeaseCoordinator : IDisposable
     async ValueTask<CloudLeaseSnapshot> ConfirmIndeterminateRenewalAsync(
         CloudLeaseRecord proposed,
         PantsException writeError,
+        long renewalStartedAt,
         CancellationToken cancellationToken)
     {
         CloudLeaseSnapshot? current;
@@ -359,20 +378,251 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
         catch (PantsException readError)
         {
-            throw new PantsLeaseIndeterminateException(
-                "The cloud primary lease renewal could not be confirmed by readback.",
-                new AggregateException(writeError, readError));
+            LoseLease();
+            await ReconcileIndeterminateRenewalAsync(
+                proposed,
+                writeError,
+                renewalStartedAt,
+                cancellationToken,
+                readError).ConfigureAwait(false);
+            throw new PantsLeaseUnavailableException(
+                "The cloud primary lease renewal was not confirmed by bounded reconciliation.",
+                writeError);
         }
 
         if (current?.Lease != proposed)
         {
+            LoseLease();
+            await ReconcileIndeterminateRenewalAsync(
+                proposed,
+                writeError,
+                renewalStartedAt,
+                cancellationToken).ConfigureAwait(false);
             throw new PantsLeaseUnavailableException(
-                "The cloud primary lease renewal was not confirmed by readback.",
+                "The cloud primary lease renewal was not confirmed by bounded reconciliation.",
                 writeError);
         }
 
         return current;
     }
+
+    async ValueTask ReconcileIndeterminateRenewalAsync(
+        CloudLeaseRecord proposed,
+        PantsException writeError,
+        long renewalStartedAt,
+        CancellationToken cancellationToken,
+        PantsException? confirmationError = null)
+    {
+        var deadline = AddSaturating(
+            renewalStartedAt,
+            AddSaturating(_leaseDuration, _clockSkewTolerance));
+        var latestSafeExpiry = AddSaturating(proposed.ExpiresAtUtc, _clockSkewTolerance);
+        var remainingMonotonicTicks = deadline - _timeProvider.GetTimestamp();
+        var monotonicDelay = remainingMonotonicTicks <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds((double)remainingMonotonicTicks / _timeProvider.TimestampFrequency);
+        var remainingUtcTicks = latestSafeExpiry.UtcTicks - ObserveMonotonicUtcNow().UtcTicks;
+        var expiryDelay = remainingUtcTicks <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromTicks(remainingUtcTicks);
+        var deadlineDelay = monotonicDelay <= expiryDelay ? monotonicDelay : expiryDelay;
+        using var deadlineCancellation = new CancellationTokenSource();
+        using var deadlineTimer = _timeProvider.CreateTimer(
+            CancelRenewalReconciliationDeadline,
+            deadlineCancellation,
+            deadlineDelay,
+            Timeout.InfiniteTimeSpan);
+        using var disposalCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _disposeCancellation.Token);
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            disposalCancellation.Token,
+            deadlineCancellation.Token);
+        var disposalToken = disposalCancellation.Token;
+        var operationToken = operationCancellation.Token;
+        var attemptedExpiry = (CloudLeaseRecord?)null;
+        Exception? latestProviderError = confirmationError;
+        var consecutiveReadFailures = 0;
+        var delay = RenewalReconciliationPollInterval;
+
+        try
+        {
+            while (WithinRenewalReconciliationWindow(deadline, latestSafeExpiry))
+            {
+                disposalToken.ThrowIfCancellationRequested();
+                operationToken.ThrowIfCancellationRequested();
+                CloudLeaseSnapshot? current;
+                try
+                {
+                    current = await _store.ReadAsync(operationToken).ConfigureAwait(false);
+                    latestProviderError = null;
+                    consecutiveReadFailures = 0;
+                }
+                catch (PantsException error)
+                {
+                    latestProviderError = error;
+                    if (consecutiveReadFailures++ < 2)
+                    {
+                        continue;
+                    }
+
+                    consecutiveReadFailures = 0;
+                    await DelayForRenewalReconciliationAsync(
+                        deadline,
+                        latestSafeExpiry,
+                        delay,
+                        disposalToken).ConfigureAwait(false);
+                    delay = NextRenewalReconciliationDelay(delay);
+                    continue;
+                }
+
+                if (!WithinRenewalReconciliationWindow(deadline, latestSafeExpiry))
+                {
+                    break;
+                }
+
+                if (attemptedExpiry is not null && current?.Lease == attemptedExpiry)
+                {
+                    return;
+                }
+
+                if (current is not null && current.Lease.Epoch > proposed.Epoch)
+                {
+                    return;
+                }
+
+                if (current is not null && current.Lease == proposed)
+                {
+                    attemptedExpiry ??= proposed with
+                    {
+                        ExpiresAtUtc = ObserveMonotonicUtcNow() -
+                                       _clockSkewTolerance -
+                                       TimeSpan.FromTicks(1),
+                        ExpiryMalformed = false
+                    };
+                    try
+                    {
+                        if (await _store.TryReplaceAsync(
+                                current.Version,
+                                attemptedExpiry,
+                                operationToken).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        latestProviderError = new PantsLeaseIndeterminateException(
+                            "The late cloud primary lease renewal changed before it could be expired.");
+                    }
+                    catch (PantsException error)
+                    {
+                        latestProviderError = error;
+                    }
+                }
+                else if (current is not null &&
+                         current.Lease.Epoch == proposed.Epoch &&
+                         !Owns(current.Lease, proposed.Epoch))
+                {
+                    throw CreateIndeterminateRenewalException(
+                        writeError,
+                        latestProviderError,
+                        "Cloud primary lease ownership changed without advancing its epoch.");
+                }
+
+                await DelayForRenewalReconciliationAsync(
+                    deadline,
+                    latestSafeExpiry,
+                    delay,
+                    disposalToken).ConfigureAwait(false);
+                delay = NextRenewalReconciliationDelay(delay);
+            }
+        }
+        catch (OperationCanceledException) when (
+            _disposeCancellation.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            throw CreateIndeterminateRenewalException(
+                writeError,
+                latestProviderError,
+                "Cloud primary lease renewal reconciliation stopped during disposal.");
+        }
+        catch (OperationCanceledException) when (
+            deadlineCancellation.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested &&
+            !_disposeCancellation.IsCancellationRequested)
+        {
+            latestProviderError = new PantsLeaseIndeterminateException(
+                "A provider operation did not finish within the cloud lease reconciliation window.");
+        }
+
+        if (latestProviderError is not null ||
+            ObserveMonotonicUtcNow() <= latestSafeExpiry)
+        {
+            throw CreateIndeterminateRenewalException(
+                writeError,
+                latestProviderError,
+                "The cloud primary lease renewal remained indeterminate after bounded reconciliation.");
+        }
+    }
+
+    bool WithinRenewalReconciliationWindow(long deadline, DateTimeOffset latestSafeExpiry) =>
+        _timeProvider.GetTimestamp() < deadline &&
+        ObserveMonotonicUtcNow() <= latestSafeExpiry;
+
+    async ValueTask DelayForRenewalReconciliationAsync(
+        long deadline,
+        DateTimeOffset latestSafeExpiry,
+        TimeSpan delay,
+        CancellationToken cancellationToken)
+    {
+        var remainingTicks = deadline - _timeProvider.GetTimestamp();
+        if (remainingTicks <= 0 || ObserveMonotonicUtcNow() > latestSafeExpiry)
+        {
+            return;
+        }
+
+        var remaining = TimeSpan.FromSeconds((double)remainingTicks / _timeProvider.TimestampFrequency);
+        var boundedDelay = delay <= remaining ? delay : remaining;
+        if (boundedDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(boundedDelay, _timeProvider, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    static TimeSpan NextRenewalReconciliationDelay(TimeSpan current) =>
+        current >= RenewalReconciliationMaximumPollInterval / 2
+            ? RenewalReconciliationMaximumPollInterval
+            : current + current;
+
+    static void CancelRenewalReconciliationDeadline(object? state)
+    {
+        try
+        {
+            ((CancellationTokenSource)state!).Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The timer may already be firing while the completed reconciliation disposes it.
+        }
+        catch (AggregateException)
+        {
+            // Cancellation is signaled even when a provider callback fails while observing it.
+        }
+    }
+
+    static TimeSpan AddSaturating(TimeSpan value, TimeSpan elapsed) =>
+        elapsed.Ticks > TimeSpan.MaxValue.Ticks - value.Ticks
+            ? TimeSpan.MaxValue
+            : TimeSpan.FromTicks(value.Ticks + elapsed.Ticks);
+
+    static PantsLeaseIndeterminateException CreateIndeterminateRenewalException(
+        PantsException writeError,
+        Exception? reconciliationError,
+        string message) =>
+        new(
+            message,
+            reconciliationError is null
+                ? writeError
+                : new AggregateException(writeError, reconciliationError));
 
     bool TryAdvanceDeadline(ulong epoch, long candidateTimestamp, DateTimeOffset candidate)
     {
@@ -460,7 +710,7 @@ sealed class CloudLeaseCoordinator : IDisposable
         {
             var current = confirmed ?? await _store.ReadAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (current is null || !Owns(current.Lease, proposed.Epoch))
+            if (current is null || current.Lease != proposed)
             {
                 return;
             }
@@ -588,9 +838,12 @@ sealed class CloudLeaseCoordinator : IDisposable
 
     void DisposeGate()
     {
-        if (Interlocked.Exchange(ref _gateDisposed, 1) == 0)
+        if (Volatile.Read(ref _disposeCancellationCompleted) != 0 &&
+            Volatile.Read(ref _activeOperations) == 0 &&
+            Interlocked.Exchange(ref _gateDisposed, 1) == 0)
         {
             _gate.Dispose();
+            _disposeCancellation.Dispose();
         }
     }
 }

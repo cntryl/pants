@@ -5,9 +5,12 @@ namespace Cntryl.Pants.Support.TestDoubles;
 sealed class TestCloudLeaseStore : ICloudLeaseStore
 {
     int _readCount;
+    int _indeterminateReadCount;
     int _version;
 
     public Action? AfterNextRead { get; set; }
+
+    public Action<int>? AfterIndeterminateRead { get; set; }
 
     public Action? AfterNextReplace { get; set; }
 
@@ -37,6 +40,7 @@ sealed class TestCloudLeaseStore : ICloudLeaseStore
         Interlocked.Increment(ref _readCount);
         if (IndeterminateRead)
         {
+            AfterIndeterminateRead?.Invoke(Interlocked.Increment(ref _indeterminateReadCount));
             throw new PantsLeaseIndeterminateException(
                 "The conditional lease read outcome is unknown.");
         }
