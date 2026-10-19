@@ -71,6 +71,8 @@ sealed class Actor : IAsyncDisposable
     readonly SpillRunRetirement _spillRetirement = new(new FileSystemSpillFileRemover());
     ImmutableFlushPipeline _immutableFlushPipeline = null!;
     Task _loopTask = null!;
+    readonly TaskCompletionSource _ownedRuntimeResourcesReleased = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     RuntimeWorker _manifestWorker = null!;
     long _nextRuntimeRequestId;
     long _nextVerificationBarrierToken;
@@ -197,6 +199,7 @@ sealed class Actor : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
+            await _ownedRuntimeResourcesReleased.Task.ConfigureAwait(false);
             return;
         }
 
@@ -269,11 +272,7 @@ sealed class Actor : IAsyncDisposable
             // A worker loop that outlived its disposal deadline may still be mid-operation. The
             // lease, the LOCK and the store stay held until it has actually exited, so a
             // successor cannot take over while it runs.
-            _ = Task.WhenAll(stuckWorkers).ContinueWith(
-                _ => ReleaseOwnedResourcesAsync(),
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default).Unwrap();
+            _ = ReleaseOwnedResourcesAfterWorkersExitAsync(stuckWorkers);
         }
         else
         {
@@ -308,40 +307,61 @@ sealed class Actor : IAsyncDisposable
 
         async Task ReleaseOwnedResourcesAsync()
         {
-            if (_cloudLeaseCancellation is not null)
+            try
             {
-                await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
-                    .ConfigureAwait(false);
-            }
-
-            if (_cloudLeaseHeartbeat is not null)
-            {
-                await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseHeartbeat))
-                    .ConfigureAwait(false);
-            }
-
-            if (_cloudLease is not null)
-            {
-                try
+                if (_cloudLeaseCancellation is not null)
                 {
-                    await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                    await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
+                        .ConfigureAwait(false);
                 }
-                catch (PantsException)
+
+                if (_cloudLeaseHeartbeat is not null)
                 {
-                    // A failed release leaves the bounded lease to expire naturally.
+                    await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseHeartbeat))
+                        .ConfigureAwait(false);
                 }
-            }
 
-            CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
-            CaptureCleanup(() => _cloudLease?.Dispose());
-            if (_cloudPersistence is not null)
+                if (_cloudLease is not null)
+                {
+                    try
+                    {
+                        await _cloudLease.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (PantsException)
+                    {
+                        // A failed release leaves the bounded lease to expire naturally.
+                    }
+                }
+
+                CaptureCleanup(() => _cloudLeaseCancellation?.Dispose());
+                CaptureCleanup(() => _cloudLease?.Dispose());
+                if (_cloudPersistence is not null)
+                {
+                    await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
+                }
+
+                CaptureCleanup(() => _hybridCache?.Dispose());
+                CaptureCleanup(() => _diskStore?.Dispose());
+                CaptureCleanup(_loopCancellation.Dispose);
+            }
+            finally
             {
-                await CaptureCleanupAsync(_cloudPersistence.DisposeAsync).ConfigureAwait(false);
+                _ownedRuntimeResourcesReleased.TrySetResult();
+            }
+        }
+
+        async Task ReleaseOwnedResourcesAfterWorkersExitAsync(IReadOnlyCollection<Task> workers)
+        {
+            try
+            {
+                await Task.WhenAll(workers).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // A failed worker is still stopped; ownership can be released after its loop exits.
             }
 
-            CaptureCleanup(() => _hybridCache?.Dispose());
-            CaptureCleanup(() => _diskStore?.Dispose());
-            CaptureCleanup(_loopCancellation.Dispose);
+            await ReleaseOwnedResourcesAsync().ConfigureAwait(false);
         }
 
         var failure = workerDisposalFailure ?? loopFailure ?? cleanupFailure;
@@ -2174,6 +2194,30 @@ sealed class Actor : IAsyncDisposable
     }
 
     public async ValueTask ShutdownAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            await _ownedRuntimeResourcesReleased.Task.WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await ShutdownCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (PantsAbortedException) when (Volatile.Read(ref _disposed) != 0)
+        {
+            // Disposal can race shutdown admission after a worker timed out. The Actor is no
+            // longer accepting commands, but callers still wait for the ownership release that
+            // follows the last worker's exit.
+            await _ownedRuntimeResourcesReleased.Task.WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    async ValueTask ShutdownCoreAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var admission = SendAsync<Task>(

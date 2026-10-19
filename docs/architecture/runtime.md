@@ -172,6 +172,9 @@ misses its disposal deadline, or cleanup fails while that worker is still active
 heartbeat is stopped and the owned resources are released only after every active worker loop has
 exited. This prevents a cloud lease from expiring while an old worker can still complete a durable
 provider operation; the next owner can then acquire the lease and recover the acknowledged state.
+Shutdown retries that arrive while deferred cleanup is waiting on a worker remain attached to that
+release barrier, so a caller receives its own `Timeout` rather than a successful close or an aborted
+runtime result before ownership is released.
 
 `PantsException.Severity` (`PantsErrorSeverity`) is the single classification for hosts deciding
 whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
