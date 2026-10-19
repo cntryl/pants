@@ -61,6 +61,45 @@ static class CloudSstReferenceReader
         }
     }
 
+    public static IReadOnlyList<CloudCompactionOutputSet> ReadOutputDurableCompactions(
+        ReadOnlyMemory<byte> bytes)
+    {
+        using var document = JsonDocument.Parse(bytes);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var intents = new List<CloudCompactionOutputSet>();
+        foreach (var entry in document.RootElement.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object || entry.EnumerateObject().Count() != 1)
+            {
+                continue;
+            }
+
+            var variant = entry.EnumerateObject().Single();
+            if (variant.Name != "CompactionPublish" ||
+                variant.Value.ValueKind != JsonValueKind.Object ||
+                !variant.Value.TryGetProperty("phase", out var phase) ||
+                phase.ValueKind != JsonValueKind.String ||
+                phase.GetString() != "OutputDurable" ||
+                !variant.Value.TryGetProperty("cf_id", out var columnFamilyElement) ||
+                !columnFamilyElement.TryGetUInt32(out var columnFamilyId) ||
+                !TryReadNames(variant.Value, "removed", false, columnFamilyId, out var removed) ||
+                !TryReadNames(variant.Value, "added", true, columnFamilyId, out var added) ||
+                removed.Count == 0 ||
+                added.Count == 0)
+            {
+                continue;
+            }
+
+            intents.Add(new CloudCompactionOutputSet(columnFamilyId, removed, added));
+        }
+
+        return intents;
+    }
+
     static void Visit(JsonElement element, ISet<string> names)
     {
         switch (element.ValueKind)
@@ -88,6 +127,63 @@ static class CloudSstReferenceReader
 
                 break;
         }
+    }
+
+    static bool TryReadNames(
+        JsonElement intent,
+        string propertyName,
+        bool objectNames,
+        uint columnFamilyId,
+        out IReadOnlySet<string> names)
+    {
+        var parsedNames = new HashSet<string>(StringComparer.Ordinal);
+        names = parsedNames;
+        if (!intent.TryGetProperty(propertyName, out var values) ||
+            values.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var value in values.EnumerateArray())
+        {
+            JsonElement nameElement;
+            if (objectNames)
+            {
+                if (value.ValueKind != JsonValueKind.Object ||
+                    !value.TryGetProperty("name", out nameElement))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                nameElement = value;
+            }
+
+            if (nameElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var name = nameElement.GetString();
+            if (name is null ||
+                !CloudSstObjectKey.TryGetName(
+                    PantsCloudObjectLayout.SstPrefix + name,
+                    out var validatedName) ||
+                !StringComparer.Ordinal.Equals(name, validatedName) ||
+                !CloudSstIdentity.TryParse(name, out var identity) ||
+                identity.ColumnFamilyId != columnFamilyId)
+            {
+                return false;
+            }
+
+            if (!parsedNames.Add(validatedName))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     static void AddValidatedName(string name, ISet<string> names)

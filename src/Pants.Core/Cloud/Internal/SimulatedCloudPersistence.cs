@@ -141,6 +141,9 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken) =>
+        MirrorMetadataAndSstsAsync(cancellationToken);
+
     public ValueTask CollectObsoleteSstsAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

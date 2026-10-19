@@ -759,10 +759,21 @@ sealed class Actor : IAsyncDisposable
                         DrainCloudWalBacklogAsync,
                         cancellationToken)
                     .ConfigureAwait(false);
+                // Inspect the remote OutputDurable intent before mirroring the recovered local
+                // log: partial output sets are rollback garbage, while complete sets remain
+                // available for a successor to adopt.
                 await recoveryDeadline.RunMutationAsync(
                         _cloudPersistence.CollectObsoleteSstsAsync,
                         cancellationToken)
                     .ConfigureAwait(false);
+                if (!_cloudPersistence.HasPersistenceAnomaly)
+                {
+                    await recoveryDeadline.RunMutationAsync(
+                            _cloudPersistence.ReconcileRecoveredMetadataAsync,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 ApplyPendingPersistenceAnomaly(_state);
             }
 

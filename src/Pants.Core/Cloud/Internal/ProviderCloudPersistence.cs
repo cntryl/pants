@@ -274,6 +274,62 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         await CollectObsoleteSstsAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _lease.EnsureValid();
+            var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
+            var manifestMetadataMatchesRemote = true;
+            foreach (var fileName in ManifestMetadataFiles)
+            {
+                _lease.EnsureValid();
+                var remote = await _controlStore.GetAsync(
+                    PantsCloudObjectLayout.MetadataPrefix + fileName,
+                    cancellationToken).ConfigureAwait(false);
+                var localExists = metadata.Files.TryGetValue(fileName, out var local);
+                if (localExists != (remote is not null) ||
+                    (localExists && !remote!.Data.Span.SequenceEqual(local.Span)))
+                {
+                    manifestMetadataMatchesRemote = false;
+                    break;
+                }
+            }
+
+            if (!manifestMetadataMatchesRemote)
+            {
+                await MirrorMetadataAndSstsAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            foreach (var fileName in MetadataFiles)
+            {
+                if (ManifestMetadataFiles.Contains(fileName, StringComparer.Ordinal) ||
+                    !metadata.Files.TryGetValue(fileName, out var local))
+                {
+                    continue;
+                }
+
+                await PutControlCasAsync(
+                    PantsCloudObjectLayout.MetadataPrefix + fileName,
+                    local,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (PantsRecoveryFailedException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            Volatile.Write(ref _persistenceAnomaly, 1);
+        }
+    }
+
     public ValueTask<WalRetirementResult> RetireCoveredWalAsync(CancellationToken cancellationToken) =>
         _walRetirement.RetireAsync(cancellationToken);
 
@@ -832,6 +888,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             CloudSstReferenceReader.ReadLocalProtectedNames(_localRoot),
             StringComparer.Ordinal);
         var guards = new List<CloudObjectIdentityGuard>(ManifestMetadataFiles.Length + 1);
+        var remoteManifests = new List<ManifestState>(ManifestMetadataFiles.Length);
         Dictionary<uint, ulong>? remoteNextSequences = null;
         foreach (var fileName in ManifestMetadataFiles)
         {
@@ -845,6 +902,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             }
 
             var manifest = CloudManifestReader.DecodeManifest(remote.Data.Span);
+            remoteManifests.Add(manifest);
             CloudSstReferenceReader.AddManifestNames(manifest, protectedNames);
             remoteNextSequences = IntersectNextSstSequences(
                 remoteNextSequences,
@@ -855,6 +913,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 remote.Version));
         }
 
+        var partialCompactionOutputs = new Dictionary<string, string>(StringComparer.Ordinal);
         var intentObjectKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
         var remoteIntent = await _controlStore.GetAsync(intentObjectKey, cancellationToken)
             .ConfigureAwait(false);
@@ -865,12 +924,85 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 _controlStore,
                 intentObjectKey,
                 remoteIntent.Version));
+            var outputVersions = await FindPartialCompactionOutputsAsync(
+                remoteIntent.Data,
+                remoteManifests,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var (name, version) in outputVersions)
+            {
+                partialCompactionOutputs.Add(name, version);
+            }
         }
 
         return new CloudSstRetentionProof(
             protectedNames,
+            partialCompactionOutputs,
             remoteNextSequences ?? new Dictionary<uint, ulong>(),
             guards);
+    }
+
+    async ValueTask<IReadOnlyDictionary<string, string>> FindPartialCompactionOutputsAsync(
+        ReadOnlyMemory<byte> remoteIntent,
+        List<ManifestState> remoteManifests,
+        CancellationToken cancellationToken)
+    {
+        var partialOutputs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var retainedOutputs = new HashSet<string>(StringComparer.Ordinal);
+        if (remoteManifests.Count == 0)
+        {
+            return partialOutputs;
+        }
+
+        foreach (var intent in CloudSstReferenceReader.ReadOutputDurableCompactions(remoteIntent))
+        {
+            var inputsRemainAuthoritative = remoteManifests.All(manifest => intent.RemovedNames.All(name =>
+                manifest.Files.Any(file => StringComparer.Ordinal.Equals(file.Name, name))));
+            var outputsRemainUnpublished = remoteManifests.All(manifest => intent.AddedNames.All(name =>
+                manifest.Files.All(file => !StringComparer.Ordinal.Equals(file.Name, name))));
+            if (!inputsRemainAuthoritative || !outputsRemainUnpublished)
+            {
+                continue;
+            }
+
+            var foundOutputs = new Dictionary<string, CloudObjectMetadata>(StringComparer.Ordinal);
+            foreach (var name in intent.AddedNames)
+            {
+                _lease.EnsureValid();
+                var remote = await _sstStore.HeadAsync(
+                    PantsCloudObjectLayout.SstPrefix + name,
+                    cancellationToken).ConfigureAwait(false);
+                _lease.EnsureValid();
+                if (remote is not null)
+                {
+                    foundOutputs.Add(name, remote);
+                }
+            }
+
+            if (foundOutputs.Count == intent.AddedNames.Count)
+            {
+                retainedOutputs.UnionWith(intent.AddedNames);
+                continue;
+            }
+
+            foreach (var (name, output) in foundOutputs)
+            {
+                if (partialOutputs.TryGetValue(name, out var existingVersion) &&
+                    !StringComparer.Ordinal.Equals(existingVersion, output.Version))
+                {
+                    retainedOutputs.Add(name);
+                    continue;
+                }
+
+                partialOutputs[name] = output.Version;
+            }
+        }
+
+        foreach (var name in retainedOutputs)
+        {
+            partialOutputs.Remove(name);
+        }
+
+        return partialOutputs;
     }
 
     static Dictionary<uint, ulong> IntersectNextSstSequences(

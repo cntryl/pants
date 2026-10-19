@@ -42,6 +42,12 @@ just to validate a file that no caller has opened. The first read pins the remot
 fetches the required ranges; malformed or replaced content is then returned as a typed read error.
 Local SST copies remain validated during recovery.
 
+Before startup mirrors recovered control metadata, provider GC checks any remote `OutputDurable`
+compaction intent against both remote manifests and the expected output objects. When every input is
+still manifest-authoritative and only part of the output set exists remotely, GC conditionally
+removes those partial outputs using the intent and manifest versions as guards. A complete output
+set remains available for a successor to adopt.
+
 Persistence work runs through bounded, single-purpose services. Typed,
 immutable requests cross the `WalRuntimeService`, `FlushRuntimeService`, and
 `CompactionRuntimeService` boundaries; the coordinator remains the sole owner
