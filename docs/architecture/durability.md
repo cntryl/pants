@@ -31,6 +31,10 @@ after coalesced WAL append, the current writer is fenced and readers continue to
 published state across column families. Reopen replays the durable WAL group; reconcile its members
 before retrying any mutation.
 
+Transactions whose WAL representation spans multiple records use begin, mutation, and commit-marker
+records. Replay applies their mutations only after the complete matching commit marker, preserving
+transaction atomicity across torn appends.
+
 Published WAL is retired from the catalog by background maintenance, never on a commit or flush
 path. A turn proves that the *published* manifest covers each candidate segment, reading the
 segment frame by frame through version-pinned ranged reads admitted against the shared maintenance

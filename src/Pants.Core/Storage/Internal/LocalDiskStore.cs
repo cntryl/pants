@@ -2695,7 +2695,8 @@ sealed class LocalDiskStore :
                 WalOperation.TransactionBegin,
                 transactionId,
                 beginSequence,
-                _lease.Epoch));
+                _lease.Epoch),
+            () => _failpoints.Hit(Failpoint.MidWalAppend));
         payload.Operations.ForEach(operation =>
         {
             var mutation = CreateMutation(
@@ -2706,7 +2707,8 @@ sealed class LocalDiskStore :
                 WalCodec.EncodeTransactionMutation(
                     mutation,
                     transactionId,
-                    _lease.Epoch));
+                    _lease.Epoch),
+                () => _failpoints.Hit(Failpoint.MidWalAppend));
         });
 
         _failpoints.Hit(Failpoint.BeforeSpilledTransactionCommitMarker);
@@ -2716,7 +2718,8 @@ sealed class LocalDiskStore :
                 WalOperation.TransactionCommit,
                 transactionId,
                 commitSequence,
-                _lease.Epoch));
+                _lease.Epoch),
+            () => _failpoints.Hit(Failpoint.MidWalAppend));
     }
 
     List<WalMutation> ReadMutations(

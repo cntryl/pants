@@ -126,36 +126,57 @@ public sealed class PantsDurabilityParityTests
     }
 
     [Theory]
-    [InlineData(nameof(Failpoint.BeforeWalAppend))]
-    [InlineData(nameof(Failpoint.MidWalAppend))]
-    [InlineData(nameof(Failpoint.AfterWalAppend))]
-    [InlineData(nameof(Failpoint.BeforeWalFlush))]
-    public async Task ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary(string failpointName)
+    [InlineData(nameof(Failpoint.BeforeWalAppend), false, 1)]
+    [InlineData(nameof(Failpoint.MidWalAppend), false, 1)]
+    [InlineData(nameof(Failpoint.AfterWalAppend), false, 1)]
+    [InlineData(nameof(Failpoint.BeforeWalFlush), false, 1)]
+    [InlineData(nameof(Failpoint.BeforeWalSync), false, 1)]
+    [InlineData(nameof(Failpoint.BeforeWalAppend), true, 1)]
+    [InlineData(nameof(Failpoint.MidWalAppend), true, 1)]
+    [InlineData(nameof(Failpoint.MidWalAppend), true, 2)]
+    [InlineData(nameof(Failpoint.MidWalAppend), true, 3)]
+    [InlineData(nameof(Failpoint.MidWalAppend), true, 4)]
+    [InlineData(nameof(Failpoint.AfterWalAppend), true, 1)]
+    [InlineData(nameof(Failpoint.BeforeWalFlush), true, 1)]
+    [InlineData(nameof(Failpoint.BeforeWalSync), true, 1)]
+    public async Task ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary(
+        string failpointName,
+        bool spill,
+        int failAtHit)
     {
         using var directory = new TemporaryDirectory();
         var failpoint = Enum.Parse<Failpoint>(failpointName);
-        var handler = new OneShotFailpointHandler(failpoint);
+        var handler = new OneShotFailpointHandler(failpoint, failAtHit: failAtHit);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithTransactionMemoryPool(1024);
+        var firstValue = spill ? new string('o', 900) : "one";
+        var secondValue = spill ? new string('t', 900) : "two";
         await using (var database = await PantsDatabase.OpenForTestingAsync(
-                         PantsOpenOptions.Local(directory.Path),
+                         options,
                          new RuntimeDependencies(handler)))
         {
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
-            transaction.Put("first"u8.ToArray(), "one"u8.ToArray());
-            transaction.Put("second"u8.ToArray(), "two"u8.ToArray());
+            transaction.Put("first"u8.ToArray(), TestBytes.FromString(firstValue));
+            transaction.Put("second"u8.ToArray(), TestBytes.FromString(secondValue));
+            if (spill)
+            {
+                Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+            }
+
             await Assert.ThrowsAnyAsync<PantsException>(() => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
 
-        await using var reopened = await PantsDatabase.OpenAsync(
-            PantsOpenOptions.Local(directory.Path));
+        await using var reopened = await PantsDatabase.OpenAsync(options);
         var first = await ReadAsync(reopened, "first");
         var second = await ReadAsync(reopened, "second");
         Assert.Equal(first is null, second is null);
         if (first is not null)
         {
-            Assert.Equal("one", first);
-            Assert.Equal("two", second);
+            Assert.Equal(firstValue, first);
+            Assert.Equal(secondValue, second);
         }
     }
 
@@ -368,13 +389,14 @@ public sealed class PantsDurabilityParityTests
 
     sealed class OneShotFailpointHandler(
         Failpoint target,
-        Func<Failpoint, Exception>? exceptionFactory = null) : IFailpointHandler
+        Func<Failpoint, Exception>? exceptionFactory = null,
+        int failAtHit = 1) : IFailpointHandler
     {
-        int _triggered;
+        int _hits;
 
         public void Hit(Failpoint failpoint)
         {
-            if (failpoint == target && Interlocked.Exchange(ref _triggered, 1) == 0)
+            if (failpoint == target && Interlocked.Increment(ref _hits) == failAtHit)
             {
                 throw exceptionFactory?.Invoke(failpoint) ??
                       new IOException($"Injected failure at {failpoint}.");
