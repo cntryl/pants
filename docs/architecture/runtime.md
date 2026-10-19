@@ -82,6 +82,13 @@ Disposing the transaction releases its local snapshot pin.
 Transactions and scans must be disposed to release their snapshot pins and any
 transaction spill files. Pants does not evict a live snapshot or use garbage
 collection to release it; disposing an active transaction rolls it back.
+Each scan captures the transaction's resident intent references and current
+spill-run references at open time. Those snapshot arrays are reserved from the
+transaction memory pool until the scan is disposed. If the reservation does not
+fit, scan creation fails with `ResourceLimit` before registering a database
+snapshot; point reads inspect intents under the transaction gate without making
+a persistent read-view copy. An open scan therefore uses part of the same pool
+that admits later writes and may cause them to spill sooner.
 `PantsRuntimeConfiguration.LongLivedSnapshotWarningThreshold` defaults to one
 hour; when runtime metrics are refreshed, snapshots at or beyond that age are
 counted in `PantsRuntimeMetrics.LongLivedSnapshots` and each newly long-lived

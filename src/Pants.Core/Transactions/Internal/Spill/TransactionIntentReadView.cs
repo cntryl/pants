@@ -2,32 +2,69 @@ namespace Cntryl.Pants.Transactions.Internal.Spill;
 
 sealed class TransactionIntentReadView : IDisposable
 {
+    static readonly IComparer<TransactionIntentOperation> ResidentOperationComparer =
+        Comparer<TransactionIntentOperation>.Create(static (left, right) =>
+        {
+            var keyOrder = ByteArrayComparer.Instance.Compare(left.Key, right.Key);
+            return keyOrder != 0 ? keyOrder : left.Ordinal.CompareTo(right.Ordinal);
+        });
+
     readonly TransactionIntentOperation[] _residentOperations;
     readonly TransactionSpillRun[] _runs;
     readonly TransactionSpillStore? _store;
+    readonly TransactionMemoryPool _memoryPool;
+    readonly long _reservedBytes;
     int _disposed;
-
-    public TransactionIntentReadView(
-        IReadOnlyList<TransactionIntentOperation> residentOperations)
-        : this(null, [], residentOperations)
-    {
-    }
 
     internal TransactionIntentReadView(
         TransactionSpillStore? store,
-        TransactionSpillRun[] runs,
-        IReadOnlyList<TransactionIntentOperation> residentOperations)
+        IReadOnlyList<TransactionSpillRun> runs,
+        IReadOnlyList<TransactionIntentOperation> residentOperations,
+        TransactionMemoryPool memoryPool)
     {
+        ArgumentNullException.ThrowIfNull(runs);
+        ArgumentNullException.ThrowIfNull(residentOperations);
+        _memoryPool = memoryPool ?? throw new ArgumentNullException(nameof(memoryPool));
+        _reservedBytes = SnapshotBytes(residentOperations.Count, runs.Count);
+        if (_reservedBytes != 0 && !_memoryPool.TryReserve(_reservedBytes))
+        {
+            throw PantsException.ResourceLimit(
+                "The transaction memory pool cannot admit a transaction read snapshot.");
+        }
+
         _store = store;
-        _runs = runs;
-        _residentOperations = residentOperations.ToArray();
+        try
+        {
+            _runs = runs.ToArray();
+            _residentOperations = residentOperations.ToArray();
+            Array.Sort(_residentOperations, ResidentOperationComparer);
+        }
+        catch
+        {
+            if (_reservedBytes != 0)
+            {
+                _memoryPool.Release(_reservedBytes);
+            }
+
+            throw;
+        }
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _store?.ReleaseReadView();
+            try
+            {
+                _store?.ReleaseReadView();
+            }
+            finally
+            {
+                if (_reservedBytes != 0)
+                {
+                    _memoryPool.Release(_reservedBytes);
+                }
+            }
         }
     }
 
@@ -50,23 +87,13 @@ sealed class TransactionIntentReadView : IDisposable
         PantsScanDirection direction)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        var residentKeys = _residentOperations
-            .Select(static operation => operation.Key)
-            .Where(key =>
-                (startInclusive is null || ByteArrayComparer.Instance.Compare(key, startInclusive) >= 0) &&
-                (endExclusive is null || ByteArrayComparer.Instance.Compare(key, endExclusive) < 0))
-            .Distinct(ByteArrayComparer.Instance)
-            .OrderBy(static key => key, ByteArrayComparer.Instance)
-            .Select(static key => key.ToArray())
-            .ToList();
-        if (direction == PantsScanDirection.Reverse)
-        {
-            residentKeys.Reverse();
-        }
-
         var sources = new List<IEnumerator<byte[]>>(_runs.Length + 1)
         {
-            residentKeys.GetEnumerator()
+            new TransactionIntentResidentKeyCursor(
+                _residentOperations,
+                startInclusive,
+                endExclusive,
+                direction)
         };
         try
         {
@@ -94,4 +121,12 @@ sealed class TransactionIntentReadView : IDisposable
             throw;
         }
     }
+
+    static long SnapshotBytes(int residentCount, int runCount) =>
+        checked(ArrayBytes(residentCount) + ArrayBytes(runCount));
+
+    // Four pointer-sized slots cover the runtime array header and alignment slack.
+    static long ArrayBytes(int count) => count == 0
+        ? 0
+        : checked((long)IntPtr.Size * (count + 4L));
 }

@@ -99,7 +99,7 @@ public sealed class PantsTransactionSpillReadMemoryTests
                 null,
                 false))
             .ToArray());
-        using var view = store.CreateReadView([]);
+        using var view = store.CreateReadView([], new TransactionMemoryPool(4_096));
         using var forward = view.CreateKeyScan(null, null, PantsScanDirection.Forward);
         using var reverse = view.CreateKeyScan(null, null, PantsScanDirection.Reverse);
 
@@ -120,6 +120,31 @@ public sealed class PantsTransactionSpillReadMemoryTests
         Assert.True(
             reverseAllocated < MaximumCursorMoveNextAllocationBytes,
             $"One-row reverse scan allocated {reverseAllocated:N0} bytes while enumerating.");
+    }
+
+    [Fact]
+    public void ShouldReleaseSpillReadViewWhenItsMemoryReservationIsRejected()
+    {
+        using var directory = new TemporaryDirectory();
+        using var store = new TransactionSpillStore(directory.Path, 1, Family);
+        store.WriteRun([
+            new TransactionIntentOperation(
+                0,
+                CommitOperationKind.Put,
+                Family,
+                "key"u8.ToArray(),
+                null,
+                "value"u8.ToArray(),
+                null,
+                null,
+                false)
+        ]);
+
+        Assert.Throws<PantsResourceLimitException>(() =>
+            store.CreateReadView([], new TransactionMemoryPool(1)));
+
+        store.Dispose();
+        Assert.False(Directory.Exists(Path.Combine(directory.Path, "txn")));
     }
 
     [Fact]

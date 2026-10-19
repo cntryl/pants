@@ -111,6 +111,78 @@ public sealed class PantsTransactionSpillTests
     }
 
     [Fact]
+    public async Task ShouldChargeResidentIntentSnapshotUntilEachScanIsDisposed()
+    {
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateConstrainedOptions(PantsOpenOptions.InMemory()));
+        var instance = Assert.IsType<DatabaseInstance>(database);
+        var baselineBytes = instance.TransactionMemoryPool.Used;
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        for (var index = 0; index < 4; index++)
+        {
+            transaction.Put(TestBytes.FromString($"snapshot-{index}"), "value"u8.ToArray());
+        }
+
+        var intentBytes = instance.TransactionMemoryPool.Used;
+        var first = await transaction.ScanAsync(new PantsScanQuery());
+        var firstScanBytes = instance.TransactionMemoryPool.Used;
+        var second = await transaction.ScanAsync(new PantsScanQuery());
+        var secondScanBytes = instance.TransactionMemoryPool.Used;
+
+        try
+        {
+            var expectedSnapshotBytes = checked((long)IntPtr.Size * 8);
+            Assert.Equal(expectedSnapshotBytes, firstScanBytes - intentBytes);
+            Assert.Equal(expectedSnapshotBytes, secondScanBytes - firstScanBytes);
+
+            await first.DisposeAsync();
+            Assert.Equal(firstScanBytes, instance.TransactionMemoryPool.Used);
+
+            await second.DisposeAsync();
+            Assert.Equal(intentBytes, instance.TransactionMemoryPool.Used);
+        }
+        finally
+        {
+            await first.DisposeAsync();
+            await second.DisposeAsync();
+        }
+
+        await transaction.RollbackAsync();
+        Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
+    }
+
+    [Fact]
+    public async Task ShouldRejectScanWhenIntentSnapshotDoesNotFitPoolAndPreservePointReads()
+    {
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateConstrainedOptions(PantsOpenOptions.InMemory()));
+        var instance = Assert.IsType<DatabaseInstance>(database);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        var value = Enumerable.Repeat((byte)'v', 950).ToArray();
+        transaction.Put("large"u8.ToArray(), value);
+        var intentBytes = instance.TransactionMemoryPool.Used;
+
+        Assert.Equal(value, (await transaction.GetAsync("large"u8.ToArray()))!.Value.ToArray());
+        var snapshotCount = (await database.Diagnostics.GetRuntimeMetricsAsync()).ActiveSnapshots;
+        var failure = await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+        {
+            var scan = await transaction.ScanAsync(new PantsScanQuery());
+            await scan.DisposeAsync();
+            throw new InvalidOperationException("The scan should fail before opening.");
+        });
+
+        Assert.Equal(PantsErrorCode.ResourceLimit, failure.Code);
+        Assert.Equal(intentBytes, instance.TransactionMemoryPool.Used);
+        Assert.Equal(
+            snapshotCount,
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).ActiveSnapshots);
+    }
+
+    [Fact]
     public async Task ShouldReportResourceLimitForUnspillableAssertionWithoutLosingSpilledWrites()
     {
         using var directory = new TemporaryDirectory();
