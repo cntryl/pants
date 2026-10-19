@@ -407,6 +407,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
         ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
     {
+        await validateRemoteLease(cancellationToken).ConfigureAwait(false);
         var root = Path.GetFullPath(localRoot);
         Directory.CreateDirectory(root);
         var localManifest = CloudManifestReader.ReadManifest(root);
@@ -450,6 +451,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             var localPath = Path.Combine(root, fileName);
             if (useRemoteMetadata || !File.Exists(localPath))
             {
+                await validateRemoteLease(cancellationToken).ConfigureAwait(false);
                 AtomicStagedFile.Write(localPath, value.Data.Span);
             }
         }
@@ -578,6 +580,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     segment.MaximumSequence);
             }
 
+            await validateRemoteLease(cancellationToken).ConfigureAwait(false);
             AtomicStagedFile.Write(localPath, bytes.Span);
         }
 
