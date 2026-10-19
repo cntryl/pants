@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -6,6 +7,11 @@ public sealed class ProviderWalCatalogMirrorTests
 {
     const string Primary = PantsCloudObjectLayout.WalCatalogObjectKey;
     const string Mirror = PantsCloudObjectLayout.WalCatalogMirrorObjectKey;
+
+    static readonly JsonSerializerOptions CatalogJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
 
     [Fact]
     public async Task ShouldConvergeMirrorToPrimaryAfterEveryCatalogCommit()
@@ -82,6 +88,80 @@ public sealed class ProviderWalCatalogMirrorTests
         _ = await HydrateAsync(cache.Path, walStore);
 
         Assert.Equal(expected, await ReadAsync(walStore, Mirror));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldNotRepairCatalogCopyWhenSharedPoolCannotAdmitRepairPublication(
+        bool primaryIsTorn)
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
+        for (ulong segmentId = 1; segmentId <= 400; segmentId++)
+        {
+            segments.Add(segmentId, new ProviderPublishedWalSegment
+            {
+                SegmentId = segmentId,
+                WriterEpoch = epoch,
+                MaximumSequence = segmentId,
+                SizeBytes = 1,
+                ContentCrc32C = 0,
+                ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, segmentId)
+            });
+        }
+
+        var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(
+            new ProviderWalCatalog { FencingEpoch = epoch, Segments = segments },
+            CatalogJsonOptions);
+        var walStore = new ScriptedCloudObjectStore();
+        var originalPrimary = primaryIsTorn ? "{ torn"u8.ToArray() : catalogBytes;
+        walStore.Write(Primary, originalPrimary);
+        if (primaryIsTorn)
+        {
+            walStore.Write(Mirror, catalogBytes);
+        }
+
+        var encodedReadBytes = checked(
+            (long)originalPrimary.Length + (primaryIsTorn ? catalogBytes.Length : 0));
+        var readWorkspaceBytes = checked(encodedReadBytes * 16);
+        var budget = new ResourceBudget(readWorkspaceBytes + 128 * 1024);
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease,
+            walRetirementSettings: new WalRetirementSettings(
+                budget,
+                new MaintenanceMemoryGate(),
+                WalRetirementSettings.DefaultPageBytes,
+                WalRetirementSettings.DefaultQuantum,
+                TimeProvider.System));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            persistence.FenceWalCatalogAsync(CancellationToken.None).AsTask());
+
+        Assert.Equal(originalPrimary, walStore.Read(Primary));
+        if (primaryIsTorn)
+        {
+            Assert.Equal(catalogBytes, walStore.Read(Mirror));
+        }
+        else
+        {
+            Assert.False(walStore.Contains(Mirror));
+        }
+        Assert.Equal(0, budget.Current);
+        Assert.InRange(budget.Peak, 0, budget.Limit);
     }
 
     [Fact]
@@ -237,16 +317,22 @@ public sealed class ProviderWalCatalogMirrorTests
         }
     }
 
-    static ValueTask<ProviderCloudHydrationResult> HydrateAsync(
+    static async ValueTask<ProviderCloudHydrationResult> HydrateAsync(
         string cachePath,
-        ICloudObjectStore walStore) =>
-        ProviderCloudPersistence.HydrateLocalCacheAsync(
+        ICloudObjectStore walStore)
+    {
+        var budget = new ResourceBudget(64L * 1024 * 1024);
+        var gate = new MaintenanceMemoryGate();
+        return await ProviderCloudPersistence.HydrateLocalCacheAsync(
             cachePath,
             walStore,
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
-            CancellationToken.None);
+            CancellationToken.None,
+            catalogReadAdmission: new ProviderWalCatalogReadAdmission(budget, gate),
+            catalogWriteAdmission: new ProviderWalCatalogWriteAdmission(budget));
+    }
 
     static async Task<byte[]?> ReadAsync(CountingCloudObjectStore store, string key) =>
         (await store.GetAsync(key, CancellationToken.None))?.Data.ToArray();

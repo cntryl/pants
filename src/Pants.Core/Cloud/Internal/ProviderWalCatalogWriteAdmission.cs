@@ -14,9 +14,7 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
         ProviderWalCatalog catalog,
         JsonSerializerOptions options)
     {
-        var fixedWorkspaceBytes = Math.Min(
-            ImmutablePublicationEnvelope.FixedWorkspaceBytes,
-            budget.Limit / 2);
+        var fixedWorkspaceBytes = FixedWorkspaceBytes;
         var maximumSerializedBytes = (budget.Limit - fixedWorkspaceBytes) /
                                      ImmutablePublicationEnvelope.CopyFactor;
         if (maximumSerializedBytes <= 0)
@@ -78,6 +76,24 @@ sealed class ProviderWalCatalogWriteAdmission(ResourceBudget budget)
             throw;
         }
     }
+
+    public IDisposable AdmitExisting(long serializedBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(serializedBytes);
+        var workspaceBytes = PublicationWorkspaceBytes(serializedBytes, FixedWorkspaceBytes);
+        if (workspaceBytes > budget.Limit)
+        {
+            throw new PantsResourceLimitException(
+                $"Cloud WAL catalog repair needs {workspaceBytes} bytes of maintenance memory; " +
+                $"the pool holds {budget.Limit}.");
+        }
+
+        return budget.Reserve(workspaceBytes);
+    }
+
+    long FixedWorkspaceBytes => Math.Min(
+        ImmutablePublicationEnvelope.FixedWorkspaceBytes,
+        budget.Limit / 2);
 
     static long PublicationWorkspaceBytes(long serializedBytes, long fixedWorkspaceBytes) =>
         serializedBytes > (long.MaxValue - fixedWorkspaceBytes) / ImmutablePublicationEnvelope.CopyFactor

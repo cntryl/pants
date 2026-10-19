@@ -56,17 +56,20 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CloudLeaseCoordinator lease,
         IFailpointHandler? failpoints = null,
         SstPublicationAdmission? sstPublicationAdmission = null,
-        WalRetirementSettings? walRetirementSettings = null)
+        WalRetirementSettings? walRetirementSettings = null,
+        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
         var retirementSettings = walRetirementSettings ?? WalRetirementSettings.Standalone();
-        _catalogWriteAdmission = new ProviderWalCatalogWriteAdmission(retirementSettings.Budget);
+        _catalogWriteAdmission = catalogWriteAdmission ??
+                                 new ProviderWalCatalogWriteAdmission(retirementSettings.Budget);
         _catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => DecodeCatalog(bytes.Span),
             lease.EnsureValid,
-            new ProviderWalCatalogReadAdmission(retirementSettings.Budget, retirementSettings.Gate));
+            new ProviderWalCatalogReadAdmission(retirementSettings.Budget, retirementSettings.Gate),
+            _catalogWriteAdmission);
         _sstStore = sstStore;
         _sstPublisher = new ProviderSstPublisher(
             sstStore,
@@ -394,7 +397,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         PantsRecoveryPolicy recoveryPolicy,
         CancellationToken cancellationToken,
         ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes,
-        ProviderWalCatalogReadAdmission? catalogReadAdmission = null)
+        ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
+        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
     {
         var root = Path.GetFullPath(localRoot);
         Directory.CreateDirectory(root);
@@ -491,7 +495,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 walStore,
                 static bytes => DecodeCatalog(bytes.Span),
                 static () => { },
-                catalogReadAdmission)
+                catalogReadAdmission,
+                catalogWriteAdmission)
             .ReadAsync(true, cancellationToken).ConfigureAwait(false);
         if (catalogRead.Catalog is not { } catalog)
         {
