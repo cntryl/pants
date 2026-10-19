@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -262,6 +266,317 @@ public sealed class S3CredentialSourceTests
     }
 
     [Fact]
+    public async Task ShouldAcceptBracketedEcsIpv6EndpointAndRejectPublicHttpEndpoint()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://[fd00:ec2::23]/v1/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (request, _) =>
+            request.Uri.AbsolutePath == "/v1/credentials"
+                ? TemporaryAwsJsonResponse("ecs-access", "ecs-secret", "ecs-token")
+                : S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+        var credentialRequest = Assert.Single(handler.Requests, static request =>
+            request.Uri.AbsolutePath == "/v1/credentials");
+        Assert.True(IPAddress.TryParse(credentialRequest.Uri.Host.Trim('[', ']'), out var endpointAddress));
+        Assert.Equal(IPAddress.Parse("fd00:ec2::23"), endpointAddress);
+
+        using var publicEnvironment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://192.0.2.1/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var publicHandler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
+        using var publicClient = new HttpClient(publicHandler);
+        var publicStore = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), publicClient);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
+            publicStore.GetAsync("object", CancellationToken.None).AsTask());
+        Assert.Empty(publicHandler.Requests);
+    }
+
+    [Theory]
+    [InlineData("//192.0.2.1/credentials")]
+    [InlineData("relative")]
+    [InlineData("\\\\evil")]
+    public async Task ShouldRejectUnsafeAwsContainerRelativeUriBeforeSendingRequest(string relativeUri)
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = relativeUri,
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
+            store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldResolveValidAwsContainerRelativeUriAgainstTheEcsCredentialHost()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = "/v1/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (request, _) =>
+            request.Uri.AbsolutePath == "/v1/credentials"
+                ? TemporaryAwsJsonResponse("ecs-access", "ecs-secret", "ecs-token")
+                : S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
+
+        Assert.NotNull(await store.GetAsync("object", CancellationToken.None));
+
+        var request = Assert.Single(handler.Requests, static request =>
+            request.Uri.AbsolutePath == "/v1/credentials");
+        Assert.Equal("169.254.170.2", request.Uri.Host);
+    }
+
+    [Fact]
+    public async Task ShouldPinLocalhostCredentialRequestToAnAllowedLoopbackAddress()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://localhost:4000/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) =>
+            TemporaryAwsJsonResponse("local-access", "local-secret", "local-token"));
+        using var client = new HttpClient(handler);
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        await provider.GetCredentialsAsync(CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.True(IPAddress.TryParse(request.Uri.Host.Trim('[', ']'), out var pinnedAddress));
+        Assert.True(IPAddress.IsLoopback(pinnedAddress!));
+        Assert.Equal("localhost:4000", request.Header("Host"));
+    }
+
+    [Fact]
+    public async Task ShouldNotRetryLocalhostCredentialRequestAfterNonConnectFailure()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://localhost:4000/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) =>
+            throw new HttpRequestException("The credential response could not be read."));
+        using var client = new HttpClient(handler);
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            provider.GetCredentialsAsync(CancellationToken.None).AsTask());
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldRejectNonLocalhostAwsContainerCredentialHostname()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://credentials.example.test/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) => S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
+            provider.GetCredentialsAsync(CancellationToken.None).AsTask());
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldRejectMissingAwsContainerCredentialExpiration()
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://127.0.0.1/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler(static (_, _) => AwsJsonResponseWithoutExpiration());
+        using var client = new HttpClient(handler);
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            provider.GetCredentialsAsync(CancellationToken.None).AsTask());
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("2099-01-01 00:00:00")]
+    [InlineData("2000-01-01T00:00:00Z")]
+    public async Task ShouldRejectNonRfc3339OrPastAwsContainerCredentialExpiration(string expiration)
+    {
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = "http://127.0.0.1/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var handler = new CredentialHttpHandler((request, _) => request.Uri.Host == "127.0.0.1"
+            ? AwsJsonResponseWithExpiration(expiration)
+            : S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("2099-01-01 00:00:00")]
+    [InlineData("2000-01-01T00:00:00Z")]
+    public async Task ShouldRejectNonRfc3339OrPastAwsStsCredentialExpiration(string expiration)
+    {
+        using var directory = new TemporaryDirectory();
+        var tokenPath = Path.Combine(directory.Path, "token");
+        await File.WriteAllTextAsync(tokenPath, "identity-token");
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_ROLE_ARN"] = "arn:aws:iam::123456789012:role/qualification",
+            ["AWS_WEB_IDENTITY_TOKEN_FILE"] = tokenPath,
+            ["AWS_SHARED_CREDENTIALS_FILE"] = Path.Combine(directory.Path, "missing"),
+            ["AWS_CONFIG_FILE"] = Path.Combine(directory.Path, "missing-config")
+        });
+        using var handler = new CredentialHttpHandler((request, _) =>
+            request.Uri.Host.StartsWith("sts.", StringComparison.Ordinal)
+                ? StsResponseWithExpiration(expiration)
+                : S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        var store = CreateAwsStore(new PantsS3CredentialSource.AwsDefaultChain(), client);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            store.GetAsync("object", CancellationToken.None).AsTask());
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldRejectMissingAwsStsCredentialExpiration()
+    {
+        using var directory = new TemporaryDirectory();
+        var tokenPath = Path.Combine(directory.Path, "token");
+        await File.WriteAllTextAsync(tokenPath, "identity-token");
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_ROLE_ARN"] = "arn:aws:iam::123456789012:role/qualification",
+            ["AWS_WEB_IDENTITY_TOKEN_FILE"] = tokenPath,
+            ["AWS_SHARED_CREDENTIALS_FILE"] = Path.Combine(directory.Path, "missing"),
+            ["AWS_CONFIG_FILE"] = Path.Combine(directory.Path, "missing-config")
+        });
+        using var handler = new CredentialHttpHandler(static (request, _) =>
+            request.Uri.Host.StartsWith("sts.", StringComparison.Ordinal)
+                ? StsResponseWithoutExpiration()
+                : S3ObjectResponse());
+        using var client = new HttpClient(handler);
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            provider.GetCredentialsAsync(CancellationToken.None).AsTask());
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ShouldResolveLocalhostContainerEndpointWhenOnlyIpv4LoopbackIsListening()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var response = ServeCredentialRequestAsync(listener, timeout.Token);
+        using var environment = SetAwsEnvironment(new Dictionary<string, string?>
+        {
+            ["AWS_CONTAINER_CREDENTIALS_FULL_URI"] = $"http://localhost:{port}/credentials",
+            ["AWS_SHARED_CREDENTIALS_FILE"] = "/missing/credentials",
+            ["AWS_CONFIG_FILE"] = "/missing/config"
+        });
+        using var client = new HttpClient();
+        using var provider = new RefreshingS3CredentialProvider(
+            "us-east-1",
+            client,
+            TimeSpan.FromSeconds(5),
+            TimeProvider.System);
+
+        var credentials = await provider.GetCredentialsAsync(timeout.Token);
+        await response;
+
+        Assert.Equal("localhost", credentials.AccessKey);
+    }
+
+    static async Task ServeCredentialRequestAsync(TcpListener listener, CancellationToken cancellationToken)
+    {
+        using var client = await listener.AcceptTcpClientAsync(cancellationToken);
+        await using var stream = client.GetStream();
+        using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+        string? line;
+        do
+        {
+            line = await reader.ReadLineAsync(cancellationToken);
+        }
+        while (!string.IsNullOrEmpty(line));
+
+        var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            AccessKeyId = "localhost",
+            SecretAccessKey = "localhost-secret",
+            Token = "localhost-token",
+            Expiration = DateTimeOffset.UtcNow.AddHours(1).ToString("O", CultureInfo.InvariantCulture)
+        }));
+        var headers = Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
+        await stream.WriteAsync(headers, cancellationToken);
+        await stream.WriteAsync(body, cancellationToken);
+    }
+
+    [Fact]
     public async Task ShouldUseImdsv2WithoutFallingBackToImdsv1()
     {
         using var directory = new TemporaryDirectory();
@@ -371,6 +686,35 @@ public sealed class S3CredentialSourceTests
             Content = new StringContent(
             $"<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>{accessKey}</AccessKeyId><SecretAccessKey>{secretKey}</SecretAccessKey><SessionToken>{sessionToken}</SessionToken><Expiration>{expiration.ToString("O", CultureInfo.InvariantCulture)}</Expiration></Credentials></AssumeRoleWithWebIdentityResponse>")
         };
+
+    static HttpResponseMessage StsResponseWithExpiration(string expiration) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            $"<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>access</AccessKeyId><SecretAccessKey>secret</SecretAccessKey><SessionToken>token</SessionToken><Expiration>{expiration}</Expiration></Credentials></AssumeRoleWithWebIdentityResponse>")
+    };
+
+    static HttpResponseMessage StsResponseWithoutExpiration() => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            "<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>access</AccessKeyId><SecretAccessKey>secret</SecretAccessKey><SessionToken>token</SessionToken></Credentials></AssumeRoleWithWebIdentityResponse>")
+    };
+
+    static HttpResponseMessage AwsJsonResponseWithExpiration(string expiration) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(new
+        {
+            AccessKeyId = "access",
+            SecretAccessKey = "secret",
+            Token = "token",
+            Expiration = expiration
+        }))
+    };
+
+    static HttpResponseMessage AwsJsonResponseWithoutExpiration() => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            "{\"AccessKeyId\":\"access\",\"SecretAccessKey\":\"secret\",\"Token\":\"token\"}")
+    };
 
     static HttpResponseMessage TemporaryAwsJsonResponse(
         string accessKey,

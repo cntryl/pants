@@ -48,6 +48,71 @@ public sealed class SqrzlCloudProviderQualificationTests
         RecoverAfterCacheLossAsync(CreateGcsJsonLocation());
 
     [Fact]
+    public async Task ShouldRecoverPartitionedCompactionAfterLocalCacheLossGivenSqrzlS3()
+    {
+        const int flushCount = 5;
+        const int entriesPerFlush = 16;
+        const int valueBytes = 2 * 1024;
+        const long localBudgetBytes = 128 * 1024;
+        await RequireSqrzlAsync();
+        using var sourceCache = new TemporaryDirectory();
+        using var replacementCache = new TemporaryDirectory();
+        var location = CreateS3Location() with
+        {
+            Prefix = $"partitioned-compaction/{Guid.NewGuid():N}"
+        };
+        var topology = PantsCloudStorageTopology.Shared(location);
+        PantsOpenOptions Options(string path) => PantsOpenOptions.CloudMulti(path, topology)
+            .WithCloudLocalStorageBudget(localBudgetBytes)
+            .WithBackgroundCompaction(false)
+            .WithCompaction(new PantsCompactionConfiguration(
+                L0FileCountTrigger: 2,
+                BackgroundEnabled: false));
+
+        await using (var database = await PantsDatabase.OpenAsync(Options(sourceCache.Path)))
+        {
+            for (var flush = 0; flush < flushCount; flush++)
+            {
+                await using (var writer = await database.Transactions.BeginAsync(
+                                 database.ColumnFamilies.DefaultFamily,
+                                 PantsTransactionMode.ReadWrite))
+                {
+                    for (var entry = 0; entry < entriesPerFlush; entry++)
+                    {
+                        var index = (flush * entriesPerFlush) + entry;
+                        var value = new byte[valueBytes];
+                        new Random(index).NextBytes(value);
+                        writer.Put(TestBytes.FromString($"partitioned:{index:0000}"), value);
+                    }
+
+                    await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+                }
+
+                await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            }
+
+            await database.Maintenance.CompactAllAsync();
+            var files = (await database.Diagnostics.GetStorageLayoutAsync())
+                .Levels.SelectMany(static level => level.Files)
+                .ToArray();
+            Assert.True(files.Length > 1, "Expected compaction to publish multiple SST partitions.");
+        }
+
+        await using var recovered = await PantsDatabase.OpenAsync(Options(replacementCache.Path));
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        for (var index = 0; index < flushCount * entriesPerFlush; index++)
+        {
+            var expected = new byte[valueBytes];
+            new Random(index).NextBytes(expected);
+            Assert.Equal(
+                expected,
+                (await reader.GetAsync(TestBytes.FromString($"partitioned:{index:0000}")))?.ToArray());
+        }
+    }
+
+    [Fact]
     public Task ShouldRecoverGivenSqrzlTwoProviderTopology() =>
         RecoverAfterCacheLossAsync(new PantsCloudStorageTopology(
             CreateS3Location(),

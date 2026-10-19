@@ -44,6 +44,55 @@ public sealed class CloudProviderEngineQualificationTests
             "/sst/"));
     }
 
+    [LiveS3Fact]
+    public async Task ShouldRecoverEngineFromLiveAwsS3AfterLocalCacheLoss()
+    {
+        var bucket = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_BUCKET");
+        var region = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_REGION");
+        if (string.IsNullOrWhiteSpace(bucket) || string.IsNullOrWhiteSpace(region))
+        {
+            throw new InvalidOperationException("Live S3 settings changed after test discovery.");
+        }
+
+        var location = new PantsCloudStorageLocation(
+            new PantsAwsS3Provider(
+                bucket,
+                region,
+                new PantsS3CredentialSource.AwsDefaultChain()),
+            $"pants-qualification/{Guid.NewGuid():N}");
+        try
+        {
+            await WriteFlushRecoverAsync(
+                PantsCloudStorageTopology.Shared(location),
+                cloudHttpClient: null);
+        }
+        finally
+        {
+            await using var store = await CloudObjectStoreFactory.CreateAsync(
+                location,
+                TimeSpan.FromSeconds(10));
+            foreach (var key in await store.ListAllAsync(string.Empty, CancellationToken.None))
+            {
+                _ = await store.DeleteAsync(
+                    key,
+                    new PantsCloudObjectDeleteCondition.Unconditional(),
+                    CancellationToken.None);
+            }
+        }
+    }
+
+    sealed class LiveS3FactAttribute : FactAttribute
+    {
+        public LiveS3FactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PANTS_LIVE_S3_BUCKET")) ||
+                string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PANTS_LIVE_S3_REGION")))
+            {
+                Skip = "Set PANTS_LIVE_S3_BUCKET and PANTS_LIVE_S3_REGION to opt in to live S3 qualification.";
+            }
+        }
+    }
+
     [Fact]
     public async Task ShouldRecoverEngineFromGcsJsonProtocolAfterLocalCacheLoss()
     {

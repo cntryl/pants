@@ -1,11 +1,17 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Cntryl.Pants.Cloud.Internal.Providers.Credentials.S3;
 
 sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 {
+    static readonly Regex Rfc3339Timestamp = new(
+        @"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})\z",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly HttpClient _httpClient;
     readonly string _region;
@@ -171,6 +177,12 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
                     "AWS container authorization token file could not be read.",
                     exception);
             }
+            catch (UnauthorizedAccessException exception)
+            {
+                throw new PantsIOException(
+                    "AWS container authorization token file could not be read.",
+                    exception);
+            }
 
             if (token.Length > 0)
             {
@@ -247,10 +259,22 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
             deadline.Token);
         try
         {
+            var endpoint = request.RequestUri;
+            if (endpoint is not null &&
+                endpoint.Scheme == Uri.UriSchemeHttp &&
+                endpoint.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SendPinnedLocalhostRequestAsync(
+                    request,
+                    endpoint,
+                    linked.Token).ConfigureAwait(false);
+            }
+
             return await _httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseContentRead,
-                linked.Token).ConfigureAwait(false);
+                    request,
+                    HttpCompletionOption.ResponseContentRead,
+                    linked.Token)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -262,6 +286,77 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
         {
             throw new PantsIOException("AWS credential transport failed.", exception);
         }
+        catch (SocketException exception)
+        {
+            throw new PantsIOException("AWS credential endpoint resolution failed.", exception);
+        }
+    }
+
+    async ValueTask<HttpResponseMessage> SendPinnedLocalhostRequestAsync(
+        HttpRequestMessage request,
+        Uri endpoint,
+        CancellationToken cancellationToken)
+    {
+        var addresses = await Dns.GetHostAddressesAsync("localhost", cancellationToken)
+            .ConfigureAwait(false);
+        if (addresses.Length == 0 || addresses.Any(static address => !IPAddress.IsLoopback(address)))
+        {
+            throw new PantsInvalidArgumentException(
+                "AWS localhost credential endpoints must resolve only to loopback addresses.");
+        }
+
+        HttpRequestException? lastFailure = null;
+        foreach (var address in addresses.Distinct())
+        {
+            var pinnedHost = address.AddressFamily == AddressFamily.InterNetworkV6
+                ? $"[{address}]"
+                : address.ToString();
+            var pinnedUri = new UriBuilder(endpoint) { Host = pinnedHost }.Uri;
+            using var pinnedRequest = new HttpRequestMessage(request.Method, pinnedUri)
+            {
+                Version = request.Version,
+                VersionPolicy = request.VersionPolicy
+            };
+            foreach (var header in request.Headers)
+            {
+                pinnedRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            pinnedRequest.Headers.Host = endpoint.Authority;
+            try
+            {
+                return await _httpClient.SendAsync(
+                        pinnedRequest,
+                        HttpCompletionOption.ResponseContentRead,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (HttpRequestException exception) when (IsRetryableConnectFailure(exception))
+            {
+                lastFailure = exception;
+            }
+        }
+
+        throw lastFailure ?? new HttpRequestException(
+            "No validated localhost credential endpoint address was reachable.");
+    }
+
+    static bool IsRetryableConnectFailure(HttpRequestException exception)
+    {
+        for (var cause = exception.InnerException; cause is not null; cause = cause.InnerException)
+        {
+            if (cause is SocketException socket)
+            {
+                return socket.SocketErrorCode is
+                    SocketError.ConnectionRefused or
+                    SocketError.AddressNotAvailable or
+                    SocketError.AddressFamilyNotSupported or
+                    SocketError.NetworkUnreachable or
+                    SocketError.HostUnreachable;
+            }
+        }
+
+        return false;
     }
 
     static Uri ResolveContainerEndpoint()
@@ -417,10 +512,11 @@ sealed class RefreshingS3CredentialProvider : IS3CredentialProvider, IDisposable
 
     DateTimeOffset ParseExpiration(string value)
     {
-        if (!DateTimeOffset.TryParse(
+        if (!Rfc3339Timestamp.IsMatch(value) ||
+            !DateTimeOffset.TryParse(
                 value,
                 CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal,
+                DateTimeStyles.None,
                 out var expiration) ||
             expiration <= _timeProvider.GetUtcNow())
         {

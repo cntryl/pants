@@ -251,7 +251,9 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         }
 
         // The canceled caller can observe its response before the admitted actor command finishes
-        // unwinding. This query is ordered behind that command and establishes the cleanup boundary.
+        // unwinding. Runtime metrics may return a live snapshot without entering the actor queue, so
+        // use the storage-layout query to establish that the command and its cleanup have completed.
+        _ = await reopened.Diagnostics.GetStorageLayoutAsync();
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp", SearchOption.AllDirectories)

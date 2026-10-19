@@ -64,6 +64,98 @@ public sealed class CloudObjectStoreFactoryTests
         await server;
     }
 
+    [Fact]
+    public async Task ShouldReportStorageRedirectWithoutFollowingIt()
+    {
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var requests = 0;
+        var server = Task.Run(async () =>
+        {
+            while (listener.IsListening)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync();
+                }
+                catch (Exception exception) when (exception is HttpListenerException or ObjectDisposedException)
+                {
+                    return;
+                }
+
+                Interlocked.Increment(ref requests);
+                context.Response.StatusCode = 307;
+                context.Response.RedirectLocation = $"http://127.0.0.1:{port}/elsewhere";
+                context.Response.Close();
+            }
+        });
+
+        var provider = new PantsS3CompatibleProvider(
+            "bucket",
+            "us-test-1",
+            new Uri($"http://127.0.0.1:{port}/"),
+            true,
+            new PantsS3CredentialSource.StaticCredentials("access", "secret"));
+        await using var store = await CloudObjectStoreFactory.CreateAsync(
+            new PantsCloudStorageLocation(provider, string.Empty),
+            TimeSpan.FromSeconds(5));
+
+        var exception = await Assert.ThrowsAsync<PantsIOException>(() =>
+            store.PutAsync(
+                "object",
+                "value"u8.ToArray(),
+                new PantsCloudObjectWriteCondition.IfAbsent(),
+                CancellationToken.None).AsTask());
+
+        Assert.Contains("307", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, Volatile.Read(ref requests));
+        listener.Stop();
+        await server;
+    }
+
+    [Fact]
+    public async Task ShouldNotFollowRedirectsGivenCredentialRequest()
+    {
+        using var listener = new HttpListener();
+        var port = GetFreePort();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var requests = 0;
+        var server = Task.Run(async () =>
+        {
+            while (listener.IsListening)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync();
+                }
+                catch (Exception exception) when (exception is HttpListenerException or ObjectDisposedException)
+                {
+                    return;
+                }
+
+                Interlocked.Increment(ref requests);
+                context.Response.StatusCode = 302;
+                context.Response.RedirectLocation = $"http://127.0.0.1:{port}/elsewhere";
+                context.Response.Close();
+            }
+        });
+        using var client = new HttpClient(CloudObjectStoreFactory.CreateCredentialHandler());
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/credentials");
+        request.Headers.TryAddWithoutValidation("Authorization", "credential-token");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal(1, Volatile.Read(ref requests));
+        listener.Stop();
+        await server;
+    }
+
     static int GetFreePort()
     {
         using var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
@@ -79,6 +171,7 @@ public sealed class CloudObjectStoreFactoryTests
 
         Assert.Equal(Timeout.InfiniteTimeSpan, storageHandler.ConnectTimeout);
         Assert.Equal(TimeSpan.FromSeconds(1), credentialHandler.ConnectTimeout);
+        Assert.False(credentialHandler.AllowAutoRedirect);
         Assert.NotSame(
             CloudObjectStoreFactory.StorageHttpClient,
             CloudObjectStoreFactory.CredentialHttpClient);

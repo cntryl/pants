@@ -130,6 +130,33 @@ public sealed class PantsCloudValidationTests
         Assert.False(provider.Validate().IsValid);
     }
 
+    [Theory]
+    [InlineData("ftp://objects.example.test")]
+    [InlineData("https://oci-user:oci-password@objects.example.test")]
+    [InlineData("https://objects.example.test/?token=oci-query-secret")]
+    [InlineData("https://objects.example.test/#oci-fragment-secret")]
+    public void ShouldRejectUnsafeOciEndpointOverridesThroughOpenOptionsWithoutLeakingSecrets(
+        string endpoint)
+    {
+        var location = new PantsCloudStorageLocation(
+            new PantsOciObjectStorageProvider(
+                "namespace",
+                "bucket",
+                "us-ashburn-1",
+                new Uri(endpoint),
+                new PantsOciCredentialSource.CustomerSecretKey("access", "oci-secret-key")),
+            "database");
+        var exception = Assert.Throws<PantsInvalidArgumentException>(() =>
+            PantsOpenOptions.Cloud(
+                Path.Combine(Path.GetTempPath(), "pants-invalid-oci-endpoint"),
+                location));
+
+        Assert.DoesNotContain("oci-password", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("oci-query-secret", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("oci-fragment-secret", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("oci-secret-key", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ShouldProvideValueEqualityForDeterministicReports()
     {
