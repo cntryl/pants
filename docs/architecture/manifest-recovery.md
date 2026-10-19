@@ -5,6 +5,12 @@ contains edits after that checkpoint. `manifest.json` is a compatibility mirror
 and may lag if the process stops after publishing a checkpoint and truncating the
 journal but before replacing the mirror.
 
+Journal envelopes carry durable edit IDs. Older bare edits have no ID, so replay
+assigns them IDs in journal order from the maximum explicit or synthesized ID
+seen in that journal. This maximum is independent of the snapshot checkpoint:
+a legacy edit whose synthesized ID is at or below the checkpoint is already
+included in the snapshot and is skipped.
+
 Strict recovery requires a valid current snapshot when one exists. A corrupt
 snapshot fails open; Strict does not silently trust the compatibility mirror or
 infer ownership from SST filenames.

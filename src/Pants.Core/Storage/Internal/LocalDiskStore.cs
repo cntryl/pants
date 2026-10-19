@@ -5951,12 +5951,12 @@ sealed class LocalDiskStore :
     {
         var records = ReadDurableJournalRecords(bytes, out durableByteLength);
         var replayed = manifest.Clone();
-        var nextLegacyEditId = replayed.EditCheckpointId;
+        ulong maximumJournalEditId = 0;
         foreach (var record in records)
         {
             var editStart = ManifestJournalPayload.Locate(record.Payload, out var envelopedEditId);
-            var editId = envelopedEditId ?? checked(++nextLegacyEditId);
-            nextLegacyEditId = Math.Max(nextLegacyEditId, editId);
+            var editId = envelopedEditId ?? checked(maximumJournalEditId + 1);
+            maximumJournalEditId = Math.Max(maximumJournalEditId, editId);
             if (editId <= replayed.EditCheckpointId)
             {
                 continue;

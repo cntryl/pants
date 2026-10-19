@@ -13,6 +13,7 @@ public sealed class PantsManifestSpecDriftTests
     const byte AddSstRecordType = 1;
     const byte RemoveSstRecordType = 2;
     const byte CreateColumnFamilyRecordType = 3;
+    const byte BumpWalSeqRecordType = 5;
     const byte SetCloudCheckpointRecordType = 7;
     const byte DurabilityMarkerRecordType = 9;
     const byte DropColumnFamilyAtRecordType = 10;
@@ -375,6 +376,46 @@ public sealed class PantsManifestSpecDriftTests
             PantsTransactionMode.ReadOnly);
         Assert.Equal("v", Encoding.UTF8.GetString((await reader.GetAsync("k"u8.ToArray()))!.Value.Span));
         Assert.Null(await reopened.ColumnFamilies.GetAsync("overflow"));
+    }
+
+    // Issue #264 ------------------------------------------------------------
+
+    [Fact]
+    public async Task ShouldSynthesizeBareManifestEditIdsFromJournalMaximumGivenMixedJournalAndCheckpoint()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, "manifest.snapshot.json"),
+            """
+            {
+              "last_persisted_sequence": 5,
+              "files": [],
+              "column_families": [
+                { "id": 0, "name": "default", "created_at": 1 }
+              ],
+              "next_wal_seq": 1,
+              "next_sst_seqs": {},
+              "edit_checkpoint_id": 5
+            }
+            """);
+
+        var staleEnvelope = BuildEnvelopedJournal(
+            (4, BumpWalSeqRecordType, """{"BumpWalSeq":{"seq":99}}"""));
+        var legacyEdit = EncodeJournalRecord(
+            BumpWalSeqRecordType,
+            """{"BumpWalSeq":{"seq":100}}""");
+        var legacyMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(5));
+        await File.WriteAllBytesAsync(
+            Path.Combine(directory.Path, "manifest.journal"),
+            [.. staleEnvelope, .. legacyEdit, .. legacyMarker]);
+
+        await using var reopened = await OpenAsync(directory.Path);
+
+        using var document = JsonDocument.Parse(
+            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        Assert.Equal(5UL, document.RootElement.GetProperty("last_persisted_sequence").GetUInt64());
+        Assert.Equal(5UL, document.RootElement.GetProperty("edit_checkpoint_id").GetUInt64());
     }
 
     // Issues #142-#146 ------------------------------------------------------
