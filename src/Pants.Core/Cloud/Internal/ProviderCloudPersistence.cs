@@ -79,13 +79,14 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _controlStore = controlStore;
         _lease = lease;
         _writerEpoch = lease.Epoch;
+        var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         _sstGarbageCollector = new CloudSstGarbageCollector(
             _sstStore,
             CaptureSstRetentionProofAsync,
             () => CloudSstReferenceReader.ReadLocalProtectedNames(_localRoot),
             _lease.EnsureValid,
             _lease.ValidateRemoteAsync,
-            failpoints ?? NullPantsFailpointHandler.Instance);
+            failpointHandler);
         _walRetirement = new ProviderWalRetirement(
             walStore,
             sstStore,
@@ -94,6 +95,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             catalog => _catalogWriteAdmission.Serialize(catalog, JsonOptions),
             lease,
             retirementSettings,
+            failpointHandler,
             () => Volatile.Write(ref _persistenceAnomaly, 1));
     }
 

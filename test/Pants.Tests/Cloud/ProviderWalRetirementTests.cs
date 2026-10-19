@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -345,6 +346,25 @@ public sealed class ProviderWalRetirementTests
     }
 
     [Fact]
+    public async Task ShouldRetainRetiredWalWhenSuccessorTakesLeaseAtDeleteBoundary()
+    {
+        var failpoints = new CloudCompactionFailpointHandler();
+        await using var harness = await RetirementHarness.CreateAsync(failpoints: failpoints);
+        harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
+        var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 2));
+        failpoints.ArmCallback(
+            Failpoint.BeforeCloudWalRetirementDelete,
+            harness.TakeoverLease);
+
+        var result = await harness.Persistence.RetireCoveredWalAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.RetiredSegments);
+        Assert.Empty(harness.CatalogSegmentIds());
+        Assert.True(harness.Wal.Contains(segment.ObjectKey));
+        Assert.True(harness.Persistence.HasPersistenceAnomaly);
+    }
+
+    [Fact]
     public async Task ShouldRevalidateFromStartAfterRestartAndKeepCatalogRecoverable()
     {
         await using var harness = await RetirementHarness.CreateAsync(quantum: TimeSpan.FromMilliseconds(1));
@@ -451,7 +471,8 @@ public sealed class ProviderWalRetirementTests
         public static async Task<RetirementHarness> CreateAsync(
             long budgetBytes = 64L * 1024 * 1024,
             TimeSpan? quantum = null,
-            bool supportsRanges = true)
+            bool supportsRanges = true,
+            IFailpointHandler? failpoints = null)
         {
             var leaseStore = new TestCloudLeaseStore();
             var lease = new CloudLeaseCoordinator(
@@ -462,7 +483,9 @@ public sealed class ProviderWalRetirementTests
                 TimeSpan.Zero);
             var epoch = await lease.AcquireAsync(CancellationToken.None);
             var harness = new RetirementHarness(budgetBytes, lease, leaseStore, epoch, supportsRanges);
-            harness.Persistence = harness.CreatePersistence(quantum ?? TimeSpan.FromHours(1));
+            harness.Persistence = harness.CreatePersistence(
+                quantum ?? TimeSpan.FromHours(1),
+                failpoints);
             await harness.Persistence.FenceWalCatalogAsync(CancellationToken.None);
             return harness;
         }
@@ -474,7 +497,9 @@ public sealed class ProviderWalRetirementTests
             DateTimeOffset.UnixEpoch,
             DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10)));
 
-        public ProviderCloudPersistence CreatePersistence(TimeSpan quantum)
+        public ProviderCloudPersistence CreatePersistence(
+            TimeSpan quantum,
+            IFailpointHandler? failpoints = null)
         {
             Budget = new ResourceBudget(_budgetBytes);
             return new ProviderCloudPersistence(
@@ -483,6 +508,7 @@ public sealed class ProviderWalRetirementTests
                 Sst,
                 Control,
                 _lease,
+                failpoints: failpoints,
                 walRetirementSettings: new WalRetirementSettings(
                     Budget,
                     new MaintenanceMemoryGate(),

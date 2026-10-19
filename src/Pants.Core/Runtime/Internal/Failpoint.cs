@@ -72,6 +72,7 @@ enum Failpoint
     BeforeHybridSstHydration,
     BeforeHybridSstEviction,
     BeforeCloudSstGarbageCollectionDelete,
+    BeforeCloudWalRetirementDelete,
     BeforeCloudWalUpload,
     AfterCloudWalUpload,
     BeforeCloudCatalogPublish,
