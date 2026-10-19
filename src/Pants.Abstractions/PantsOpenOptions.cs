@@ -204,6 +204,12 @@ public sealed class PantsOpenOptions
     public PantsOpenOptions WithLeaseClockSkewTolerance(TimeSpan tolerance) =>
         With(_configuration with { LeaseClockSkewTolerance = tolerance });
 
+    /// <summary>Sets the caller-supplied floor for the writer lease epoch.</summary>
+    /// <remarks>
+    ///     Lease acquisition advances beyond both the stored epoch and this floor. The default
+    ///     floor of zero cannot detect a newer epoch that exists only outside a restored database
+    ///     directory; recovery and migration callers must supply a floor from an external authority.
+    /// </remarks>
     public PantsOpenOptions WithMinimumEpoch(ulong minimumEpoch) =>
         With(_configuration with { MinimumEpoch = minimumEpoch });
 

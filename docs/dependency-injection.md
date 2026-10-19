@@ -31,6 +31,7 @@ services.AddPants().BindConfiguration("Pants");
     "ShutdownTimeout": "00:00:30",
     "LeaseTimeToLive": "00:00:30",
     "LeaseClockSkewTolerance": "00:00:15",
+    "MinimumEpoch": 0,
     "BackgroundCompaction": true
   }
 }
@@ -75,6 +76,12 @@ simulated-cloud, and provider-cloud writers. As in Midge, the TTL must be greate
 `LeaseClockSkewTolerance` must be non-negative and must not exceed the TTL (skew equal to the TTL
 is allowed). Pants renews at one third of the TTL, clamped to 1 ms through 10 seconds. A successor may take over only after the persisted
 lease boundary plus skew, and writer-epoch checks still fence the old owner.
+
+`MinimumEpoch` is an optional caller-supplied floor for writer lease acquisition. The next lease
+epoch advances beyond both the stored epoch and this floor. The default of `0` preserves ordinary
+open behavior but cannot detect a newer epoch that exists only outside a restored database
+directory. Disaster-recovery and migration callers must supply a floor from an external authority
+when they need to fence a stale restore; Pants cannot infer epochs absent from that directory.
 
 ## Bind multiple databases
 
