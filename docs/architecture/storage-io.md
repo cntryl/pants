@@ -127,3 +127,20 @@ Startup recovery remains a separate path. Recovery checkpoints still use the
 recovery working-set policy and can stage past the soft local-cache budget;
 that path is not covered by the live-write flush-headroom guarantee and remains
 part of the open local-budget work.
+
+## Flush Construction Memory
+
+Persistent flushes reserve construction scratch before copying mutable operations
+or building a frozen generation's SST plan. The allowance is derived as four
+times the larger of the memtable size limit and one eighth of the engine memory
+budget, plus one mebibyte. `SstFlushFootprint` supplies a conservative estimate
+of four times the point and range payload bytes plus 192 bytes per operation
+for grouping, entries, sorting, indexes, and range metadata. Memtable accounting
+includes 64 bytes per operation, so a generation at its configured limit fits
+below the derived allowance; the extra mebibyte covers fixed block and
+collection overhead. The single-reader flush worker releases the reservation
+after construction completes.
+
+SST key bounds are found by scanning point keys and range endpoints once. Flush
+metadata no longer creates a second sorted list of every key or a list of every
+sequence number.

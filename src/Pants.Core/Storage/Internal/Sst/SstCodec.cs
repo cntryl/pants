@@ -478,23 +478,56 @@ static class SstCodec
         SstBlockHandle? rangeHandle,
         SstIndexKind indexKind)
     {
-        var keys = entries.Select(entry => entry.Key)
-            .Concat(tombstones.SelectMany(tombstone => new[] { tombstone.Start, tombstone.End }))
-            .OrderBy(key => key, ByteArrayComparer.Instance)
-            .ToList();
+        var (smallestKey, largestKey) = GetKeyBounds(entries, tombstones);
         using var output = new MemoryStream();
         DiskFormat.WriteUInt32(output, DiskFormat.SstFormatVersion);
         output.WriteByte((byte)indexKind);
-        output.WriteByte(keys.Count > 0 ? (byte)1 : (byte)0);
+        output.WriteByte(smallestKey is not null ? (byte)1 : (byte)0);
         WriteUInt16(output, 0);
         WriteHandle(output, rangeHandle ?? default);
-        if (keys.Count > 0)
+        if (smallestKey is not null)
         {
-            WriteLengthPrefixed(output, keys[0]);
-            WriteLengthPrefixed(output, keys[^1]);
+            WriteLengthPrefixed(output, smallestKey);
+            WriteLengthPrefixed(output, largestKey!);
         }
 
         return output.ToArray();
+    }
+
+    internal static (byte[]? SmallestKey, byte[]? LargestKey) GetKeyBounds(
+        IReadOnlyList<SstEntry> entries,
+        IReadOnlyList<RangeTombstone> tombstones)
+    {
+        byte[]? smallestKey = null;
+        byte[]? largestKey = null;
+
+        void Include(byte[] key)
+        {
+            if (smallestKey is null ||
+                ByteArrayComparer.Instance.Compare(key, smallestKey) < 0)
+            {
+                smallestKey = key;
+            }
+
+            if (largestKey is null ||
+                ByteArrayComparer.Instance.Compare(key, largestKey) > 0)
+            {
+                largestKey = key;
+            }
+        }
+
+        foreach (var entry in entries)
+        {
+            Include(entry.Key);
+        }
+
+        foreach (var tombstone in tombstones)
+        {
+            Include(tombstone.Start);
+            Include(tombstone.End);
+        }
+
+        return (smallestKey, largestKey);
     }
 
     internal static SstMetadata DecodeMetadata(byte[] metadata)

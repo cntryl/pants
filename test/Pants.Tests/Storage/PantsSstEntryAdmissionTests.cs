@@ -28,6 +28,21 @@ public sealed class PantsSstEntryAdmissionTests
     }
 
     [Fact]
+    public void ShouldRoundTripAnEntryAtTheDecodedBlockLimit()
+    {
+        var key = new byte[] { 0x6d };
+        var value = new byte[DiskFormat.MaximumDecodedBlockBytes - 26 - key.Length];
+        var encoded = SstCodec.Encode(
+            [new SstEntry(key, value, 1, null, false)],
+            [],
+            PantsPerformanceGoal.Latency);
+
+        var decoded = Assert.Single(SstCodec.Decode(encoded).Entries);
+        Assert.Equal(key, decoded.Key);
+        Assert.True(decoded.Value!.AsSpan().SequenceEqual(value));
+    }
+
+    [Fact]
     public void ShouldRejectEntrySizeGivenLengthsOverflow()
     {
         Assert.Throws<PantsResourceLimitException>(() =>
@@ -97,10 +112,16 @@ public sealed class PantsSstEntryAdmissionTests
                          family,
                          PantsTransactionMode.ReadWrite))
         {
+            var oversizedValue = new byte[DiskFormat.MaximumDecodedBlockBytes];
             Assert.Throws<PantsResourceLimitException>(() =>
                 transaction.Put(
                     TestBytes.FromString("oversized"),
-                    new byte[DiskFormat.MaximumDecodedBlockBytes]));
+                    oversizedValue));
+            Assert.Throws<PantsResourceLimitException>(() =>
+                transaction.Put(
+                    TestBytes.FromString("oversized-ttl"),
+                    oversizedValue,
+                    TimeSpan.FromMinutes(1)));
 
             transaction.Put(TestBytes.FromString("kept"), TestBytes.FromString("value"));
             await transaction.CommitAsync(PantsWriteOptions.Sync);

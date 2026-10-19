@@ -6,6 +6,44 @@ public sealed class PantsL0AdmissionTests
 {
     const int L0FileCountTrigger = 2;
 
+    [Fact]
+    public void ShouldAllowTheActiveGenerationToFinishTheLastL0SlotThenStallAfterFreeze()
+    {
+        var plan = RuntimePlan.Resolve(
+            PantsOpenOptions.Local("unused")
+                .WithCompaction(new PantsCompactionConfiguration(
+                    L0FileCountTrigger: L0FileCountTrigger)));
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var family = new ColumnFamilyIdentity(7, "family-7", 0);
+        var ceiling = MemtableWritePressure.GetL0HardCeiling(plan);
+        state.PublishedL0FileCounts[family.Id] = ceiling - 1;
+
+        Assert.Equal(ceiling - 1, MemtableWritePressure.GetL0SlotUsage(state, family));
+        Assert.False(MemtableWritePressure.HasCriticalL0Debt(plan, state, family));
+
+        state.ActiveMemtableBytes[family] = 1;
+        Assert.Equal(ceiling, MemtableWritePressure.GetL0SlotUsage(state, family));
+        Assert.False(MemtableWritePressure.HasCriticalL0Debt(plan, state, family));
+
+        state.ImmutableMemtableFlushes.Add(
+            1,
+            new ImmutableMemtableFlush(new FrozenMemtableFlush(
+                1,
+                family,
+                family.Id,
+                [],
+                1,
+                1,
+                1)));
+        state.ActiveMemtableBytes[family] = 0;
+
+        Assert.Equal(ceiling, MemtableWritePressure.GetL0SlotUsage(state, family));
+        Assert.True(MemtableWritePressure.HasCriticalL0Debt(plan, state, family));
+        Assert.True(MemtableWritePressure.IsStalled(plan, state, [family]));
+    }
+
     /// <summary>
     ///     With background compaction disabled, critical L0 debt must still drain on its own so a
     ///     write-heavy caller is never wedged and published L0 stays bounded.

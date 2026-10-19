@@ -12,7 +12,10 @@ sealed class SstFlushFootprint
     const long ZstandardMaximumSmallBlockMargin = 64;
     const long Lz4MaximumBlockExpansionBytes = 20;
     const long BlockLengthAndChecksumTrailerBytes = 9;
+    const long MaximumEncodedPayloadCopies = 4;
+    const long ConstructionScratchBytesPerOperation = 192;
 
+    long _operationCount;
     long _pointCount;
     long _pointKeyBytes;
     long _valueBytes;
@@ -30,6 +33,7 @@ sealed class SstFlushFootprint
         ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
         ArgumentOutOfRangeException.ThrowIfNegative(valueLength);
         ArgumentOutOfRangeException.ThrowIfNegative(rangeEndLength);
+        _operationCount = checked(_operationCount + 1);
         _hasAnyKey = true;
 
         if (isRangeTombstone)
@@ -124,6 +128,33 @@ sealed class SstFlushFootprint
         }
 
         return footprint.MeasureUpperBound(performanceGoal);
+    }
+
+    /// <summary>
+    ///     A conservative bound for flush construction scratch: four payload copies plus fixed
+    ///     per-operation accounting for grouping, entries, sorting, indexes, and range metadata.
+    /// </summary>
+    public static long MeasureWorkingSetUpperBound(
+        IEnumerable<WalMutation> operations)
+    {
+        ArgumentNullException.ThrowIfNull(operations);
+        var footprint = new SstFlushFootprint();
+        foreach (var operation in operations)
+        {
+            footprint.Add(
+                operation.Key.Length,
+                operation.Value?.Length ?? 0,
+                operation.RangeEnd?.Length ?? 0,
+                operation.Operation == WalOperation.DeleteRange);
+        }
+
+        var sourceBytes = checked(
+            footprint._pointKeyBytes +
+            footprint._valueBytes +
+            footprint._rangeBoundBytes);
+        return checked(
+            MaximumEncodedPayloadCopies * sourceBytes +
+            ConstructionScratchBytesPerOperation * footprint._operationCount);
     }
 
     static long CeilingDivide(long value, long divisor) => value == 0

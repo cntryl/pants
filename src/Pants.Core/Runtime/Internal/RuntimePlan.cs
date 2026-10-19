@@ -108,6 +108,9 @@ sealed class RuntimePlan
 
     public long MemtableFlushThresholdBytes { get; }
 
+    public long FlushWorkingMemoryLimitBytes => checked(
+        4 * Math.Max(MemtableSizeLimitBytes, MemoryBudgetBytes / 8) + 1024L * 1024);
+
     public long BlockCacheBytes { get; }
 
     public int BlockSizeBytes { get; }
