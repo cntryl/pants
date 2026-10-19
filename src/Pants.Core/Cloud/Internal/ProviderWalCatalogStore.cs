@@ -18,12 +18,14 @@ sealed class ProviderWalCatalogStore(
     ICloudObjectStore walStore,
     Func<ReadOnlyMemory<byte>, ProviderWalCatalog> decode,
     Action ensureLeaseValid,
-    ProviderWalCatalogReadAdmission? readAdmission = null)
+    ProviderWalCatalogReadAdmission? readAdmission = null,
+    ProviderWalCatalogWriteAdmission? writeAdmission = null)
 {
     const int MaximumRepairAttempts = 4;
 
     readonly ProviderWalCatalogReadAdmission _readAdmission =
         readAdmission ?? ProviderWalCatalogReadAdmission.Standalone();
+    readonly ProviderWalCatalogWriteAdmission? _writeAdmission = writeAdmission;
 
     /// <param name="rejectOrphanedWalSegments">
     ///     At startup recovery, fail closed when neither catalog copy exists but WAL segment objects
@@ -71,6 +73,7 @@ sealed class ProviderWalCatalogStore(
                 {
                     if (mirror is null || !mirror.Data.Span.SequenceEqual(primary.Data.Span))
                     {
+                        using var mirrorAdmission = _writeAdmission?.AdmitExisting(primary.Data.Length);
                         await ConvergeMirrorAsync(
                                 primary.Data,
                                 primary.Version,
@@ -100,6 +103,7 @@ sealed class ProviderWalCatalogStore(
                 }
 
                 // The mirror is valid and the primary is torn or missing: repair the primary.
+                using var primaryAdmission = _writeAdmission?.AdmitExisting(mirror.Data.Length);
                 var repaired = await walStore.PutAsync(
                     PantsCloudObjectLayout.WalCatalogObjectKey,
                     mirror.Data,

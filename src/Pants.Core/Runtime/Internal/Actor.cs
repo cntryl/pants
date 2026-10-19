@@ -379,6 +379,7 @@ sealed class Actor : IAsyncDisposable
         var catalogReadAdmission = new ProviderWalCatalogReadAdmission(
             maintenanceMemoryBudget,
             maintenanceMemoryGate);
+        var catalogWriteAdmission = new ProviderWalCatalogWriteAdmission(maintenanceMemoryBudget);
         var leaseClock = new NonDecreasingPantsClock(dependencies.LeaseClock);
         var leaseHeartbeatInterval = dependencies.LeaseHeartbeatInterval ??
                                      options.LeaseHeartbeatInterval;
@@ -533,7 +534,8 @@ sealed class Actor : IAsyncDisposable
                                         objectStores.Wal,
                                         static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
                                         static () => { },
-                                        catalogReadAdmission)
+                                        catalogReadAdmission,
+                                        catalogWriteAdmission)
                                     .ReadFencingEpochAsync(token),
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -555,7 +557,8 @@ sealed class Actor : IAsyncDisposable
                                     objectStores.Control,
                                     options.RecoveryPolicy,
                                     token,
-                                    catalogReadAdmission: catalogReadAdmission),
+                                    catalogReadAdmission: catalogReadAdmission,
+                                    catalogWriteAdmission: catalogWriteAdmission),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -601,7 +604,8 @@ sealed class Actor : IAsyncDisposable
                         cloudLease,
                         dependencies.Failpoints,
                         mirrorPublicationAdmission,
-                        walRetirementSettings);
+                        walRetirementSettings,
+                        catalogWriteAdmission);
                     cloudPersistence = providerPersistence;
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
