@@ -17,6 +17,7 @@ sealed class CloudLeaseCoordinator : IDisposable
     readonly TimeProvider _timeProvider;
     int _activeOperations;
     int _disposed;
+    int _disposeCancellationCompleted;
     ulong _epoch;
 
     /// <summary>
@@ -94,7 +95,19 @@ sealed class CloudLeaseCoordinator : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _disposeCancellation.Cancel();
+            try
+            {
+                _disposeCancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The final operation may have already disposed the source.
+            }
+            finally
+            {
+                Volatile.Write(ref _disposeCancellationCompleted, 1);
+            }
+
             DisposeWatchdog();
             Volatile.Write(ref _lost, 1);
             if (Volatile.Read(ref _activeOperations) == 0)
@@ -822,7 +835,9 @@ sealed class CloudLeaseCoordinator : IDisposable
 
     void DisposeGate()
     {
-        if (Interlocked.Exchange(ref _gateDisposed, 1) == 0)
+        if (Volatile.Read(ref _disposeCancellationCompleted) != 0 &&
+            Volatile.Read(ref _activeOperations) == 0 &&
+            Interlocked.Exchange(ref _gateDisposed, 1) == 0)
         {
             _gate.Dispose();
             _disposeCancellation.Dispose();
