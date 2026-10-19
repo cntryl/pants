@@ -74,7 +74,8 @@ static class CloudHttpResponseReader
             values.Count != 1 ||
             !ContentRangeHeaderValue.TryParse(values.Single(), out var actual) ||
             !actual.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) ||
-            actual.From != start || actual.To != end)
+            actual.From != start || actual.To != end ||
+            !actual.Length.HasValue || actual.Length.Value <= end)
         {
             throw new PantsIOException("Cloud ranged GET did not return the requested Content-Range.");
         }
