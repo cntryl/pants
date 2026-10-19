@@ -1307,12 +1307,12 @@ public sealed class ProviderCloudPersistenceTests
         using var client = new HttpClient(handler);
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
-            hybridLocalStorageBudgetBytes: 512 * 1024);
+            hybridLocalStorageBudgetBytes: 560 * 1024);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),
             dependencies);
-        var firstValue = new byte[128 * 1024];
+        var firstValue = new byte[16 * 1024];
         new Random(71).NextBytes(firstValue);
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,

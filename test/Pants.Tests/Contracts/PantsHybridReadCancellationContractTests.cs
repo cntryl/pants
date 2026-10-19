@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsHybridReadCancellationContractTests
 {
-    const long LocalBudgetBytes = 128 * 1024;
+    const long LocalBudgetBytes = 280 * 1024;
     static readonly TimeSpan PromptCancellationTimeout = TimeSpan.FromSeconds(1);
 
     [Fact]

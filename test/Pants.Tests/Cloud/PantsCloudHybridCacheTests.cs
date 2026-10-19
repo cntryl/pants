@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudHybridCacheTests
 {
-    const long LocalCacheBudgetBytes = 128 * 1024;
+    const long LocalCacheBudgetBytes = 280 * 1024;
 
     [Fact]
     public async Task ShouldEvictProvenSstsAndAcceptWritesWhileProviderGarbageCollectionIsUnavailable()

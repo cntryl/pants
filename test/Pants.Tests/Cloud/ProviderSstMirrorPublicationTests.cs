@@ -54,8 +54,8 @@ public sealed class ProviderSstMirrorPublicationTests
             cache.Path,
             new RuntimeDependencies(
                 cloudHttpClient: client,
-                hybridLocalStorageBudgetBytes: 512 * 1024));
-        await CommitAndFlushAsync(database, "remote-first", 128 * 1024);
+                hybridLocalStorageBudgetBytes: 560 * 1024));
+        await CommitAndFlushAsync(database, "remote-first", 16 * 1024);
         await CommitAndFlushAsync(database, "remote-second", 512 * 1024);
         var remoteOnly = azure.GetObjectPaths("/sst/")
             .Select(static path => path[(path.LastIndexOf('/') + 1)..])

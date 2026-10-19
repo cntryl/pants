@@ -653,6 +653,7 @@ sealed class LocalDiskStore :
         {
             ThrowIfDisposed();
             ThrowIfDurableWalFenced(durability);
+            StorageBudgetLedger.StorageReservation? walAdmission = null;
             var walLength = _walStream.Length;
             var reservedSequence = checked((long)_nextSequence);
             var unflushedCommitSequence = _unflushedCommitSequence;
@@ -666,8 +667,10 @@ sealed class LocalDiskStore :
                     state,
                     durability,
                     out reservedSequence,
-                    metrics);
+                    metrics,
+                    ref walAdmission);
                 _walIo.CompleteTransition();
+                walAdmission?.Dispose();
                 return result;
             }
             catch (Exception appendFailure)
@@ -683,6 +686,7 @@ sealed class LocalDiskStore :
                         walRecords,
                         mutableOperationSequence,
                         durabilityState);
+                    walAdmission?.Dispose();
                 }
                 catch (Exception rollbackFailure)
                 {
@@ -731,6 +735,7 @@ sealed class LocalDiskStore :
             ThrowIfDisposed();
             ThrowIfDurableWalFenced(durability);
             _lease.EnsureValid();
+            StorageBudgetLedger.StorageReservation? walAdmission = null;
             var walLength = _walStream.Length;
             var reservedSequence = commits[^1].ExpectedSequence;
             if (reservedSequence < state.Sequence)
@@ -762,6 +767,13 @@ sealed class LocalDiskStore :
                 {
                     var appendStarted = Stopwatch.GetTimestamp();
                     var payloads = prepared.Select(static commit => commit.Payload).ToArray();
+                    var walBytes = 0L;
+                    foreach (var payload in payloads)
+                    {
+                        walBytes = checked(walBytes + WalCodec.MeasureEncodedFrameBytes(payload.Length));
+                    }
+
+                    walAdmission = _localStorageLedger?.Reserve(StorageAdmissionKind.Wal, walBytes);
                     _walIo.BeginTransition();
                     WalCodec.AppendFrames(
                         _walStream.SafeFileHandle,
@@ -803,6 +815,7 @@ sealed class LocalDiskStore :
                 }
 
                 _walIo.CompleteTransition();
+                walAdmission?.Dispose();
                 return new WalCommitGroupResult(commits.Count);
             }
             catch (Exception groupFailure)
@@ -817,6 +830,7 @@ sealed class LocalDiskStore :
                         walRecords,
                         mutableOperationSequence,
                         durabilityState);
+                    walAdmission?.Dispose();
                 }
                 catch (Exception rollbackFailure)
                 {
@@ -2401,6 +2415,7 @@ sealed class LocalDiskStore :
         PantsDurability durability,
         out long reservedSequence,
         WalMetricsRecorder? metrics,
+        ref StorageBudgetLedger.StorageReservation? walAdmission,
         bool flushBufferedWrites = true)
     {
         ThrowIfDisposed();
@@ -2440,7 +2455,8 @@ sealed class LocalDiskStore :
                     payload,
                     checked((ulong)payload.TransactionId),
                     beginSequence,
-                    commitSequence);
+                    commitSequence,
+                    ref walAdmission);
             }
             else
             {
@@ -2448,7 +2464,8 @@ sealed class LocalDiskStore :
                 AppendDirectTransaction(
                     checked((ulong)payload.TransactionId),
                     beginSequence,
-                    residentMutations);
+                    residentMutations,
+                    ref walAdmission);
             }
 
             appendElapsed = Stopwatch.GetElapsedTime(appendStarted);
@@ -2678,7 +2695,8 @@ sealed class LocalDiskStore :
     void AppendDirectTransaction(
         ulong transactionId,
         ulong beginSequence,
-        IReadOnlyList<WalMutation> mutations)
+        IReadOnlyList<WalMutation> mutations,
+        ref StorageBudgetLedger.StorageReservation? walAdmission)
     {
         _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
         var payload = WalCodec.EncodeTransactionBatch(
@@ -2686,6 +2704,9 @@ sealed class LocalDiskStore :
             beginSequence,
             _lease.Epoch,
             mutations);
+        walAdmission = _localStorageLedger?.Reserve(
+            StorageAdmissionKind.Wal,
+            WalCodec.MeasureEncodedFrameBytes(payload.Length));
         var offset = _walStream.Length;
         AppendWalFrame(
             ref offset,
@@ -2697,17 +2718,36 @@ sealed class LocalDiskStore :
         CommitPayload payload,
         ulong transactionId,
         ulong beginSequence,
-        ulong commitSequence)
+        ulong commitSequence,
+        ref StorageBudgetLedger.StorageReservation? walAdmission)
     {
+        var beginMarker = WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionBegin,
+            transactionId,
+            beginSequence,
+            _lease.Epoch);
+        var commitMarker = WalCodec.EncodeTransactionMarker(
+            WalOperation.TransactionCommit,
+            transactionId,
+            commitSequence,
+            _lease.Epoch);
+        var walBytes = checked(
+            WalCodec.MeasureEncodedFrameBytes(beginMarker.Length) +
+            WalCodec.MeasureEncodedFrameBytes(commitMarker.Length));
+        payload.Operations.ForEach(operation =>
+        {
+            var mutation = CreateMutation(
+                operation,
+                checked(beginSequence + operation.Ordinal + 1));
+            walBytes = checked(walBytes + WalCodec.MeasureWorstCaseSpilledMutationFrameBytes(
+                mutation.Key.Length,
+                mutation.Value?.Length,
+                mutation.RangeEnd?.Length));
+        });
+
+        walAdmission = _localStorageLedger?.Reserve(StorageAdmissionKind.Wal, walBytes);
         var offset = _walStream.Length;
-        AppendWalFrame(
-            ref offset,
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionBegin,
-                transactionId,
-                beginSequence,
-                _lease.Epoch),
-            () => _failpoints.Hit(Failpoint.MidWalAppend));
+        AppendWalFrame(ref offset, beginMarker, () => _failpoints.Hit(Failpoint.MidWalAppend));
         payload.Operations.ForEach(operation =>
         {
             var mutation = CreateMutation(
@@ -2723,14 +2763,7 @@ sealed class LocalDiskStore :
         });
 
         _failpoints.Hit(Failpoint.BeforeSpilledTransactionCommitMarker);
-        AppendWalFrame(
-            ref offset,
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionCommit,
-                transactionId,
-                commitSequence,
-                _lease.Epoch),
-            () => _failpoints.Hit(Failpoint.MidWalAppend));
+        AppendWalFrame(ref offset, commitMarker, () => _failpoints.Hit(Failpoint.MidWalAppend));
     }
 
     List<WalMutation> ReadMutations(

@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsPointReadDiagnosticsTests
 {
-    const long HybridLocalBudgetBytes = 128 * 1024;
+    const long HybridLocalBudgetBytes = 280 * 1024;
 
     [Fact]
     public void ShouldKeepSstTraceUnchangedWhenTheSourceCollectionIsMutated()
