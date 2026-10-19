@@ -18,6 +18,13 @@ abstract class CloudObjectStore : ICloudObjectStore
         int length,
         CancellationToken cancellationToken = default);
 
+    internal abstract ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CloudObjectMetadata expectedMetadata,
+        CancellationToken cancellationToken = default);
+
     public abstract ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
         CancellationToken cancellationToken = default);

@@ -35,7 +35,11 @@ and the existing operation deadline still cover buffering.
 Built-in adapters require HTTP 206 and a single `Content-Range` matching the requested byte
 offset and length, including a known total object length that contains the requested range.
 Ignored ranges, unknown totals, wrong offsets, malformed range headers, and inconsistent declared
-lengths fail before body consumption. An absent Content-Length is supported.
+lengths fail before body consumption. An absent Content-Length is supported. For SST reads, each
+built-in provider pins every range request to the identity returned by the initial HEAD: S3 and
+Azure use `If-Match`, while GCS uses its object generation precondition. A failed precondition is
+reported as a concurrent change, and a range whose total differs from the HEAD size is rejected
+before its body is read.
 
 Range bodies are read into a requested-length buffer, respecting the configured HttpClient
 response-buffer limit. The reader consumes at most one extra byte to detect an oversized body;

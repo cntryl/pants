@@ -38,19 +38,17 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
         return new ProviderCloudSstSource(
             _store,
             objectKey,
-            checked((long)metadata.SizeBytes),
-            metadata.Version);
+            metadata);
     }
 
     sealed class ProviderCloudSstSource(
         ICloudObjectStore store,
         string objectKey,
-        long length,
-        string version) : IAsyncSstSource
+        CloudObjectMetadata metadata) : IAsyncSstSource
     {
         int _disposed;
 
-        public long Length { get; } = length;
+        public long Length { get; } = checked((long)metadata.SizeBytes);
 
         public async ValueTask<byte[]> ReadExactlyAsync(
             long offset,
@@ -68,12 +66,20 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
             CloudObject? value;
             try
             {
-                value = await store.GetRangeAsync(
-                        objectKey,
-                        checked((ulong)offset),
-                        rangeLength,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                value = store is CloudObjectStore builtInStore
+                    ? await builtInStore.GetRangeAsync(
+                            objectKey,
+                            checked((ulong)offset),
+                            rangeLength,
+                            metadata,
+                            cancellationToken)
+                        .ConfigureAwait(false)
+                    : await store.GetRangeAsync(
+                            objectKey,
+                            checked((ulong)offset),
+                            rangeLength,
+                            cancellationToken)
+                        .ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (
                 cancellationToken.IsCancellationRequested &&
@@ -91,9 +97,9 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
                     $"Manifest-owned cloud SST '{objectKey}' is missing during a ranged read.");
             }
 
-            if (!StringComparer.Ordinal.Equals(value.Version, version))
+            if (!StringComparer.Ordinal.Equals(value.Version, metadata.Version))
             {
-                throw new PantsCorruptionException(
+                throw new PantsBusyException(
                     $"Immutable cloud SST '{objectKey}' was replaced during a ranged read.");
             }
 

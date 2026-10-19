@@ -80,20 +80,43 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         return new CloudObject(data, version);
     }
 
-    public override async ValueTask<CloudObject?> GetRangeAsync(
+    public override ValueTask<CloudObject?> GetRangeAsync(
         string objectKey,
         ulong offset,
         int length,
+        CancellationToken cancellationToken) =>
+        GetRangeCoreAsync(objectKey, offset, length, null, cancellationToken);
+
+    internal override ValueTask<CloudObject?> GetRangeAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CloudObjectMetadata expectedMetadata,
+        CancellationToken cancellationToken) =>
+        GetRangeCoreAsync(objectKey, offset, length, expectedMetadata, cancellationToken);
+
+    async ValueTask<CloudObject?> GetRangeCoreAsync(
+        string objectKey,
+        ulong offset,
+        int length,
+        CloudObjectMetadata? expectedMetadata,
         CancellationToken cancellationToken)
     {
         ValidateRange(offset, length);
         using var response = await SendReadAsync(
-                token => CreateRangeRequestAsync(objectKey, offset, length, token),
+                token => CreateRangeRequestAsync(objectKey, offset, length, expectedMetadata, token),
+                expectedMetadata?.SizeBytes,
                 cancellationToken)
             .ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
+        }
+
+        if (expectedMetadata is not null && response.StatusCode == HttpStatusCode.PreconditionFailed)
+        {
+            throw new PantsBusyException(
+                $"Azure Blob object '{objectKey}' changed during a pinned range read.");
         }
 
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
@@ -234,12 +257,18 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         string objectKey,
         ulong offset,
         int length,
+        CloudObjectMetadata? expectedMetadata,
         CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
         request.Headers.Range = new RangeHeaderValue(
             checked((long)offset),
             checked((long)offset + length - 1));
+        if (expectedMetadata is not null)
+        {
+            request.Headers.IfMatch.Add(new EntityTagHeaderValue(expectedMetadata.Version));
+        }
+
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
     }
@@ -336,14 +365,27 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         CancellationToken cancellationToken) =>
         SendAsync(requestFactory, true, cancellationToken);
 
+    ValueTask<HttpResponseMessage> SendReadAsync(
+        Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
+        ulong? expectedRangeObjectLength,
+        CancellationToken cancellationToken) =>
+        SendAsync(requestFactory, true, expectedRangeObjectLength, cancellationToken);
+
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         CancellationToken cancellationToken) =>
         SendAsync(requestFactory, false, cancellationToken);
 
+    ValueTask<HttpResponseMessage> SendAsync(
+        Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
+        bool retryTransientFailures,
+        CancellationToken cancellationToken) =>
+        SendAsync(requestFactory, retryTransientFailures, null, cancellationToken);
+
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
+        ulong? expectedRangeObjectLength,
         CancellationToken cancellationToken)
     {
         using var deadline = new CancellationTokenSource(_timeout);
@@ -358,6 +400,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 var response = await CloudHttpResponseReader.SendAsync(
                     _httpClient,
                     request,
+                    expectedRangeObjectLength,
                     linked.Token).ConfigureAwait(false);
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {

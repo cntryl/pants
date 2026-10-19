@@ -6,9 +6,16 @@ namespace Cntryl.Pants.Cloud.Internal.Providers.Protocol;
 
 static class CloudHttpResponseReader
 {
+    public static ValueTask<HttpResponseMessage> SendAsync(
+        HttpClient client,
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) =>
+        SendAsync(client, request, null, cancellationToken);
+
     public static async ValueTask<HttpResponseMessage> SendAsync(
         HttpClient client,
         HttpRequestMessage request,
+        ulong? expectedRangeObjectLength,
         CancellationToken cancellationToken)
     {
         if (request.Method != HttpMethod.Get)
@@ -32,7 +39,12 @@ static class CloudHttpResponseReader
                     return response;
                 }
 
-                await BufferRangeAsync(response, range, client.MaxResponseContentBufferSize, cancellationToken)
+                await BufferRangeAsync(
+                        response,
+                        range,
+                        client.MaxResponseContentBufferSize,
+                        expectedRangeObjectLength,
+                        cancellationToken)
                     .ConfigureAwait(false);
                 return response;
             }
@@ -64,6 +76,7 @@ static class CloudHttpResponseReader
         HttpResponseMessage response,
         RangeHeaderValue requested,
         long maximumBufferSize,
+        ulong? expectedObjectLength,
         CancellationToken cancellationToken)
     {
         var range = requested.Ranges.Count == 1 ? requested.Ranges.Single() : null;
@@ -75,7 +88,9 @@ static class CloudHttpResponseReader
             !ContentRangeHeaderValue.TryParse(values.Single(), out var actual) ||
             !actual.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) ||
             actual.From != start || actual.To != end ||
-            !actual.Length.HasValue || actual.Length.Value <= end)
+            !actual.Length.HasValue || actual.Length.Value <= end ||
+            (expectedObjectLength is { } expected &&
+             checked((ulong)actual.Length.Value) != expected))
         {
             throw new PantsIOException("Cloud ranged GET did not return the requested Content-Range.");
         }
