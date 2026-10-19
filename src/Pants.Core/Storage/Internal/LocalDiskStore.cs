@@ -45,6 +45,7 @@ sealed class LocalDiskStore :
     RecoveryCheckpointer? _recoveryCheckpoints;
     StorageBudgetLedger? _localStorageLedger;
     readonly ManifestState _manifest;
+    const byte ManifestDurabilityMarkerRecordType = 9;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
 
     readonly object _manifestGate = new();
@@ -5997,6 +5998,21 @@ sealed class LocalDiskStore :
             }
 
             var recordType = bytes[cursor];
+            if (recordType == 0)
+            {
+                if (bytes[cursor..].IndexOfAnyExcept((byte)0) < 0)
+                {
+                    break;
+                }
+
+                if (HasCompleteChecksumValidManifestFrameAfter(bytes, cursor + 1))
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        "The manifest journal contains a zero-filled region before a later valid record.");
+                }
+            }
+
             if (recordType is < 1 or > 11)
             {
                 throw PantsException.Create(
@@ -6015,6 +6031,13 @@ sealed class LocalDiskStore :
             var recordLength = checked(1 + sizeof(uint) + (int)payloadLength + sizeof(uint));
             if (recordLength > remaining)
             {
+                if (HasCompleteChecksumValidManifestFrameAfter(bytes, cursor + 1))
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.Corruption,
+                        "The manifest journal contains a truncated record before a later valid record.");
+                }
+
                 break;
             }
 
@@ -6032,7 +6055,7 @@ sealed class LocalDiskStore :
             try
             {
                 ManifestJournalPayload.Validate(payloadCopy);
-                if (recordType == 9)
+                if (recordType == ManifestDurabilityMarkerRecordType)
                 {
                     ManifestDurabilityMarkerValidator.Validate(payloadCopy);
                 }
@@ -6045,7 +6068,7 @@ sealed class LocalDiskStore :
                     exception);
             }
 
-            if (recordType == 9)
+            if (recordType == ManifestDurabilityMarkerRecordType)
             {
                 durableCount = pending.Count;
                 durableByteLength = cursor + recordLength;
@@ -6059,6 +6082,41 @@ sealed class LocalDiskStore :
         }
 
         return pending.Take(durableCount).ToArray();
+    }
+
+    static bool HasCompleteChecksumValidManifestFrameAfter(ReadOnlySpan<byte> bytes, int start)
+    {
+        for (var cursor = start; cursor <= bytes.Length - 9; cursor++)
+        {
+            var remaining = bytes.Length - cursor;
+            var recordType = bytes[cursor];
+            if (remaining < 9 || recordType is < 1 or > 11)
+            {
+                continue;
+            }
+
+            var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(cursor + 1)..]);
+            if (payloadLength > DiskFormat.WalMaximumRecordBytes)
+            {
+                continue;
+            }
+
+            var recordLength = checked(1 + sizeof(uint) + (int)payloadLength + sizeof(uint));
+            if (recordLength > remaining)
+            {
+                continue;
+            }
+
+            var payload = bytes.Slice(cursor + 5, checked((int)payloadLength));
+            var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.Slice(cursor + 5 + checked((int)payloadLength), sizeof(uint)));
+            if (Crc32(payload) == expectedChecksum)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     static void ApplyManifestEdit(

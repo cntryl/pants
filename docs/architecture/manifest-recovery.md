@@ -11,6 +11,11 @@ seen in that journal. This maximum is independent of the snapshot checkpoint:
 a legacy edit whose synthesized ID is at or below the checkpoint is already
 included in the snapshot and is skipped.
 
+Recovery may repair an incomplete final record or a zero-filled final tail only
+when no later complete, checksum-valid journal frame follows it. A zero-filled
+region or overlong record before a later frame is corruption; recovery preserves
+the journal bytes instead of truncating edits hidden behind the damaged frame.
+
 Strict recovery requires a valid current snapshot when one exists. A corrupt
 snapshot fails open; Strict does not silently trust the compatibility mirror or
 infer ownership from SST filenames.
