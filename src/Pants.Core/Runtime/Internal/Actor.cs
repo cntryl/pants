@@ -558,7 +558,8 @@ sealed class Actor : IAsyncDisposable
                                     options.RecoveryPolicy,
                                     token,
                                     catalogReadAdmission: catalogReadAdmission,
-                                    catalogWriteAdmission: catalogWriteAdmission),
+                                    catalogWriteAdmission: catalogWriteAdmission,
+                                    validateRemoteLease: cloudLease.ValidateRemoteAsync),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }

@@ -69,7 +69,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             static bytes => DecodeCatalog(bytes.Span),
             lease.EnsureValid,
             new ProviderWalCatalogReadAdmission(retirementSettings.Budget, retirementSettings.Gate),
-            _catalogWriteAdmission);
+            _catalogWriteAdmission,
+            lease.ValidateRemoteAsync);
         _sstStore = sstStore;
         _sstPublisher = new ProviderSstPublisher(
             sstStore,
@@ -403,7 +404,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken,
         ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes,
         ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
-        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
+        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null,
+        Func<CancellationToken, ValueTask>? validateRemoteLease = null)
     {
         var root = Path.GetFullPath(localRoot);
         Directory.CreateDirectory(root);
@@ -501,7 +503,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 static bytes => DecodeCatalog(bytes.Span),
                 static () => { },
                 catalogReadAdmission,
-                catalogWriteAdmission)
+                catalogWriteAdmission,
+                validateRemoteLease)
             .ReadAsync(true, cancellationToken).ConfigureAwait(false);
         if (catalogRead.Catalog is not { } catalog)
         {

@@ -348,7 +348,7 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
-    public async Task ShouldValidateRemoteLeaseForEveryWalSegmentAndBeforeCatalogWrite()
+    public async Task ShouldValidateRemoteLeaseForEveryWalSegmentAndCatalogCopyWrite()
     {
         using var cache = new TemporaryDirectory();
         var leaseStore = new TestCloudLeaseStore();
@@ -378,7 +378,7 @@ public sealed class ProviderCloudPersistenceTests
                 .ToArray(),
             CancellationToken.None);
 
-        Assert.Equal(5, leaseStore.ReadCount - reads);
+        Assert.Equal(6, leaseStore.ReadCount - reads);
     }
 
     [Fact]
