@@ -130,6 +130,13 @@ replayed to every later `ShutdownAsync` or `DisposeAsync` caller without re-runn
 after a completed close also return `Busy`. This matches the reference engine and keeps the writer
 lease and `LOCK` held, because a failed shutdown cannot prove its workers have stopped.
 
+Shutdown stops new background scheduling before waiting for started worker loops. If a worker
+misses its disposal deadline, or cleanup fails while that worker is still active, shutdown reports
+`Timeout` and retains the local `LOCK`, local store, cloud lease, and cloud lease heartbeat. The
+heartbeat is stopped and the owned resources are released only after every active worker loop has
+exited. This prevents a cloud lease from expiring while an old worker can still complete a durable
+provider operation; the next owner can then acquire the lease and recover the acknowledged state.
+
 `PantsException.Severity` (`PantsErrorSeverity`) is the single classification for hosts deciding
 whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
 succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost

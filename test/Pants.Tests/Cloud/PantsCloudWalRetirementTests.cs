@@ -7,6 +7,76 @@ namespace Cntryl.Pants.Cloud;
 public sealed class PantsCloudWalRetirementTests
 {
     [Fact]
+    public async Task ShouldKeepCloudLeaseRenewingUntilBlockedWorkerExitsAfterCancellationFailure()
+    {
+        using var cache = new TemporaryDirectory();
+        using var competingCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var leaseTimeToLive = TimeSpan.FromMilliseconds(500);
+        var database = await OpenAsync(
+            cache.Path,
+            client,
+            workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
+            leaseTimeToLive: leaseTimeToLive);
+        try
+        {
+            await CommitAsync(database, "lease-held-through-worker");
+            handler.BlockWalRangeReadsThroughCancellationFailure();
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await handler.WaitForBlockedWalRangeReadAsync();
+
+            var firstShutdown = database.ShutdownAsync(TestTimeouts.Expected).AsTask();
+            var secondShutdown = database.ShutdownAsync(TestTimeouts.Expected).AsTask();
+            var shutdownFailure = await Assert.ThrowsAsync<PantsTimeoutException>(() => firstShutdown);
+            var concurrentShutdownFailure = await Assert.ThrowsAsync<PantsTimeoutException>(
+                () => secondShutdown);
+            Assert.Equal(PantsErrorCode.Timeout, shutdownFailure.Code);
+            Assert.Equal(PantsErrorCode.Timeout, concurrentShutdownFailure.Code);
+
+            // The cleanup deadline has elapsed, but the retirement worker is still inside the
+            // provider. The heartbeat and remote lease must remain live for its full lifetime.
+            await Task.Delay(TimeSpan.FromMilliseconds(900));
+            IPantsDatabase? competingDatabase = null;
+            try
+            {
+                competingDatabase = await OpenAsync(
+                    competingCache.Path,
+                    client,
+                    leaseTimeToLive: leaseTimeToLive);
+            }
+            catch (PantsLeaseHeldException)
+            {
+            }
+
+            if (competingDatabase is not null)
+            {
+                await competingDatabase.DisposeAsync();
+            }
+
+            Assert.Null(competingDatabase);
+        }
+        finally
+        {
+            handler.ReleaseWalRangeReads();
+            try
+            {
+                await database.DisposeAsync();
+            }
+            catch (Exception)
+            {
+                // The test observes the first shutdown failure; release unblocks deferred cleanup.
+            }
+        }
+
+        await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
+            competingCache.Path,
+            client,
+            leaseTimeToLive);
+        await AssertValueAsync(recovered, "lease-held-through-worker");
+    }
+
+    [Fact]
     public async Task ShouldNotDelayCloudStrictCommitWhileWalRetirementWaitsOnProvider()
     {
         using var cache = new TemporaryDirectory();
@@ -83,19 +153,55 @@ public sealed class PantsCloudWalRetirementTests
         Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
-    static ValueTask<IPantsDatabase> OpenAsync(string root, HttpClient client) =>
+    static ValueTask<IPantsDatabase> OpenAsync(
+        string root,
+        HttpClient client,
+        TimeSpan? workerDisposalTimeout = null,
+        TimeSpan? leaseTimeToLive = null) =>
         PantsDatabase.OpenForTestingAsync(
-            PantsOpenOptions.Cloud(
-                    root,
-                    new PantsCloudStorageLocation(
-                        new PantsAzureBlobProvider(
-                            "account",
-                            "container",
-                            new Uri("https://storage.example.test"),
-                            new PantsAzureCredentialSource.SasToken("sig=test")),
-                        "database"))
-                .WithBackgroundCompaction(false),
-            new RuntimeDependencies(cloudHttpClient: client));
+            CreateOptions(root, leaseTimeToLive),
+            new RuntimeDependencies(
+                cloudHttpClient: client,
+                workerDisposalTimeout: workerDisposalTimeout));
+
+    static async ValueTask<IPantsDatabase> OpenUntilCloudLeaseReleasedAsync(
+        string root,
+        HttpClient client,
+        TimeSpan leaseTimeToLive)
+    {
+        using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            try
+            {
+                return await OpenAsync(root, client, leaseTimeToLive: leaseTimeToLive);
+            }
+            catch (PantsLeaseHeldException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), deadline.Token);
+            }
+        }
+    }
+
+    static PantsOpenOptions CreateOptions(string root, TimeSpan? leaseTimeToLive)
+    {
+        var options = PantsOpenOptions.Cloud(
+                root,
+                new PantsCloudStorageLocation(
+                    new PantsAzureBlobProvider(
+                        "account",
+                        "container",
+                        new Uri("https://storage.example.test"),
+                        new PantsAzureCredentialSource.SasToken("sig=test")),
+                    "database"))
+            .WithBackgroundCompaction(false);
+        return leaseTimeToLive is { } timeToLive
+            ? options
+                .WithLeaseClockSkewTolerance(TimeSpan.Zero)
+                .WithLeaseTimeToLive(timeToLive)
+            : options;
+    }
 
     static async Task CommitAsync(IPantsDatabase database, string key)
     {

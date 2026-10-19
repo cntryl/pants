@@ -199,6 +199,7 @@ sealed class Actor : IAsyncDisposable
 
         Exception? cleanupFailure = null;
         Exception? loopFailure = null;
+        PantsTimeoutException? workerDisposalFailure = null;
 
         async ValueTask CaptureCleanupAsync(Func<ValueTask> cleanup)
         {
@@ -260,18 +261,6 @@ sealed class Actor : IAsyncDisposable
         await CaptureCleanupAsync(_compactionRuntime.DisposeAsync).ConfigureAwait(false);
         await DisposeWorkerAsync(_manifestWorker).ConfigureAwait(false);
         await DisposeWorkerAsync(_garbageCollectionWorker).ConfigureAwait(false);
-        if (_cloudLeaseCancellation is not null)
-        {
-            await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
-                .ConfigureAwait(false);
-        }
-
-        if (_cloudLeaseHeartbeat is not null)
-        {
-            await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseHeartbeat))
-                .ConfigureAwait(false);
-        }
-
         if (stuckWorkers.Count != 0)
         {
             // A worker loop that outlived its disposal deadline may still be mid-operation. The
@@ -297,16 +286,37 @@ sealed class Actor : IAsyncDisposable
             catch (PantsTimeoutException exception)
             {
                 stuckWorkers.Add(worker.Completion);
+                workerDisposalFailure ??= exception;
                 cleanupFailure ??= exception;
             }
             catch (Exception exception)
             {
+                if (!worker.Completion.IsCompleted)
+                {
+                    stuckWorkers.Add(worker.Completion);
+                    workerDisposalFailure ??= new PantsTimeoutException(
+                        "Runtime worker disposal failed while its worker loop was still active.",
+                        exception);
+                }
+
                 cleanupFailure ??= exception;
             }
         }
 
         async Task ReleaseOwnedResourcesAsync()
         {
+            if (_cloudLeaseCancellation is not null)
+            {
+                await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseCancellation.CancelAsync()))
+                    .ConfigureAwait(false);
+            }
+
+            if (_cloudLeaseHeartbeat is not null)
+            {
+                await CaptureCleanupAsync(() => new ValueTask(_cloudLeaseHeartbeat))
+                    .ConfigureAwait(false);
+            }
+
             if (_cloudLease is not null)
             {
                 try
@@ -331,7 +341,7 @@ sealed class Actor : IAsyncDisposable
             CaptureCleanup(_loopCancellation.Dispose);
         }
 
-        var failure = loopFailure ?? cleanupFailure;
+        var failure = workerDisposalFailure ?? loopFailure ?? cleanupFailure;
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
