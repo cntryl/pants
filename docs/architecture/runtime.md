@@ -51,6 +51,12 @@ Those services depend on narrow storage ports (`ILocalWalStore`, `ILocalFlushSto
 store. `LocalDiskStore` remains the format authority and supplies those capabilities without
 leaking its full surface into each runtime subsystem.
 
+Hybrid-cache eviction is decided per SST. A local copy remains until its remote object identity is
+verified and the manifest makes that object authoritative. Once proven, unrelated garbage
+collection or WAL-retirement residue may degrade health and remain pending cleanup, but it does not
+block eviction of that SST or other proven files. An upload, identity, or manifest outcome that is
+unknown keeps the local copy available for recovery.
+
 Concurrent local `Sync` or `Buffered` commits with the same durability may be
 admitted as one coordinator batch. Each transaction remains a distinct atomic
 Midge WAL frame and is validated in commit order. Logical visibility and
