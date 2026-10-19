@@ -70,6 +70,18 @@ public sealed class RecoveryCheckpointerTests
             checkpointer.RequireTransactionFits([CreatePut(1)]));
     }
 
+    [Fact]
+    public void ShouldAdmitAWholeTransactionWhenHybridCheckpointCanOvershootItsCacheBudget()
+    {
+        var ledger = CreateLedger(maximumBytes: 1024 * Kibibyte, residentBytes: 1024 * Kibibyte);
+        var checkpointer = RecoveryCheckpointer.Create(
+            64 * Kibibyte,
+            ledger,
+            allowCheckpointCapacityOvershoot: true);
+
+        checkpointer.RequireTransactionFits([CreatePut(1)]);
+    }
+
     static StorageBudgetLedger CreateLedger(long maximumBytes, long residentBytes) =>
         new(new HybridStorageBudgetPolicy(maximumBytes), () => residentBytes);
 

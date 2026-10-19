@@ -2337,10 +2337,10 @@ sealed class LocalDiskStore :
                 "A spilled transaction cannot enter resident WAL coalescing.");
         }
 
-        payload.Operations.Validate();
+        var mutations = ReadMutations(payload, checked(_nextSequence + 1));
+        RequireTransactionFitsRecoveryEnvelope(mutations);
         var (beginSequence, sequence) = ReserveResidentCommitSequence(payload, state);
         _failpoints.Hit(Failpoint.BeforeWalAppend);
-        var mutations = ReadMutations(payload, beginSequence);
         _failpoints.Hit(Failpoint.BeforeDirectTransactionCommitMarker);
         var walPayload = WalCodec.EncodeTransactionBatch(
             checked((ulong)payload.TransactionId),
@@ -2393,8 +2393,17 @@ sealed class LocalDiskStore :
             return default;
         }
 
-        payload.Operations.Validate();
+        if (durability == PantsDurability.BestEffort)
+        {
+            payload.Operations.Validate();
+        }
+
         var beginSequence = _nextSequence + 1;
+        if (durability != PantsDurability.BestEffort)
+        {
+            RequireTransactionFitsRecoveryEnvelope(payload, beginSequence);
+        }
+
         reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
         var commitSequence = (ulong)reservedSequence;
         _nextSequence = commitSequence;
@@ -2707,6 +2716,40 @@ sealed class LocalDiskStore :
                 operation,
                 checked(beginSequence + operation.Ordinal + 1))));
         return mutations;
+    }
+
+    void RequireTransactionFitsRecoveryEnvelope(
+        CommitPayload payload,
+        ulong beginSequence)
+    {
+        if (_recoveryCheckpointBytes is not { } checkpointBytes)
+        {
+            payload.Operations.Validate();
+            return;
+        }
+
+        RecoveryCheckpointer.Create(
+                checkpointBytes,
+                _localStorageLedger,
+                allowCheckpointCapacityOvershoot: _localStorageLedger is not null)
+            .RequireTransactionFits(visitor => payload.Operations.ForEach(operation =>
+                visitor(CreateMutation(
+                    operation,
+                    checked(beginSequence + operation.Ordinal + 1)))));
+    }
+
+    void RequireTransactionFitsRecoveryEnvelope(IEnumerable<WalMutation> mutations)
+    {
+        if (_recoveryCheckpointBytes is not { } checkpointBytes)
+        {
+            return;
+        }
+
+        RecoveryCheckpointer.Create(
+                checkpointBytes,
+                _localStorageLedger,
+                allowCheckpointCapacityOvershoot: _localStorageLedger is not null)
+            .RequireTransactionFits(mutations);
     }
 
     WalMutation CreateMutation(
@@ -3951,7 +3994,10 @@ sealed class LocalDiskStore :
             Path.Combine(RootPath, "recovery"),
             _localStorageLedger);
         _recoveryCheckpoints = _recoveryCheckpointBytes is { } checkpointTarget
-            ? RecoveryCheckpointer.Create(checkpointTarget, _localStorageLedger)
+            ? RecoveryCheckpointer.Create(
+                checkpointTarget,
+                _localStorageLedger,
+                allowCheckpointCapacityOvershoot: _localStorageLedger is not null)
             : null;
         try
         {

@@ -7,12 +7,13 @@ namespace Cntryl.Pants.Storage.Internal.Recovery;
 /// </summary>
 /// <remarks>
 ///     The target is derived from both budgets. The memtable size limit (itself carved from the
-///     memory budget) bounds recovered memory; where a local-storage budget applies, half of its
-///     free space at replay start bounds each checkpoint, so a checkpoint never needs more disk than
-///     the database has left. A transaction is applied whole, so it cannot be split across
-///     checkpoints: beyond a generous multiple of the memory target it is a resource failure, and
-///     beyond the disk capacity it is a no-space failure. Neither is corruption, so salvage never
-///     truncates the WAL to get past it.
+///     memory budget) bounds recovered memory; where a local-storage budget applies, half its free
+///     space at replay start determines when to checkpoint. A transaction is applied whole, so it
+///     cannot be split across checkpoints: beyond a generous multiple of the memory target it is a
+///     resource failure. A hybrid cache may allow a checkpoint to exceed its current soft local
+///     budget, so that budget must not reject the transaction itself. In strict capacity mode, a
+///     transaction beyond disk capacity is a no-space failure. Neither resource failure is
+///     corruption, so salvage never truncates the WAL to get past it.
 /// </remarks>
 sealed class RecoveryCheckpointer
 {
@@ -20,6 +21,7 @@ sealed class RecoveryCheckpointer
     const long RecoveredEntryOverheadBytes = 64;
 
     readonly long? _diskCapacityBytes;
+    readonly bool _allowCheckpointCapacityOvershoot;
     readonly StorageBudgetLedger? _ledger;
     readonly long _transactionMemoryLimitBytes;
 
@@ -27,11 +29,13 @@ sealed class RecoveryCheckpointer
         long targetBytes,
         long transactionMemoryLimitBytes,
         long? diskCapacityBytes,
+        bool allowCheckpointCapacityOvershoot,
         StorageBudgetLedger? ledger)
     {
         TargetBytes = targetBytes;
         _transactionMemoryLimitBytes = transactionMemoryLimitBytes;
         _diskCapacityBytes = diskCapacityBytes;
+        _allowCheckpointCapacityOvershoot = allowCheckpointCapacityOvershoot;
         _ledger = ledger;
     }
 
@@ -42,7 +46,17 @@ sealed class RecoveryCheckpointer
     ///     Derives the working set from <paramref name="memtableTargetBytes" /> and, when
     ///     <paramref name="ledger" /> is present, the local storage it leaves free right now.
     /// </summary>
-    public static RecoveryCheckpointer Create(long memtableTargetBytes, StorageBudgetLedger? ledger)
+    /// <param name="memtableTargetBytes">The configured recovered-memtable target.</param>
+    /// <param name="ledger">The optional local-storage budget ledger.</param>
+    /// <param name="allowCheckpointCapacityOvershoot">
+    ///     Whether a hybrid cache checkpoint may proceed beyond its current soft local budget.
+    ///     The ledger still determines the checkpoint target and accounts for staging; this option
+    ///     only avoids rejecting a transaction based on transient cache headroom.
+    /// </param>
+    public static RecoveryCheckpointer Create(
+        long memtableTargetBytes,
+        StorageBudgetLedger? ledger,
+        bool allowCheckpointCapacityOvershoot = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(memtableTargetBytes);
         var memoryLimit = memtableTargetBytes > long.MaxValue / TransactionMemoryLimitMultiple
@@ -54,7 +68,12 @@ sealed class RecoveryCheckpointer
         var target = diskCapacity is { } capacity
             ? Math.Min(memtableTargetBytes, capacity)
             : memtableTargetBytes;
-        return new RecoveryCheckpointer(target, memoryLimit, diskCapacity, ledger);
+        return new RecoveryCheckpointer(
+            target,
+            memoryLimit,
+            diskCapacity,
+            allowCheckpointCapacityOvershoot,
+            ledger);
     }
 
     public bool IsDue(long recoveredBytes) => recoveredBytes > 0 && recoveredBytes >= TargetBytes;
@@ -66,8 +85,24 @@ sealed class RecoveryCheckpointer
     public void RequireTransactionFits(IEnumerable<WalMutation> mutations)
     {
         ArgumentNullException.ThrowIfNull(mutations);
+        RequireTransactionFits(visitor =>
+        {
+            foreach (var mutation in mutations)
+            {
+                visitor(mutation);
+            }
+        });
+    }
+
+    /// <summary>
+    ///     Checks mutations as they are visited, so callers with spilled operations do not need to
+    ///     materialize a complete transaction to apply the same recovery bound before WAL append.
+    /// </summary>
+    public void RequireTransactionFits(Action<Action<WalMutation>> enumerate)
+    {
+        ArgumentNullException.ThrowIfNull(enumerate);
         long bytes = 0;
-        foreach (var mutation in mutations)
+        enumerate(mutation =>
         {
             bytes = checked(bytes + EstimateBytes(mutation));
             if (bytes > _transactionMemoryLimitBytes)
@@ -76,9 +111,12 @@ sealed class RecoveryCheckpointer
                     $"A WAL transaction needs more than {_transactionMemoryLimitBytes} bytes to " +
                     "recover, above the recovery working set; the WAL was left untouched.");
             }
-        }
+        });
 
-        if (bytes > 0 && _diskCapacityBytes is { } capacity && bytes > capacity)
+        if (!_allowCheckpointCapacityOvershoot &&
+            bytes > 0 &&
+            _diskCapacityBytes is { } capacity &&
+            bytes > capacity)
         {
             throw new PantsNoSpaceException(
                 $"A WAL transaction needs {bytes} bytes to recover, but local storage leaves only " +

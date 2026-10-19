@@ -365,6 +365,28 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
+    public async Task ShouldReplayCloudDurableTransactionLargerThanTheLocalCacheHeadroom()
+    {
+        using var directory = new TemporaryDirectory();
+        var value = CreateValue(256 * 1024, 151);
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await PutAsync(database, "large-cloud-transaction", value);
+            Assert.Empty(LocalSsts(directory.Path));
+        }
+
+        await using var reopened = await OpenAsync(directory.Path);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            value,
+            Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("large-cloud-transaction"u8.ToArray())).ToArray());
+    }
+
+    [Fact]
     public async Task ShouldReportOnlyPlannedEvictionsWhileEvictionIsBlocked()
     {
         using var directory = new TemporaryDirectory();
