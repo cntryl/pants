@@ -6,6 +6,8 @@ sealed record MidgeBenchmarkResult(
     string Workload,
     string Parameters,
     string PrimaryMetric,
+    int MeasuredSamples,
+    ulong OperationsCompleted,
     double Mean,
     string Quality,
     string TrustClass,
@@ -13,4 +15,9 @@ sealed record MidgeBenchmarkResult(
     string Cpu,
     string OperatingSystem,
     string Runtime,
-    string ToolVersion);
+    string RunProfile,
+    string ToolVersion)
+{
+    public string FixturePatchSha256 { get; init; } = string.Empty;
+    public string CargoLockSha256 { get; init; } = string.Empty;
+}

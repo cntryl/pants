@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
@@ -36,6 +37,25 @@ static class BenchmarkReportCommand
         var metadataPath = Path.Combine(directory, "pants-metadata.json");
         var metadata = JsonSerializer.Deserialize<BenchmarkRunMetadata>(File.ReadAllText(metadataPath)) ??
                        throw new InvalidDataException("Pants benchmark metadata is invalid.");
+        var expectedScenarioIds = File.ReadAllLines(Path.Combine(directory, "pants-scenarios.txt"))
+            .Select(ScenarioIdFromInventory)
+            .ToArray();
+        if (expectedScenarioIds.Length != metadata.ExpectedScenarioCount)
+        {
+            throw new InvalidDataException(
+                $"Pants benchmark inventory is invalid: expected {metadata.ExpectedScenarioCount} identities, " +
+                $"found {expectedScenarioIds.Length}.");
+        }
+
+        var duplicateExpected = expectedScenarioIds
+            .GroupBy(scenarioId => scenarioId, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateExpected is not null)
+        {
+            throw new InvalidDataException(
+                $"Duplicate Pants benchmark inventory scenario '{duplicateExpected.Key}'.");
+        }
+
         var results = Directory.GetFiles(directory, "*-report.csv", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
             .SelectMany(path =>
@@ -60,7 +80,56 @@ static class BenchmarkReportCommand
                 $"Pants benchmark is incomplete: expected {metadata.ExpectedScenarioCount} rows, found {results.Length}.");
         }
 
+        var expected = expectedScenarioIds.ToHashSet(StringComparer.Ordinal);
+        var actual = results.Select(result => result.ScenarioId).ToHashSet(StringComparer.Ordinal);
+        var missing = expected.Except(actual, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var unexpected = actual.Except(expected, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (missing.Length != 0 || unexpected.Length != 0)
+        {
+            throw new InvalidDataException(
+                $"Pants benchmark scenarios do not match inventory. Missing: [{string.Join(", ", missing)}]; " +
+                $"unexpected: [{string.Join(", ", unexpected)}].");
+        }
+
         return (metadata, results);
+    }
+
+    static string ScenarioIdFromInventory(string inventoryId)
+    {
+        var parameterSeparator = inventoryId.IndexOf(':');
+        var methodSeparator = parameterSeparator > 0
+            ? inventoryId.LastIndexOf('.', parameterSeparator - 1)
+            : -1;
+        if (parameterSeparator <= 0 || methodSeparator <= 0 || methodSeparator == parameterSeparator - 1)
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        var benchmarkType = inventoryId[..methodSeparator];
+        var method = inventoryId[(methodSeparator + 1)..parameterSeparator];
+        var parameterDisplay = inventoryId[(parameterSeparator + 1)..];
+        if (parameterDisplay.Length == 0)
+        {
+            return $"pants:{benchmarkType}:{method}";
+        }
+
+        if (parameterDisplay.Length < 2 || parameterDisplay[0] != '[' || parameterDisplay[^1] != ']')
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        var parameters = parameterDisplay[1..^1]
+            .Split(", ", StringSplitOptions.RemoveEmptyEntries)
+            .Select(static parameter => parameter.Trim())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (parameters.Length == 0 || parameters.Any(static parameter =>
+                parameter.IndexOf('=') <= 0))
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        return $"pants:{benchmarkType}:{method}:{string.Join(';', parameters)}";
     }
 
     internal static IReadOnlyList<MidgeBenchmarkResult> ReadMidge(string directory)
@@ -73,7 +142,37 @@ static class BenchmarkReportCommand
             throw new InvalidDataException("No Midge latest.json benchmark artifacts were found.");
         }
 
-        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path))).ToArray();
+        var setupPatchPath = Path.Combine(directory, "midge-smoke-fixtures.patch");
+        if (!File.Exists(setupPatchPath))
+        {
+            throw new InvalidDataException("Midge benchmark setup patch artifact is missing.");
+        }
+
+        var setupPatchSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(setupPatchPath)))
+            .ToLowerInvariant();
+        if (!setupPatchSha.Equals(MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Midge benchmark setup patch SHA '{setupPatchSha}' does not match pinned SHA " +
+                $"'{MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256}'.");
+        }
+
+        var cargoLockPath = Path.Combine(directory, "Cargo.lock");
+        if (!File.Exists(cargoLockPath))
+        {
+            throw new InvalidDataException("Midge benchmark Cargo.lock artifact is missing.");
+        }
+
+        var cargoLockBytes = File.ReadAllBytes(cargoLockPath);
+        var cargoLockSha = MidgeBenchmarkReader.ValidateCargoLock(cargoLockBytes);
+
+        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path)))
+            .Select(result => result with
+            {
+                FixturePatchSha256 = setupPatchSha,
+                CargoLockSha256 = cargoLockSha
+            })
+            .ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
@@ -82,12 +181,15 @@ static class BenchmarkReportCommand
         }
 
         if (results.Select(result =>
-                    (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.ToolVersion))
+                    (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.RunProfile,
+                        result.ToolVersion))
                 .Distinct().Count() != 1)
         {
             throw new InvalidDataException(
                 "Midge benchmark artifacts contain inconsistent source or machine metadata.");
         }
+
+        MidgeBenchmarkReader.ValidateScenarioInventory(results.Select(result => result.ScenarioId));
 
         return results;
     }
@@ -103,13 +205,25 @@ static class BenchmarkReportCommand
         output.AppendLine(CultureInfo.InvariantCulture, $"Pants SHA: `{metadata.SourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture, $"Midge SHA: `{MidgeBenchmarkReader.PinnedSourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge fixture patch SHA256: `{midge[0].FixturePatchSha256}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge scenario inventory SHA256: `{MidgeBenchmarkReader.PinnedScenarioInventorySha256}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
             $"Pants machine: {metadata.Cpu}; {metadata.OperatingSystem}; {metadata.Architecture}; {metadata.Runtime}  ");
         var midgeEnvironment = midge[0];
         output.AppendLine(CultureInfo.InvariantCulture,
-            $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}; cntryl-stress {midgeEnvironment.ToolVersion}");
+            $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge harness: cntryl-stress `{MidgeBenchmarkReader.PinnedStressHarnessSha}` (v{midgeEnvironment.ToolVersion}); Cargo.lock SHA256 `{midgeEnvironment.CargoLockSha256}`");
         output.AppendLine();
         output.AppendLine(
             "> Rows are grouped for investigation, not treated as equivalent. A ratio is intentionally omitted unless workload mechanics, logical units, storage mode, client count, and measurement class are explicitly matched.");
+        if (midge.All(result => result.RunProfile == "smoke"))
+        {
+            output.AppendLine();
+            output.AppendLine(
+                "> The Midge smoke profile is an abbreviated lifecycle and inventory check, not statistical performance evidence.");
+        }
 
         foreach (var tier in pants.Select(result => result.Tier).Concat(midge.Select(result => result.Tier))
                      .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
@@ -119,25 +233,25 @@ static class BenchmarkReportCommand
             output.AppendLine();
             output.AppendLine("### Pants");
             output.AppendLine();
-            output.AppendLine("| Workload | Parameters | Mean ns/op | Allocated B/op | Class |");
-            output.AppendLine("|---|---|---:|---:|---|");
+            output.AppendLine("| Workload | Parameters | Logical ops/invoke | Mean ns/op | Allocated B/op | Class |");
+            output.AppendLine("|---|---|---:|---:|---:|---|");
             foreach (var result in pants.Where(result => result.Tier == tier)
                          .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
                 output.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.OperationsPerInvoke} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
             }
 
             output.AppendLine();
             output.AppendLine("### Midge");
             output.AppendLine();
-            output.AppendLine("| Workload | Parameters | Metric | Mean | Quality | Trust |");
-            output.AppendLine("|---|---|---|---:|---|---|");
+            output.AppendLine("| Workload | Parameters | Profile | Metric | Samples | Measured ops | Mean | Quality | Trust |");
+            output.AppendLine("|---|---|---|---|---:|---:|---:|---|---|");
             foreach (var result in midge.Where(result => result.Tier == tier)
                          .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
                 output.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.RunProfile} | {result.PrimaryMetric} | {result.MeasuredSamples} | {result.OperationsCompleted} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
             }
         }
 

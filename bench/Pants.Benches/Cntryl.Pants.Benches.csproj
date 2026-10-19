@@ -10,4 +10,9 @@
     <InternalsVisibleTo Include="Cntryl.Pants.Tests"/>
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Reporting\midge-c5-scenarios.txt"
+                      LogicalName="Cntryl.Pants.Benches.Reporting.midge-c5-scenarios.txt" />
+  </ItemGroup>
+
 </Project>

@@ -4,7 +4,7 @@ static class BenchmarkCsvReader
 {
     static readonly HashSet<string> InfrastructureColumns = new(StringComparer.Ordinal)
     {
-        "Method", "Job", "Mean", "Error", "StdDev", "Median", "Ratio", "RatioSD",
+        "Method", "Job", "Mean", "Error", "StdDev", "Median", "Ratio", "RatioSD", "Alloc Ratio",
         "Gen0", "Gen1", "Gen2", "Allocated"
     };
 
