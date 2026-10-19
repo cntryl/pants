@@ -5,6 +5,46 @@ namespace Cntryl.Pants.Cloud;
 public sealed class PantsProviderCloudStartupCleanupTests
 {
     [Fact]
+    public async Task ShouldReportColdStartReadinessAndMaintenancePeakWithinProductionMemoryProfile()
+    {
+        const long ProductionMemoryProfileBytes = 512L * 1024 * 1024;
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var measurements = new List<StartupPhaseMeasurement>();
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
+            .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
+            .WithWorkloadProfile(PantsWorkloadProfile.Mixed)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(ProductionMemoryProfileBytes))
+            .WithBackgroundCompaction(false);
+        var dependencies = new RuntimeDependencies(
+            cloudHttpClient: client,
+            startupPhaseMeasurement: measurements.Add);
+        var resolved = PantsOpenOptionsResolver.Resolve(options);
+
+        await using var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+
+        Assert.Equal(ProductionMemoryProfileBytes, resolved.MemoryBudgetBytes);
+        Assert.Equal(ProductionMemoryProfileBytes, metrics.MemoryBudgetBytes);
+        Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
+        Assert.True(database.Cloud!.IsPrimaryLeaseHealthy);
+        Assert.Contains(StartupPhase.CloudControlHydration, measurements.Select(static item => item.Phase));
+        Assert.Contains(StartupPhase.WalReplay, measurements.Select(static item => item.Phase));
+        Assert.Contains(StartupPhase.ServiceStartup, measurements.Select(static item => item.Phase));
+        Assert.Equal(resolved.CompactionMemoryPoolBytes, metrics.MaintenanceMemoryCapacityBytes);
+        Assert.InRange(
+            metrics.MaintenanceMemoryPeakBytes,
+            1,
+            metrics.MaintenanceMemoryCapacityBytes);
+        Assert.InRange(
+            metrics.MaintenanceMemoryUsedBytes,
+            0,
+            metrics.MaintenanceMemoryCapacityBytes);
+        Assert.Equal(metrics.CompactionBufferCapacityBytes, metrics.MaintenanceMemoryCapacityBytes);
+    }
+
+    [Fact]
     public async Task ShouldReleaseCloudLeaseAfterStrictHydrationFailure()
     {
         using var initialCache = new TemporaryDirectory();

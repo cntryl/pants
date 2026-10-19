@@ -11,8 +11,16 @@ public sealed record PantsRuntimeMetrics
     public long TotalMemtableBytes { get; init; }
     public long ActiveMemtableBytes { get; init; }
     public long ImmutableMemtableBytes { get; init; }
+    /// <summary>The resolved runtime memory budget configured for this database instance.</summary>
+    public long MemoryBudgetBytes { get; init; }
     public long BlockCacheUsedBytes { get; init; }
     public long BlockCacheCapacityBytes { get; init; }
+    /// <summary>Current reservations in the shared compaction and cloud-maintenance memory pool.</summary>
+    public long MaintenanceMemoryUsedBytes { get; init; }
+    /// <summary>High-water reservation in the shared compaction and cloud-maintenance memory pool.</summary>
+    public long MaintenanceMemoryPeakBytes { get; init; }
+    /// <summary>Capacity of the shared compaction and cloud-maintenance memory pool.</summary>
+    public long MaintenanceMemoryCapacityBytes { get; init; }
     public long CompactionBufferUsedBytes { get; init; }
     public long CompactionBufferPeakBytes { get; init; }
     public long CompactionBufferCapacityBytes { get; init; }
