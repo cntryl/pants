@@ -21,11 +21,15 @@ or WAL record. A failed upload cannot be acknowledged as a successful confirmati
 If Pants cannot establish whether an admitted commit became durable, `CommitAsync` throws
 `PantsCommitOutcomeUnknownException` (`PantsErrorCode.CommitOutcomeUnknown`, fatal severity). This
 includes a caller response deadline or cancellation after admission, a WAL rollback that cannot
-be proven safe, or failure to apply a coalesced commit after WAL append. The runtime may still
-finish accepted work; reopen and reconcile durable state before
-retrying the mutation. Failures proven to precede all WAL effects keep their ordinary rejection
-classification. If a coalesced commit group cannot be applied after WAL append, the current writer
-is fenced and its previously published snapshot remains visible until reopen recovers durable state.
+be proven safe, or failure to apply a coalesced commit after WAL append. Local append and sync
+failures are also outcome-unknown once WAL I/O has begun and the writer is fenced, even if rollback
+restores the previous file length: the rollback itself is not known to be durable. The original
+storage failure remains the exception cause for diagnosis, while the public error tells callers not
+to retry the mutation before reconciliation. Failures proven to precede all WAL effects keep their
+ordinary rejection classification. The runtime may still finish accepted work; reopen and
+reconcile durable state before retrying the mutation. If a coalesced commit group cannot be applied
+after WAL append, the current writer is fenced and its previously published snapshot remains visible
+until reopen recovers durable state.
 
 Published WAL is retired from the catalog by background maintenance, never on a commit or flush
 path. A turn proves that the *published* manifest covers each candidate segment, reading the

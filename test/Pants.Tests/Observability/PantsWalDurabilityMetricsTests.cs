@@ -84,7 +84,8 @@ public sealed class PantsWalDurabilityMetricsTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put("failed"u8.ToArray(), "value"u8.ToArray());
-        await Assert.ThrowsAsync<PantsIOException>(() => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask());
+        await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+            () => transaction.CommitAsync(PantsWriteOptions.Buffered).AsTask());
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.WalAppendCount + 1, metrics.WalAppendCount);

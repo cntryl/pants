@@ -683,7 +683,11 @@ sealed class LocalDiskStore :
                     throw uncertainty;
                 }
 
-                FenceIfWalTransitioning(state, appendFailure);
+                if (FenceIfWalTransitioning(state, appendFailure))
+                {
+                    throw CreateWalCommitOutcomeUnknown(appendFailure);
+                }
+
                 throw;
             }
         }
@@ -813,7 +817,11 @@ sealed class LocalDiskStore :
                     throw uncertainty;
                 }
 
-                FenceIfWalTransitioning(state, groupFailure);
+                if (FenceIfWalTransitioning(state, groupFailure))
+                {
+                    throw CreateWalCommitOutcomeUnknown(groupFailure);
+                }
+
                 throw;
             }
         }
@@ -2488,13 +2496,23 @@ sealed class LocalDiskStore :
         return new WalCommitResult(postDurabilityFailure);
     }
 
-    void FenceIfWalTransitioning(RuntimeState state, Exception failure)
+    bool FenceIfWalTransitioning(RuntimeState state, Exception failure)
     {
-        if (_walIo.FenceIfTransitioning(failure))
+        var fenced = _walIo.FenceIfTransitioning(failure);
+        if (fenced)
         {
             state.Health = PantsEngineHealth.Degraded;
         }
+
+        return fenced;
     }
+
+    static PantsCommitOutcomeUnknownException CreateWalCommitOutcomeUnknown(Exception failure) =>
+        failure as PantsCommitOutcomeUnknownException ??
+        new PantsCommitOutcomeUnknownException(
+            "The commit outcome is unknown because a WAL write or sync failed after an " +
+            "ambiguous I/O transition. Reopen and reconcile before retrying.",
+            failure);
 
     void RollBackWalCommitGroup(
         RuntimeState state,

@@ -106,6 +106,59 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
     }
 
     [Fact]
+    public async Task ShouldReportUnknownForEveryCommitGivenAmbiguousCoalescedWalAppendFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new CoalescedCommitFailureFailpointHandler(Failpoint.AfterWalAppend);
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoints));
+        var transactions = await CreateTransactionsAsync(database, "unknown-group", 4);
+
+        var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
+        await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
+        var commits = transactions
+            .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
+            .ToArray();
+        failpoints.ReleaseRuntimeBarrier();
+        _ = await barrier.WaitAsync(TestTimeouts.Expected);
+
+        foreach (var commit in commits)
+        {
+            var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                () => commit.WaitAsync(TestTimeouts.Expected));
+            Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
+            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
+        }
+
+        Assert.Equal(
+            PantsEngineHealth.Degraded,
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        await using (var reader = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadOnly))
+        {
+            for (var index = 0; index < transactions.Count; index++)
+            {
+                Assert.Null(await reader.GetAsync(TestBytes.FromString($"unknown-group-key-{index}")));
+            }
+        }
+
+        await using (var fenced = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            fenced.Put("after-unknown-group"u8.ToArray(), "rejected"u8.ToArray());
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                fenced.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        }
+
+        await DisposeTransactionsAsync(transactions);
+    }
+
+    [Fact]
     public async Task ShouldMaintainOrderingAcrossSequentialRuntimeCommits()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());

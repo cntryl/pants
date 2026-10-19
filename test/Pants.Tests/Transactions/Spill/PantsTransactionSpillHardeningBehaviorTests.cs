@@ -363,7 +363,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                              PantsTransactionMode.ReadWrite))
             {
                 TransactionSpillHardeningTestHarness.Fill(spilled, "failed", 12);
-                await Assert.ThrowsAsync<PantsIOException>(() => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
+                await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
+                    () => spilled.CommitAsync(PantsWriteOptions.Sync).AsTask());
             }
 
             // The spilled records were already appended, so the writer is fenced until reopen.
@@ -422,7 +423,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                 PantsTransactionMode.ReadWrite);
             TransactionSpillHardeningTestHarness.Fill(transaction, "failed-cloud", 12);
 
-            await Assert.ThrowsAsync<PantsIOException>(() =>
+            await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                 transaction.CommitAsync(PantsWriteOptions.CloudAsync).AsTask());
 
             Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(
