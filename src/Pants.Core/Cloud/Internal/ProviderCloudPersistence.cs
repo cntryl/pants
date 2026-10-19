@@ -737,6 +737,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 catalog with { FencingEpoch = _writerEpoch },
                 JsonOptions);
             var bytes = serializedCatalog.Bytes;
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var fenced = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
