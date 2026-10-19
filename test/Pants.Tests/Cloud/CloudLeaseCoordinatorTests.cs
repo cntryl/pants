@@ -866,6 +866,60 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
+    public async Task ShouldPreserveIndeterminateOutcomeWhenLateRenewalCannotBeExpired()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        var lateRenewal = Assert.IsType<CloudLeaseRecord>(store.Lease) with
+        {
+            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15)
+        };
+        var expiryAttempts = 0;
+        Action? retryExpiry = null;
+        retryExpiry = () =>
+        {
+            expiryAttempts++;
+            if (expiryAttempts == 2)
+            {
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+                return;
+            }
+
+            store.NextReplaceException = new PantsIOException(
+                "The provider could not conditionally expire the late renewal.");
+            store.AfterNextReplace = retryExpiry;
+        };
+        store.NextReplaceException = new PantsTimeoutException(
+            "The provider timed out before the renewal became visible.");
+        store.AfterNextReplace = () =>
+        {
+            store.AfterNextRead = () => store.Seed(lateRenewal);
+            store.NextReplaceException = new PantsIOException(
+                "The provider could not conditionally expire the late renewal.");
+            store.AfterNextReplace = retryExpiry;
+        };
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.Equal(lateRenewal, store.Lease);
+        Assert.Equal(2, expiryAttempts);
+        Assert.Equal(3, store.ReplaceAttempts);
+    }
+
+    [Fact]
     public async Task ShouldStopLateRenewalReconciliationWhenDisposed()
     {
         var store = new TestCloudLeaseStore();
