@@ -211,6 +211,75 @@ public sealed class PantsManifestSpecDriftTests
     }
 
     [Fact]
+    public async Task ShouldRepairZeroFilledJournalTailBeforeCheckpoint()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var durablePrefix = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"durable-prefix","created_at":1}}"""));
+        var journal = durablePrefix.Concat(new byte[16]).ToArray();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        await File.WriteAllBytesAsync(journalPath, journal);
+
+        var failpoint = new ArmableFailpointHandler();
+        failpoint.Arm(Failpoint.BeforeManifestCheckpointReplace);
+        await Assert.ThrowsAnyAsync<PantsException>(() =>
+            PantsDatabase.OpenForTestingAsync(
+                PantsOpenOptions.Local(directory.Path),
+                new RuntimeDependencies(failpoint)).AsTask());
+
+        Assert.Equal(durablePrefix, await File.ReadAllBytesAsync(journalPath));
+    }
+
+    [Fact]
+    public async Task ShouldRejectZeroFilledJournalRegionGivenLaterValidDurableRecord()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var durablePrefix = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"durable-prefix","created_at":1}}"""));
+        var hiddenRecords = BuildLegacyJournalEdit(
+            BumpWalSeqRecordType,
+            """{"BumpWalSeq":{"seq":99}}""",
+            2);
+        var journal = durablePrefix.Concat(new byte[16]).Concat(hiddenRecords).ToArray();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        await File.WriteAllBytesAsync(journalPath, journal);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+        Assert.Equal(journal, await File.ReadAllBytesAsync(journalPath));
+    }
+
+    [Fact]
+    public async Task ShouldRejectTruncatedManifestJournalRecordGivenLaterValidDurableRecord()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var durablePrefix = BuildJournal(
+            (CreateColumnFamilyRecordType,
+                """{"CreateColumnFamily":{"id":1,"name":"durable-prefix","created_at":1}}"""));
+        var hiddenRecords = BuildLegacyJournalEdit(
+            BumpWalSeqRecordType,
+            """{"BumpWalSeq":{"seq":99}}""",
+            2);
+        var truncatedHeader = new byte[1 + sizeof(uint)];
+        truncatedHeader[0] = BumpWalSeqRecordType;
+        BinaryPrimitives.WriteUInt32LittleEndian(truncatedHeader.AsSpan(1), 1_024);
+        var journal = durablePrefix.Concat(truncatedHeader).Concat(hiddenRecords).ToArray();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        await File.WriteAllBytesAsync(journalPath, journal);
+
+        var exception = await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+        Assert.Equal(journal, await File.ReadAllBytesAsync(journalPath));
+    }
+
+    [Fact]
     public void ShouldUseNormativeManifestJournalRepairStagingName()
     {
         using var directory = new TemporaryDirectory();
@@ -607,6 +676,12 @@ public sealed class PantsManifestSpecDriftTests
 
         return stream.ToArray();
     }
+
+    static byte[] BuildLegacyJournalEdit(byte type, string json, ulong editId) =>
+        [
+            .. EncodeJournalRecord(type, json),
+            .. EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(editId))
+        ];
 
     static byte[] BuildEnvelopedJournal(params (ulong Id, byte Type, string Json)[] edits)
     {
