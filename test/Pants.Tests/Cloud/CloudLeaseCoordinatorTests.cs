@@ -720,6 +720,9 @@ public sealed class CloudLeaseCoordinatorTests
         await lease.AcquireAsync(CancellationToken.None);
         clock.UtcNow += TimeSpan.FromSeconds(5);
         store.IndeterminateReplace = true;
+        store.AfterNextReplace = () =>
+            store.AfterNextRead = () =>
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
 
         await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() =>
             lease.RenewAsync(CancellationToken.None).AsTask());
@@ -746,6 +749,8 @@ public sealed class CloudLeaseCoordinatorTests
         clock.UtcNow += TimeSpan.FromSeconds(5);
         store.IndeterminateReplace = true;
         store.AfterNextReplace = () => store.IndeterminateRead = true;
+        store.AfterIndeterminateRead = _ =>
+            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
 
         await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
             lease.RenewAsync(CancellationToken.None).AsTask());
@@ -753,6 +758,154 @@ public sealed class CloudLeaseCoordinatorTests
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, store.ReplaceAttempts);
         Assert.Equal(1, leaseLosses);
+    }
+
+    [Fact]
+    public async Task ShouldExpireLateRenewalThatAppearsAfterReadbackFencedTheHolder()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        var lateRenewal = Assert.IsType<CloudLeaseRecord>(store.Lease) with
+        {
+            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15)
+        };
+        store.NextReplaceException = new PantsTimeoutException(
+            "The provider timed out after accepting the renewal.");
+        store.AfterNextReplace = () => store.AfterNextRead = () => store.Seed(lateRenewal);
+
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.NotNull(store.Lease);
+        Assert.True(store.Lease!.ExpiresAtUtc + TimeSpan.FromSeconds(1) < clock.UtcNow);
+        Assert.Equal(2, store.ReplaceAttempts);
+    }
+
+    [Fact]
+    public async Task ShouldLeaveSuccessorLeaseUntouchedDuringLateRenewalReconciliation()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        var successor = new CloudLeaseRecord(
+            "successor",
+            2,
+            "successor-token",
+            clock.UtcNow,
+            clock.UtcNow + TimeSpan.FromSeconds(10));
+        store.NextReplaceException = new PantsTimeoutException(
+            "The provider timed out before the renewal became visible.");
+        store.AfterNextReplace = () => store.AfterNextRead = () => store.Seed(successor);
+
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.Equal(successor, store.Lease);
+        Assert.Equal(1, store.ReplaceAttempts);
+    }
+
+    [Fact]
+    public async Task ShouldBoundLateRenewalReconciliationWhenProviderReadsKeepFailing()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.NextReplaceException = new PantsTimeoutException(
+            "The provider timed out before the renewal could be confirmed.");
+        store.AfterNextReplace = () => store.IndeterminateRead = true;
+        var indeterminateReadCount = 0;
+        store.AfterIndeterminateRead = failureCount =>
+        {
+            indeterminateReadCount = failureCount;
+            if (failureCount == 3)
+            {
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+            }
+        };
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
+            lease.RenewAsync(CancellationToken.None).AsTask());
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.Equal(5, store.ReadCount);
+        Assert.Equal(3, indeterminateReadCount);
+        Assert.Equal(1, store.ReplaceAttempts);
+    }
+
+    [Fact]
+    public async Task ShouldStopLateRenewalReconciliationWhenDisposed()
+    {
+        var store = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var timeProvider = new ManualSchedulingTimeProvider();
+        var leaseLosses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            store,
+            clock,
+            "holder",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(1),
+            () => leaseLosses++,
+            timeProvider);
+        await lease.AcquireAsync(CancellationToken.None);
+        clock.UtcNow += TimeSpan.FromSeconds(5);
+        store.NextReplaceException = new PantsTimeoutException(
+            "The provider timed out before the renewal could be confirmed.");
+        store.AfterNextReplace = () => store.IndeterminateRead = true;
+        var reconciliationWaiting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        store.AfterIndeterminateRead = failureCount =>
+        {
+            if (failureCount == 4)
+            {
+                reconciliationWaiting.SetResult();
+            }
+        };
+
+        var renewal = lease.RenewAsync(CancellationToken.None).AsTask();
+        await reconciliationWaiting.Task.WaitAsync(TestTimeouts.Expected);
+        var readsAtDisposal = store.ReadCount;
+        lease.Dispose();
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() => renewal);
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, leaseLosses);
+        Assert.Equal(readsAtDisposal, store.ReadCount);
+        Assert.Equal(1, store.ReplaceAttempts);
     }
 
     [Fact]

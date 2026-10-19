@@ -106,9 +106,16 @@ setting through dependency injection.
 
 Cloud leasing is separated from provider transport: `CloudLeaseCoordinator`
 implements expiry, conditional takeover, renewal, and fencing over
-`ICloudLeaseStore`. `CloudObjectLeaseStore` persists the Midge lease document
-through conditional object operations, allowing provider clients to supply
+`ICloudLeaseStore`. `CloudObjectLeaseStore` persists the canonical cloud lease
+record through conditional object operations, allowing provider clients to supply
 ETag or generation semantics without entering the runtime layer.
+
+An unknown renewal result fences its local holder immediately. The coordinator
+then reconciles that exact renewal within a window capped by monotonic lease
+time and its proposed expiry plus clock-skew tolerance, conditionally expiring
+it if it becomes visible late. Reconciliation stops when a newer epoch appears
+or the coordinator is disposed; provider failures that prevent a safe
+determination remain `LeaseIndeterminate`.
 
 Provider selection is also outside the runtime. Public `IPantsCloudProvider` and
 `IPantsCloudObjectStore` contracts live in `Cntryl.Pants.Abstractions`; built-in providers live in
