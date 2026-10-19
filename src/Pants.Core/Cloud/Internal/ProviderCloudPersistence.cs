@@ -122,9 +122,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             return;
         }
 
-        // Reject already-stale writers before uploading. Checks after uploads and immediately
-        // before each catalog write also catch takeovers while provider operations are in flight.
-        await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+        // Validate every segment at its upload boundary. Revalidation after all uploads and
+        // immediately before each catalog write catches takeovers during provider operations.
         var batchEpoch = segments[0].WriterEpoch;
         if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
         {
@@ -139,7 +138,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         var publications = new ProviderPublishedWalSegment[segments.Count];
         for (var index = 0; index < segments.Count; index++)
         {
-            _lease.EnsureValid();
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var segment = segments[index];
             var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
                 segment.WriterEpoch,
