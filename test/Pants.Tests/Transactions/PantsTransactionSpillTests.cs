@@ -111,6 +111,57 @@ public sealed class PantsTransactionSpillTests
     }
 
     [Fact]
+    public async Task ShouldReportResourceLimitForUnspillableAssertionWithoutLosingSpilledWrites()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
+        var instance = Assert.IsType<DatabaseInstance>(database);
+        var baselineBytes = instance.TransactionMemoryPool.Used;
+
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("resident"u8.ToArray(), new byte[900]);
+
+            var error = Assert.Throws<PantsResourceLimitException>(() =>
+                transaction.AssertValue("asserted"u8.ToArray(), new byte[1_200]));
+
+            Assert.Equal(PantsErrorCode.ResourceLimit, error.Code);
+            Assert.Contains("assertion bytes", error.Message, StringComparison.Ordinal);
+            Assert.NotEmpty(Directory.GetFiles(
+                Path.Combine(directory.Path, "txn"),
+                "*.run"));
+
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
+
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("spillable"u8.ToArray(), new byte[1_200]);
+            Assert.NotEmpty(Directory.GetFiles(
+                Path.Combine(directory.Path, "txn"),
+                "*.run"));
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(900, Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("resident"u8.ToArray())).Length);
+        Assert.Equal(1_200, Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("spillable"u8.ToArray())).Length);
+        Assert.Null(await reader.GetAsync("asserted"u8.ToArray()));
+    }
+
+    [Fact]
     public async Task ShouldRemoveOrphanedSpillRunsAfterAcquiringWriterLease()
     {
         using var directory = new TemporaryDirectory();
