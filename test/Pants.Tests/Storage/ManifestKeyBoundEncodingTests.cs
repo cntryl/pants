@@ -41,9 +41,11 @@ public sealed class ManifestKeyBoundEncodingTests
     ///     is not one the engine can trust.
     /// </summary>
     [Theory]
-    [InlineData(256)]
-    [InlineData(-1)]
-    public async Task ShouldRefuseManifestWhoseKeyBoundHoldsANonByteValue(int value)
+    [InlineData("smallest_key", 256)]
+    [InlineData("smallest_key", -1)]
+    [InlineData("largest_key", 256)]
+    [InlineData("largest_key", -1)]
+    public async Task ShouldRefuseManifestWhoseKeyBoundHoldsANonByteValue(string boundName, int value)
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
@@ -52,7 +54,7 @@ public sealed class ManifestKeyBoundEncodingTests
         {
             var path = Path.Combine(directory.Path, name);
             var manifest = JsonNode.Parse(File.ReadAllBytes(path))!;
-            manifest["files"]![0]!["smallest_key"]![1] = value;
+            manifest["files"]![0]![boundName]![1] = value;
             File.WriteAllText(path, manifest.ToJsonString());
         }
 
