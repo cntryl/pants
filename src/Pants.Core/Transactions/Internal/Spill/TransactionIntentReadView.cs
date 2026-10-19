@@ -87,16 +87,22 @@ sealed class TransactionIntentReadView : IDisposable
         PantsScanDirection direction)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        var sources = new List<IEnumerator<byte[]>>(_runs.Length + 1)
+        var reservedBytes = KeyScanBytes(_runs, direction);
+        if (reservedBytes != 0 && !_memoryPool.TryReserve(reservedBytes))
         {
-            new TransactionIntentResidentKeyCursor(
+            throw PantsException.ResourceLimit(
+                $"The transaction memory pool cannot admit {reservedBytes} bytes for spill scan " +
+                $"readers and index state; it currently uses {_memoryPool.Used} bytes.");
+        }
+
+        List<IEnumerator<byte[]>>? sources = null;
+        try
+        {
+            sources = [new TransactionIntentResidentKeyCursor(
                 _residentOperations,
                 startInclusive,
                 endExclusive,
-                direction)
-        };
-        try
-        {
+                direction)];
             if (_store is not null)
             {
                 foreach (var run in _runs)
@@ -109,17 +115,62 @@ sealed class TransactionIntentReadView : IDisposable
                 }
             }
 
-            return new TransactionIntentKeyScan(sources, direction);
+            return new TransactionIntentKeyScan(
+                sources,
+                direction,
+                _memoryPool,
+                reservedBytes);
         }
         catch
         {
-            foreach (var source in sources)
+            try
             {
-                source.Dispose();
+                if (sources is not null)
+                {
+                    foreach (var source in sources)
+                    {
+                        source.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                if (reservedBytes != 0)
+                {
+                    _memoryPool.Release(reservedBytes);
+                }
             }
 
             throw;
         }
+    }
+
+    static long KeyScanBytes(
+        TransactionSpillRun[] runs,
+        PantsScanDirection direction)
+    {
+        const long listObjectBytes = 32;
+        if (direction != PantsScanDirection.Reverse)
+        {
+            return 0;
+        }
+
+        long bytes = 0;
+        foreach (var run in runs)
+        {
+            var sparseCount = checked((int)(
+                ((long)run.RecordCount + TransactionSpillStore.SparseIndexStride - 1) /
+                TransactionSpillStore.SparseIndexStride));
+            bytes = checked(
+                bytes +
+                SparseOffsetArrayBytes(sparseCount) +
+                listObjectBytes +
+                SparseOffsetArrayBytes(Math.Min(
+                    TransactionSpillStore.SparseIndexStride,
+                    run.RecordCount)));
+        }
+
+        return bytes;
     }
 
     static long SnapshotBytes(int residentCount, int runCount) =>
@@ -129,4 +180,9 @@ sealed class TransactionIntentReadView : IDisposable
     static long ArrayBytes(int count) => count == 0
         ? 0
         : checked((long)IntPtr.Size * (count + 4L));
+
+    static long SparseOffsetArrayBytes(int count) => count == 0
+        ? 0
+        : checked((sizeof(ulong) * (long)count) + (IntPtr.Size * 4L));
+
 }

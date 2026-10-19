@@ -148,6 +148,92 @@ public sealed class PantsTransactionSpillReadMemoryTests
     }
 
     [Fact]
+    public void ShouldReserveSpillReaderStateBeforeOpeningRunIndexes()
+    {
+        using var directory = new TemporaryDirectory();
+        var readers = new CountingRunReaders();
+        using var store = CreateManyRunStore(directory.Path, 8, readers);
+        var memoryPool = new TransactionMemoryPool(4_096);
+        using var view = store.CreateReadView([], memoryPool);
+        var viewBytes = memoryPool.Used;
+
+        using (view.CreateKeyScan(null, null, PantsScanDirection.Reverse))
+        {
+            Assert.True(memoryPool.Used > viewBytes);
+            Assert.Equal(1, readers.PeakActive);
+        }
+
+        Assert.Equal(viewBytes, memoryPool.Used);
+        Assert.Equal(0, readers.Active);
+    }
+
+    [Fact]
+    public void ShouldRejectScanBeforeOpeningSpillRunIndexesWhenReservationDoesNotFit()
+    {
+        using var directory = new TemporaryDirectory();
+        var readers = new CountingRunReaders();
+        using var store = CreateManyRunStore(directory.Path, 8, readers);
+        var memoryPool = new TransactionMemoryPool(IntPtr.Size * (8 + 4));
+        using var view = store.CreateReadView([], memoryPool);
+        var viewBytes = memoryPool.Used;
+
+        Assert.Throws<PantsResourceLimitException>(() =>
+            view.CreateKeyScan(null, null, PantsScanDirection.Reverse));
+
+        Assert.Equal(0, readers.PeakActive);
+        Assert.Equal(0, readers.Active);
+        Assert.Equal(viewBytes, memoryPool.Used);
+    }
+
+    [Fact]
+    public void ShouldReleaseSpillReaderReservationWhenRunCursorConstructionFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var readers = new CountingRunReaders(failOnOpen: 2);
+        using var store = CreateManyRunStore(directory.Path, 8, readers);
+        var memoryPool = new TransactionMemoryPool(4_096);
+        using var view = store.CreateReadView([], memoryPool);
+        var viewBytes = memoryPool.Used;
+
+        Assert.Throws<PantsIOException>(() =>
+            view.CreateKeyScan(null, null, PantsScanDirection.Reverse));
+
+        Assert.Equal(2, readers.OpenCalls);
+        Assert.Equal(1, readers.PeakActive);
+        Assert.Equal(0, readers.Active);
+        Assert.Equal(viewBytes, memoryPool.Used);
+    }
+
+    [Theory]
+    [InlineData(PantsScanDirection.Forward)]
+    [InlineData(PantsScanDirection.Reverse)]
+    public void ShouldKeepAtMostOneSpillRunReaderOpenPerScan(PantsScanDirection direction)
+    {
+        using var directory = new TemporaryDirectory();
+        var readers = new CountingRunReaders();
+        using var store = CreateManyRunStore(directory.Path, 8, readers);
+        using var view = store.CreateReadView([], new TransactionMemoryPool(4_096));
+        using var scan = view.CreateKeyScan(null, null, direction);
+        var keys = new List<string>();
+        while (scan.MoveNext())
+        {
+            keys.Add(TestBytes.ToText(scan.Current));
+        }
+
+        var expected = Enumerable.Range(0, 8)
+            .Select(index => $"key-{index:00}")
+            .ToArray();
+        if (direction == PantsScanDirection.Reverse)
+        {
+            Array.Reverse(expected);
+        }
+
+        Assert.Equal(expected, keys);
+        Assert.Equal(1, readers.PeakActive);
+        Assert.Equal(0, readers.Active);
+    }
+
+    [Fact]
     public async Task ShouldRetainSpilledScanReadViewUntilEnumerationCompletesAfterRollback()
     {
         using var directory = new TemporaryDirectory();
@@ -176,5 +262,123 @@ public sealed class PantsTransactionSpillReadMemoryTests
         Assert.Equal(["retained:a", "retained:b"], rows.Select(row => TestBytes.ToText(row.Key)));
         Assert.Equal(["alpha", "bravo"], rows.Select(row => TestBytes.ToText(row.Value)));
         Assert.Empty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
+    }
+
+    static TransactionSpillStore CreateManyRunStore(
+        string path,
+        int runCount,
+        CountingRunReaders readers)
+    {
+        var store = new TransactionSpillStore(
+            path,
+            1,
+            Family,
+            readStreamFactory: readers.Open);
+        for (var index = 0; index < runCount; index++)
+        {
+            store.WriteRun([
+                new TransactionIntentOperation(
+                    checked((ulong)index),
+                    CommitOperationKind.Put,
+                    Family,
+                    TestBytes.FromString($"key-{index:00}"),
+                    null,
+                    TestBytes.FromString($"value-{index:00}"),
+                    null,
+                    null,
+                    false)
+            ]);
+        }
+
+        return store;
+    }
+
+    sealed class CountingRunReaders
+    {
+        readonly Lock _gate = new();
+        readonly int? _failOnOpen;
+
+        public CountingRunReaders(int? failOnOpen = null)
+        {
+            _failOnOpen = failOnOpen;
+        }
+
+        public int OpenCalls { get; private set; }
+
+        public int Active { get; private set; }
+
+        public int PeakActive { get; private set; }
+
+        public TrackingReadStream Open(string path)
+        {
+            lock (_gate)
+            {
+                OpenCalls++;
+                if (OpenCalls == _failOnOpen)
+                {
+                    throw new IOException("Injected spill reader open failure.");
+                }
+
+                Active++;
+                PeakActive = Math.Max(PeakActive, Active);
+            }
+
+            return new TrackingReadStream(
+                new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read),
+                this);
+        }
+
+        public void Closed()
+        {
+            lock (_gate)
+            {
+                Active--;
+            }
+        }
+    }
+
+    sealed class TrackingReadStream(Stream inner, CountingRunReaders readers) : Stream
+    {
+        bool _disposed;
+
+        public override bool CanRead => inner.CanRead;
+
+        public override bool CanSeek => inner.CanSeek;
+
+        public override bool CanWrite => false;
+
+        public override long Length => inner.Length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => inner.Position = value;
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            inner.Read(buffer, offset, count);
+
+        public override int Read(Span<byte> buffer) => inner.Read(buffer);
+
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !_disposed)
+            {
+                _disposed = true;
+                inner.Dispose();
+                readers.Closed();
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }

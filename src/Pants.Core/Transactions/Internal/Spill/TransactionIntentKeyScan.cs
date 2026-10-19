@@ -7,19 +7,25 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
     readonly PantsScanDirection _direction;
     readonly byte[]?[] _heads;
     readonly bool[] _needsAdvance;
+    readonly TransactionMemoryPool _memoryPool;
     readonly IReadOnlyList<IEnumerator<byte[]>> _sources;
+    readonly long _reservedBytes;
     int _disposed;
     bool _exhausted;
     bool _primed;
 
     public TransactionIntentKeyScan(
         IReadOnlyList<IEnumerator<byte[]>> sources,
-        PantsScanDirection direction)
+        PantsScanDirection direction,
+        TransactionMemoryPool memoryPool,
+        long reservedBytes)
     {
         _sources = sources;
         _heads = new byte[sources.Count][];
         _needsAdvance = new bool[sources.Count];
         _direction = direction;
+        _memoryPool = memoryPool;
+        _reservedBytes = reservedBytes;
     }
 
     public byte[] Current { get; private set; } = [];
@@ -97,9 +103,19 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
             return;
         }
 
-        foreach (var source in _sources)
+        try
         {
-            source.Dispose();
+            foreach (var source in _sources)
+            {
+                source.Dispose();
+            }
+        }
+        finally
+        {
+            if (_reservedBytes != 0)
+            {
+                _memoryPool.Release(_reservedBytes);
+            }
         }
     }
 }

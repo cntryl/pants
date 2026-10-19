@@ -107,6 +107,9 @@ fit, scan creation fails with `ResourceLimit` before registering a database
 snapshot; point reads inspect intents under the transaction gate without making
 a persistent read-view copy. An open scan therefore uses part of the same pool
 that admits later writes and may cause them to spill sooner.
+A reverse scan also reserves its sparse-index and chunk-offset state before
+opening run files. Spill cursors open at most one run reader at a time, so a
+transaction with many spill runs does not retain one file descriptor per run.
 `PantsRuntimeConfiguration.LongLivedSnapshotWarningThreshold` defaults to one
 hour; when runtime metrics are refreshed, snapshots at or beyond that age are
 counted in `PantsRuntimeMetrics.LongLivedSnapshots` and each newly long-lived

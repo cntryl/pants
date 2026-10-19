@@ -84,7 +84,9 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     public async Task ShouldMergeTransactionIntentsWhenScanningAfterSpill()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
+        await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(
+            directory.Path,
+            transactionMemoryPoolBytes: 4 * 1_024);
         await using (var seed = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
@@ -122,7 +124,9 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     public async Task ShouldReturnReverseRowsInDescendingOrderGivenPrefixAndLimitWhenScanning()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
+        await using var database = await TransactionSpillHardeningTestHarness.OpenLocalAsync(
+            directory.Path,
+            transactionMemoryPoolBytes: 4 * 1_024);
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
