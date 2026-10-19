@@ -816,6 +816,67 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
+    public async Task ShouldUseStaleManifestMirrorOnlyDuringSalvageAndRetainUnreferencedSsts()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        byte[] staleManifest;
+        string retainedSstPath;
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            await using (var first = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                first.Put("before"u8.ToArray(), "first"u8.ToArray());
+                await first.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            staleManifest = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json"));
+            var firstSstPath = Assert.Single(Directory.GetFiles(
+                Path.Combine(directory.Path, "sst"),
+                "*.sst"));
+
+            await using (var second = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                second.Put("after"u8.ToArray(), "second"u8.ToArray());
+                await second.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            retainedSstPath = Assert.Single(
+                Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"),
+                path => !StringComparer.Ordinal.Equals(path, firstSstPath));
+        }
+
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.json"), staleManifest);
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), []);
+
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            PantsDatabase.OpenAsync(options).AsTask());
+
+        await using var salvaged = await PantsDatabase.OpenAsync(
+            options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
+        Assert.Equal(
+            PantsEngineHealth.SalvageMode,
+            (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.True(File.Exists(retainedSstPath));
+        Assert.Contains(
+            Path.GetFileName(retainedSstPath),
+            (await salvaged.Diagnostics.GetStorageLayoutAsync()).ObsoleteFiles,
+            StringComparer.Ordinal);
+
+        await using var reader = await salvaged.Transactions.BeginAsync(
+            salvaged.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("first", TestBytes.ToText((await reader.GetAsync("before"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldReconstructValidSstsGivenTotalManifestLossDuringSalvage()
     {
         using var directory = new TemporaryDirectory();
