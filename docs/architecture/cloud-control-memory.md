@@ -33,3 +33,14 @@ retirement, SST publication, and compaction because those operations share the s
 
 The maintenance peak is an admitted-resource high-water mark for that pool. It is not a process RSS
 measurement and does not include CLR overhead or resources outside the explicit Pants pools.
+
+Cloud startup reads each control metadata object's HEAD before fetching its bytes. Before allocating
+a destination buffer, it reserves workspace equal to 16 times the encoded size plus a fixed parse
+allowance from the same maintenance pool. Built-in stores use identity-pinned ranges no larger than
+64 KiB;
+stores without ranged reads may use a whole-object GET only when the object is at most 64 KiB.
+Larger objects, or concurrent reads that cannot fit the shared pool, fail with `ResourceLimit`
+before the corresponding body is read. Successful reservations stay live while the metadata is
+decoded and its manifest SST references are checked, then release before WAL catalog admission.
+Cancellation, provider failures, identity changes, incomplete ranges, and decode failures release
+the temporary reservations without repairing catalog authority.

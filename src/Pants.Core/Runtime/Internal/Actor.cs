@@ -583,7 +583,8 @@ sealed class Actor : IAsyncDisposable
                                     cloudLease.ValidateRemoteAsync,
                                     token,
                                     catalogReadAdmission: catalogReadAdmission,
-                                    catalogWriteAdmission: catalogWriteAdmission),
+                                    catalogWriteAdmission: catalogWriteAdmission,
+                                    controlMetadataMemoryBudget: maintenanceMemoryBudget),
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }

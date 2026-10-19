@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal;
 
 namespace Cntryl.Pants.Cloud.Internal;
 
@@ -461,8 +462,12 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         CancellationToken cancellationToken,
         ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes,
         ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
-        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null)
+        ProviderWalCatalogWriteAdmission? catalogWriteAdmission = null,
+        ResourceBudget? controlMetadataMemoryBudget = null)
     {
+        using var controlMetadataReads = new ProviderCloudControlMetadataReadSet(
+            controlStore,
+            controlMetadataMemoryBudget ?? new ResourceBudget(64L * 1024 * 1024));
         await validateRemoteLease(cancellationToken).ConfigureAwait(false);
         var root = Path.GetFullPath(localRoot);
         Directory.CreateDirectory(root);
@@ -474,9 +479,16 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             CloudObject? value;
             try
             {
-                value = await controlStore.GetAsync(
+                value = await controlMetadataReads.ReadAsync(
                     PantsCloudObjectLayout.MetadataPrefix + fileName,
                     cancellationToken).ConfigureAwait(false);
+            }
+            catch (PantsResourceLimitException)
+            {
+                // Resource admission is part of authority safety, not a recoverable read error.
+                // Salvage must not continue to catalog repair or metadata writes after a rejected
+                // control-object read.
+                throw;
             }
             catch (PantsException) when (
                 recoveryPolicy == PantsRecoveryPolicy.Salvage &&
@@ -555,6 +567,13 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                     $"Cloud SST '{file.Name}' length differs from its manifest.");
             }
         }
+
+        remoteMetadata.Clear();
+        remoteManifestObject = null;
+        remoteManifest = null;
+        activeManifest = null;
+        localManifest = null;
+        controlMetadataReads.ReleaseReservations();
 
         using var catalogRead = await new ProviderWalCatalogStore(
                 walStore,

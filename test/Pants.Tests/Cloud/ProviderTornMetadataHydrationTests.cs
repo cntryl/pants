@@ -101,7 +101,9 @@ public sealed class ProviderTornMetadataHydrationTests
             ulong offset,
             int length,
             CancellationToken cancellationToken) =>
-            inner.GetRangeAsync(objectKey, offset, length, cancellationToken);
+            objectKey == failingKey
+                ? throw new PantsIOException("Injected read failure.")
+                : inner.GetRangeAsync(objectKey, offset, length, cancellationToken);
 
         public ValueTask<CloudObjectMetadata?> HeadAsync(string objectKey, CancellationToken cancellationToken) =>
             inner.HeadAsync(objectKey, cancellationToken);
