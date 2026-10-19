@@ -68,6 +68,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             walStore,
             static bytes => DecodeCatalog(bytes.Span),
             lease.EnsureValid,
+            lease.ValidateRemoteAsync,
             new ProviderWalCatalogReadAdmission(retirementSettings.Budget, retirementSettings.Gate),
             _catalogWriteAdmission);
         _sstStore = sstStore;
@@ -400,6 +401,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         PantsRecoveryPolicy recoveryPolicy,
+        Func<CancellationToken, ValueTask> validateRemoteLease,
         CancellationToken cancellationToken,
         ulong maximumWholeObjectBytes = MaximumWholeObjectWalRecoveryBytes,
         ProviderWalCatalogReadAdmission? catalogReadAdmission = null,
@@ -500,6 +502,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 walStore,
                 static bytes => DecodeCatalog(bytes.Span),
                 static () => { },
+                validateRemoteLease,
                 catalogReadAdmission,
                 catalogWriteAdmission)
             .ReadAsync(true, cancellationToken).ConfigureAwait(false);

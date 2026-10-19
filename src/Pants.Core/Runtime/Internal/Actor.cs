@@ -534,6 +534,7 @@ sealed class Actor : IAsyncDisposable
                                         objectStores.Wal,
                                         static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
                                         static () => { },
+                                        static _ => ValueTask.CompletedTask,
                                         catalogReadAdmission,
                                         catalogWriteAdmission)
                                     .ReadFencingEpochAsync(token),
@@ -556,6 +557,7 @@ sealed class Actor : IAsyncDisposable
                                     objectStores.Sst,
                                     objectStores.Control,
                                     options.RecoveryPolicy,
+                                    cloudLease.ValidateRemoteAsync,
                                     token,
                                     catalogReadAdmission: catalogReadAdmission,
                                     catalogWriteAdmission: catalogWriteAdmission),

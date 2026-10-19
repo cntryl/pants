@@ -52,6 +52,7 @@ public sealed class ProviderCloudPersistenceTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
         Assert.Equal([1UL, 2UL, 3UL], hydrated.PublishedWalSegments.Keys);
     }
@@ -348,7 +349,7 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
-    public async Task ShouldValidateRemoteLeaseForEveryWalSegmentAndBeforeCatalogWrite()
+    public async Task ShouldValidateRemoteLeaseForEveryWalSegmentAndCatalogCopyWrite()
     {
         using var cache = new TemporaryDirectory();
         var leaseStore = new TestCloudLeaseStore();
@@ -378,7 +379,7 @@ public sealed class ProviderCloudPersistenceTests
                 .ToArray(),
             CancellationToken.None);
 
-        Assert.Equal(5, leaseStore.ReadCount - reads);
+        Assert.Equal(6, leaseStore.ReadCount - reads);
     }
 
     [Fact]
@@ -448,6 +449,7 @@ public sealed class ProviderCloudPersistenceTests
             sstStore,
             controlStore,
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
         Assert.False(result.RequiresSalvage);

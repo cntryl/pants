@@ -18,11 +18,13 @@ sealed class ProviderWalCatalogStore(
     ICloudObjectStore walStore,
     Func<ReadOnlyMemory<byte>, ProviderWalCatalog> decode,
     Action ensureLeaseValid,
+    Func<CancellationToken, ValueTask> validateRemoteLease,
     ProviderWalCatalogReadAdmission? readAdmission = null,
     ProviderWalCatalogWriteAdmission? writeAdmission = null)
 {
     const int MaximumRepairAttempts = 4;
 
+    readonly Func<CancellationToken, ValueTask> _validateRemoteLease = validateRemoteLease;
     readonly ProviderWalCatalogReadAdmission _readAdmission =
         readAdmission ?? ProviderWalCatalogReadAdmission.Standalone();
     readonly ProviderWalCatalogWriteAdmission? _writeAdmission = writeAdmission;
@@ -40,7 +42,8 @@ sealed class ProviderWalCatalogStore(
     public async ValueTask<WalCatalogRead> ReadAsync(
         bool rejectOrphanedWalSegments,
         CancellationToken cancellationToken,
-        bool waitForMaintenanceGate = true)
+        bool waitForMaintenanceGate = true,
+        bool repairCopies = true)
     {
         for (var attempt = 0; attempt < MaximumRepairAttempts; attempt++)
         {
@@ -71,7 +74,8 @@ sealed class ProviderWalCatalogStore(
 
                 if (primary is not null && primaryCatalog is not null)
                 {
-                    if (mirror is null || !mirror.Data.Span.SequenceEqual(primary.Data.Span))
+                    if (repairCopies &&
+                        (mirror is null || !mirror.Data.Span.SequenceEqual(primary.Data.Span)))
                     {
                         using var mirrorAdmission = _writeAdmission?.AdmitExisting(primary.Data.Length);
                         await ConvergeMirrorAsync(
@@ -102,8 +106,14 @@ sealed class ProviderWalCatalogStore(
                               "Both cloud WAL publication catalog copies are unusable.");
                 }
 
+                if (!repairCopies)
+                {
+                    return TransferRead(mirror.Version, mirrorCatalog, ref readLease);
+                }
+
                 // The mirror is valid and the primary is torn or missing: repair the primary.
                 using var primaryAdmission = _writeAdmission?.AdmitExisting(mirror.Data.Length);
+                await ValidateBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
                 var repaired = await walStore.PutAsync(
                     PantsCloudObjectLayout.WalCatalogObjectKey,
                     mirror.Data,
@@ -151,7 +161,11 @@ sealed class ProviderWalCatalogStore(
     /// <summary>The catalog's fencing epoch, or 0 when no catalog exists yet.</summary>
     public async ValueTask<ulong> ReadFencingEpochAsync(CancellationToken cancellationToken)
     {
-        using var read = await ReadAsync(false, cancellationToken).ConfigureAwait(false);
+        using var read = await ReadAsync(
+                false,
+                cancellationToken,
+                repairCopies: false)
+            .ConfigureAwait(false);
         return read.Catalog is null
             ? 0
             : Math.Max(
@@ -292,6 +306,7 @@ sealed class ProviderWalCatalogStore(
         ensureLeaseValid();
         for (var attempt = 0; attempt < MaximumRepairAttempts; attempt++)
         {
+            await ValidateBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
             var written = await walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogMirrorObjectKey,
                 primaryBytes,
@@ -340,6 +355,12 @@ sealed class ProviderWalCatalogStore(
     static bool IsWalSegmentKey(string key) =>
         key.StartsWith(PantsCloudObjectLayout.WalPrefix, StringComparison.Ordinal) &&
         key.EndsWith(".wal", StringComparison.Ordinal);
+
+    async ValueTask ValidateBeforeWriteAsync(CancellationToken cancellationToken)
+    {
+        ensureLeaseValid();
+        await _validateRemoteLease(cancellationToken).ConfigureAwait(false);
+    }
 
     ProviderWalCatalog? TryDecode(CloudObject? candidate, out PantsCorruptionException? error)
     {

@@ -138,5 +138,6 @@ public sealed class ProviderSalvageLocalSstTests
             sst,
             control,
             policy,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 }

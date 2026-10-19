@@ -193,12 +193,102 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
         Assert.Equal(0UL, await catalog.ReadFencingEpochAsync(CancellationToken.None));
 
         await PublishAsync(cache.Path, walStore);
 
         Assert.True(await catalog.ReadFencingEpochAsync(CancellationToken.None) >= 1UL);
+    }
+
+    [Fact]
+    public async Task ShouldReadFencingEpochWithoutConvergingAStaleMirror()
+    {
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var catalogBytes = EncodeCatalog(7);
+        walStore.Seed(Primary, catalogBytes);
+        walStore.Seed(Mirror, "stale"u8);
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { },
+            static _ => ValueTask.CompletedTask);
+
+        var epoch = await catalog.ReadFencingEpochAsync(CancellationToken.None);
+
+        Assert.Equal(7UL, epoch);
+        Assert.Equal(catalogBytes, walStore.GetData(Primary));
+        Assert.Equal("stale"u8.ToArray(), walStore.GetData(Mirror));
+    }
+
+    [Fact]
+    public async Task ShouldReadFencingEpochWithoutRepairingATornPrimary()
+    {
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var catalogBytes = EncodeCatalog(7);
+        walStore.Seed(Primary, "{ torn"u8);
+        walStore.Seed(Mirror, catalogBytes);
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { },
+            static _ => ValueTask.CompletedTask);
+
+        var epoch = await catalog.ReadFencingEpochAsync(CancellationToken.None);
+
+        Assert.Equal(7UL, epoch);
+        Assert.Equal("{ torn"u8.ToArray(), walStore.GetData(Primary));
+        Assert.Equal(catalogBytes, walStore.GetData(Mirror));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ShouldFenceCatalogCopyWritesWhenSuccessorTakesLeaseAtWriteBoundary(
+        bool primaryIsTorn)
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "predecessor",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var catalogBytes = EncodeCatalog(epoch);
+        var tornPrimary = "{ torn"u8.ToArray();
+        var staleMirror = "stale"u8.ToArray();
+        walStore.Seed(Primary, primaryIsTorn ? tornPrimary : catalogBytes);
+        walStore.Seed(Mirror, primaryIsTorn ? catalogBytes : staleMirror);
+
+        async ValueTask ValidateRemoteLeaseAsync(CancellationToken cancellationToken)
+        {
+            leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10)));
+            await lease.ValidateRemoteAsync(cancellationToken);
+        }
+
+        await Assert.ThrowsAsync<PantsFencedException>(async () =>
+            await ProviderCloudPersistence.HydrateLocalCacheAsync(
+                cache.Path,
+                walStore,
+                new TestCloudObjectStore(),
+                new TestCloudObjectStore(),
+                PantsRecoveryPolicy.Strict,
+                ValidateRemoteLeaseAsync,
+                CancellationToken.None));
+
+        Assert.Equal(primaryIsTorn ? tornPrimary : catalogBytes, walStore.GetData(Primary));
+        Assert.Equal(primaryIsTorn ? catalogBytes : staleMirror, walStore.GetData(Mirror));
+        Assert.False(lease.IsHealthy);
     }
 
     [Fact]
@@ -212,7 +302,8 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
 
         using var read = await catalog.ReadAsync(false, CancellationToken.None);
 
@@ -238,6 +329,7 @@ public sealed class ProviderWalCatalogMirrorTests
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
             static () => { },
+            static _ => ValueTask.CompletedTask,
             new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
@@ -266,6 +358,7 @@ public sealed class ProviderWalCatalogMirrorTests
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
             static () => { },
+            static _ => ValueTask.CompletedTask,
             new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
 
         var read = await catalog.ReadAsync(false, CancellationToken.None);
@@ -329,6 +422,7 @@ public sealed class ProviderWalCatalogMirrorTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None,
             catalogReadAdmission: new ProviderWalCatalogReadAdmission(budget, gate),
             catalogWriteAdmission: new ProviderWalCatalogWriteAdmission(budget));
@@ -343,4 +437,8 @@ public sealed class ProviderWalCatalogMirrorTests
             data,
             new PantsCloudObjectWriteCondition.Unconditional(),
             CancellationToken.None));
+
+    static byte[] EncodeCatalog(ulong fencingEpoch) => JsonSerializer.SerializeToUtf8Bytes(
+        new ProviderWalCatalog { FencingEpoch = fencingEpoch },
+        CatalogJsonOptions);
 }

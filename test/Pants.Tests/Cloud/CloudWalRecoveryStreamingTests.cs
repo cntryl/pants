@@ -28,6 +28,7 @@ public sealed class CloudWalRecoveryStreamingTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
         Assert.Single(hydrated.PublishedWalSegments);
@@ -54,6 +55,7 @@ public sealed class CloudWalRecoveryStreamingTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
         Assert.Single(hydrated.PublishedWalSegments);
@@ -75,6 +77,7 @@ public sealed class CloudWalRecoveryStreamingTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
         var remote = Assert.Single(hydrated.RemoteWalSegments!);
@@ -105,6 +108,7 @@ public sealed class CloudWalRecoveryStreamingTests
                 new TestCloudObjectStore(),
                 new TestCloudObjectStore(),
                 PantsRecoveryPolicy.Strict,
+                static _ => ValueTask.CompletedTask,
                 CancellationToken.None,
                 maximumWholeObjectBytes: 1024));
 
