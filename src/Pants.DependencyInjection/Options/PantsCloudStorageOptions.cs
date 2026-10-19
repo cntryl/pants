@@ -2,6 +2,8 @@ namespace Cntryl.Pants.Options;
 
 public sealed class PantsCloudStorageOptions
 {
+    public long? LocalStorageBudgetBytes { get; set; }
+
     public PantsCloudLocationOptions? Shared { get; set; }
 
     public PantsCloudLocationOptions? Wal { get; set; }

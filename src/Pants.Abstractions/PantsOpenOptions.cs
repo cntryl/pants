@@ -227,6 +227,20 @@ public sealed class PantsOpenOptions
         });
     }
 
+    public PantsOpenOptions WithCloudLocalStorageBudget(long bytes)
+    {
+        if (Storage is not PantsStorageConfiguration.Cloud cloud)
+        {
+            throw PantsException.InvalidArgument(
+                "A provider-cloud local storage budget requires provider-cloud storage.");
+        }
+
+        return With(_configuration with
+        {
+            Storage = cloud with { LocalStorageBudgetBytes = bytes }
+        });
+    }
+
     internal PantsOpenOptions WithCoordinatorQueueCapacityForTesting(int capacity) =>
         With(_configuration with { CoordinatorQueueCapacity = capacity });
 
@@ -328,6 +342,12 @@ public sealed class PantsOpenOptions
         {
             throw PantsException.InvalidArgument(
                 "Simulated-cloud local storage budget must be greater than zero.");
+        }
+
+        if (Storage is PantsStorageConfiguration.Cloud { LocalStorageBudgetBytes: <= 0 })
+        {
+            throw PantsException.InvalidArgument(
+                "Cloud local storage budget must be greater than zero.");
         }
 
         if (_configuration.CoordinatorQueueCapacity <= 0 || _configuration.FlushAfterWalRecords < 0)

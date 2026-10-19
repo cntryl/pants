@@ -91,7 +91,10 @@ static class PantsDatabaseOptionsMapper
 
         return new PantsStorageConfiguration.Cloud(
             RequireText(options.Path, "The cloud local cache path must not be empty."),
-            new PantsCloudStorageTopology(wal, sst, control));
+            new PantsCloudStorageTopology(wal, sst, control))
+        {
+            LocalStorageBudgetBytes = cloud.LocalStorageBudgetBytes
+        };
     }
 
     static PantsCloudStorageLocation CreateLocation(PantsCloudLocationOptions options) =>
