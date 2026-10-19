@@ -7339,12 +7339,11 @@
       "source": "tests/lifecycle.rs",
       "sourceSymbolOrTest": "should_reexport_shared_public_types_from_crate_root",
       "observableBehavior": "reexport shared public types from crate root",
-      "status": "mapped",
+      "status": "n/a",
       "expectedError": null,
       "issue": 6,
-      "pantsTests": [
-        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
-      ]
+      "rationale": "Rust crate-root re-export is a source-layout convention, not observable C# runtime behavior. A reflection-only test that enforces public type shape would violate the repository test guidance.",
+      "pantsTests": null
     },
     {
       "id": "behavior:7d39f86217fd:tests/lifecycle.rs:solid_cleanup::should_remove_eviction_actor_wrapper_provider_modules",
