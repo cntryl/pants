@@ -57,6 +57,78 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldRejectWalCatalogPublicationBeforeAuthorityWriteWhenSharedPoolCannotFitIt()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var existingSegments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
+        for (ulong segmentId = 1; segmentId <= 40; segmentId++)
+        {
+            existingSegments.Add(segmentId, new ProviderPublishedWalSegment
+            {
+                SegmentId = segmentId,
+                WriterEpoch = epoch,
+                MaximumSequence = segmentId,
+                SizeBytes = 1,
+                ContentCrc32C = 0,
+                ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, segmentId)
+            });
+        }
+
+        var initialCatalogBytes = JsonSerializer.SerializeToUtf8Bytes(
+            new ProviderWalCatalog { FencingEpoch = epoch, Segments = existingSegments },
+            CatalogJsonOptions);
+        walStore.Seed(PantsCloudObjectLayout.WalCatalogObjectKey, initialCatalogBytes);
+        walStore.Seed(PantsCloudObjectLayout.WalCatalogMirrorObjectKey, initialCatalogBytes);
+        var readWorkspaceBytes = checked((long)initialCatalogBytes.Length * 2 * 16);
+        var budget = new ResourceBudget(readWorkspaceBytes + 400 * 1024);
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease,
+            walRetirementSettings: new WalRetirementSettings(
+                budget,
+                new MaintenanceMemoryGate(),
+                WalRetirementSettings.DefaultPageBytes,
+                WalRetirementSettings.DefaultQuantum,
+                TimeProvider.System));
+        using var maintenancePressure = budget.Reserve(200 * 1024);
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            persistence.PublishWalBatchAsync(
+                [new SealedWalSegment(100, epoch, 100, "100.wal", [1])],
+                CancellationToken.None).AsTask());
+
+        Assert.NotNull(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 100)));
+        Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey));
+        Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogMirrorObjectKey));
+        Assert.Equal(200 * 1024, budget.Current);
+        Assert.InRange(budget.Peak, 0, budget.Limit);
+
+        maintenancePressure.Dispose();
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(100, epoch, 100, "100.wal", [1])],
+            CancellationToken.None);
+
+        using var publishedCatalog = JsonDocument.Parse(
+            Assert.IsType<byte[]>(walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey)));
+        Assert.Equal(41, publishedCatalog.RootElement.GetProperty("segments").EnumerateObject().Count());
+        Assert.Equal(0, budget.Current);
+        Assert.InRange(budget.Peak, 0, budget.Limit);
+    }
+
+    [Fact]
     public async Task ShouldFenceWalBatchAndFireLossCallbackWhenLeaseObjectWasRewrittenBeforeLocalExpiry()
     {
         using var cache = new TemporaryDirectory();

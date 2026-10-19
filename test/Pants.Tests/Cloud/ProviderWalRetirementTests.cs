@@ -84,6 +84,41 @@ public sealed class ProviderWalRetirementTests
     }
 
     [Fact]
+    public async Task ShouldDeferCatalogRetirementWhenPublicationWorkspaceIsUnavailableAndRetryAfterRelease()
+    {
+        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 4L * 1024 * 1024);
+        harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
+        var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 1));
+        IDisposable? pressure = null;
+        harness.Wal.BeforeRangeRead = (objectKey, _) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, segment.ObjectKey))
+            {
+                pressure = harness.Budget.Reserve(harness.Budget.Limit - harness.Budget.Current);
+                harness.Wal.BeforeRangeRead = null;
+            }
+
+            return ValueTask.CompletedTask;
+        };
+
+        var deferred = await harness.Persistence.RetireCoveredWalAsync(CancellationToken.None);
+
+        Assert.Equal(new WalRetirementResult(WalRetirementOutcome.Deferred, 0), deferred);
+        Assert.Equal([segment.SegmentId], harness.CatalogSegmentIds());
+        Assert.True(harness.Wal.Contains(segment.ObjectKey));
+        Assert.False(harness.Persistence.HasPersistenceAnomaly);
+        Assert.NotNull(pressure);
+        pressure.Dispose();
+
+        var retried = await harness.Persistence.RetireCoveredWalAsync(CancellationToken.None);
+
+        Assert.Equal(new WalRetirementResult(WalRetirementOutcome.Settled, 1), retried);
+        Assert.Empty(harness.CatalogSegmentIds());
+        Assert.False(harness.Wal.Contains(segment.ObjectKey));
+        Assert.Equal(0, harness.Budget.Current);
+    }
+
+    [Fact]
     public async Task ShouldFinishOldestWalProofAcrossShortAttemptQuantaWithoutRereading()
     {
         await using var harness = await RetirementHarness.CreateAsync(quantum: TimeSpan.FromMilliseconds(1));
