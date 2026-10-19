@@ -8,4 +8,28 @@ The catalog workspace is conservatively charged at 16 times the combined encoded
 
 WAL batch publication, catalog epoch fencing, and WAL retirement count the serialized catalog with a workspace capped at 64 KiB and sized to at least 256 bytes and at most one quarter of the maintenance pool. They then reserve `4 × serialized bytes` plus a fixed workspace capped at 256 KiB and half the pool before allocating the outgoing byte array. The reservation remains live through the primary write, readback, and mirror convergence. If the combined read and write workspace does not fit, Pants returns `ResourceLimit` before changing catalog authority; uploaded epoch-scoped WAL segments remain unreferenced.
 
-Catalog input, parse memory, writer-owned publication, and repair writes performed while reading a torn or divergent catalog are bounded by the shared pool. Repair reuses the validated catalog bytes and reserves the same publication envelope before changing either copy. Cold-start readiness and peak use against the complete 512 MiB production host envelope remain separate qualification work.
+Catalog input, parse memory, writer-owned publication, and repair writes performed while reading a torn or divergent catalog are bounded by the shared pool. Repair reuses the validated catalog bytes and reserves the same publication envelope before changing either copy.
+
+## 512 MiB production profile
+
+Set an explicit 512 MiB runtime memory budget for a reproducible production profile:
+
+```csharp
+var options = PantsOpenOptions.Cloud(cachePath, location)
+    .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
+    .WithWorkloadProfile(PantsWorkloadProfile.Mixed)
+    .WithMemoryBudget(PantsMemoryBudget.FromBytes(512L * 1024 * 1024));
+```
+
+This profile combines throughput goals and a mixed workload with the explicit budget. The
+dependency-injection equivalent is `"MemoryBudgetBytes": 536870912`,
+`"PerformanceGoal": "Throughput"`, and `"WorkloadProfile": "Mixed"`. Use
+`PantsOpenOptionsResolver.Resolve(options)` to record the effective pool capacities for the selected
+performance goal and workload profile. A successful cold provider open establishes readiness;
+`PantsRuntimeMetrics` reports the configured total budget plus the shared maintenance pool's current,
+peak, and capacity bytes. The maintenance high-water mark includes catalog reads and repairs, WAL
+retirement, SST publication, and compaction because those operations share the same pool. The older
+`CompactionBuffer*Bytes` values remain available for compatibility.
+
+The maintenance peak is an admitted-resource high-water mark for that pool. It is not a process RSS
+measurement and does not include CLR overhead or resources outside the explicit Pants pools.
