@@ -50,12 +50,15 @@ public sealed class PantsCloudCompactionFailureTests
         await AssertSeedValuesAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "remote-orphan");
     }
 
-    [Fact]
-    public async Task ShouldRollBackProvenUnpublishedCompactionOrphanUnderStrictWhenItsLocalCopyIsCorrupt()
+    [Theory]
+    [InlineData(PantsRecoveryPolicy.Strict)]
+    [InlineData(PantsRecoveryPolicy.Salvage)]
+    public async Task ShouldRollBackProvenUnpublishedCompactionOrphanWhenItsLocalCopyIsCorrupt(
+        PantsRecoveryPolicy recoveryPolicy)
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new CloudCompactionFailpointHandler();
-        var options = CreateOptions(directory.Path);
+        var options = CreateOptions(directory.Path).WithRecoveryPolicy(recoveryPolicy);
         var initialRemoteCount = 0;
         string orphanLocalPath;
         await using (var database = await OpenAsync(options, failpoints))
@@ -89,6 +92,9 @@ public sealed class PantsCloudCompactionFailureTests
 
         Assert.Equal(initialRemoteCount, RemoteSsts(directory.Path).Length);
         Assert.False(File.Exists(orphanLocalPath));
+        await AssertSeedValuesAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "corrupt-orphan");
+
+        await reopened.Maintenance.CompactAllAsync();
         await AssertSeedValuesAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "corrupt-orphan");
     }
 

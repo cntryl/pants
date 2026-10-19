@@ -28,8 +28,12 @@ static class CloudObjectStoreFactory
         return handler;
     }
 
-    internal static SocketsHttpHandler CreateCredentialHandler() =>
-        CreateHandler(CredentialConnectTimeout);
+    internal static SocketsHttpHandler CreateCredentialHandler()
+    {
+        var handler = CreateHandler(CredentialConnectTimeout);
+        handler.AllowAutoRedirect = false;
+        return handler;
+    }
 
     static SocketsHttpHandler CreateHandler(TimeSpan? connectTimeout)
     {

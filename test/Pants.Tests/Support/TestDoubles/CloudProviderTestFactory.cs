@@ -5,7 +5,8 @@ static class CloudProviderTestFactory
     public static ValueTask<IPantsCloudObjectStore> OpenAsync(
         string provider,
         HttpClient client,
-        TimeSpan? operationTimeout = null)
+        TimeSpan? operationTimeout = null,
+        string prefix = "")
     {
         var endpoint = new Uri("https://storage.example.test");
         IPantsCloudProvider configuration = provider switch
@@ -21,6 +22,6 @@ static class CloudProviderTestFactory
             _ => throw new ArgumentOutOfRangeException(nameof(provider))
         };
         return configuration.OpenObjectStoreAsync(new PantsCloudProviderContext(
-            "", operationTimeout ?? TimeSpan.FromSeconds(5), client, client, TimeProvider.System));
+            prefix, operationTimeout ?? TimeSpan.FromSeconds(5), client, client, TimeProvider.System));
     }
 }
