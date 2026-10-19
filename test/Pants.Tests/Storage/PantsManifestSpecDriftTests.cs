@@ -487,6 +487,76 @@ public sealed class PantsManifestSpecDriftTests
         Assert.Equal(5UL, document.RootElement.GetProperty("edit_checkpoint_id").GetUInt64());
     }
 
+    // Issue #267 ------------------------------------------------------------
+
+    [Fact]
+    public async Task ShouldInitializeFreshDatabaseGivenOnlyEmptyStorageDirectoriesAndFinderMetadata()
+    {
+        using var directory = new TemporaryDirectory();
+        Directory.CreateDirectory(Path.Combine(directory.Path, "wal"));
+        Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, ".DS_Store"), [1, 2, 3]);
+
+        await using var database = await OpenAsync(directory.Path);
+
+        Assert.Equal("midge-format-version=3\n", await File.ReadAllTextAsync(
+            Path.Combine(directory.Path, "FORMAT")));
+    }
+
+    [Theory]
+    [InlineData("manifest.json")]
+    [InlineData("manifest.snapshot.json")]
+    [InlineData("intent_log.json")]
+    [InlineData("manifest.yaml")]
+    [InlineData("manifest.snapshot")]
+    [InlineData("manifest.journal")]
+    [InlineData("intent_log.yaml")]
+    public async Task ShouldRejectMissingFormatMarkerGivenPersistedRootState(string stateFileName)
+    {
+        using var directory = new TemporaryDirectory();
+        var statePath = Path.Combine(directory.Path, stateFileName);
+        await File.WriteAllTextAsync(statePath, "persisted-state");
+
+        await Assert.ThrowsAsync<PantsCompatibilityException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.False(File.Exists(Path.Combine(directory.Path, "FORMAT")));
+        Assert.Equal("persisted-state", await File.ReadAllTextAsync(statePath));
+    }
+
+    [Theory]
+    [InlineData("wal")]
+    [InlineData("sst")]
+    public async Task ShouldRejectMissingFormatMarkerGivenNonEmptyStorageDirectory(string directoryName)
+    {
+        using var directory = new TemporaryDirectory();
+        var storagePath = Path.Combine(directory.Path, directoryName);
+        Directory.CreateDirectory(storagePath);
+        var payloadPath = Path.Combine(storagePath, "persisted-segment");
+        await File.WriteAllTextAsync(payloadPath, "persisted-state");
+
+        await Assert.ThrowsAsync<PantsCompatibilityException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.False(File.Exists(Path.Combine(directory.Path, "FORMAT")));
+        Assert.Equal("persisted-state", await File.ReadAllTextAsync(payloadPath));
+    }
+
+    [Theory]
+    [InlineData("midge-format-version=3")]
+    [InlineData("midge-format-version=3 \n")]
+    [InlineData("midge-format-version=3\r\n")]
+    [InlineData(" midge-format-version=3\n")]
+    public async Task ShouldRejectNonCanonicalFormatMarkerBeforeCreatingDatabaseState(string marker)
+    {
+        using var directory = new TemporaryDirectory();
+        var markerPath = Path.Combine(directory.Path, "FORMAT");
+        await File.WriteAllTextAsync(markerPath, marker);
+
+        await Assert.ThrowsAsync<PantsCompatibilityException>(() => OpenAsync(directory.Path).AsTask());
+
+        Assert.Equal(marker, await File.ReadAllTextAsync(markerPath));
+        Assert.False(File.Exists(Path.Combine(directory.Path, "manifest.journal")));
+    }
+
     // Issues #142-#146 ------------------------------------------------------
 
     [Fact]
