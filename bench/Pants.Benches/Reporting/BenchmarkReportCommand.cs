@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
@@ -141,7 +142,37 @@ static class BenchmarkReportCommand
             throw new InvalidDataException("No Midge latest.json benchmark artifacts were found.");
         }
 
-        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path))).ToArray();
+        var setupPatchPath = Path.Combine(directory, "midge-smoke-fixtures.patch");
+        if (!File.Exists(setupPatchPath))
+        {
+            throw new InvalidDataException("Midge benchmark setup patch artifact is missing.");
+        }
+
+        var setupPatchSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(setupPatchPath)))
+            .ToLowerInvariant();
+        if (!setupPatchSha.Equals(MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Midge benchmark setup patch SHA '{setupPatchSha}' does not match pinned SHA " +
+                $"'{MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256}'.");
+        }
+
+        var cargoLockPath = Path.Combine(directory, "Cargo.lock");
+        if (!File.Exists(cargoLockPath))
+        {
+            throw new InvalidDataException("Midge benchmark Cargo.lock artifact is missing.");
+        }
+
+        var cargoLockBytes = File.ReadAllBytes(cargoLockPath);
+        var cargoLockSha = MidgeBenchmarkReader.ValidateCargoLock(cargoLockBytes);
+
+        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path)))
+            .Select(result => result with
+            {
+                FixturePatchSha256 = setupPatchSha,
+                CargoLockSha256 = cargoLockSha
+            })
+            .ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
@@ -150,12 +181,15 @@ static class BenchmarkReportCommand
         }
 
         if (results.Select(result =>
-                    (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.ToolVersion))
+                    (result.SourceSha, result.Cpu, result.OperatingSystem, result.Runtime, result.RunProfile,
+                        result.ToolVersion))
                 .Distinct().Count() != 1)
         {
             throw new InvalidDataException(
                 "Midge benchmark artifacts contain inconsistent source or machine metadata.");
         }
+
+        MidgeBenchmarkReader.ValidateScenarioInventory(results.Select(result => result.ScenarioId));
 
         return results;
     }
@@ -171,13 +205,25 @@ static class BenchmarkReportCommand
         output.AppendLine(CultureInfo.InvariantCulture, $"Pants SHA: `{metadata.SourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture, $"Midge SHA: `{MidgeBenchmarkReader.PinnedSourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge fixture patch SHA256: `{midge[0].FixturePatchSha256}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge scenario inventory SHA256: `{MidgeBenchmarkReader.PinnedScenarioInventorySha256}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
             $"Pants machine: {metadata.Cpu}; {metadata.OperatingSystem}; {metadata.Architecture}; {metadata.Runtime}  ");
         var midgeEnvironment = midge[0];
         output.AppendLine(CultureInfo.InvariantCulture,
-            $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}; cntryl-stress {midgeEnvironment.ToolVersion}");
+            $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}  ");
+        output.AppendLine(CultureInfo.InvariantCulture,
+            $"Midge harness: cntryl-stress `{MidgeBenchmarkReader.PinnedStressHarnessSha}` (v{midgeEnvironment.ToolVersion}); Cargo.lock SHA256 `{midgeEnvironment.CargoLockSha256}`");
         output.AppendLine();
         output.AppendLine(
             "> Rows are grouped for investigation, not treated as equivalent. A ratio is intentionally omitted unless workload mechanics, logical units, storage mode, client count, and measurement class are explicitly matched.");
+        if (midge.All(result => result.RunProfile == "smoke"))
+        {
+            output.AppendLine();
+            output.AppendLine(
+                "> The Midge smoke profile is an abbreviated lifecycle and inventory check, not statistical performance evidence.");
+        }
 
         foreach (var tier in pants.Select(result => result.Tier).Concat(midge.Select(result => result.Tier))
                      .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
@@ -199,13 +245,13 @@ static class BenchmarkReportCommand
             output.AppendLine();
             output.AppendLine("### Midge");
             output.AppendLine();
-            output.AppendLine("| Workload | Parameters | Metric | Measured ops | Mean | Quality | Trust |");
-            output.AppendLine("|---|---|---|---:|---:|---|---|");
+            output.AppendLine("| Workload | Parameters | Profile | Metric | Samples | Measured ops | Mean | Quality | Trust |");
+            output.AppendLine("|---|---|---|---|---:|---:|---:|---|---|");
             foreach (var result in midge.Where(result => result.Tier == tier)
                          .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
                 output.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.OperationsCompleted} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.RunProfile} | {result.PrimaryMetric} | {result.MeasuredSamples} | {result.OperationsCompleted} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
             }
         }
 
