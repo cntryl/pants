@@ -6,6 +6,58 @@ namespace Cntryl.Pants.Runtime;
 public sealed class PantsRuntimeLifecycleAdversarialTests
 {
     [Fact]
+    public async Task ShouldKeepLocalStorageLeaseHeldUntilBlockedFlushWorkerExitsAfterShutdownTimeout()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoint = new FlushPipelineFailpointHandler(
+            Failpoint.BeforeFlushPublication);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithMemtableLimits(256 * 1024, 64 * 1024);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoint));
+        var value = new byte[64 * 1024];
+        new Random(401).NextBytes(value);
+
+        try
+        {
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                transaction.Put("lease-held"u8.ToArray(), value);
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+            var timeout = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+                database.ShutdownAsync(TimeSpan.FromMilliseconds(50)).AsTask());
+
+            Assert.Equal(PantsErrorCode.Timeout, timeout.Code);
+            await Assert.ThrowsAsync<PantsLeaseHeldException>(() =>
+                PantsDatabase.OpenAsync(options).AsTask());
+
+            failpoint.Release();
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+        finally
+        {
+            failpoint.Release();
+        }
+
+        await using var recovered = await PantsDatabase.OpenAsync(options);
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            value,
+            Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("lease-held"u8.ToArray())).ToArray());
+    }
+
+    [Fact]
     public async Task ShouldReleaseDiskStoreWhenRunLoopFaultsDuringDisposal()
     {
         using var directory = new TemporaryDirectory();
