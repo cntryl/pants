@@ -319,6 +319,32 @@ public sealed class ProviderWalRetirementTests
     }
 
     [Fact]
+    public async Task ShouldRejectWalRetirementWhenSuccessorTakesLeaseDuringProof()
+    {
+        await using var harness = await RetirementHarness.CreateAsync();
+        harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
+        var segment = await harness.PublishSegmentAsync(1, RetirementHarness.Records("a-", 2));
+        var takeover = 0;
+        harness.Wal.BeforeRangeRead = (objectKey, _) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, segment.ObjectKey) &&
+                Interlocked.Exchange(ref takeover, 1) == 0)
+            {
+                harness.TakeoverLease();
+            }
+
+            return ValueTask.CompletedTask;
+        };
+
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            harness.Persistence.RetireCoveredWalAsync(CancellationToken.None).AsTask());
+
+        Assert.Equal("successor", harness.LeaseStore.Lease?.HolderId);
+        Assert.Equal([segment.SegmentId], harness.CatalogSegmentIds());
+        Assert.True(harness.Wal.Contains(segment.ObjectKey));
+    }
+
+    [Fact]
     public async Task ShouldRevalidateFromStartAfterRestartAndKeepCatalogRecoverable()
     {
         await using var harness = await RetirementHarness.CreateAsync(quantum: TimeSpan.FromMilliseconds(1));
@@ -387,16 +413,19 @@ public sealed class ProviderWalRetirementTests
 
         readonly long _budgetBytes;
         readonly CloudLeaseCoordinator _lease;
+        readonly TestCloudLeaseStore _leaseStore;
         ulong _lastPersistedSequence;
 
         RetirementHarness(
             long budgetBytes,
             CloudLeaseCoordinator lease,
+            TestCloudLeaseStore leaseStore,
             ulong epoch,
             bool supportsRanges)
         {
             _budgetBytes = budgetBytes;
             _lease = lease;
+            _leaseStore = leaseStore;
             Epoch = epoch;
             Wal = new ScriptedCloudObjectStore { SupportsRanges = supportsRanges };
         }
@@ -417,23 +446,33 @@ public sealed class ProviderWalRetirementTests
 
         public ulong Epoch { get; }
 
+        public TestCloudLeaseStore LeaseStore => _leaseStore;
+
         public static async Task<RetirementHarness> CreateAsync(
             long budgetBytes = 64L * 1024 * 1024,
             TimeSpan? quantum = null,
             bool supportsRanges = true)
         {
+            var leaseStore = new TestCloudLeaseStore();
             var lease = new CloudLeaseCoordinator(
-                new TestCloudLeaseStore(),
+                leaseStore,
                 new ManualClock(DateTimeOffset.UnixEpoch),
                 "writer",
                 TimeSpan.FromSeconds(10),
                 TimeSpan.Zero);
             var epoch = await lease.AcquireAsync(CancellationToken.None);
-            var harness = new RetirementHarness(budgetBytes, lease, epoch, supportsRanges);
+            var harness = new RetirementHarness(budgetBytes, lease, leaseStore, epoch, supportsRanges);
             harness.Persistence = harness.CreatePersistence(quantum ?? TimeSpan.FromHours(1));
             await harness.Persistence.FenceWalCatalogAsync(CancellationToken.None);
             return harness;
         }
+
+        public void TakeoverLease() => _leaseStore.Seed(new CloudLeaseRecord(
+            "successor",
+            Epoch + 1,
+            "successor-token",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10)));
 
         public ProviderCloudPersistence CreatePersistence(TimeSpan quantum)
         {
