@@ -223,6 +223,71 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
+    public async Task ShouldStopWalBatchBeforeNextSegmentWhenSuccessorTakesLeaseAfterFirstReadback()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var losses = 0;
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            clock,
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero,
+            () => losses++);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var walStore = new SnapshotConsistencyCloudObjectStore();
+        var firstSegmentKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 1);
+        var getStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseGet = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        walStore.BeforeGetAsync = async (objectKey, _, cancellationToken) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, firstSegmentKey))
+            {
+                getStarted.TrySetResult();
+                await releaseGet.Task.WaitAsync(cancellationToken);
+            }
+        };
+        var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+
+        var publication = persistence.PublishWalBatchAsync(
+                [
+                    new SealedWalSegment(1, epoch, 1, "1.wal", [1]),
+                    new SealedWalSegment(2, epoch, 2, "2.wal", [2])
+                ],
+                CancellationToken.None)
+            .AsTask();
+        try
+        {
+            await getStarted.Task.WaitAsync(TestTimeouts.Expected);
+            leaseStore.Seed(new CloudLeaseRecord(
+                "successor",
+                epoch + 1,
+                "successor-token",
+                clock.UtcNow,
+                clock.UtcNow + TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            releaseGet.TrySetResult();
+        }
+
+        await Assert.ThrowsAsync<PantsFencedException>(() => publication);
+
+        Assert.False(lease.IsHealthy);
+        Assert.Equal(1, losses);
+        Assert.NotNull(walStore.GetData(firstSegmentKey));
+        Assert.Null(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 2)));
+        Assert.Null(walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey));
+    }
+
+    [Fact]
     public async Task ShouldFenceWalCatalogPublicationWhenSuccessorTakesLeaseDuringCatalogRead()
     {
         using var cache = new TemporaryDirectory();
@@ -283,7 +348,7 @@ public sealed class ProviderCloudPersistenceTests
     }
 
     [Fact]
-    public async Task ShouldValidateTheRemoteLeaseBeforeUploadsAfterUploadsAndBeforeCatalogWrite()
+    public async Task ShouldValidateRemoteLeaseForEveryWalSegmentAndBeforeCatalogWrite()
     {
         using var cache = new TemporaryDirectory();
         var leaseStore = new TestCloudLeaseStore();
@@ -313,7 +378,7 @@ public sealed class ProviderCloudPersistenceTests
                 .ToArray(),
             CancellationToken.None);
 
-        Assert.Equal(3, leaseStore.ReadCount - reads);
+        Assert.Equal(5, leaseStore.ReadCount - reads);
     }
 
     [Fact]
