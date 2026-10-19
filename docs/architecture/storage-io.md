@@ -103,6 +103,10 @@ bound across a transaction's families must fit within half of the configured
 local budget. An oversized transaction is rejected before append, including
 when its operations are spilled.
 
+Cloud mode also flushes when aggregate active memtable bytes reach one quarter
+of the local budget. This pressure signal spans all column families, so many
+small families make progress before the shared budget approaches its hard cap.
+
 Each family output claim stays charged while its operations remain in the
 mutable memtable. Freezing transfers the claims to that flush generation; a
 successful manifest publication releases them, after which the resident SST is
