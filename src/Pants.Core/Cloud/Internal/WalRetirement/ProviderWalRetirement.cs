@@ -24,7 +24,7 @@ sealed class ProviderWalRetirement
     const int MaximumCatalogAttempts = 8;
 
     readonly ProviderWalCatalogStore _catalog;
-    readonly Func<ProviderWalCatalog, byte[]> _encodeCatalog;
+    readonly Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> _encodeCatalog;
     readonly CloudLeaseCoordinator _lease;
     readonly PublishedManifestReader _manifests;
     readonly Action _markPersistenceAnomaly;
@@ -40,7 +40,7 @@ sealed class ProviderWalRetirement
         ICloudObjectStore sstStore,
         ICloudObjectStore controlStore,
         ProviderWalCatalogStore catalog,
-        Func<ProviderWalCatalog, byte[]> encodeCatalog,
+        Func<ProviderWalCatalog, ProviderWalCatalogSerializedBytes> encodeCatalog,
         CloudLeaseCoordinator lease,
         WalRetirementSettings settings,
         Action markPersistenceAnomaly)
@@ -227,7 +227,18 @@ sealed class ProviderWalRetirement
             catalog.Segments
                 .Where(entry => !retiredIds.Contains(entry.Key))
                 .ToDictionary());
-        var bytes = _encodeCatalog(catalog with { Segments = retained });
+        ProviderWalCatalogSerializedBytes encodedCatalog;
+        try
+        {
+            encodedCatalog = _encodeCatalog(catalog with { Segments = retained });
+        }
+        catch (Exception exception) when (IsDeferral(exception, cancellationToken))
+        {
+            return CommitResult.Deferred;
+        }
+
+        using var serializedCatalog = encodedCatalog;
+        var bytes = serializedCatalog.Bytes;
         // From the CAS on, an outcome is no longer a clean deferral: failures surface.
         var published = await _walStore.PutAsync(
             PantsCloudObjectLayout.WalCatalogObjectKey,
@@ -244,7 +255,7 @@ sealed class ProviderWalRetirement
                            cancellationToken).ConfigureAwait(false) ??
                        throw new PantsLeaseIndeterminateException(
                            "Cloud WAL catalog retirement was acknowledged without an authoritative object.");
-        if (!readback.Data.Span.SequenceEqual(bytes))
+        if (!readback.Data.Span.SequenceEqual(bytes.Span))
         {
             throw new PantsCorruptionException(
                 "Cloud WAL catalog retirement read back different bytes after CAS.");

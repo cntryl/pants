@@ -41,6 +41,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ICloudObjectStore _sstStore;
     readonly ICloudObjectStore _walStore;
     readonly ProviderWalCatalogStore _catalog;
+    readonly ProviderWalCatalogWriteAdmission _catalogWriteAdmission;
     readonly ProviderSstPublisher _sstPublisher;
     readonly ProviderWalRetirement _walRetirement;
     readonly ulong _writerEpoch;
@@ -60,6 +61,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         _localRoot = Path.GetFullPath(localRoot);
         _walStore = walStore;
         var retirementSettings = walRetirementSettings ?? WalRetirementSettings.Standalone();
+        _catalogWriteAdmission = new ProviderWalCatalogWriteAdmission(retirementSettings.Budget);
         _catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => DecodeCatalog(bytes.Span),
@@ -84,7 +86,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             sstStore,
             controlStore,
             _catalog,
-            static catalog => JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions),
+            catalog => _catalogWriteAdmission.Serialize(catalog, JsonOptions),
             lease,
             retirementSettings,
             () => Volatile.Write(ref _persistenceAnomaly, 1));
@@ -211,9 +213,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 return;
             }
 
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            using var serializedCatalog = _catalogWriteAdmission.Serialize(
                 catalog with { FencingEpoch = _writerEpoch, Segments = updatedSegments },
                 JsonOptions);
+            var bytes = serializedCatalog.Bytes;
             await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var published = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
@@ -227,7 +230,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 var readback = await _walStore.GetAsync(
                     PantsCloudObjectLayout.WalCatalogObjectKey,
                     cancellationToken).ConfigureAwait(false);
-                if (readback is not null && readback.Data.Span.SequenceEqual(bytes))
+                if (readback is not null && readback.Data.Span.SequenceEqual(bytes.Span))
                 {
                     await _catalog.ConvergeMirrorAsync(bytes, readback.Version, cancellationToken)
                         .ConfigureAwait(false);
@@ -722,9 +725,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                 return;
             }
 
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            using var serializedCatalog = _catalogWriteAdmission.Serialize(
                 catalog with { FencingEpoch = _writerEpoch },
                 JsonOptions);
+            var bytes = serializedCatalog.Bytes;
             var fenced = await _walStore.PutAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 bytes,
@@ -739,7 +743,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
                                    cancellationToken).ConfigureAwait(false) ??
                                throw new PantsLeaseIndeterminateException(
                                    "The cloud WAL catalog fence was acknowledged without an authoritative object.");
-                if (!readback.Data.Span.SequenceEqual(bytes))
+                if (!readback.Data.Span.SequenceEqual(bytes.Span))
                 {
                     throw new PantsCorruptionException(
                         "The cloud WAL catalog fence read back different bytes after CAS.");
