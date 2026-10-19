@@ -95,6 +95,8 @@ sealed class CloudLeaseCoordinator : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            DisposeWatchdog();
+            Volatile.Write(ref _lost, 1);
             try
             {
                 _disposeCancellation.Cancel();
@@ -106,13 +108,10 @@ sealed class CloudLeaseCoordinator : IDisposable
             finally
             {
                 Volatile.Write(ref _disposeCancellationCompleted, 1);
-            }
-
-            DisposeWatchdog();
-            Volatile.Write(ref _lost, 1);
-            if (Volatile.Read(ref _activeOperations) == 0)
-            {
-                DisposeGate();
+                if (Volatile.Read(ref _activeOperations) == 0)
+                {
+                    DisposeGate();
+                }
             }
         }
     }
@@ -603,6 +602,10 @@ sealed class CloudLeaseCoordinator : IDisposable
         catch (ObjectDisposedException)
         {
             // The timer may already be firing while the completed reconciliation disposes it.
+        }
+        catch (AggregateException)
+        {
+            // Cancellation is signaled even when a provider callback fails while observing it.
         }
     }
 
