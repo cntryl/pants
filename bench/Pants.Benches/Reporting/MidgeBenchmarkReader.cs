@@ -34,8 +34,9 @@ static class MidgeBenchmarkReader
             throw new InvalidDataException("The Midge benchmark has no summary rows.");
         }
 
+        var measuredOperations = ReadMeasuredOperations(Required(root, "samples"));
         var results = summaries.EnumerateArray().Select(summary =>
-            ReadSummary(summary, sourceSha, cpu, operatingSystem, runtime, toolVersion)).ToArray();
+            ReadSummary(summary, measuredOperations, sourceSha, cpu, operatingSystem, runtime, toolVersion)).ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
@@ -43,11 +44,76 @@ static class MidgeBenchmarkReader
             throw new InvalidDataException($"Duplicate Midge benchmark scenario '{duplicate.Key}'.");
         }
 
+        if (measuredOperations.Count != 0)
+        {
+            throw new InvalidDataException(
+                "Midge benchmark contains measured samples without summaries: " +
+                $"[{string.Join(", ", measuredOperations.Keys.Order(StringComparer.Ordinal))}].");
+        }
+
         return results;
+    }
+
+    static Dictionary<string, (int Count, ulong Operations)> ReadMeasuredOperations(JsonElement samples)
+    {
+        if (samples.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException("Midge benchmark samples must be an array.");
+        }
+
+        var totals = new Dictionary<string, (int Count, ulong Operations)>(StringComparer.Ordinal);
+        foreach (var sample in samples.EnumerateArray())
+        {
+            var benchmarkId = RequiredString(sample, "benchmark_id");
+            var phase = RequiredString(sample, "phase");
+            if (phase is not "warmup" and not "measured" and not "cooldown")
+            {
+                throw new InvalidDataException($"Midge benchmark sample has unsupported phase '{phase}'.");
+            }
+
+            var completedElement = Required(sample, "operations_completed");
+            if (completedElement.ValueKind != JsonValueKind.Number ||
+                !completedElement.TryGetUInt64(out var completed))
+            {
+                throw new InvalidDataException(
+                    "Midge benchmark sample operations_completed must be a non-negative integer.");
+            }
+
+            if (phase != "measured")
+            {
+                continue;
+            }
+
+            if (completed == 0)
+            {
+                throw new InvalidDataException(
+                    $"Midge benchmark '{benchmarkId}' has a measured sample with no completed operations.");
+            }
+
+            if (totals.TryGetValue(benchmarkId, out var current))
+            {
+                try
+                {
+                    totals[benchmarkId] = (checked(current.Count + 1), checked(current.Operations + completed));
+                }
+                catch (OverflowException exception)
+                {
+                    throw new InvalidDataException(
+                        $"Midge benchmark '{benchmarkId}' measured-operation totals overflow.", exception);
+                }
+            }
+            else
+            {
+                totals.Add(benchmarkId, (1, completed));
+            }
+        }
+
+        return totals;
     }
 
     static MidgeBenchmarkResult ReadSummary(
         JsonElement summary,
+        Dictionary<string, (int Count, ulong Operations)> measuredOperations,
         string sourceSha,
         string cpu,
         string operatingSystem,
@@ -78,6 +144,19 @@ static class MidgeBenchmarkReader
             : throw new InvalidDataException("Midge benchmark parameters must be an object.");
         var id = RequiredString(summary, "benchmark_id");
         var tier = Required(summary, "tier").GetUInt32();
+        var measuredElement = Required(summary, "measured_samples");
+        if (measuredElement.ValueKind != JsonValueKind.Number || !measuredElement.TryGetInt32(out var expectedCount) ||
+            expectedCount <= 0 || !measuredOperations.Remove(id, out var operations))
+        {
+            throw new InvalidDataException($"Midge benchmark '{id}' has no measured operation samples.");
+        }
+
+        if (operations.Count != expectedCount)
+        {
+            throw new InvalidDataException(
+                $"Midge benchmark '{id}' summary reports {expectedCount} measured samples, " +
+                $"but the artifact contains {operations.Count}.");
+        }
 
         return new MidgeBenchmarkResult(
             $"midge:{id}" + (parameterText.Length == 0 ? string.Empty : $":{parameterText}"),
@@ -85,6 +164,7 @@ static class MidgeBenchmarkReader
             RequiredString(summary, "name"),
             parameterText,
             RequiredString(summary, "primary_metric"),
+            operations.Operations,
             mean,
             RequiredString(summary, "quality"),
             RequiredString(summary, "trust_class"),

@@ -6,6 +6,7 @@ sealed record MidgeBenchmarkResult(
     string Workload,
     string Parameters,
     string PrimaryMetric,
+    ulong OperationsCompleted,
     double Mean,
     string Quality,
     string TrustClass,

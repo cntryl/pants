@@ -37,6 +37,7 @@ public sealed class BenchmarkReportingTests
         Assert.Null(result.ErrorNanoseconds);
         Assert.Equal(3_019_898.88, result.AllocatedBytes, 2);
         Assert.Equal("Scenario=Local-16", result.Parameters);
+        Assert.Equal(10_000, result.OperationsPerInvoke);
         Assert.Equal("cold", result.MeasurementClass);
     }
 
@@ -82,6 +83,7 @@ public sealed class BenchmarkReportingTests
         Assert.Equal("Tier2", result.Tier);
         Assert.Equal("midge:tier2/read:clients=16;storage=local", result.ScenarioId);
         Assert.Equal(125.5, result.Mean);
+        Assert.Equal((ulong)300, result.OperationsCompleted);
         Assert.Equal("ns_per_op", result.PrimaryMetric);
         Assert.Equal("test cpu", result.Cpu);
     }
@@ -93,6 +95,17 @@ public sealed class BenchmarkReportingTests
             MidgeBenchmarkReader.Read(MidgeJson(new string('0', 40))));
 
         Assert.Contains("does not match pinned SHA", exception.Message);
+    }
+
+    [Fact]
+    public void ShouldRejectMidgeArtifactGivenMeasuredSampleCountDoesNotMatchSummary()
+    {
+        var json = MidgeJson(MidgeBenchmarkReader.PinnedSourceSha)
+            .Replace("\"measured_samples\": 2", "\"measured_samples\": 3", StringComparison.Ordinal);
+
+        var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkReader.Read(json));
+
+        Assert.Contains("summary reports 3 measured samples", exception.Message);
     }
 
     [Fact]
@@ -113,11 +126,65 @@ public sealed class BenchmarkReportingTests
               "ExpectedScenarioCount": 151
             }
             """);
+        File.WriteAllLines(
+            Path.Combine(directory.Path, "pants-scenarios.txt"),
+            Enumerable.Range(0, 151)
+                .Select(index =>
+                    $"Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks.RunAsync:[Scenario=Local-{index}]"));
 
         var exception = Assert.Throws<InvalidDataException>(() => BenchmarkReportCommand.ReadPants(directory.Path));
 
         Assert.Contains("expected 151 rows, found 0", exception.Message);
     }
+
+    [Fact]
+    public void ShouldRejectUnexpectedScenarioGivenItReplacesAnExpectedUniqueIdentity()
+    {
+        using var directory = new TemporaryDirectory();
+        File.WriteAllText(
+            Path.Combine(directory.Path, "pants-metadata.json"),
+            """
+            {
+              "Engine": "pants",
+              "SourceSha": "0123456789abcdef",
+              "OperatingSystem": "test",
+              "Architecture": "Arm64",
+              "Cpu": "test cpu",
+              "Runtime": ".NET test",
+              "MeasurementClass": "cold",
+              "ExpectedScenarioCount": 2
+            }
+            """);
+        File.WriteAllLines(
+            Path.Combine(directory.Path, "pants-scenarios.txt"),
+            [
+                "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks.RunAsync:[Scenario=Local-1]",
+                "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks.RunAsync:[Scenario=Local-2]"
+            ]);
+        File.WriteAllText(
+            Path.Combine(directory.Path, "Cntryl.Pants.Tier4.YcsbAWorkloadBenchmarks-report.csv"),
+            "Method,Job,Scenario,Mean,Error,Allocated\n" +
+            "RunAsync,Dry,Local-1,1 ms,NA,1 KB\n" +
+            "RunAsync,Dry,Local-3,1 ms,NA,1 KB\n");
+
+        var exception = Assert.Throws<InvalidDataException>(() => BenchmarkReportCommand.ReadPants(directory.Path));
+
+        Assert.Contains("Scenario=Local-2", exception.Message);
+        Assert.Contains("Scenario=Local-3", exception.Message);
+    }
+
+    [Fact]
+    public void ShouldRejectDirtyWorktreeBeforeCapturingBenchmarkSourceRevision()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            BenchmarkEnvironment.EnsureCleanWorkingTree(" M bench/Pants.Benches/Program.cs"));
+
+        Assert.Contains("worktree must be clean", exception.Message);
+    }
+
+    [Fact]
+    public void ShouldAcceptCleanWorktreeForBenchmarkSourceRevision() =>
+        BenchmarkEnvironment.EnsureCleanWorkingTree(string.Empty);
 
     [Fact]
     public void ShouldAvoidUnsupportedRatioGivenRenderingCrossEngineReport()
@@ -130,6 +197,10 @@ public sealed class BenchmarkReportingTests
         var report = BenchmarkReportCommand.Render(metadata, [pants], [midge]);
 
         Assert.Contains("not treated as equivalent", report);
+        Assert.Contains("Logical ops/invoke", report);
+        Assert.Contains("Measured ops", report);
+        Assert.Contains("| Read | clients=16 | 1 | 100.00 |", report);
+        Assert.Contains("| point read | clients=16;storage=local | ns_per_op | 300 |", report);
         Assert.DoesNotContain("| Ratio |", report, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -148,6 +219,7 @@ public sealed class BenchmarkReportingTests
                                                          "benchmark_id": "tier2/read",
                                                          "name": "point read",
                                                          "tier": 2,
+                                                         "measured_samples": 2,
                                                          "primary_metric": "ns_per_op",
                                                          "stats": { "mean": 125.5 },
                                                          "quality": "acceptable",
@@ -155,6 +227,12 @@ public sealed class BenchmarkReportingTests
                                                          "correctness": { "passed": true },
                                                          "parameters": { "storage": "local", "clients": "16" }
                                                        }
+                                                     ],
+                                                     "samples": [
+                                                       { "benchmark_id": "tier2/read", "phase": "warmup", "operations_completed": 9 },
+                                                       { "benchmark_id": "tier2/read", "phase": "measured", "operations_completed": 100 },
+                                                       { "benchmark_id": "tier2/read", "phase": "measured", "operations_completed": 200 },
+                                                       { "benchmark_id": "tier2/read", "phase": "cooldown", "operations_completed": 8 }
                                                      ]
                                                    }
                                                    """;

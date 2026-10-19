@@ -11,7 +11,7 @@ dotnet run --project bench/Pants.Benches/Cntryl.Pants.Benches.csproj \
   --configuration Release --no-restore -- practical BenchmarkDotNet.Artifacts/practical
 ```
 
-This command fails unless discovery contains exactly 157 unique scenarios and every BenchmarkDotNet report succeeds. It writes source and machine metadata plus the scenario inventory beside the CSV reports. The `Dry` job is a cold lifecycle validation, not statistical performance evidence.
+This command fails unless discovery contains exactly 157 unique scenarios and every BenchmarkDotNet report succeeds. It writes source and machine metadata plus the scenario inventory beside the CSV reports. Aggregation matches every CSV identity to that inventory and reports each method's logical operations per invocation. The `Dry` job is a cold lifecycle validation, not statistical performance evidence.
 
 Before promoting an optimization, rerun the affected types with the normal BenchmarkDotNet job at least three times on the same machine. Use the tier-specific regression thresholds documented in the other performance guides. For example:
 
@@ -47,6 +47,6 @@ dotnet run --project bench/Pants.Benches/Cntryl.Pants.Benches.csproj \
   BenchmarkDotNet.Artifacts/comparison.md
 ```
 
-Aggregation fails closed for incomplete Pants output, duplicate scenario identities, malformed or failed Midge summaries, a non-pinned Midge SHA, unsupported schemas, and missing required measurements. The report groups Pants and Midge rows by tier and workload but deliberately omits ratios. A reviewer may compare rows only after documenting that their mechanics are equivalent.
+Aggregation fails closed for incomplete Pants output, duplicate or unexpected scenario identities, malformed or failed Midge summaries, a non-pinned Midge SHA, unsupported schemas, missing measured samples, or a disagreement between raw measured-operation counts and summary counts. The report includes Pants operations per invocation and the total completed Midge operations across measured samples. It groups rows by tier and workload but deliberately omits ratios. A reviewer may compare rows only after documenting that their mechanics are equivalent.
 
 Benchmark artifacts remain ignored. Commit a reviewed fixture under `docs/performance/` only when it is intentionally part of a stable report-schema test.

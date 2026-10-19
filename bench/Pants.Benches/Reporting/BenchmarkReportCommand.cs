@@ -36,6 +36,25 @@ static class BenchmarkReportCommand
         var metadataPath = Path.Combine(directory, "pants-metadata.json");
         var metadata = JsonSerializer.Deserialize<BenchmarkRunMetadata>(File.ReadAllText(metadataPath)) ??
                        throw new InvalidDataException("Pants benchmark metadata is invalid.");
+        var expectedScenarioIds = File.ReadAllLines(Path.Combine(directory, "pants-scenarios.txt"))
+            .Select(ScenarioIdFromInventory)
+            .ToArray();
+        if (expectedScenarioIds.Length != metadata.ExpectedScenarioCount)
+        {
+            throw new InvalidDataException(
+                $"Pants benchmark inventory is invalid: expected {metadata.ExpectedScenarioCount} identities, " +
+                $"found {expectedScenarioIds.Length}.");
+        }
+
+        var duplicateExpected = expectedScenarioIds
+            .GroupBy(scenarioId => scenarioId, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateExpected is not null)
+        {
+            throw new InvalidDataException(
+                $"Duplicate Pants benchmark inventory scenario '{duplicateExpected.Key}'.");
+        }
+
         var results = Directory.GetFiles(directory, "*-report.csv", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
             .SelectMany(path =>
@@ -60,7 +79,56 @@ static class BenchmarkReportCommand
                 $"Pants benchmark is incomplete: expected {metadata.ExpectedScenarioCount} rows, found {results.Length}.");
         }
 
+        var expected = expectedScenarioIds.ToHashSet(StringComparer.Ordinal);
+        var actual = results.Select(result => result.ScenarioId).ToHashSet(StringComparer.Ordinal);
+        var missing = expected.Except(actual, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var unexpected = actual.Except(expected, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (missing.Length != 0 || unexpected.Length != 0)
+        {
+            throw new InvalidDataException(
+                $"Pants benchmark scenarios do not match inventory. Missing: [{string.Join(", ", missing)}]; " +
+                $"unexpected: [{string.Join(", ", unexpected)}].");
+        }
+
         return (metadata, results);
+    }
+
+    static string ScenarioIdFromInventory(string inventoryId)
+    {
+        var parameterSeparator = inventoryId.IndexOf(':');
+        var methodSeparator = parameterSeparator > 0
+            ? inventoryId.LastIndexOf('.', parameterSeparator - 1)
+            : -1;
+        if (parameterSeparator <= 0 || methodSeparator <= 0 || methodSeparator == parameterSeparator - 1)
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        var benchmarkType = inventoryId[..methodSeparator];
+        var method = inventoryId[(methodSeparator + 1)..parameterSeparator];
+        var parameterDisplay = inventoryId[(parameterSeparator + 1)..];
+        if (parameterDisplay.Length == 0)
+        {
+            return $"pants:{benchmarkType}:{method}";
+        }
+
+        if (parameterDisplay.Length < 2 || parameterDisplay[0] != '[' || parameterDisplay[^1] != ']')
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        var parameters = parameterDisplay[1..^1]
+            .Split(", ", StringSplitOptions.RemoveEmptyEntries)
+            .Select(static parameter => parameter.Trim())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (parameters.Length == 0 || parameters.Any(static parameter =>
+                parameter.IndexOf('=') <= 0))
+        {
+            throw new InvalidDataException($"Invalid Pants benchmark inventory identity '{inventoryId}'.");
+        }
+
+        return $"pants:{benchmarkType}:{method}:{string.Join(';', parameters)}";
     }
 
     internal static IReadOnlyList<MidgeBenchmarkResult> ReadMidge(string directory)
@@ -119,25 +187,25 @@ static class BenchmarkReportCommand
             output.AppendLine();
             output.AppendLine("### Pants");
             output.AppendLine();
-            output.AppendLine("| Workload | Parameters | Mean ns/op | Allocated B/op | Class |");
-            output.AppendLine("|---|---|---:|---:|---|");
+            output.AppendLine("| Workload | Parameters | Logical ops/invoke | Mean ns/op | Allocated B/op | Class |");
+            output.AppendLine("|---|---|---:|---:|---:|---|");
             foreach (var result in pants.Where(result => result.Tier == tier)
                          .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
                 output.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.OperationsPerInvoke} | {result.MeanNanoseconds:F2} | {result.AllocatedBytes:F2} | {result.MeasurementClass} |");
             }
 
             output.AppendLine();
             output.AppendLine("### Midge");
             output.AppendLine();
-            output.AppendLine("| Workload | Parameters | Metric | Mean | Quality | Trust |");
-            output.AppendLine("|---|---|---|---:|---|---|");
+            output.AppendLine("| Workload | Parameters | Metric | Measured ops | Mean | Quality | Trust |");
+            output.AppendLine("|---|---|---|---:|---:|---|---|");
             foreach (var result in midge.Where(result => result.Tier == tier)
                          .OrderBy(result => result.ScenarioId, StringComparer.Ordinal))
             {
                 output.AppendLine(CultureInfo.InvariantCulture,
-                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
+                    $"| {Escape(result.Workload)} | {Escape(result.Parameters)} | {result.PrimaryMetric} | {result.OperationsCompleted} | {result.Mean:F2} | {result.Quality} | {result.TrustClass} |");
             }
         }
 
