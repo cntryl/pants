@@ -78,3 +78,17 @@ maintenance can evict older cloud-durable SSTs. The recovery spool for split
 transactions remains budgeted separately and fails with a resource error if its
 bytes cannot be reserved. Neither resource failure is treated as WAL corruption
 or salvaged by truncating acknowledged records.
+
+Hybrid WAL appends reserve their local frame bytes against the same ledger before
+writing the first frame. Admission includes resident WAL and SST bytes plus
+outstanding flush, compaction, hydration, and spill reservations, and applies the
+98% emergency ceiling used for user writes. A single transaction and a coalesced
+group are each admitted as one append; spilled transactions reserve the
+worst-case size of all begin, mutation, and commit frames before writing any of
+them. A capacity rejection leaves the WAL untouched and the writer usable.
+
+An append reservation stays charged through its durability boundary. If an
+append fails, Pants releases the reservation only after truncating the WAL to
+its previous length and flushing that rollback. If rollback cannot be proven,
+the writer is fenced and the reservation remains charged until the runtime is
+discarded; on reopen, the ledger measures any retained WAL bytes from storage.

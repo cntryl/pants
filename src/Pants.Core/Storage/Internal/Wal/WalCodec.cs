@@ -40,6 +40,7 @@ static class WalCodec
     const int RecordPrefixBytes = 3;
     const int TlvHeaderBytes = sizeof(byte) + sizeof(uint);
     const int TransactionBatchHeaderBytes = 3 + 3 * sizeof(ulong) + sizeof(uint);
+    const int WalFrameHeaderBytes = 2 * sizeof(uint);
 
     /// <summary>
     ///     Operation, column family, sequence, writer epoch and transaction id: the TLV fields every
@@ -105,6 +106,31 @@ static class WalCodec
         var batched = TransactionBatchRecordOverhead +
                       MeasureTransactionBatchOperation(keyLength, valueLength, rangeEndLength);
         return Math.Max(spilled, batched);
+    }
+
+    /// <summary>Measures the encoded payload and framing header for an existing WAL payload.</summary>
+    public static long MeasureEncodedFrameBytes(int payloadBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(payloadBytes);
+        return checked((long)payloadBytes + WalFrameHeaderBytes);
+    }
+
+    /// <summary>
+    ///     Measures a spilled transaction mutation as its own WAL frame, including the largest
+    ///     possible expiration and compression metadata.
+    /// </summary>
+    public static long MeasureWorstCaseSpilledMutationFrameBytes(
+        int keyLength,
+        int? valueLength,
+        int? rangeEndLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
+        var recordBytes = (long)FixedRecordFieldBytes +
+                          TlvHeaderBytes + sizeof(ulong) +
+                          TlvHeaderBytes + keyLength +
+                          (valueLength is { } value ? ValueFieldBytes + value : 0) +
+                          (rangeEndLength is { } rangeEnd ? TlvHeaderBytes + rangeEnd : 0);
+        return checked(recordBytes + WalFrameHeaderBytes);
     }
 
     public static byte[] EncodeRecord(WalRecord record)
@@ -566,7 +592,7 @@ static class WalCodec
             throw new StorageException("WAL record exceeds Midge's 64 MiB frame limit.");
         }
 
-        var header = new byte[2 * sizeof(uint)];
+        var header = new byte[WalFrameHeaderBytes];
         BinaryPrimitives.WriteUInt32LittleEndian(header, checked((uint)payload.Length));
         BinaryPrimitives.WriteUInt32LittleEndian(
             header.AsSpan(sizeof(uint)),
@@ -607,7 +633,7 @@ static class WalCodec
                 throw new StorageException("WAL record exceeds Midge's 64 MiB frame limit.");
             }
 
-            var header = new byte[2 * sizeof(uint)];
+            var header = new byte[WalFrameHeaderBytes];
             BinaryPrimitives.WriteUInt32LittleEndian(header, checked((uint)payload.Length));
             BinaryPrimitives.WriteUInt32LittleEndian(
                 header.AsSpan(sizeof(uint)),

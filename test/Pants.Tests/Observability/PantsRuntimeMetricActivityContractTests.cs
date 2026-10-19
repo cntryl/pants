@@ -390,7 +390,7 @@ public sealed class PantsRuntimeMetricActivityContractTests
             Failpoint.BeforeHybridSstEviction);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-hybrid-eviction/")
-            .WithSimulatedCloudLocalStorageBudget(128 * 1024)
+            .WithSimulatedCloudLocalStorageBudget(280 * 1024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,

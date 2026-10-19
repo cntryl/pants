@@ -5,7 +5,12 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class PantsHybridStorageTests
 {
-    const long LocalBudgetBytes = 128 * 1024;
+    const long LocalBudgetBytes = 280 * 1024;
+    const long WalAdmissionBudgetBytes = 128 * 1024;
+    static readonly ColumnFamilyIdentity DefaultFamily = new(
+        0,
+        "default",
+        RuntimeState.DefaultFamilyVersion);
 
     [Fact]
     public async Task ShouldApplySimulatedCloudLocalStorageBudgetWhenOpeningSimulatedCloud()
@@ -63,7 +68,7 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
-    public async Task ShouldBlockWritesAtEmergencyWatermark()
+    public async Task ShouldBlockWritesWhenCloudEvictionContinuesFailing()
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new PersistentThrowingFlushFailpointHandler(
@@ -81,12 +86,12 @@ public sealed class PantsHybridStorageTests
                 PantsTransactionMode.ReadWrite);
             blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
 
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+            await Assert.ThrowsAsync<PantsIOException>(() =>
                 blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
 
             Assert.Single(LocalSsts(directory.Path));
             Assert.Single(CloudSsts(directory.Path));
-            Assert.Equal(1, (await database.Diagnostics.GetRuntimeMetricsAsync()).NoSpaceEvents);
+            Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).NoSpaceEvents);
         }
         finally
         {
@@ -95,7 +100,237 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
-    public async Task ShouldResumeWritesGivenCloudUploadCompletesWhenEmergencyWatermarkIsActive()
+    public async Task ShouldRejectWalFrameBeforeWritingWhenOutstandingReservationsConsumeHeadroom()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = NewState();
+        var firstValue = CreateValue(80 * 1024, 107);
+        using var hybridCache = new HybridCacheManager(WalAdmissionBudgetBytes);
+        {
+            using var store = LocalDiskStore.Open(
+                directory.Path,
+                state,
+                hybridCache: hybridCache);
+            using var first = CreateCommitPayload(state, 1, "admitted", firstValue);
+            _ = store.AppendCommit(first, state, PantsDurability.Sync);
+            var walBytesAfterFirstCommit = WalBytes(directory.Path);
+
+            using (hybridCache.Ledger.Reserve(StorageAdmissionKind.Flush, 32 * 1024))
+            {
+                using var rejected = CreateCommitPayload(
+                    state,
+                    2,
+                    "rejected",
+                    CreateValue(20 * 1024, 109));
+
+                Assert.Throws<PantsNoSpaceException>(() => store.AppendCommit(
+                    rejected,
+                    state,
+                    PantsDurability.Sync));
+
+                Assert.Equal(walBytesAfterFirstCommit, WalBytes(directory.Path));
+            }
+
+            using var afterRejection = CreateCommitPayload(
+                state,
+                3,
+                "after-rejection",
+                "still-writable"u8.ToArray());
+            _ = store.AppendCommit(afterRejection, state, PantsDurability.Sync);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            firstValue,
+            Assert.IsType<ReadOnlyMemory<byte>>(await reader.GetAsync("admitted"u8.ToArray())).ToArray());
+        Assert.Null(await reader.GetAsync("rejected"u8.ToArray()));
+        Assert.Equal(
+            "still-writable",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("after-rejection"u8.ToArray()))));
+    }
+
+    [Fact]
+    public async Task ShouldRejectCoalescedWalAppendBeforeWritingWhenOutstandingReservationsConsumeHeadroom()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = NewState();
+        var firstValue = CreateValue(80 * 1024, 113);
+        using var hybridCache = new HybridCacheManager(WalAdmissionBudgetBytes);
+        {
+            using var store = LocalDiskStore.Open(
+                directory.Path,
+                state,
+                hybridCache: hybridCache);
+            using var first = CreateCommitPayload(state, 1, "admitted", firstValue);
+            _ = store.AppendCommit(first, state, PantsDurability.Sync);
+            var walBytesAfterFirstCommit = WalBytes(directory.Path);
+
+            using (hybridCache.Ledger.Reserve(StorageAdmissionKind.Flush, 32 * 1024))
+            {
+                using var firstGrouped = CreateCommitPayload(
+                    state,
+                    2,
+                    "grouped-first",
+                    CreateValue(10 * 1024, 127));
+                using var secondGrouped = CreateCommitPayload(
+                    state,
+                    3,
+                    "grouped-second",
+                    CreateValue(10 * 1024, 131));
+                var commits = new[]
+                {
+                    new WalCommitGroupEntry(firstGrouped, 6),
+                    new WalCommitGroupEntry(secondGrouped, 9)
+                };
+
+                Assert.Throws<PantsNoSpaceException>(() => store.AppendCommitGroup(
+                    commits,
+                    state,
+                    PantsDurability.Sync,
+                    static () => { }));
+
+                Assert.Equal(walBytesAfterFirstCommit, WalBytes(directory.Path));
+            }
+
+            using var afterRejection = CreateCommitPayload(
+                state,
+                4,
+                "after-group-rejection",
+                "still-writable"u8.ToArray());
+            _ = store.AppendCommit(afterRejection, state, PantsDurability.Sync);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            firstValue,
+            Assert.IsType<ReadOnlyMemory<byte>>(await reader.GetAsync("admitted"u8.ToArray())).ToArray());
+        Assert.Null(await reader.GetAsync("grouped-first"u8.ToArray()));
+        Assert.Null(await reader.GetAsync("grouped-second"u8.ToArray()));
+        Assert.Equal(
+            "still-writable",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("after-group-rejection"u8.ToArray()))));
+    }
+
+    [Fact]
+    public async Task ShouldRejectSpilledTransactionBeforeItsFirstWalFrameWhenHeadroomIsReserved()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = NewState();
+        using var hybridCache = new HybridCacheManager(WalAdmissionBudgetBytes);
+        {
+            using var store = LocalDiskStore.Open(
+                directory.Path,
+                state,
+                hybridCache: hybridCache);
+            using var first = CreateCommitPayload(
+                state,
+                1,
+                "admitted",
+                CreateValue(80 * 1024, 139));
+            _ = store.AppendCommit(first, state, PantsDurability.Sync);
+            var walBytesAfterFirstCommit = WalBytes(directory.Path);
+
+            using (hybridCache.Ledger.Reserve(StorageAdmissionKind.Flush, 32 * 1024))
+            {
+                using var spilled = CreateSpilledCommitPayload(
+                    directory.Path,
+                    state,
+                    2,
+                    "spilled-rejected",
+                    CreateValue(20 * 1024, 149));
+
+                Assert.Throws<PantsNoSpaceException>(() => store.AppendCommit(
+                    spilled,
+                    state,
+                    PantsDurability.Sync));
+
+                Assert.Equal(walBytesAfterFirstCommit, WalBytes(directory.Path));
+            }
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.NotNull(await reader.GetAsync("admitted"u8.ToArray()));
+        Assert.Null(await reader.GetAsync("spilled-rejected"u8.ToArray()));
+    }
+
+    [Fact]
+    public void ShouldRetainWalAdmissionWhenFailedAppendHasNoRollbackProof()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = NewState();
+        var failpoints = new WalRollbackFailureFailpointHandler();
+        using var hybridCache = new HybridCacheManager(1024 * 1024);
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            failpoints: failpoints,
+            hybridCache: hybridCache);
+        using var payload = CreateCommitPayload(
+            state,
+            1,
+            "ambiguous",
+            CreateValue(4096, 137));
+
+        Assert.Throws<WalCommitRollbackException>(() => store.AppendCommit(
+            payload,
+            state,
+            PantsDurability.Sync));
+
+        var walBytes = WalBytes(directory.Path);
+        Assert.True(walBytes > 0);
+        Assert.Equal(walBytes, hybridCache.Ledger.ReservedBytes);
+        Assert.True(hybridCache.Ledger.ChargedBytes >= walBytes * 2);
+        Assert.True(store.IsWalFenced);
+    }
+
+    [Fact]
+    public void ShouldReleaseWalAdmissionAfterAppendRollbackIsDurablyProven()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = NewState();
+        var failpoints = new ArmableFailpointHandler();
+        using var hybridCache = new HybridCacheManager(1024 * 1024);
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            failpoints: failpoints,
+            hybridCache: hybridCache);
+        using var payload = CreateCommitPayload(
+            state,
+            1,
+            "rolled-back",
+            CreateValue(4096, 151));
+        failpoints.Arm(Failpoint.AfterWalAppend);
+
+        Assert.Throws<PantsCommitOutcomeUnknownException>(() => store.AppendCommit(
+            payload,
+            state,
+            PantsDurability.Sync));
+
+        Assert.Equal(0, WalBytes(directory.Path));
+        Assert.Equal(0, hybridCache.Ledger.ReservedBytes);
+        Assert.True(store.IsWalFenced);
+    }
+
+    [Fact]
+    public async Task ShouldResumeWritesAfterCloudEvictionCompletes()
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new PersistentThrowingFlushFailpointHandler(
@@ -111,7 +346,7 @@ public sealed class PantsHybridStorageTests
                          PantsTransactionMode.ReadWrite))
         {
             blocked.Put("blocked"u8.ToArray(), "value"u8.ToArray());
-            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+            await Assert.ThrowsAsync<PantsIOException>(() =>
                 blocked.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
         }
 
@@ -276,7 +511,7 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldEvictSnapshotVisibleSstAndReadItFromRemoteAuthority()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await OpenAsync(directory.Path, 300 * 1024);
+        await using var database = await OpenAsync(directory.Path, 340 * 1024);
         await PutAsync(database, "pinned", CreateValue(64 * 1024, 53));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var pinnedSst = Assert.Single(LocalSsts(directory.Path));
@@ -365,25 +600,27 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
-    public async Task ShouldReplayCloudDurableTransactionLargerThanTheLocalCacheHeadroom()
+    public async Task ShouldRejectCloudWalAppendBeforeAnyFrameWhenTransactionExceedsLocalAdmissionCeiling()
     {
         using var directory = new TemporaryDirectory();
         var value = CreateValue(256 * 1024, 151);
-        await using (var database = await OpenAsync(directory.Path))
+        await using (var database = await OpenAsync(directory.Path, WalAdmissionBudgetBytes))
         {
-            await PutAsync(database, "large-cloud-transaction", value);
-            Assert.Empty(LocalSsts(directory.Path));
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                PutAsync(database, "large-cloud-transaction", value).AsTask());
+            await PutAsync(database, "after-rejection", "still-writable"u8.ToArray());
         }
 
-        await using var reopened = await OpenAsync(directory.Path);
+        await using var reopened = await OpenAsync(directory.Path, WalAdmissionBudgetBytes);
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
+        Assert.Null(await reader.GetAsync("large-cloud-transaction"u8.ToArray()));
         Assert.Equal(
-            value,
-            Assert.IsType<ReadOnlyMemory<byte>>(
-                await reader.GetAsync("large-cloud-transaction"u8.ToArray())).ToArray());
+            "still-writable",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("after-rejection"u8.ToArray()))));
     }
 
     [Fact]
@@ -392,7 +629,7 @@ public sealed class PantsHybridStorageTests
         using var directory = new TemporaryDirectory();
         var failpoints = new BlockingHybridEvictionFailpointHandler();
         await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path, 160 * 1024),
+            CreateOptions(directory.Path, 240 * 1024),
             new RuntimeDependencies(failpoints));
         for (var index = 0; index < 4; index++)
         {
@@ -401,7 +638,7 @@ public sealed class PantsHybridStorageTests
         }
 
         failpoints.Arm();
-        await PutAsync(database, "cross-high", CreateValue(128 * 1024, 89));
+        await PutAsync(database, "cross-high", CreateValue(160 * 1024, 89));
         var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
         try
         {
@@ -427,9 +664,9 @@ public sealed class PantsHybridStorageTests
 
         // This exercises eviction, not write admission. Background compaction stays off so the
         // local/cloud file counts are deterministic, which means nothing drains L0 across the 20
-        // cycles below; lift the L0 trigger so the admission ceiling is not what ends the loop.
+        // cycles below; keep enough budget for each WAL frame while eviction trims resident SSTs.
         await using var database = await PantsDatabase.OpenAsync(
-            CreateOptions(directory.Path, 192 * 1024)
+            CreateOptions(directory.Path, 384 * 1024)
                 .WithCompaction(new PantsCompactionConfiguration(
                     L0FileCountTrigger: 32,
                     BackgroundEnabled: false)));
@@ -483,4 +720,79 @@ public sealed class PantsHybridStorageTests
 
     static string[] CloudSsts(string root) =>
         Directory.GetFiles(Path.Combine(root, "cloud_store", "sst"), "*.sst");
+
+    static long WalBytes(string root) =>
+        new FileInfo(Path.Combine(root, "wal", "wal.log")).Length;
+
+    static RuntimeState NewState() => new(
+        new ManualClock(DateTimeOffset.UnixEpoch),
+        new RuntimeTelemetry());
+
+    static CommitPayload CreateCommitPayload(
+        RuntimeState state,
+        long transactionId,
+        string key,
+        byte[] value)
+    {
+        var operation = new TransactionIntentOperation(
+            0,
+            CommitOperationKind.Put,
+            DefaultFamily,
+            TestBytes.FromString(key),
+            null,
+            value,
+            null,
+            null,
+            false);
+        var source = new TransactionOperationSource(
+            null,
+            [operation],
+            1,
+            DateTimeOffset.UnixEpoch);
+        return new CommitPayload(
+            transactionId,
+            PantsTransactionMode.ReadWrite,
+            PantsConflictPolicy.LastWriteWins,
+            DateTimeOffset.UnixEpoch,
+            state.CreateVersion(),
+            source,
+            []);
+    }
+
+    static CommitPayload CreateSpilledCommitPayload(
+        string directory,
+        RuntimeState state,
+        long transactionId,
+        string key,
+        byte[] value)
+    {
+        var spillStore = new TransactionSpillStore(directory, transactionId, DefaultFamily);
+        spillStore.WriteRun(
+        [
+            new TransactionIntentOperation(
+                0,
+                CommitOperationKind.Put,
+                DefaultFamily,
+                TestBytes.FromString(key),
+                null,
+                value,
+                null,
+                null,
+                false)
+        ]);
+        var source = new TransactionOperationSource(
+            spillStore,
+            [],
+            1,
+            DateTimeOffset.UnixEpoch,
+            ownsSpillStore: true);
+        return new CommitPayload(
+            transactionId,
+            PantsTransactionMode.ReadWrite,
+            PantsConflictPolicy.LastWriteWins,
+            DateTimeOffset.UnixEpoch,
+            state.CreateVersion(),
+            source,
+            []);
+    }
 }
