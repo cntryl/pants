@@ -1,3 +1,4 @@
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -56,6 +57,59 @@ public sealed class LocalCommittedBytesTests
         using var store = LocalDiskStore.Open(directory.Path, state);
 
         Assert.Equal(MeasureOnDisk(directory.Path), store.LocalCommittedBytes);
+    }
+
+    [Fact]
+    public void ShouldChargeRetainedStartupResidueUntilItsFilesAreDeleted()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
+        using (LocalDiskStore.Open(directory.Path, state))
+        {
+        }
+
+        var residuePaths = new[]
+        {
+            Path.Combine(directory.Path, "cloud_recovery", "nested", "cloud.sst"),
+            Path.Combine(directory.Path, "sst", ".flush-staging", "nested", "staging.tmp"),
+            Path.Combine(directory.Path, "sst", "orphan.sst.tmp"),
+            Path.Combine(directory.Path, "startup-residue.tmp"),
+            Path.Combine(directory.Path, "sst", "orphan.sst")
+        };
+        foreach (var path in residuePaths)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, new byte[128 + residuePaths.Length]);
+        }
+
+        var failpoints = new PersistentThrowingFlushFailpointHandler(
+            Failpoint.BeforeStartupResidueDelete);
+        using var hybridCache = new HybridCacheManager(1024 * 1024);
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            failpoints: failpoints,
+            hybridCache: hybridCache);
+
+        var expectedBytes = residuePaths.Sum(path => new FileInfo(path).Length);
+        Assert.All(residuePaths, path => Assert.True(File.Exists(path)));
+        Assert.Equal(expectedBytes, store.LocalCommittedBytes);
+        Assert.Equal(expectedBytes, hybridCache.Ledger.ChargedBytes);
+        var walAdmissionBytes = hybridCache.Ledger.GetAvailableBytes(StorageAdmissionKind.Wal);
+        Assert.Throws<PantsNoSpaceException>(() => hybridCache.Ledger.Reserve(
+            StorageAdmissionKind.Wal,
+            walAdmissionBytes + 1));
+
+        foreach (var path in residuePaths)
+        {
+            File.Delete(path);
+        }
+
+        Assert.Equal(0, store.LocalCommittedBytes);
+        Assert.Equal(0, hybridCache.Ledger.ChargedBytes);
+        using var reservation = hybridCache.Ledger.Reserve(
+            StorageAdmissionKind.Wal,
+            hybridCache.Ledger.GetAdmissionCeilingBytes(StorageAdmissionKind.Wal));
     }
 
     static long MeasureOnDisk(string root)

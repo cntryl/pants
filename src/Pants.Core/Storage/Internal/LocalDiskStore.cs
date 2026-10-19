@@ -62,6 +62,7 @@ sealed class LocalDiskStore :
     readonly string _manifestJournalPath;
     readonly string _manifestPath;
     readonly string _manifestSnapshotPath;
+    readonly string[] _retainedStartupResiduePaths;
     readonly MutableMemtableOperations _mutableOperations = new();
     readonly PantsPerformanceGoal _performanceGoal;
     readonly SstReaderCache _readerCache;
@@ -117,6 +118,7 @@ sealed class LocalDiskStore :
         long targetSstSizeBytes,
         PantsBlockCachePolicy blockCachePolicy,
         long blockCacheBytes,
+        string[] retainedStartupResiduePaths,
         IAsyncSstSourceFactory? remoteSstSourceFactory)
     {
         RootPath = root;
@@ -126,6 +128,7 @@ sealed class LocalDiskStore :
         _manifestPath = Path.Combine(root, "manifest.json");
         _manifestSnapshotPath = Path.Combine(root, "manifest.snapshot.json");
         _manifestJournalPath = Path.Combine(root, "manifest.journal");
+        _retainedStartupResiduePaths = retainedStartupResiduePaths;
         _intentPath = Path.Combine(root, "intent_log.json");
         _lockStream = lockStream;
         _lease = lease;
@@ -368,7 +371,31 @@ sealed class LocalDiskStore :
         _rootTrust?.Dispose();
     }
 
-    public long LocalCommittedBytes => checked(LocalWalBytes + LocalSstBytes);
+    public long LocalCommittedBytes => checked(
+        LocalWalBytes + LocalSstBytes + LocalStartupResidueBytes);
+
+    long LocalStartupResidueBytes
+    {
+        get
+        {
+            var total = 0L;
+            foreach (var path in _retainedStartupResiduePaths)
+            {
+                EnsureSafeResiduePath(path);
+                try
+                {
+                    total = checked(total + new FileInfo(path).Length);
+                }
+                catch (Exception exception) when (
+                    exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    // Startup residue is no longer charged once cleanup removes its file.
+                }
+            }
+
+            return total;
+        }
+    }
 
     public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
         GetManifestFilesSnapshot()
@@ -1886,6 +1913,7 @@ sealed class LocalDiskStore :
                 manifestLoad.PreserveUnownedSsts || recoveryMetadata.PreserveUnownedSsts,
                 failpointHandler,
                 lease);
+            var retainedStartupResiduePaths = GetRetainedStartupResiduePaths(root);
             lease.EnsureValid();
             AtomicStagedFile.CreateDirectoryDurably(
                 Path.Combine(root, "sst", ".flush-staging"),
@@ -1915,6 +1943,7 @@ sealed class LocalDiskStore :
                 targetSstSizeBytes,
                 blockCachePolicy,
                 blockCacheBytes,
+                retainedStartupResiduePaths,
                 remoteSstSourceFactory)
             {
                 _rootTrust = rootTrust,
@@ -2019,6 +2048,58 @@ sealed class LocalDiskStore :
             StartupCleanupFailureDisposition.Degrade,
             failpoints,
             lease);
+    }
+
+    static string[] GetRetainedStartupResiduePaths(string root)
+    {
+        var paths = new List<string>();
+        AppendStartupResiduePaths(
+            paths,
+            Path.Combine(root, "cloud_recovery"),
+            "*",
+            SearchOption.AllDirectories);
+        AppendStartupResiduePaths(
+            paths,
+            Path.Combine(root, "sst", ".flush-staging"),
+            "*",
+            SearchOption.AllDirectories);
+        AppendStartupResiduePaths(
+            paths,
+            Path.Combine(root, "sst"),
+            "*.tmp",
+            SearchOption.TopDirectoryOnly);
+        AppendStartupResiduePaths(
+            paths,
+            root,
+            "*.tmp",
+            SearchOption.TopDirectoryOnly,
+            excludeLeaderFiles: true);
+        return EnsureSafeResiduePaths(paths.Distinct(StringComparer.Ordinal)).ToArray();
+    }
+
+    static void AppendStartupResiduePaths(
+        List<string> paths,
+        string directory,
+        string pattern,
+        SearchOption searchOption,
+        bool excludeLeaderFiles = false)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(directory, pattern, searchOption))
+        {
+            if (excludeLeaderFiles && Path.GetFileName(path).StartsWith(
+                    ".midge_leader.",
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            paths.Add(path);
+        }
     }
 
     static void DeleteStartupResidue(

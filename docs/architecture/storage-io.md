@@ -116,6 +116,13 @@ Cloud-durable SST eviction is planned against the admission operation's actual
 ceiling and is performed only when removing the full planned set makes the
 request fit.
 
+The ledger also charges files left behind when startup residue cleanup cannot
+remove them. This includes retained files under `cloud_recovery` and
+`sst/.flush-staging`, temporary files at the database root or directly under
+`sst`, and unowned top-level SSTs through the normal SST accounting. Retained
+file lengths are checked during admission and stop counting once those files
+are deleted.
+
 Startup recovery remains a separate path. Recovery checkpoints still use the
 recovery working-set policy and can stage past the soft local-cache budget;
 that path is not covered by the live-write flush-headroom guarantee and remains
