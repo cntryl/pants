@@ -5,6 +5,11 @@ contains edits after that checkpoint. `manifest.json` is a compatibility mirror
 and may lag if the process stops after publishing a checkpoint and truncating the
 journal but before replacing the mirror.
 
+The `FORMAT` marker must match its canonical bytes exactly. When the marker is
+absent, current or legacy manifest and intent files, or entries inside `wal/`
+or `sst/`, indicate persisted state and prevent fresh initialization. Empty
+`wal/` and `sst/` directories and unrelated root metadata do not count as state.
+
 Journal envelopes carry durable edit IDs. Older bare edits have no ID, so replay
 assigns them IDs in journal order from the maximum explicit or synthesized ID
 seen in that journal. This maximum is independent of the snapshot checkpoint:

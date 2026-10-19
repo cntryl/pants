@@ -47,6 +47,16 @@ sealed class LocalDiskStore :
     readonly ManifestState _manifest;
     const byte ManifestDurabilityMarkerRecordType = 9;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
+    static readonly string[] PersistedManifestRootEntries =
+    [
+        "manifest.json",
+        "manifest.snapshot.json",
+        "intent_log.json",
+        "manifest.yaml",
+        "manifest.snapshot",
+        "manifest.journal",
+        "intent_log.yaml"
+    ];
 
     readonly object _manifestGate = new();
     readonly string _manifestJournalPath;
@@ -5315,21 +5325,51 @@ sealed class LocalDiskStore :
             return;
         }
 
-        var hasState = Directory.EnumerateFileSystemEntries(root)
-            .Select(Path.GetFileName)
-            .Any(static name => name is not (
-                                    "FORMAT.tmp" or
-                                    "LOCK" or
-                                    ".midge_leader" or
-                                    ".midge_leader.lock") &&
-                                !name!.StartsWith(".midge_leader.", StringComparison.Ordinal));
-        if (hasState)
+        if (HasPersistedStateWithoutFormatMarker(root))
         {
             throw new PantsCompatibilityException(
                 "Persisted state without a Midge FORMAT marker is unsupported.");
         }
 
         AtomicStagedFile.Write(path, "midge-format-version=3\n"u8);
+    }
+
+    static bool HasPersistedStateWithoutFormatMarker(string root)
+    {
+        var rootEntries = Directory.EnumerateFileSystemEntries(root)
+            .Select(static path => Path.GetFileName(path)!)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var name in PersistedManifestRootEntries)
+        {
+            var path = Path.Combine(root, name);
+            if (rootEntries.Contains(name) || File.Exists(path) || Directory.Exists(path))
+            {
+                return true;
+            }
+        }
+
+        foreach (var name in new[] { "wal", "sst" })
+        {
+            var path = Path.Combine(root, name);
+            if (!rootEntries.Contains(name) && !File.Exists(path) && !Directory.Exists(path))
+            {
+                continue;
+            }
+
+            if (Directory.Exists(path))
+            {
+                if (Directory.EnumerateFileSystemEntries(path).Any())
+                {
+                    return true;
+                }
+            }
+            else if (File.Exists(path))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     static ManifestLoadResult LoadManifest(
