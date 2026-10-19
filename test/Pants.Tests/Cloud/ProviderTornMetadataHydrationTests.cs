@@ -86,6 +86,7 @@ public sealed class ProviderTornMetadataHydrationTests
             new CountingCloudObjectStore(),
             control,
             policy,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
     sealed class FailingReadStore(ICloudObjectStore inner, string failingKey) : ICloudObjectStore

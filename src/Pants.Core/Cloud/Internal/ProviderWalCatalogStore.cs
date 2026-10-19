@@ -18,13 +18,13 @@ sealed class ProviderWalCatalogStore(
     ICloudObjectStore walStore,
     Func<ReadOnlyMemory<byte>, ProviderWalCatalog> decode,
     Action ensureLeaseValid,
+    Func<CancellationToken, ValueTask> validateRemoteLease,
     ProviderWalCatalogReadAdmission? readAdmission = null,
-    ProviderWalCatalogWriteAdmission? writeAdmission = null,
-    Func<CancellationToken, ValueTask>? validateRemoteLease = null)
+    ProviderWalCatalogWriteAdmission? writeAdmission = null)
 {
     const int MaximumRepairAttempts = 4;
 
-    readonly Func<CancellationToken, ValueTask>? _validateRemoteLease = validateRemoteLease;
+    readonly Func<CancellationToken, ValueTask> _validateRemoteLease = validateRemoteLease;
     readonly ProviderWalCatalogReadAdmission _readAdmission =
         readAdmission ?? ProviderWalCatalogReadAdmission.Standalone();
     readonly ProviderWalCatalogWriteAdmission? _writeAdmission = writeAdmission;
@@ -359,10 +359,7 @@ sealed class ProviderWalCatalogStore(
     async ValueTask ValidateBeforeWriteAsync(CancellationToken cancellationToken)
     {
         ensureLeaseValid();
-        if (_validateRemoteLease is not null)
-        {
-            await _validateRemoteLease(cancellationToken).ConfigureAwait(false);
-        }
+        await _validateRemoteLease(cancellationToken).ConfigureAwait(false);
     }
 
     ProviderWalCatalog? TryDecode(CloudObject? candidate, out PantsCorruptionException? error)

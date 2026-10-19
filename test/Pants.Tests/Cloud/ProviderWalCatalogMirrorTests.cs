@@ -193,7 +193,8 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
         Assert.Equal(0UL, await catalog.ReadFencingEpochAsync(CancellationToken.None));
 
         await PublishAsync(cache.Path, walStore);
@@ -211,7 +212,8 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
 
         var epoch = await catalog.ReadFencingEpochAsync(CancellationToken.None);
 
@@ -230,7 +232,8 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
 
         var epoch = await catalog.ReadFencingEpochAsync(CancellationToken.None);
 
@@ -280,8 +283,8 @@ public sealed class ProviderWalCatalogMirrorTests
                 new TestCloudObjectStore(),
                 new TestCloudObjectStore(),
                 PantsRecoveryPolicy.Strict,
-                CancellationToken.None,
-                validateRemoteLease: ValidateRemoteLeaseAsync));
+                ValidateRemoteLeaseAsync,
+                CancellationToken.None));
 
         Assert.Equal(primaryIsTorn ? tornPrimary : catalogBytes, walStore.GetData(Primary));
         Assert.Equal(primaryIsTorn ? catalogBytes : staleMirror, walStore.GetData(Mirror));
@@ -299,7 +302,8 @@ public sealed class ProviderWalCatalogMirrorTests
         var catalog = new ProviderWalCatalogStore(
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
-            static () => { });
+            static () => { },
+            static _ => ValueTask.CompletedTask);
 
         using var read = await catalog.ReadAsync(false, CancellationToken.None);
 
@@ -325,6 +329,7 @@ public sealed class ProviderWalCatalogMirrorTests
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
             static () => { },
+            static _ => ValueTask.CompletedTask,
             new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
@@ -353,6 +358,7 @@ public sealed class ProviderWalCatalogMirrorTests
             walStore,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
             static () => { },
+            static _ => ValueTask.CompletedTask,
             new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
 
         var read = await catalog.ReadAsync(false, CancellationToken.None);
@@ -416,6 +422,7 @@ public sealed class ProviderWalCatalogMirrorTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None,
             catalogReadAdmission: new ProviderWalCatalogReadAdmission(budget, gate),
             catalogWriteAdmission: new ProviderWalCatalogWriteAdmission(budget));

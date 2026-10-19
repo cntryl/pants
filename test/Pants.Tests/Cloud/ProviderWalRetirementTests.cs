@@ -382,6 +382,7 @@ public sealed class ProviderWalRetirementTests
             harness.Sst,
             harness.Control,
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
         Assert.Equal([segment.SegmentId], hydrated.PublishedWalSegments.Keys);
 

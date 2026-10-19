@@ -52,6 +52,7 @@ public sealed class ProviderCloudPersistenceTests
             new TestCloudObjectStore(),
             new TestCloudObjectStore(),
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
         Assert.Equal([1UL, 2UL, 3UL], hydrated.PublishedWalSegments.Keys);
     }
@@ -448,6 +449,7 @@ public sealed class ProviderCloudPersistenceTests
             sstStore,
             controlStore,
             PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
             CancellationToken.None);
 
         Assert.False(result.RequiresSalvage);
