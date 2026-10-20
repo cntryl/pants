@@ -10,64 +10,126 @@ static class CloudHttpResponseReader
         HttpClient client,
         HttpRequestMessage request,
         CancellationToken cancellationToken) =>
-        SendAsync(client, request, null, cancellationToken);
+        SendAsync(client, request, null, cancellationToken, cancellationToken);
+
+    public static ValueTask<HttpResponseMessage> SendAsync(
+        HttpClient client,
+        HttpRequestMessage request,
+        ulong? expectedRangeObjectLength,
+        CancellationToken cancellationToken) =>
+        SendAsync(client, request, expectedRangeObjectLength, cancellationToken, cancellationToken);
 
     public static async ValueTask<HttpResponseMessage> SendAsync(
         HttpClient client,
         HttpRequestMessage request,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken callerCancellationToken)
     {
-        if (request.Method != HttpMethod.Get)
-        {
-            return await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        using var attempt = new CloudHttpAttemptObservation(request);
         try
         {
-            if (request.Headers.Range is { } range)
+            if (request.Method != HttpMethod.Get)
             {
-                if (!response.IsSuccessStatusCode)
+                if (!attempt.IsEnabled)
                 {
-                    // Ranged reads classify errors by status (and response headers), never by
-                    // their body. Do not download an unbounded error page before retrying.
-                    response.Content.Dispose();
-                    response.Content = new ByteArrayContent([]);
+                    return await client.SendAsync(
+                            request,
+                            HttpCompletionOption.ResponseContentRead,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                var mutationResponse = await client.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                attempt.RecordStatus((int)mutationResponse.StatusCode);
+                mutationResponse.Content = new CloudHttpAttemptResponseContent(
+                    mutationResponse.Content,
+                    attempt.RecordResponseBodyBytes);
+                try
+                {
+                    await mutationResponse.Content.LoadIntoBufferAsync(
+                            client.MaxResponseContentBufferSize,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    return mutationResponse;
+                }
+                catch
+                {
+                    mutationResponse.Dispose();
+                    throw;
+                }
+            }
+
+            var response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            attempt.RecordStatus((int)response.StatusCode);
+            if (attempt.IsEnabled)
+            {
+                response.Content = new CloudHttpAttemptResponseContent(
+                    response.Content,
+                    attempt.RecordResponseBodyBytes);
+            }
+
+            try
+            {
+                if (request.Headers.Range is { } range)
+                {
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // Ranged reads classify errors by status (and response headers), never by
+                        // their body. Do not download an unbounded error page before retrying.
+                        response.Content.Dispose();
+                        response.Content = new ByteArrayContent([]);
+                        return response;
+                    }
+
+                    await BufferRangeAsync(
+                            response,
+                            range,
+                            client.MaxResponseContentBufferSize,
+                            expectedRangeObjectLength,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     return response;
                 }
 
-                await BufferRangeAsync(
-                        response,
-                        range,
-                        client.MaxResponseContentBufferSize,
-                        expectedRangeObjectLength,
-                        cancellationToken)
+                // Buffering can replace malformed headers with a computed length. Capture and validate
+                // the declaration first, then buffer under the caller's existing operation deadline.
+                var declaredLength = response.IsSuccessStatusCode ? ReadDeclaredLength(response) : null;
+                await response.Content.LoadIntoBufferAsync(client.MaxResponseContentBufferSize, cancellationToken)
                     .ConfigureAwait(false);
+                if (declaredLength is { } expected)
+                {
+                    var buffered = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    if ((ulong)buffered.Length != expected)
+                    {
+                        throw InvalidLength();
+                    }
+                }
+
                 return response;
             }
-
-            // Buffering can replace malformed headers with a computed length. Capture and validate
-            // the declaration first, then buffer under the caller's existing operation deadline.
-            var declaredLength = response.IsSuccessStatusCode ? ReadDeclaredLength(response) : null;
-            await response.Content.LoadIntoBufferAsync(client.MaxResponseContentBufferSize, cancellationToken)
-                .ConfigureAwait(false);
-            if (declaredLength is { } expected)
+            catch
             {
-                var buffered = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                if ((ulong)buffered.Length != expected)
-                {
-                    throw InvalidLength();
-                }
+                response.Dispose();
+                throw;
             }
-
-            return response;
+        }
+        catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+        {
+            attempt.RecordCancellation();
+            throw;
         }
         catch
         {
-            response.Dispose();
+            attempt.RecordTransportError();
             throw;
         }
     }
