@@ -79,6 +79,27 @@ sealed class AsyncSstReader : IAsyncDisposable
     }
 
     /// <summary>
+    ///     Approximate metadata retained by an async scan source after it releases this reader:
+    ///     its key bounds and range tombstones. The parsed index, blooms and trie remain owned by
+    ///     the reader cache and are accounted by that cache's byte budget.
+    /// </summary>
+    public long EstimatedScanMetadataBytes
+    {
+        get
+        {
+            const int fixedOverhead = 128;
+            const int perRangeTombstoneOverhead = 64;
+            long bytes = fixedOverhead + (SmallestKey?.Length ?? 0) + (LargestKey?.Length ?? 0);
+            foreach (var tombstone in RangeTombstones)
+            {
+                bytes += tombstone.Start.Length + tombstone.End.Length + perRangeTombstoneOverhead;
+            }
+
+            return bytes;
+        }
+    }
+
+    /// <summary>
     ///     Returns another handle onto the same parsed metadata and source. Each handle is
     ///     disposed on its own; the source closes when the last one is.
     /// </summary>
