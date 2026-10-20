@@ -39,13 +39,15 @@ then:
 |---------|---------|-----------------------|
 | acked | acknowledged with a durability the crash cannot undo (`Sync`, `CloudStrict`, and `CloudAsync` unless the cache was discarded) | present, unless a later write to the same key may have replaced it |
 | failed | rolled back, rejected, or doomed by construction (impossible assertion, conflict loser) | never visible |
-| unknown | dispatched but unanswered, or acknowledged with a durability that promises nothing across a crash | visible entirely or not at all |
+| unknown | dispatched but unanswered, returned as `PantsCommitOutcomeUnknownException`, or acknowledged with a durability that promises nothing across a crash | visible entirely or not at all |
 | not dispatched | the child never reached it | never visible |
 
 For each key the verifier allows the value of the last crash-durable acknowledged write, or of any
 later write that is not known to have failed. It also checks that no unknown transaction is only
 partly visible, that a full scan returns exactly the keys and values that point reads return, and
-that no key outside the workload appears. The verified state becomes the next cycle's floor; for
+that no key outside the workload appears. When a commit returns `PantsCommitOutcomeUnknownException`,
+the child records no authoritative outcome and dies immediately; the parent reopens and reconciles
+that transaction before the next cycle. The verified state becomes the next cycle's floor; for
 cloud backends the verifier first commits an empty `CloudStrict` transaction so that floor is
 cloud-durable.
 
