@@ -180,21 +180,26 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
 
         var blocker = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
-        var metrics = Enumerable.Range(0, 10)
-            .Select(_ => database.Diagnostics.GetRuntimeMetricsAsync().AsTask())
+        var families = Enumerable.Range(0, 10)
+            .Select(index => database.ColumnFamilies.CreateAsync($"queued-{index}").AsTask())
             .ToArray();
         var commits = transactions
             .Select(transaction => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask())
             .ToArray();
 
         await Task.Delay(100);
-        Assert.All(metrics, static operation => Assert.False(operation.IsCompleted));
+        Assert.All(families, static operation => Assert.False(operation.IsCompleted));
         Assert.All(commits, static operation => Assert.False(operation.IsCompleted));
 
         failpoint.Release();
         _ = await blocker.WaitAsync(TestTimeouts.Expected);
-        await Task.WhenAll(metrics).WaitAsync(TestTimeouts.Expected);
+        var createdFamilies = await Task.WhenAll(families).WaitAsync(TestTimeouts.Expected);
         await Task.WhenAll(commits).WaitAsync(TestTimeouts.Expected);
+        for (var index = 0; index < createdFamilies.Length; index++)
+        {
+            Assert.Equal($"queued-{index}", createdFamilies[index].Name);
+        }
+
         foreach (var transaction in transactions)
         {
             await transaction.DisposeAsync();
