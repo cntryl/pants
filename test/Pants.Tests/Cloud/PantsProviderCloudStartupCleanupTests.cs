@@ -5,6 +5,45 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldApplyOneRuntimeResponseDeadlineAcrossCloudStartup(bool expireDuringServiceStartup)
+    {
+        using var cache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var runtimeResponseTimeout = TimeSpan.FromSeconds(30);
+        var timeProvider = new ManualTimeProvider();
+        var deadlineAdvanced = 0;
+        var expiredPhase = expireDuringServiceStartup
+            ? StartupPhase.ServiceStartup
+            : StartupPhase.ManifestSnapshot;
+        var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
+            .WithStorageTimeout(TimeSpan.FromSeconds(5))
+            .WithRuntimeResponseTimeout(runtimeResponseTimeout)
+            .WithLeaseTimeToLive(TimeSpan.FromMinutes(2))
+            .WithBackgroundCompaction(false);
+        var dependencies = new RuntimeDependencies(
+            cloudHttpClient: client,
+            runtimeTimeProvider: timeProvider,
+            startupPhaseMeasurement: measurement =>
+            {
+                if (measurement.Phase == expiredPhase &&
+                    Interlocked.Exchange(ref deadlineAdvanced, 1) == 0)
+                {
+                    timeProvider.Advance(runtimeResponseTimeout);
+                }
+            });
+
+        await Assert.ThrowsAsync<PantsTimeoutException>(() => PantsDatabase.OpenForTestingAsync(
+            options,
+            dependencies).AsTask());
+
+        await using var recovered = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        Assert.True(recovered.Cloud!.IsPrimaryLeaseHealthy);
+    }
+
     [Fact]
     public async Task ShouldReportColdStartReadinessAndMaintenancePeakForGrowingRemoteHistory()
     {
