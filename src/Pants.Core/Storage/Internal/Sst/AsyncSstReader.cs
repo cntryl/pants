@@ -45,8 +45,17 @@ sealed class AsyncSstReader : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 0 &&
             Interlocked.Decrement(ref _shared.References) == 0)
         {
+            // Keep the slot reserved if close fails; the source may still own a live handle.
             await _source.DisposeAsync().ConfigureAwait(false);
+            _shared.ReleaseHandleReservation();
         }
+    }
+
+    public void AttachHandleReservation(IDisposable reservation)
+    {
+        ArgumentNullException.ThrowIfNull(reservation);
+        ThrowIfDisposed();
+        _shared.AttachHandleReservation(reservation);
     }
 
     /// <summary>
@@ -305,5 +314,19 @@ sealed class AsyncSstReader : IAsyncDisposable
         public IAsyncSstSource Source { get; } = source;
 
         public int References = 1;
+
+        IDisposable? _handleReservation;
+
+        public void AttachHandleReservation(IDisposable reservation)
+        {
+            if (Interlocked.CompareExchange(ref _handleReservation, reservation, null) is not null)
+            {
+                throw new InvalidOperationException(
+                    "An async SST source handle reservation is already attached.");
+            }
+        }
+
+        public void ReleaseHandleReservation() =>
+            Interlocked.Exchange(ref _handleReservation, null)?.Dispose();
     }
 }
