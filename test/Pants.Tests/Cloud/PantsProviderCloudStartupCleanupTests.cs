@@ -9,8 +9,11 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
     public async Task ShouldReportColdStartReadinessAndMaintenancePeakForGrowingRemoteHistory()
     {
         const long ProductionMemoryProfileBytes = 512L * 1024 * 1024;
-        const int HistoryWriteCount = 32;
+        const long LocalDiskProfileBudgetBytes = 64L * 1024 * 1024;
+        const int HistoryWriteCount = 128;
         const int MinimumHistorySstCount = 16;
+        var storageTimeout = TimeSpan.FromSeconds(5);
+        var runtimeResponseTimeout = TimeSpan.FromSeconds(30);
         using var sourceCache = new TemporaryDirectory();
         using var coldCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -21,6 +24,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.Mixed)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(ProductionMemoryProfileBytes))
+            .WithCloudLocalStorageBudget(LocalDiskProfileBudgetBytes)
             .WithBackgroundCompaction(false);
         await using (var source = await PantsDatabase.OpenForTestingAsync(
                          sourceOptions,
@@ -33,7 +37,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(
                     TestBytes.FromString($"history-key-{index:D2}"),
-                    new byte[4 * 1024]);
+                    HistoryValue(index));
                 await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
                 await source.Maintenance.FlushAsync(source.ColumnFamilies.DefaultFamily);
             }
@@ -51,6 +55,9 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             .WithPerformanceGoal(PantsPerformanceGoal.Throughput)
             .WithWorkloadProfile(PantsWorkloadProfile.Mixed)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(ProductionMemoryProfileBytes))
+            .WithCloudLocalStorageBudget(LocalDiskProfileBudgetBytes)
+            .WithStorageTimeout(storageTimeout)
+            .WithRuntimeResponseTimeout(runtimeResponseTimeout)
             .WithBackgroundCompaction(false);
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
@@ -61,16 +68,30 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         var coldOpen = System.Diagnostics.Stopwatch.StartNew();
         await using var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         coldOpen.Stop();
+        var coldStartSstFullReads = handler.SstFullReads;
+        var coldStartSstMetadataReads = handler.SstMetadataReads;
+        var coldStartSstRangeReads = handler.SstRangeReads;
+        var coldStartSstRangeBytes = handler.SstRangeBytes;
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(ProductionMemoryProfileBytes, resolved.MemoryBudgetBytes);
+        Assert.Equal(runtimeResponseTimeout, resolved.RuntimeResponseTimeout);
         Assert.Equal(ProductionMemoryProfileBytes, metrics.MemoryBudgetBytes);
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
         Assert.True(database.Cloud!.IsPrimaryLeaseHealthy);
+        Assert.True(coldOpen.Elapsed <= runtimeResponseTimeout);
+        Assert.Equal(LocalDiskProfileBudgetBytes, metrics.HybridMaximumLocalBytes);
+        Assert.InRange(
+            metrics.HybridTotalCommittedBytes,
+            0,
+            LocalDiskProfileBudgetBytes);
         Assert.Contains(StartupPhase.CloudControlHydration, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.WalReplay, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.ServiceStartup, measurements.Select(static item => item.Phase));
-        Assert.Equal(sstCount, handler.SstMetadataReads);
+        Assert.Equal(sstCount, coldStartSstMetadataReads);
+        Assert.Equal(0, coldStartSstFullReads);
+        Assert.Equal(0, coldStartSstRangeReads);
+        Assert.Equal(0L, coldStartSstRangeBytes);
         Assert.Equal(resolved.CompactionMemoryPoolBytes, metrics.MaintenanceMemoryCapacityBytes);
         Assert.InRange(
             metrics.MaintenanceMemoryPeakBytes,
@@ -89,21 +110,34 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             for (var index = 0; index < HistoryWriteCount; index++)
             {
                 Assert.Equal(
-                    new byte[4 * 1024],
+                    HistoryValue(index),
                     (await reader.GetAsync(TestBytes.FromString($"history-key-{index:D2}")))?.ToArray());
             }
         }
 
         output.WriteLine(
-            $"512 MiB profile; {sstCount} remote SSTs, {handler.SstStoredBytes} SST bytes; " +
+            $"512 MiB memory / 64 MiB local-disk profile; {sstCount} remote SSTs, " +
+            $"{handler.SstStoredBytes} remote SST bytes; " +
             $"cold open {coldOpen.Elapsed.TotalMilliseconds:F1} ms; maintenance peak " +
-            $"{metrics.MaintenanceMemoryPeakBytes}/{metrics.MaintenanceMemoryCapacityBytes} bytes.");
+            $"{metrics.MaintenanceMemoryPeakBytes}/{metrics.MaintenanceMemoryCapacityBytes} bytes; " +
+            $"local cache {metrics.HybridTotalCommittedBytes}/{metrics.HybridMaximumLocalBytes} bytes; " +
+            $"cold-start SST reads: {coldStartSstMetadataReads} metadata HEADs, " +
+            $"{coldStartSstFullReads} full, {coldStartSstRangeReads} ranges / " +
+            $"{coldStartSstRangeBytes} bytes; " +
+            $"runtime response timeout {runtimeResponseTimeout.TotalSeconds:F0} s.");
         foreach (var measurement in measurements)
         {
             output.WriteLine(
                 $"{measurement.Phase}: {measurement.Elapsed.TotalMilliseconds:F1} ms, " +
                 $"{measurement.AllocatedBytes} B allocated");
         }
+    }
+
+    static byte[] HistoryValue(int index)
+    {
+        var value = new byte[4 * 1024];
+        new Random(index).NextBytes(value);
+        return value;
     }
 
     [Fact]
