@@ -11,6 +11,7 @@ sealed class SstReader : IDisposable
     readonly long _fileLength;
     readonly (byte[] FirstKey, SstBlockHandle Handle)[] _index;
     readonly TrieIndex? _trieIndex;
+    IDisposable? _handleReservation;
     int _disposed;
 
     SstReader(
@@ -19,13 +20,15 @@ sealed class SstReader : IDisposable
         (byte[] FirstKey, SstBlockHandle Handle)[] index,
         byte[]? blockBlooms,
         TrieIndex? trieIndex,
-        IReadOnlyList<RangeTombstone> rangeTombstones)
+        IReadOnlyList<RangeTombstone> rangeTombstones,
+        IDisposable? handleReservation)
     {
         _file = file;
         _fileLength = fileLength;
         _index = index;
         _blockBlooms = blockBlooms;
         _trieIndex = trieIndex;
+        _handleReservation = handleReservation;
         RangeTombstones = rangeTombstones;
     }
 
@@ -73,7 +76,14 @@ sealed class SstReader : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _file.Dispose();
+            try
+            {
+                _file.Dispose();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _handleReservation, null)?.Dispose();
+            }
         }
     }
 
@@ -99,10 +109,24 @@ sealed class SstReader : IDisposable
         return _index[blockIndex].Handle;
     }
 
-    public static SstReader Open(string path)
+    public static SstReader Open(string path) => OpenCore(path, null);
+
+    internal static SstReader Open(string path, IDisposable handleReservation) =>
+        OpenCore(path, handleReservation);
+
+    static SstReader OpenCore(string path, IDisposable? handleReservation)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        StoragePathGuard.EnsureNotLink(path);
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            StoragePathGuard.EnsureNotLink(path);
+        }
+        catch
+        {
+            handleReservation?.Dispose();
+            throw;
+        }
+
         SafeFileHandle? file = null;
         try
         {
@@ -174,8 +198,16 @@ sealed class SstReader : IDisposable
             var rangeTombstones = metadata.RangeHandle is { } rangeHandle
                 ? SstCodec.DecodeRangeTombstones(SstCodec.ReadBlock(file, fileLength, rangeHandle))
                 : [];
-            var reader = new SstReader(file, fileLength, index, blockBlooms, trieIndex, rangeTombstones);
+            var reader = new SstReader(
+                file,
+                fileLength,
+                index,
+                blockBlooms,
+                trieIndex,
+                rangeTombstones,
+                handleReservation);
             file = null;
+            handleReservation = null;
             return reader;
         }
         catch (PantsException)
@@ -189,6 +221,7 @@ sealed class SstReader : IDisposable
         finally
         {
             file?.Dispose();
+            handleReservation?.Dispose();
         }
     }
 

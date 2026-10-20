@@ -2,10 +2,13 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 
 sealed class SstReaderCache : IDisposable
 {
+    internal const int DefaultOpenReaderHandleBudget = 256;
+
     readonly long _budgetBytes;
     readonly object _gate = new();
     readonly LinkedList<ReaderEntry> _idleOrder = [];
     readonly Func<string, SstReader> _openReader;
+    readonly SstReaderHandleBudget _openReaderHandleBudget;
     readonly HashSet<ReaderEntry> _retiredReaders = [];
     readonly Dictionary<SstFileIdentity, ReaderSlot> _slots = [];
     bool _disposeCompleted;
@@ -15,30 +18,46 @@ sealed class SstReaderCache : IDisposable
     long _cachedBytes;
 
     public SstReaderCache()
-        : this(long.MaxValue, SstReader.Open)
+        : this(long.MaxValue, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), SstReader.Open)
     {
     }
 
     /// <summary>
     ///     Caches parsed readers up to <paramref name="budgetBytes" /> of estimated metadata,
-    ///     evicting the least recently used readers nobody currently holds.
+    ///     evicting the least recently used readers nobody currently holds, with a separate
+    ///     <see cref="DefaultOpenReaderHandleBudget" /> for cached and uncached open readers.
     /// </summary>
     public SstReaderCache(long budgetBytes)
-        : this(budgetBytes, SstReader.Open)
+        : this(budgetBytes, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), SstReader.Open)
     {
     }
 
     internal SstReaderCache(Func<string, SstReader> openReader)
-        : this(long.MaxValue, openReader)
+        : this(long.MaxValue, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), openReader)
     {
     }
 
     internal SstReaderCache(long budgetBytes, Func<string, SstReader> openReader)
+        : this(budgetBytes, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), openReader)
+    {
+    }
+
+    internal SstReaderCache(
+        long budgetBytes,
+        SstReaderHandleBudget openReaderHandleBudget,
+        Func<string, SstReader> openReader)
     {
         ArgumentNullException.ThrowIfNull(openReader);
+        ArgumentNullException.ThrowIfNull(openReaderHandleBudget);
         ArgumentOutOfRangeException.ThrowIfNegative(budgetBytes);
         _budgetBytes = budgetBytes;
+        _openReaderHandleBudget = openReaderHandleBudget;
         _openReader = openReader;
+    }
+
+    internal SstReaderCache(long budgetBytes, SstReaderHandleBudget openReaderHandleBudget)
+        : this(budgetBytes, openReaderHandleBudget, SstReader.Open)
+    {
     }
 
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
@@ -91,6 +110,7 @@ sealed class SstReaderCache : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ReaderSlot slot;
         int generation;
+        IDisposable handleReservation;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -115,6 +135,16 @@ sealed class SstReaderCache : IDisposable
                 slot = GetOrCreateSlot(file);
             }
 
+            try
+            {
+                handleReservation = ReserveOpenReaderHandleUnderLock();
+            }
+            catch
+            {
+                RemoveUnusedSlot(file, slot);
+                throw;
+            }
+
             generation = slot.Generation;
             slot.Opening = true;
             slot.OpeningReaders++;
@@ -128,42 +158,127 @@ sealed class SstReaderCache : IDisposable
         }
         catch
         {
-            CompleteOpening(file, slot);
+            try
+            {
+                handleReservation.Dispose();
+            }
+            finally
+            {
+                CompleteOpening(file, slot);
+            }
+
             throw;
         }
 
+        var handleReservationTransferred = false;
+        var removeUnusedSlot = false;
         lock (_gate)
         {
-            CompleteOpeningUnderLock(slot);
-            if (_disposed != 0)
+            try
             {
-                created.Dispose();
-                throw new ObjectDisposedException(nameof(SstReaderCache));
+                ObjectDisposedException.ThrowIf(_disposed != 0, this);
+
+                if (slot.Generation != generation)
+                {
+                    removeUnusedSlot = true;
+                    throw new FileNotFoundException(
+                        $"SST reader '{file.Name}' was removed while it was opening.",
+                        path);
+                }
+
+                if (slot.Reader is { } winner)
+                {
+                    var lease = Acquire(winner);
+                    DisposeUnpublishedReader(created, handleReservation);
+                    handleReservationTransferred = true;
+                    cacheHit = true;
+                    return lease;
+                }
+
+                var added = new ReaderEntry(file, created, handleReservation) { References = 1 };
+                var leaseForCreated = new SstReaderLease(created, () => Release(added));
+                _cachedBytes = checked(_cachedBytes + added.Bytes);
+                added.Node = _idleOrder.AddLast(added);
+                slot.Reader = added;
+                handleReservationTransferred = true;
+                EvictIdleOverBudget();
+                cacheHit = false;
+                return leaseForCreated;
+            }
+            catch
+            {
+                if (!handleReservationTransferred)
+                {
+                    DisposeUnpublishedReader(created, handleReservation);
+                    handleReservationTransferred = true;
+                }
+
+                throw;
+            }
+            finally
+            {
+                CompleteOpeningUnderLock(slot);
+                if (removeUnusedSlot)
+                {
+                    RemoveUnusedSlot(file, slot);
+                }
             }
 
-            if (slot.Generation != generation)
-            {
-                created.Dispose();
-                RemoveUnusedSlot(file, slot);
-                throw new FileNotFoundException(
-                    $"SST reader '{file.Name}' was removed while it was opening.",
-                    path);
-            }
+        }
+    }
 
-            if (slot.Reader is { } winner)
-            {
-                created.Dispose();
-                cacheHit = true;
-                return Acquire(winner);
-            }
+    /// <summary>Opens an uncached reader under the same handle limit as cached readers.</summary>
+    public SstReader OpenUncached(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        IDisposable handleReservation;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            handleReservation = ReserveOpenReaderHandleUnderLock();
+            _openingReaders++;
+        }
 
-            var added = new ReaderEntry(file, created) { References = 1 };
-            slot.Reader = added;
-            _cachedBytes = checked(_cachedBytes + added.Bytes);
-            added.Node = _idleOrder.AddLast(added);
-            EvictIdleOverBudget();
-            cacheHit = false;
-            return new SstReaderLease(created, () => Release(added));
+        SstReader? reader = null;
+        var openingCompleted = false;
+        try
+        {
+            var opened = SstReader.Open(path, handleReservation);
+            reader = opened;
+            lock (_gate)
+            {
+                if (_disposed != 0)
+                {
+                    opened.Dispose();
+                    reader = null;
+                    ObjectDisposedException.ThrowIf(_disposed != 0, this);
+                }
+
+                _openingReaders--;
+                openingCompleted = true;
+                Monitor.PulseAll(_gate);
+                return opened;
+            }
+        }
+        finally
+        {
+            if (!openingCompleted)
+            {
+                lock (_gate)
+                {
+                    _openingReaders--;
+                    Monitor.PulseAll(_gate);
+                }
+
+                if (reader is not null)
+                {
+                    reader.Dispose();
+                }
+                else
+                {
+                    handleReservation.Dispose();
+                }
+            }
         }
     }
 
@@ -252,9 +367,15 @@ sealed class SstReaderCache : IDisposable
             entry.References--;
             if (entry.References == 0 && entry.Retired)
             {
-                entry.Reader.Dispose();
-                _retiredReaders.Remove(entry);
-                Monitor.PulseAll(_gate);
+                try
+                {
+                    entry.Dispose();
+                }
+                finally
+                {
+                    _retiredReaders.Remove(entry);
+                    Monitor.PulseAll(_gate);
+                }
             }
             else if (entry.References == 0)
             {
@@ -287,6 +408,57 @@ sealed class SstReaderCache : IDisposable
         }
     }
 
+    IDisposable ReserveOpenReaderHandleUnderLock()
+    {
+        if (_openReaderHandleBudget.TryReserve(out var reservation))
+        {
+            return reservation;
+        }
+
+        while (_idleOrder.First is { } node)
+        {
+            var entry = node.Value;
+            if (_slots.TryGetValue(entry.File, out var slot) && ReferenceEquals(slot.Reader, entry))
+            {
+                slot.Reader = null;
+                Retire(entry);
+                RemoveUnusedSlot(entry.File, slot);
+            }
+            else
+            {
+                _idleOrder.Remove(node);
+                entry.Node = null;
+            }
+
+            if (_openReaderHandleBudget.TryReserve(out reservation))
+            {
+                return reservation;
+            }
+        }
+
+        if (_openReaderHandleBudget.TryReserve(out reservation))
+        {
+            return reservation;
+        }
+
+        throw new PantsResourceLimitException(
+            $"Opening another SST reader would exceed the " +
+            $"{_openReaderHandleBudget.Limit}-handle budget " +
+            $"({_openReaderHandleBudget.Current} reader handles are already reserved).");
+    }
+
+    static void DisposeUnpublishedReader(SstReader reader, IDisposable handleReservation)
+    {
+        try
+        {
+            reader.Dispose();
+        }
+        finally
+        {
+            handleReservation.Dispose();
+        }
+    }
+
     void RemoveUnusedSlot(SstFileIdentity file, ReaderSlot slot)
     {
         if (slot.Reader is null && slot.OpeningReaders == 0 &&
@@ -307,14 +479,14 @@ sealed class SstReaderCache : IDisposable
 
         if (entry.References == 0)
         {
-            entry.Reader.Dispose();
+            entry.Dispose();
             return;
         }
 
         _retiredReaders.Add(entry);
     }
 
-    sealed class ReaderEntry(SstFileIdentity file, SstReader reader)
+    sealed class ReaderEntry(SstFileIdentity file, SstReader reader, IDisposable handleReservation)
     {
         public SstFileIdentity File { get; } = file;
 
@@ -322,11 +494,25 @@ sealed class SstReaderCache : IDisposable
 
         public long Bytes { get; } = reader.EstimatedMetadataBytes;
 
+        public IDisposable HandleReservation { get; } = handleReservation;
+
         public LinkedListNode<ReaderEntry>? Node { get; set; }
 
         public int References { get; set; }
 
         public bool Retired { get; set; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Reader.Dispose();
+            }
+            finally
+            {
+                HandleReservation.Dispose();
+            }
+        }
     }
 
     sealed class ReaderSlot

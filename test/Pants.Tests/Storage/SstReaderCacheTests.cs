@@ -6,6 +6,74 @@ namespace Cntryl.Pants.Storage;
 public sealed class SstReaderCacheTests
 {
     [Fact]
+    public void ShouldRejectOverBudgetReaderOpenAndEvictIdleReaderForLaterAdmission()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
+        var opens = 0;
+        using var cache = new SstReaderCache(
+            long.MaxValue,
+            handleBudget,
+            openPath =>
+            {
+                Interlocked.Increment(ref opens);
+                return SstReader.Open(openPath);
+            });
+        using var first = cache.GetOrAdd(Sst("first.sst"), path, out _);
+
+        Assert.Equal(1, handleBudget.Current);
+        SstReaderLease? rejectedLease = null;
+        var rejection = Record.Exception(() =>
+            rejectedLease = cache.GetOrAdd(Sst("rejected.sst"), path, out _));
+        rejectedLease?.Dispose();
+        Assert.IsType<PantsResourceLimitException>(rejection);
+        Assert.Equal(1, Volatile.Read(ref opens));
+        Assert.Equal(1, handleBudget.Current);
+        SstReader? rejectedUncachedReader = null;
+        var uncachedRejection = Record.Exception(() =>
+            rejectedUncachedReader = cache.OpenUncached(path));
+        rejectedUncachedReader?.Dispose();
+        Assert.IsType<PantsResourceLimitException>(uncachedRejection);
+        Assert.Equal(1, handleBudget.Current);
+
+        var firstReader = first.Reader;
+        first.Dispose();
+        using var admitted = cache.GetOrAdd(Sst("admitted.sst"), path, out _);
+        Assert.Equal(2, Volatile.Read(ref opens));
+        Assert.True(firstReader.IsDisposed);
+        Assert.Equal(["admitted.sst"], cache.SnapshotFiles());
+        Assert.Equal(1, handleBudget.Current);
+
+        admitted.Dispose();
+        var uncached = cache.OpenUncached(path);
+        Assert.True(admitted.Reader.IsDisposed);
+        Assert.Empty(cache.SnapshotFiles());
+        Assert.Equal(1, handleBudget.Current);
+        uncached.Dispose();
+        cache.Dispose();
+        Assert.Equal(0, handleBudget.Current);
+    }
+
+    [Fact]
+    public void ShouldReleaseHandleReservationWhenUncachedReaderOpenFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var (path, _) = CreateSst(directory.Path);
+        var budget = new SstReaderHandleBudget(1);
+        using var cache = new SstReaderCache(long.MaxValue, budget);
+
+        Assert.Throws<StorageException>(() =>
+            cache.OpenUncached(Path.Combine(directory.Path, "missing.sst")));
+        Assert.Equal(0, budget.Current);
+
+        using var reader = cache.OpenUncached(path);
+        Assert.Equal(1, budget.Current);
+        reader.Dispose();
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
     public void ShouldCacheParsedReaderAndOwnItsFileHandle()
     {
         using var directory = new TemporaryDirectory();
@@ -124,16 +192,22 @@ public sealed class SstReaderCacheTests
         using var directory = new TemporaryDirectory();
         var (path, _) = CreateSst(directory.Path);
         var attempts = 0;
-        using var cache = new SstReaderCache(openPath =>
-            Interlocked.Increment(ref attempts) == 1
-                ? throw new IOException("injected")
-                : SstReader.Open(openPath));
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new SstReaderCache(
+            long.MaxValue,
+            handleBudget,
+            openPath =>
+                Interlocked.Increment(ref attempts) == 1
+                    ? throw new IOException("injected")
+                    : SstReader.Open(openPath));
 
         Assert.Throws<IOException>(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
+        Assert.Equal(0, handleBudget.Current);
         using var lease = cache.GetOrAdd(Sst("reader.sst"), path, out var hit);
 
         Assert.False(hit);
         Assert.False(lease.Reader.IsDisposed);
+        Assert.Equal(1, handleBudget.Current);
     }
 
     [Fact]
@@ -201,18 +275,31 @@ public sealed class SstReaderCacheTests
     {
         using var directory = new TemporaryDirectory();
         var (path, _) = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
         using var opening = new ManualResetEventSlim();
         using var releaseOpening = new ManualResetEventSlim();
         SstReader? created = null;
-        var cache = new SstReaderCache(openPath =>
-        {
-            created = SstReader.Open(openPath);
-            opening.Set();
-            Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
-            return created;
-        });
+        var openAttempts = 0;
+        var cache = new SstReaderCache(
+            long.MaxValue,
+            handleBudget,
+            openPath =>
+            {
+                Interlocked.Increment(ref openAttempts);
+                created = SstReader.Open(openPath);
+                opening.Set();
+                Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
+                return created;
+            });
         var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
         Assert.True(opening.Wait(TestTimeouts.Expected));
+        Assert.Equal(1, handleBudget.Current);
+        SstReaderLease? rejectedLease = null;
+        var rejection = Record.Exception(() =>
+            rejectedLease = cache.GetOrAdd(Sst("other.sst"), path, out _));
+        rejectedLease?.Dispose();
+        Assert.IsType<PantsResourceLimitException>(rejection);
+        Assert.Equal(1, Volatile.Read(ref openAttempts));
 
         var firstDisposal = Task.Run(cache.Dispose);
         Assert.True(SpinWait.SpinUntil(() => cache.IsDisposed, TestTimeouts.Expected));
@@ -225,6 +312,7 @@ public sealed class SstReaderCacheTests
         await Task.WhenAll(firstDisposal, secondDisposal).WaitAsync(TestTimeouts.Expected);
         Assert.NotNull(created);
         Assert.True(created.IsDisposed);
+        Assert.Equal(0, handleBudget.Current);
         Assert.Empty(cache.SnapshotFiles());
     }
 
@@ -233,18 +321,23 @@ public sealed class SstReaderCacheTests
     {
         using var directory = new TemporaryDirectory();
         var (path, _) = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
         using var opening = new ManualResetEventSlim();
         using var releaseOpening = new ManualResetEventSlim();
         SstReader? created = null;
-        using var cache = new SstReaderCache(openPath =>
-        {
-            created = SstReader.Open(openPath);
-            opening.Set();
-            Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
-            return created;
-        });
+        using var cache = new SstReaderCache(
+            long.MaxValue,
+            handleBudget,
+            openPath =>
+            {
+                created = SstReader.Open(openPath);
+                opening.Set();
+                Assert.True(releaseOpening.Wait(TestTimeouts.Expected));
+                return created;
+            });
         var acquisition = Task.Run(() => cache.GetOrAdd(Sst("reader.sst"), path, out _));
         Assert.True(opening.Wait(TestTimeouts.Expected));
+        Assert.Equal(1, handleBudget.Current);
 
         cache.RemoveFile("reader.sst");
         releaseOpening.Set();
@@ -252,6 +345,7 @@ public sealed class SstReaderCacheTests
         await Assert.ThrowsAsync<FileNotFoundException>(async () => await acquisition);
         Assert.NotNull(created);
         Assert.True(created.IsDisposed);
+        Assert.Equal(0, handleBudget.Current);
         Assert.Empty(cache.SnapshotFiles());
     }
 
