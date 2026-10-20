@@ -233,6 +233,7 @@ sealed class TransactionInstance : IPantsTransaction
                 {
                     IScanReadValidator? validator = null;
                     TransactionScanEnumerator? entries = null;
+                    IDisposable? sstFanInReservation = null;
                     IReadOnlyList<AsyncSstScanSource> sstSources = [];
                     try
                     {
@@ -249,6 +250,12 @@ sealed class TransactionInstance : IPantsTransaction
                                 bounds.StartInclusive,
                                 bounds.EndExclusive,
                                 scanCancellationToken).ConfigureAwait(false);
+                        var fanInBytes = TransactionScanEnumerator.EstimateSstFanInMetadataBytes(sstSources);
+                        if (fanInBytes != 0)
+                        {
+                            sstFanInReservation = _database.ReserveScanMemory(fanInBytes);
+                        }
+
                         validator = _database.CreateScanReadValidator(sstSources);
                         entries = new TransactionScanEnumerator(
                             _startSnapshot,
@@ -257,13 +264,16 @@ sealed class TransactionInstance : IPantsTransaction
                             intents,
                             bounds,
                             sstSources,
+                            sstFanInReservation,
                             scanCancellationToken);
+                        sstFanInReservation = null;
                         return validator is null
                             ? entries
                             : new ValidatingScanEnumerator(entries, validator);
                     }
                     catch
                     {
+                        sstFanInReservation?.Dispose();
                         if (entries is not null)
                         {
                             await entries.DisposeAsync().ConfigureAwait(false);

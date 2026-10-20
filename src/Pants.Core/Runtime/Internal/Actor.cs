@@ -2129,6 +2129,8 @@ sealed class Actor : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    public IDisposable ReserveScanMemory(long bytes) => _scanMemoryBudget.Reserve(bytes);
+
     public IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>
         sources.Count == 0 ? null : new AsyncSstScanReadValidator(_telemetry, sources);

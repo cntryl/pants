@@ -31,6 +31,67 @@ public sealed class PantsStreamingScanHardeningTests
     }
 
     [Fact]
+    public async Task ShouldShareSstFanInBudgetAcrossScansAndReleaseItOnDisposal()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(20 * 1024))
+            .WithMemtableLimits(512)
+            .WithCompaction(new PantsCompactionConfiguration(
+                L0FileCountTrigger: 1000,
+                BackgroundEnabled: false));
+        Assert.Equal(1024, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
+
+        await using var database = await PantsDatabase.OpenAsync(options);
+        for (var index = 0; index < 20; index++)
+        {
+            await using var writer = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            writer.Put(TestBytes.FromString($"key-{index:0000}"), new byte[] { 1 });
+            writer.DeleteRange(TestBytes.FromString("z-start"), TestBytes.FromString("zz-end"));
+            await writer.CommitAsync(PantsWriteOptions.Buffered);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        var metricsBeforeScan = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(20, metricsBeforeScan.SstCount);
+        await using var firstTransaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var firstScan = await firstTransaction.ScanAsync(new PantsScanQuery());
+        var firstEnumerator = firstScan.GetAsyncEnumerator();
+        Assert.True(await firstEnumerator.MoveNextAsync());
+        Assert.True(firstScan.IsActive);
+        var metricsDuringFirstScan = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(
+            metricsDuringFirstScan.ScanBufferUsedBytes > 0,
+            $"Expected scan memory to be reserved, found {metricsDuringFirstScan.ScanBufferUsedBytes} bytes.");
+
+        await using var secondTransaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var secondScan = await secondTransaction.ScanAsync(new PantsScanQuery());
+        var secondEnumerator = secondScan.GetAsyncEnumerator();
+
+        var failure = await Assert.ThrowsAsync<PantsResourceLimitException>(
+            () => secondEnumerator.MoveNextAsync().AsTask());
+
+        Assert.Equal(PantsErrorCode.ResourceLimit, failure.Code);
+        Assert.True(secondScan.IsFailed);
+        Assert.True(firstScan.IsActive);
+        Assert.Equal(
+            metricsDuringFirstScan.ScanBufferUsedBytes,
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).ScanBufferUsedBytes);
+
+        await firstScan.DisposeAsync();
+        var metricsAfterDisposal = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(
+            metricsAfterDisposal.ScanBufferUsedBytes == 0,
+            $"Scan memory remained reserved after disposal: {metricsAfterDisposal.ScanBufferUsedBytes} bytes.");
+    }
+
+    [Fact]
     public async Task ShouldYieldEarlierRowsBeforeAStickyLaterBlockFailure()
     {
         using var directory = new TemporaryDirectory();
@@ -65,6 +126,7 @@ public sealed class PantsStreamingScanHardeningTests
         var second = await Assert.ThrowsAsync<PantsCorruptionException>(() => enumerator.MoveNextAsync().AsTask());
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ScanBufferUsedBytes);
     }
 
     [Fact]
