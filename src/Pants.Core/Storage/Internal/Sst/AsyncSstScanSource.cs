@@ -12,6 +12,7 @@ sealed class AsyncSstScanSource : IAsyncDisposable
     readonly byte[]? _endExclusive;
     readonly Func<CancellationToken, ValueTask<AsyncSstReader>> _reopenReader;
     readonly ResourceBudget? _resourceBudget;
+    IDisposable? _readerMetadataReservation;
     readonly byte[]? _startInclusive;
     int _dataBlocksRead;
     AsyncSstBlockIterator? _iterator;
@@ -23,13 +24,15 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         PantsScanDirection direction,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget,
+        IDisposable? readerMetadataReservation)
     {
         _reopenReader = reopenReader;
         _direction = direction;
         _startInclusive = startInclusive;
         _endExclusive = endExclusive;
         _resourceBudget = resourceBudget;
+        _readerMetadataReservation = readerMetadataReservation;
         SmallestKey = reader.SmallestKey ??
                       throw new PantsCorruptionException($"SST '{file.Name}' has no smallest key.");
         LargestKey = reader.LargestKey ??
@@ -64,33 +67,53 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         byte[]? endExclusive,
         ResourceBudget? resourceBudget)
     {
+        IDisposable? readerMetadataReservation = null;
+        AsyncSstScanSource? source = null;
         try
         {
-            return new AsyncSstScanSource(
+            readerMetadataReservation = resourceBudget?.Reserve(reader.EstimatedScanMetadataBytes);
+            source = new AsyncSstScanSource(
                 file,
                 reader,
                 reopenReader,
                 direction,
                 startInclusive,
                 endExclusive,
-                resourceBudget);
-        }
-        finally
-        {
+                resourceBudget,
+                readerMetadataReservation);
+            readerMetadataReservation = null;
             await reader.DisposeAsync().ConfigureAwait(false);
+            return source;
+        }
+        catch
+        {
+            readerMetadataReservation?.Dispose();
+            if (source is not null)
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+
+            await reader.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_iterator is not { } iterator)
-        {
-            return;
-        }
-
-        _dataBlocksRead = checked(_dataBlocksRead + iterator.DataBlocksRead);
+        var iterator = _iterator;
         _iterator = null;
-        await iterator.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            if (iterator is not null)
+            {
+                _dataBlocksRead = checked(_dataBlocksRead + iterator.DataBlocksRead);
+                await iterator.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _readerMetadataReservation, null)?.Dispose();
+        }
     }
 
     public async ValueTask<bool> MoveNextAsync(CancellationToken cancellationToken)

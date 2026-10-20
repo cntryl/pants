@@ -5,7 +5,10 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 ///     duration of the scan via <see cref="SstReaderCache" />) plus a bound-clamped block iterator
 ///     over it. Disposing releases the lease, not the underlying reader (which the cache still owns).
 /// </summary>
-sealed class SstScanSource(SstReaderLease lease, SstBlockIterator iterator) : IDisposable
+sealed class SstScanSource(
+    SstReaderLease lease,
+    SstBlockIterator iterator,
+    IDisposable? readerMetadataReservation) : IDisposable
 {
     public SstBlockIterator Iterator { get; } = iterator;
 
@@ -13,7 +16,20 @@ sealed class SstScanSource(SstReaderLease lease, SstBlockIterator iterator) : ID
 
     public void Dispose()
     {
-        Iterator.Dispose();
-        lease.Dispose();
+        try
+        {
+            Iterator.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                lease.Dispose();
+            }
+            finally
+            {
+                readerMetadataReservation?.Dispose();
+            }
+        }
     }
 }

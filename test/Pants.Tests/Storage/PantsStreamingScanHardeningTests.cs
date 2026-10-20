@@ -35,12 +35,12 @@ public sealed class PantsStreamingScanHardeningTests
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(20 * 1024))
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1024))
             .WithMemtableLimits(512)
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 1000,
                 BackgroundEnabled: false));
-        Assert.Equal(1024, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
+        Assert.Equal(6_553, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
 
         await using var database = await PantsDatabase.OpenAsync(options);
         for (var index = 0; index < 20; index++)

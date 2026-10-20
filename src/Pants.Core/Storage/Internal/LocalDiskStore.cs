@@ -1775,14 +1775,41 @@ sealed class LocalDiskStore :
             {
                 var path = Path.Combine(_sstDirectory, candidate.Name);
                 var lease = _readerCache.GetOrAdd(SstFileIdentity.Of(candidate), path, out _);
-                sources.Add(new SstScanSource(
-                    lease,
-                    SstBlockIterator.Create(
+                IDisposable? readerMetadataReservation = null;
+                SstBlockIterator? iterator = null;
+                try
+                {
+                    readerMetadataReservation = resourceBudget?.Reserve(lease.Reader.EstimatedMetadataBytes);
+                    iterator = SstBlockIterator.Create(
                         lease.Reader,
                         direction,
                         startInclusive,
                         endExclusive,
-                        resourceBudget)));
+                        resourceBudget);
+                    sources.Add(new SstScanSource(lease, iterator, readerMetadataReservation));
+                    iterator = null;
+                    readerMetadataReservation = null;
+                }
+                catch
+                {
+                    try
+                    {
+                        iterator?.Dispose();
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            readerMetadataReservation?.Dispose();
+                        }
+                        finally
+                        {
+                            lease.Dispose();
+                        }
+                    }
+
+                    throw;
+                }
             }
 
             return sources;
