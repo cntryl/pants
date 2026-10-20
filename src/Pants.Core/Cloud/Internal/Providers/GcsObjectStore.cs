@@ -353,7 +353,7 @@ sealed class GcsObjectStore : CloudObjectStore
         var request = new HttpRequestMessage(requestMethod, uri);
         if (method == HttpMethod.Put)
         {
-            request.Content = new ByteArrayContent(data.ToArray());
+            request.Content = new ReadOnlyMemoryContent(data);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         }
 

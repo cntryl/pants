@@ -620,7 +620,8 @@ sealed class Actor : IAsyncDisposable
                         walRetirementSettings,
                         catalogWriteAdmission,
                         localWalCacheId,
-                        walRetirementDiagnostics);
+                        walRetirementDiagnostics,
+                        walPublicationAdmission: new WalPublicationAdmission(maintenanceMemoryBudget));
                     cloudPersistence = providerPersistence;
                     var allowLocalWalTailRecovery = await startupDeadline.RunMutationAsync(
                             providerPersistence.FenceWalCatalogAsync,

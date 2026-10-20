@@ -43,6 +43,11 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
         string objectKey,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Writes an object using the requested conditional mutation.</summary>
+    /// <remarks>
+    ///     Keep the memory backing <paramref name="data" /> valid and unchanged until the returned
+    ///     <see cref="ValueTask{TResult}" /> completes.
+    /// </remarks>
     ValueTask<bool> PutAsync(
         string objectKey,
         ReadOnlyMemory<byte> data,

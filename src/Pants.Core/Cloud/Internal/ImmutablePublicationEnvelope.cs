@@ -2,8 +2,9 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 /// <summary>
 ///     The transient memory an immutable file publication needs, mirroring Midge's
-///     <c>publish_immutable_file</c> admission: the local copy plus provider transport and readback
-///     copies (<see cref="CopyFactor" />), and a fixed workspace for bounded range buffers.
+///     <c>publish_immutable_file</c> admission: a conservative payload multiple for local staging,
+///     provider working buffers, and readback (<see cref="CopyFactor" />), plus a fixed workspace
+///     for bounded range buffers.
 /// </summary>
 static class ImmutablePublicationEnvelope
 {

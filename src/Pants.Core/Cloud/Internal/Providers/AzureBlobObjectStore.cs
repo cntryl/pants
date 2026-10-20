@@ -290,7 +290,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     {
         var request = new HttpRequestMessage(HttpMethod.Put, BuildObjectUri(objectKey))
         {
-            Content = new ByteArrayContent(data.ToArray())
+            Content = new ReadOnlyMemoryContent(data)
         };
         request.Headers.TryAddWithoutValidation("x-ms-blob-type", "BlockBlob");
         switch (condition)
