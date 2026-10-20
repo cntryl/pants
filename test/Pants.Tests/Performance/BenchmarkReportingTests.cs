@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Cntryl.Pants.Reporting;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -97,11 +100,11 @@ public sealed class BenchmarkReportingTests
     }
 
     [Fact]
-    public void ShouldReadPinnedMidgeSummaryGivenCurrentStressSchema()
+    public void ShouldReadMidgeSummaryGivenConfiguredSourcePin()
     {
-        var json = MidgeJson(MidgeBenchmarkReader.PinnedSourceSha);
+        var json = MidgeJson(TestMidgeSourceSha);
 
-        var result = Assert.Single(MidgeBenchmarkReader.Read(json));
+        var result = Assert.Single(MidgeBenchmarkReader.Read(json, TestPin()));
 
         Assert.Equal("Tier2", result.Tier);
         Assert.Equal("midge:tier2/read", result.ScenarioId);
@@ -112,30 +115,41 @@ public sealed class BenchmarkReportingTests
     }
 
     [Fact]
-    public void ShouldRejectMidgeArtifactGivenSourceShaIsNotPinned()
+    public void ShouldRejectMidgeArtifactGivenSourceShaDiffersFromConfiguredPin()
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
-            MidgeBenchmarkReader.Read(MidgeJson(new string('0', 40))));
+            MidgeBenchmarkReader.Read(MidgeJson(TestMidgeSourceSha), TestPin(new string('0', 40))));
 
-        Assert.Contains("does not match pinned SHA", exception.Message);
+        Assert.Contains("configured pin", exception.Message);
+    }
+
+    [Fact]
+    public void ShouldRejectMidgeArtifactGivenStressToolVersionDiffersFromConfiguredPin()
+    {
+        var json = MidgeJson(TestMidgeSourceSha)
+            .Replace("\"tool_version\": \"0.4.0\"", "\"tool_version\": \"0.3.0\"", StringComparison.Ordinal);
+
+        var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkReader.Read(json, TestPin()));
+
+        Assert.Contains("does not match configured pin version", exception.Message);
     }
 
     [Fact]
     public void ShouldRejectMidgeCargoLockGivenHarnessRevisionIsNotPinned()
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
-            MidgeBenchmarkReader.ValidateCargoLock("not a pinned Cargo.lock"u8.ToArray()));
+            MidgeBenchmarkReader.ValidateCargoLock("not a pinned Cargo.lock"u8.ToArray(), TestPin()));
 
-        Assert.Contains("does not match the pinned lock", exception.Message);
+        Assert.Contains("configured pin", exception.Message);
     }
 
     [Fact]
     public void ShouldRejectMidgeArtifactGivenMeasuredSampleCountDoesNotMatchSummary()
     {
-        var json = MidgeJson(MidgeBenchmarkReader.PinnedSourceSha)
+        var json = MidgeJson(TestMidgeSourceSha)
             .Replace("\"measured_samples\": 2", "\"measured_samples\": 3", StringComparison.Ordinal);
 
-        var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkReader.Read(json));
+        var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkReader.Read(json, TestPin()));
 
         Assert.Contains("summary reports 3 measured samples", exception.Message);
     }
@@ -144,8 +158,8 @@ public sealed class BenchmarkReportingTests
     public void ShouldKeepMidgeScenarioIdentityStableGivenDiagnosticParametersChange()
     {
         var result = Assert.Single(MidgeBenchmarkReader.Read(MidgeJson(
-            MidgeBenchmarkReader.PinnedSourceSha,
-            parametersJson: "{ \"candidate_blocks_checked_delta\": \"2813\", \"storage\": \"local\" }")));
+            TestMidgeSourceSha,
+            parametersJson: "{ \"candidate_blocks_checked_delta\": \"2813\", \"storage\": \"local\" }"), TestPin()));
 
         Assert.Equal("midge:tier2/read", result.ScenarioId);
         Assert.Contains("candidate_blocks_checked_delta=2813", result.Parameters);
@@ -155,8 +169,8 @@ public sealed class BenchmarkReportingTests
     public void ShouldRejectMidgeFixtureGivenTier3SetupMarkerIsMissing()
     {
         var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkReader.Read(MidgeJson(
-            MidgeBenchmarkReader.PinnedSourceSha,
-            name: "tier3_engine_get_local")));
+            TestMidgeSourceSha,
+            name: "tier3_engine_get_local"), TestPin()));
 
         Assert.Contains("fixture memtable marker", exception.Message);
     }
@@ -168,10 +182,10 @@ public sealed class BenchmarkReportingTests
     public void ShouldReadMidgeFixtureGivenPinnedMemtableMarker(string name, string sizeBytes)
     {
         var result = Assert.Single(MidgeBenchmarkReader.Read(MidgeJson(
-            MidgeBenchmarkReader.PinnedSourceSha,
+            TestMidgeSourceSha,
             name,
             $"{{ \"fixture_memtable_size_bytes\": \"{sizeBytes}\" }}",
-            tier: 3)));
+            tier: 3), TestPin()));
 
         Assert.Equal(name, result.Workload);
         Assert.Contains($"fixture_memtable_size_bytes={sizeBytes}", result.Parameters);
@@ -181,22 +195,57 @@ public sealed class BenchmarkReportingTests
     public void ShouldRejectIncompleteMidgeArtifactGivenPinnedScenarioInventory()
     {
         var exception = Assert.Throws<InvalidDataException>(() =>
-            MidgeBenchmarkReader.ValidateScenarioInventory(["midge:tier2/read"]));
+            MidgeBenchmarkReader.ValidateScenarioInventory(
+                ["midge:tier2/read"],
+                new HashSet<string>(["midge:tier2/expected"], StringComparer.Ordinal)));
 
-        Assert.Contains("do not match the pinned inventory", exception.Message);
+        Assert.Contains("do not match the configured inventory", exception.Message);
         Assert.Contains("Missing:", exception.Message);
     }
 
     [Fact]
-    public void ShouldRejectMidgeArtifactsGivenFixturePatchIsNotPinned()
+    public void ShouldReadMidgeArtifactsGivenConfiguredReleasePin()
     {
         using var directory = new TemporaryDirectory();
-        File.WriteAllText(Path.Combine(directory.Path, "latest.json"), "{}");
-        File.WriteAllText(Path.Combine(directory.Path, "midge-smoke-fixtures.patch"), "unreviewed patch");
+        var artifacts = Path.Combine(directory.Path, "artifacts");
+        Directory.CreateDirectory(artifacts);
+        File.WriteAllText(Path.Combine(artifacts, "latest.json"), MidgeJson(TestMidgeSourceSha));
+        File.WriteAllBytes(Path.Combine(artifacts, "Cargo.lock"), TestCargoLockBytes);
+        var pinPath = WritePin(directory.Path, TestMidgeSourceSha, ["midge:tier2/read"]);
 
-        var exception = Assert.Throws<InvalidDataException>(() => BenchmarkReportCommand.ReadMidge(directory.Path));
+        var results = BenchmarkReportCommand.ReadMidge(artifacts, MidgeBenchmarkPin.Load(pinPath));
 
-        Assert.Contains("does not match pinned SHA", exception.Message);
+        var result = Assert.Single(results);
+        Assert.Equal(TestMidgeSourceSha, result.SourceSha);
+        Assert.Equal(TestPin().CargoLockSha256, result.CargoLockSha256);
+    }
+
+    [Fact]
+    public void ShouldRejectMidgePinGivenScenarioInventoryBytesDifferFromConfiguredHash()
+    {
+        using var directory = new TemporaryDirectory();
+        var pinPath = WritePin(directory.Path, TestMidgeSourceSha, ["midge:tier2/read"]);
+        File.AppendAllText(Path.Combine(directory.Path, "scenarios.txt"), "midge:tier2/extra\n");
+
+        var exception = Assert.Throws<InvalidDataException>(() => MidgeBenchmarkPin.Load(pinPath));
+
+        Assert.Contains("does not match the configured pin", exception.Message);
+    }
+
+    [Fact]
+    public void ShouldRejectMidgeArtifactsGivenSourceShaDiffersFromConfiguredReleasePin()
+    {
+        using var directory = new TemporaryDirectory();
+        var artifacts = Path.Combine(directory.Path, "artifacts");
+        Directory.CreateDirectory(artifacts);
+        File.WriteAllText(Path.Combine(artifacts, "latest.json"), MidgeJson(TestMidgeSourceSha));
+        File.WriteAllBytes(Path.Combine(artifacts, "Cargo.lock"), TestCargoLockBytes);
+        var pinPath = WritePin(directory.Path, new string('0', 40), ["midge:tier2/read"]);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            BenchmarkReportCommand.ReadMidge(artifacts, MidgeBenchmarkPin.Load(pinPath)));
+
+        Assert.Contains("does not match configured pin", exception.Message);
     }
 
     [Fact]
@@ -283,20 +332,21 @@ public sealed class BenchmarkReportingTests
         var metadata = new BenchmarkRunMetadata(
             "pants", "pants-sha", "test-os", "Arm64", "test-cpu", ".NET test", "cold", 1);
         var pants = new BenchmarkResult("pants:id", "Tier2", "Read", "clients=16", 1, 100, null, 10, "cold");
-        var midge = Assert.Single(MidgeBenchmarkReader.Read(MidgeJson(MidgeBenchmarkReader.PinnedSourceSha))) with
+        var pin = TestPin();
+        var midge = Assert.Single(MidgeBenchmarkReader.Read(MidgeJson(TestMidgeSourceSha), pin)) with
         {
-            FixturePatchSha256 = MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256,
-            CargoLockSha256 = MidgeBenchmarkReader.PinnedCargoLockSha256
+            CargoLockSha256 = pin.CargoLockSha256
         };
 
-        var report = BenchmarkReportCommand.Render(metadata, [pants], [midge]);
+        var report = BenchmarkReportCommand.Render(metadata, [pants], [midge], pin);
 
         Assert.Contains("not treated as equivalent", report);
         Assert.Contains("Logical ops/invoke", report);
         Assert.Contains("Measured ops", report);
-        Assert.Contains(MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256, report);
-        Assert.Contains(MidgeBenchmarkReader.PinnedCargoLockSha256, report);
-        Assert.Contains(MidgeBenchmarkReader.PinnedScenarioInventorySha256, report);
+        Assert.Contains("Midge release: `0.1.1`", report);
+        Assert.Contains(TestMidgeSourceSha, report);
+        Assert.Contains(pin.CargoLockSha256, report);
+        Assert.Contains(pin.ScenarioInventorySha256, report);
         Assert.Contains("| Read | clients=16 | 1 | 100.00 |", report);
         Assert.Contains("| point read | clients=16;storage=local | smoke | ns_per_op | 2 | 300 |", report);
         Assert.DoesNotContain("| Ratio |", report, StringComparison.OrdinalIgnoreCase);
@@ -309,7 +359,7 @@ public sealed class BenchmarkReportingTests
         int tier = 2) => $$"""
                                                    {
                                                      "schema_version": "cntryl-stress.v2",
-                                                     "tool_version": "0.3.0",
+                                                     "tool_version": "0.4.0",
                                                      "run_profile": "smoke",
                                                      "environment": {
                                                        "git_commit": "{{sourceSha}}",
@@ -339,4 +389,47 @@ public sealed class BenchmarkReportingTests
                                                      ]
                                                    }
                                                    """;
+
+    const string TestMidgeSourceSha = "7d39f86217fdb07191a83bd885a514dd5ea9723f";
+
+    static readonly byte[] TestCargoLockBytes = Encoding.UTF8.GetBytes(
+        """
+        [[package]]
+        name = "cntryl-stress"
+        version = "0.4.0"
+        source = "registry+https://github.com/rust-lang/crates.io-index"
+        checksum = "61338fa3caeb07817598b9c7080ba4d94e9961352467226633c707581f545b07"
+        """);
+
+    static MidgeBenchmarkPin TestPin(string? sourceSha = null)
+    {
+        var inventory = Encoding.UTF8.GetBytes("midge:tier2/read\n");
+        return new MidgeBenchmarkPin(
+            "0.1.1",
+            sourceSha ?? TestMidgeSourceSha,
+            "0.4.0",
+            Hash(TestCargoLockBytes),
+            Hash(inventory),
+            new HashSet<string>(["midge:tier2/read"], StringComparer.Ordinal));
+    }
+
+    static string WritePin(string directory, string sourceSha, IReadOnlyList<string> scenarioIds)
+    {
+        var inventoryBytes = Encoding.UTF8.GetBytes(string.Join('\n', scenarioIds) + "\n");
+        var inventoryPath = Path.Combine(directory, "scenarios.txt");
+        File.WriteAllBytes(inventoryPath, inventoryBytes);
+        var pinPath = Path.Combine(directory, "midge-pin.json");
+        File.WriteAllText(pinPath, JsonSerializer.Serialize(new
+        {
+            release = "0.1.1",
+            source_sha = sourceSha,
+            stress_tool_version = "0.4.0",
+            cargo_lock_sha256 = Hash(TestCargoLockBytes),
+            scenario_inventory_file = Path.GetFileName(inventoryPath),
+            scenario_inventory_sha256 = Hash(inventoryBytes)
+        }));
+        return pinPath;
+    }
+
+    static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

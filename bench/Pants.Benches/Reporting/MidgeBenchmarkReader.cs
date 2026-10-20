@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -8,35 +7,42 @@ namespace Cntryl.Pants.Reporting;
 
 static class MidgeBenchmarkReader
 {
-    public const string PinnedSourceSha = "c5ffc2d3284c76b6f7cd03444a5b0a38ae8bbc33";
-    public const string PinnedStressHarnessSha = "6b7bd34b495f843826eb873e45b7a70b341c74e3";
-    public const string PinnedToolVersion = "0.3.0";
-    public const string PinnedCargoLockSha256 =
-        "484a1b98e6760d680397fcb5be00accad37f6dade8946e2bfe6dfcc517db9b2d";
-    public const string PinnedBenchmarkFixturePatchSha256 =
-        "f9b0c0035989a5bf98df9377295b9ea8d9efd9edaefdade404f2d517e2ea8b44";
-
-    const string ScenarioInventoryResourceName = "Cntryl.Pants.Benches.Reporting.midge-c5-scenarios.txt";
-    static readonly byte[] ScenarioInventoryBytes = ReadScenarioInventoryBytes();
-    static readonly HashSet<string> ExpectedScenarioIds = ParseScenarioInventory(ScenarioInventoryBytes);
-
-    public static string PinnedScenarioInventorySha256 =>
-        Convert.ToHexString(SHA256.HashData(ScenarioInventoryBytes)).ToLowerInvariant();
-
-    internal static string ValidateCargoLock(byte[] cargoLockBytes)
+    internal static string ValidateCargoLock(byte[] cargoLockBytes, MidgeBenchmarkPin pin)
     {
         var cargoLockSha = Convert.ToHexString(SHA256.HashData(cargoLockBytes)).ToLowerInvariant();
-        if (!cargoLockSha.Equals(PinnedCargoLockSha256, StringComparison.Ordinal) ||
-            !Encoding.UTF8.GetString(cargoLockBytes).Contains(PinnedStressHarnessSha, StringComparison.Ordinal))
+        if (!cargoLockSha.Equals(pin.CargoLockSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Midge Cargo.lock SHA '{cargoLockSha}' or stress harness revision does not match the pinned lock.");
+                $"Midge Cargo.lock SHA '{cargoLockSha}' does not match the configured pin.");
+        }
+
+        var stressPackage = Encoding.UTF8.GetString(cargoLockBytes)
+            .Split("[[package]]", StringSplitOptions.RemoveEmptyEntries)
+            .Any(section =>
+                CargoLockValue(section, "name") == "cntryl-stress" &&
+                CargoLockValue(section, "version") == pin.StressToolVersion &&
+                CargoLockValue(section, "source") == "registry+https://github.com/rust-lang/crates.io-index");
+        if (!stressPackage)
+        {
+            throw new InvalidDataException(
+                $"Midge Cargo.lock does not contain the configured published cntryl-stress {pin.StressToolVersion} crate.");
         }
 
         return cargoLockSha;
     }
 
-    public static IReadOnlyList<MidgeBenchmarkResult> Read(string json)
+    static string? CargoLockValue(string packageSection, string propertyName)
+    {
+        var prefix = $"{propertyName} = \"";
+        var line = packageSection.Split('\n')
+            .Select(static value => value.Trim())
+            .FirstOrDefault(value => value.StartsWith(prefix, StringComparison.Ordinal));
+        return line is not null && line.EndsWith('"')
+            ? line[prefix.Length..^1]
+            : null;
+    }
+
+    public static IReadOnlyList<MidgeBenchmarkResult> Read(string json, MidgeBenchmarkPin pin)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -47,10 +53,11 @@ static class MidgeBenchmarkReader
 
         var environment = Required(root, "environment");
         var sourceSha = RequiredString(environment, "git_commit");
-        if (!sourceSha.Equals(PinnedSourceSha, StringComparison.Ordinal))
+        if (!sourceSha.Equals(pin.SourceSha, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Midge benchmark SHA '{sourceSha}' does not match pinned SHA '{PinnedSourceSha}'.");
+                $"Midge benchmark SHA '{sourceSha}' does not match configured pin for release {pin.Release} " +
+                $"with SHA '{pin.SourceSha}'.");
         }
 
         var cpu = RequiredString(environment, "cpu_model");
@@ -58,10 +65,11 @@ static class MidgeBenchmarkReader
         var runtime = RequiredString(environment, "rustc_version");
         var runProfile = RequiredString(root, "run_profile");
         var toolVersion = RequiredString(root, "tool_version");
-        if (!toolVersion.Equals(PinnedToolVersion, StringComparison.Ordinal))
+        if (!toolVersion.Equals(pin.StressToolVersion, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Midge stress tool version '{toolVersion}' does not match pinned version '{PinnedToolVersion}'.");
+                $"Midge stress tool version '{toolVersion}' does not match configured pin version " +
+                $"'{pin.StressToolVersion}'.");
         }
         var summaries = Required(root, "summaries");
         if (summaries.ValueKind != JsonValueKind.Array || summaries.GetArrayLength() == 0)
@@ -244,41 +252,19 @@ static class MidgeBenchmarkReader
         }
     }
 
-    static byte[] ReadScenarioInventoryBytes()
-    {
-        using var stream = Assembly.GetExecutingAssembly()
-            .GetManifestResourceStream(ScenarioInventoryResourceName) ??
-            throw new InvalidDataException(
-                $"Pinned Midge scenario inventory resource '{ScenarioInventoryResourceName}' is missing.");
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return buffer.ToArray();
-    }
-
-    static HashSet<string> ParseScenarioInventory(byte[] bytes)
-    {
-        var ids = Encoding.UTF8.GetString(bytes)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToArray();
-        if (ids.Length == 0 || ids.Distinct(StringComparer.Ordinal).Count() != ids.Length)
-        {
-            throw new InvalidDataException("Pinned Midge scenario inventory is empty or contains duplicate IDs.");
-        }
-
-        return ids.ToHashSet(StringComparer.Ordinal);
-    }
-
-    internal static void ValidateScenarioInventory(IEnumerable<string> scenarioIds)
+    internal static void ValidateScenarioInventory(
+        IEnumerable<string> scenarioIds,
+        IReadOnlySet<string> expectedScenarioIds)
     {
         var actual = scenarioIds.ToHashSet(StringComparer.Ordinal);
-        var missing = ExpectedScenarioIds.Except(actual, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        var unexpected = actual.Except(ExpectedScenarioIds, StringComparer.Ordinal)
+        var missing = expectedScenarioIds.Except(actual, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var unexpected = actual.Except(expectedScenarioIds, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (missing.Length != 0 || unexpected.Length != 0)
         {
             throw new InvalidDataException(
-                "Midge benchmark scenarios do not match the pinned inventory. " +
+                "Midge benchmark scenarios do not match the configured inventory. " +
                 $"Missing: [{string.Join(", ", missing)}]; unexpected: [{string.Join(", ", unexpected)}].");
         }
     }

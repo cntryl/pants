@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Reflection;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
@@ -11,18 +10,20 @@ static class BenchmarkReportCommand
 {
     public static int Run(string[] args)
     {
-        if (args.Length != 3)
+        if (args.Length != 4)
         {
             Console.Error.WriteLine(
-                "Usage: aggregate <pants-artifact-directory> <midge-artifact-directory> <output.md>");
+                "Usage: aggregate <midge-pin.json> <pants-artifact-directory> " +
+                "<midge-artifact-directory> <output.md>");
             return 2;
         }
 
         try
         {
-            var pants = ReadPants(args[0]);
-            var midge = ReadMidge(args[1]);
-            File.WriteAllText(args[2], Render(pants.Metadata, pants.Results, midge));
+            var pin = MidgeBenchmarkPin.Load(args[0]);
+            var pants = ReadPants(args[1]);
+            var midge = ReadMidge(args[2], pin);
+            File.WriteAllText(args[3], Render(pants.Metadata, pants.Results, midge, pin));
             return 0;
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException)
@@ -132,7 +133,7 @@ static class BenchmarkReportCommand
         return $"pants:{benchmarkType}:{method}:{string.Join(';', parameters)}";
     }
 
-    internal static IReadOnlyList<MidgeBenchmarkResult> ReadMidge(string directory)
+    internal static IReadOnlyList<MidgeBenchmarkResult> ReadMidge(string directory, MidgeBenchmarkPin pin)
     {
         var files = Directory.GetFiles(directory, "latest.json", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
@@ -142,21 +143,6 @@ static class BenchmarkReportCommand
             throw new InvalidDataException("No Midge latest.json benchmark artifacts were found.");
         }
 
-        var setupPatchPath = Path.Combine(directory, "midge-smoke-fixtures.patch");
-        if (!File.Exists(setupPatchPath))
-        {
-            throw new InvalidDataException("Midge benchmark setup patch artifact is missing.");
-        }
-
-        var setupPatchSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(setupPatchPath)))
-            .ToLowerInvariant();
-        if (!setupPatchSha.Equals(MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                $"Midge benchmark setup patch SHA '{setupPatchSha}' does not match pinned SHA " +
-                $"'{MidgeBenchmarkReader.PinnedBenchmarkFixturePatchSha256}'.");
-        }
-
         var cargoLockPath = Path.Combine(directory, "Cargo.lock");
         if (!File.Exists(cargoLockPath))
         {
@@ -164,12 +150,11 @@ static class BenchmarkReportCommand
         }
 
         var cargoLockBytes = File.ReadAllBytes(cargoLockPath);
-        var cargoLockSha = MidgeBenchmarkReader.ValidateCargoLock(cargoLockBytes);
+        var cargoLockSha = MidgeBenchmarkReader.ValidateCargoLock(cargoLockBytes, pin);
 
-        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path)))
+        var results = files.SelectMany(path => MidgeBenchmarkReader.Read(File.ReadAllText(path), pin))
             .Select(result => result with
             {
-                FixturePatchSha256 = setupPatchSha,
                 CargoLockSha256 = cargoLockSha
             })
             .ToArray();
@@ -189,7 +174,9 @@ static class BenchmarkReportCommand
                 "Midge benchmark artifacts contain inconsistent source or machine metadata.");
         }
 
-        MidgeBenchmarkReader.ValidateScenarioInventory(results.Select(result => result.ScenarioId));
+        MidgeBenchmarkReader.ValidateScenarioInventory(
+            results.Select(result => result.ScenarioId),
+            pin.ExpectedScenarioIds);
 
         return results;
     }
@@ -197,24 +184,24 @@ static class BenchmarkReportCommand
     internal static string Render(
         BenchmarkRunMetadata metadata,
         IReadOnlyList<BenchmarkResult> pants,
-        IReadOnlyList<MidgeBenchmarkResult> midge)
+        IReadOnlyList<MidgeBenchmarkResult> midge,
+        MidgeBenchmarkPin pin)
     {
         var output = new StringBuilder();
         output.AppendLine("# Pants and Midge benchmark comparison");
         output.AppendLine();
         output.AppendLine(CultureInfo.InvariantCulture, $"Pants SHA: `{metadata.SourceSha}`  ");
-        output.AppendLine(CultureInfo.InvariantCulture, $"Midge SHA: `{MidgeBenchmarkReader.PinnedSourceSha}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture, $"Midge release: `{pin.Release}`  ");
+        output.AppendLine(CultureInfo.InvariantCulture, $"Midge SHA: `{midge[0].SourceSha}`  ");
         output.AppendLine(CultureInfo.InvariantCulture,
-            $"Midge fixture patch SHA256: `{midge[0].FixturePatchSha256}`  ");
-        output.AppendLine(CultureInfo.InvariantCulture,
-            $"Midge scenario inventory SHA256: `{MidgeBenchmarkReader.PinnedScenarioInventorySha256}`  ");
+            $"Midge scenario inventory SHA256: `{pin.ScenarioInventorySha256}`  ");
         output.AppendLine(CultureInfo.InvariantCulture,
             $"Pants machine: {metadata.Cpu}; {metadata.OperatingSystem}; {metadata.Architecture}; {metadata.Runtime}  ");
         var midgeEnvironment = midge[0];
         output.AppendLine(CultureInfo.InvariantCulture,
             $"Midge machine: {midgeEnvironment.Cpu}; {midgeEnvironment.OperatingSystem}; {midgeEnvironment.Runtime}  ");
         output.AppendLine(CultureInfo.InvariantCulture,
-            $"Midge harness: cntryl-stress `{MidgeBenchmarkReader.PinnedStressHarnessSha}` (v{midgeEnvironment.ToolVersion}); Cargo.lock SHA256 `{midgeEnvironment.CargoLockSha256}`");
+            $"Midge harness: cntryl-stress `{midgeEnvironment.ToolVersion}`; Cargo.lock SHA256 `{midgeEnvironment.CargoLockSha256}`");
         output.AppendLine();
         output.AppendLine(
             "> Rows are grouped for investigation, not treated as equivalent. A ratio is intentionally omitted unless workload mechanics, logical units, storage mode, client count, and measurement class are explicitly matched.");
