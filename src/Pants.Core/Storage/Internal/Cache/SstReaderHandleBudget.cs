@@ -4,6 +4,8 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 
 sealed class SstReaderHandleBudget
 {
+    internal const int DefaultLimit = 256;
+
     int _current;
 
     public SstReaderHandleBudget(int limit)

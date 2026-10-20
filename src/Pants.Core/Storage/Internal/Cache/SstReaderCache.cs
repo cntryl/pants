@@ -2,8 +2,6 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 
 sealed class SstReaderCache : IDisposable
 {
-    internal const int DefaultOpenReaderHandleBudget = 256;
-
     readonly long _budgetBytes;
     readonly object _gate = new();
     readonly LinkedList<ReaderEntry> _idleOrder = [];
@@ -18,27 +16,27 @@ sealed class SstReaderCache : IDisposable
     long _cachedBytes;
 
     public SstReaderCache()
-        : this(long.MaxValue, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), SstReader.Open)
+        : this(long.MaxValue, new SstReaderHandleBudget(SstReaderHandleBudget.DefaultLimit), SstReader.Open)
     {
     }
 
     /// <summary>
     ///     Caches parsed readers up to <paramref name="budgetBytes" /> of estimated metadata,
     ///     evicting the least recently used readers nobody currently holds, with a separate
-    ///     <see cref="DefaultOpenReaderHandleBudget" /> for cached and uncached open readers.
+    ///     <see cref="SstReaderHandleBudget.DefaultLimit" /> for cached and uncached open readers.
     /// </summary>
     public SstReaderCache(long budgetBytes)
-        : this(budgetBytes, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), SstReader.Open)
+        : this(budgetBytes, new SstReaderHandleBudget(SstReaderHandleBudget.DefaultLimit), SstReader.Open)
     {
     }
 
     internal SstReaderCache(Func<string, SstReader> openReader)
-        : this(long.MaxValue, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), openReader)
+        : this(long.MaxValue, new SstReaderHandleBudget(SstReaderHandleBudget.DefaultLimit), openReader)
     {
     }
 
     internal SstReaderCache(long budgetBytes, Func<string, SstReader> openReader)
-        : this(budgetBytes, new SstReaderHandleBudget(DefaultOpenReaderHandleBudget), openReader)
+        : this(budgetBytes, new SstReaderHandleBudget(SstReaderHandleBudget.DefaultLimit), openReader)
     {
     }
 
