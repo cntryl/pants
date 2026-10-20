@@ -3,10 +3,11 @@ using System.Text.Json.Nodes;
 using Cntryl.Pants.Observability;
 using Cntryl.Pants.Storage.Internal.Wal;
 using Cntryl.Pants.Support.TestDoubles;
+using Xunit.Abstractions;
 
 namespace Cntryl.Pants.Cloud;
 
-public sealed class ProviderCloudPersistenceTests
+public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 {
     static readonly JsonSerializerOptions CatalogJsonOptions = new()
     {
@@ -17,6 +18,7 @@ public sealed class ProviderCloudPersistenceTests
     public async Task ShouldPublishOneCatalogTransitionGivenEpochCompatibleWalBatch()
     {
         using var cache = new TemporaryDirectory();
+        using var individualCache = new TemporaryDirectory();
         var leaseStore = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         using var lease = new CloudLeaseCoordinator(
@@ -27,7 +29,7 @@ public sealed class ProviderCloudPersistenceTests
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var walStore = new CountingCloudObjectStore();
-        var persistence = new ProviderCloudPersistence(
+        await using var persistence = new ProviderCloudPersistence(
             cache.Path,
             walStore,
             new TestCloudObjectStore(),
@@ -44,10 +46,38 @@ public sealed class ProviderCloudPersistenceTests
 
         await persistence.PublishWalBatchAsync(segments, CancellationToken.None);
 
-        // Three segment verifications and one catalog publication readback; mirror checks use HEAD.
+        var batchRequests = walStore.RequestCount;
+        var batchPayloadBytesCopied = walStore.PayloadBytesCopied;
         Assert.Equal(5, walStore.PutCount);
         Assert.Equal(4, walStore.GetCount);
-        Assert.True(walStore.PayloadBytesCopied > 3);
+        Assert.Equal(walStore.PutCount, walStore.ConditionalPutCount);
+        Assert.Equal(0, walStore.UnconditionalPutCount);
+
+        var individualWalStore = new CountingCloudObjectStore();
+        await using var individualPersistence = new ProviderCloudPersistence(
+            individualCache.Path,
+            individualWalStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease);
+        foreach (var segment in segments)
+        {
+            await individualPersistence.PublishWalBatchAsync([segment], CancellationToken.None);
+        }
+
+        var individualRequests = individualWalStore.RequestCount;
+        var individualPayloadBytesCopied = individualWalStore.PayloadBytesCopied;
+        Assert.Equal(individualWalStore.PutCount, individualWalStore.ConditionalPutCount);
+        Assert.Equal(0, individualWalStore.UnconditionalPutCount);
+        Assert.True(
+            batchRequests < individualRequests,
+            $"Expected one batch to use fewer object requests than individual publication " +
+            $"(batch={batchRequests}, individual={individualRequests}).");
+        Assert.True(
+            batchPayloadBytesCopied < individualPayloadBytesCopied,
+            $"Expected one batch to copy fewer payload bytes than individual publication " +
+            $"(batch={batchPayloadBytesCopied}, individual={individualPayloadBytesCopied}).");
+
         var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
             cache.Path,
             walStore,
@@ -56,7 +86,21 @@ public sealed class ProviderCloudPersistenceTests
             PantsRecoveryPolicy.Strict,
             static _ => ValueTask.CompletedTask,
             CancellationToken.None);
-        Assert.Equal([1UL, 2UL, 3UL], hydrated.PublishedWalSegments.Keys);
+        var individuallyHydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
+            individualCache.Path,
+            individualWalStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+        var expectedSegmentIds = segments.Select(static segment => segment.SegmentId).ToArray();
+        Assert.Equal(expectedSegmentIds, hydrated.PublishedWalSegments.Keys);
+        Assert.Equal(expectedSegmentIds, individuallyHydrated.PublishedWalSegments.Keys);
+        output.WriteLine(
+            $"Three WAL segments: batched {batchRequests} requests / {batchPayloadBytesCopied} " +
+            $"payload bytes copied; individual {individualRequests} requests / " +
+            $"{individualPayloadBytesCopied} payload bytes copied.");
     }
 
     [Fact]
