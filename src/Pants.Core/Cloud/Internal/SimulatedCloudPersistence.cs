@@ -28,6 +28,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     readonly string _cloudRoot;
     readonly IFailpointHandler _failpoints;
+    readonly SstPublicationAdmission _sstPublicationAdmission;
 
     readonly string _localRoot;
     readonly ResourceBudget _metadataSnapshotBudget = new(64L * 1024 * 1024);
@@ -39,12 +40,16 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     public SimulatedCloudPersistence(
         string localRoot,
         ulong writerEpoch,
-        IFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null,
+        SstPublicationAdmission? sstPublicationAdmission = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
         _writerEpoch = writerEpoch;
         _failpoints = failpoints ?? NullPantsFailpointHandler.Instance;
+        _sstPublicationAdmission = sstPublicationAdmission ?? SstPublicationAdmission.Gated(
+            new ResourceBudget(64L * 1024 * 1024),
+            new MaintenanceMemoryGate());
         Directory.CreateDirectory(_cloudRoot);
         _catalog = LoadCatalog(_cloudRoot) ?? WalPublicationCatalog.Empty(writerEpoch);
         if (_catalog.NextSegmentId == 0)
@@ -136,20 +141,21 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.FromResult(true);
     }
 
-    public ValueTask PublishWalBatchAsync(
+    public async ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        PublishWalBatch(segments);
-        return ValueTask.CompletedTask;
+        if (PublishWalBatchCatalog(segments))
+        {
+            await MirrorMetadataAndSstsCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        MirrorMetadataAndSsts();
-        return ValueTask.CompletedTask;
+        return MirrorMetadataAndSstsCoreAsync(cancellationToken);
     }
 
     public ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken) =>
@@ -296,9 +302,17 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public void PublishWalBatch(IReadOnlyList<SealedWalSegment> segments)
     {
+        if (PublishWalBatchCatalog(segments))
+        {
+            MirrorMetadataAndSsts();
+        }
+    }
+
+    bool PublishWalBatchCatalog(IReadOnlyList<SealedWalSegment> segments)
+    {
         if (segments.Count == 0)
         {
-            return;
+            return false;
         }
 
         var batchEpoch = segments[0].WriterEpoch;
@@ -384,7 +398,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         if (publishableSegments.Count == 0)
         {
-            return;
+            return false;
         }
 
         var publications = publishableSegments.Select(segment => new PublishedWalSegment
@@ -423,7 +437,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         if (!changed)
         {
-            return;
+            return false;
         }
 
         var updatedSegments = new SortedDictionary<ulong, PublishedWalSegment>(_catalog.Segments);
@@ -444,36 +458,46 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         };
         SaveCatalog(updatedCatalog);
         _catalog = updatedCatalog;
-        MirrorMetadataAndSsts();
+        return true;
     }
 
-    public void MirrorMetadataAndSsts()
+    public void MirrorMetadataAndSsts() =>
+        MirrorMetadataAndSstsCoreAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+    async ValueTask MirrorMetadataAndSstsCoreAsync(CancellationToken cancellationToken)
     {
         using var metadata = CloudControlMetadataSnapshot.Capture(
             _localRoot,
             MetadataFiles,
             _metadataSnapshotBudget);
         var localSstDirectory = Path.Combine(_localRoot, "sst");
-        var localSsts = Directory.Exists(localSstDirectory)
-            ? Directory.EnumerateFiles(
-                    localSstDirectory,
-                    "*.sst",
-                    SearchOption.TopDirectoryOnly)
-                .ToArray()
-            : [];
-        var pendingSsts = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (var localSst in localSsts)
+        var pendingSstCount = 0L;
+        foreach (var localSst in EnumerateLocalSsts())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = ValidateSstName(Path.GetFileName(localSst));
             var remotePath = Path.Combine(_cloudRoot, "sst", name);
-            var bytes = File.ReadAllBytes(localSst);
             if (!File.Exists(remotePath))
             {
-                pendingSsts.Add(remotePath, bytes);
+                pendingSstCount = checked(pendingSstCount + 1);
                 continue;
             }
 
-            if (!File.ReadAllBytes(remotePath).AsSpan().SequenceEqual(bytes))
+            var localLength = new FileInfo(localSst).Length;
+            if (new FileInfo(remotePath).Length != localLength)
+            {
+                throw new PantsFencedException(
+                    $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
+            }
+
+            using var admission = await _sstPublicationAdmission.AdmitAsync(
+                    localLength,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var localBytes = File.ReadAllBytes(localSst);
+            var remoteBytes = File.ReadAllBytes(remotePath);
+            if (!remoteBytes.AsSpan().SequenceEqual(localBytes))
             {
                 throw new PantsFencedException(
                     $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
@@ -483,33 +507,53 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         foreach (var references in metadata.ReferencedSsts
                      .GroupBy(static file => file.Name, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = ValidateSstName(references.Key);
             var localPath = Path.Combine(localSstDirectory, name);
             var remotePath = Path.Combine(_cloudRoot, "sst", name);
             if (File.Exists(localPath) && !File.Exists(remotePath))
             {
+                using var admission = await _sstPublicationAdmission.AdmitAsync(
+                        new FileInfo(localPath).Length,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 var bytes = File.ReadAllBytes(localPath);
                 foreach (var proof in references)
                 {
                     CloudSstValidator.Validate(bytes, proof);
                 }
-
-                pendingSsts.TryAdd(remotePath, bytes);
             }
         }
 
-        if (pendingSsts.Count > 0)
+        if (pendingSstCount > 0)
         {
             _failpoints.Hit(Failpoint.BeforeCloudUpload);
-            foreach (var (remotePath, bytes) in pendingSsts)
+            foreach (var localSst in EnumerateLocalSsts())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                var name = ValidateSstName(Path.GetFileName(localSst));
+                var remotePath = Path.Combine(_cloudRoot, "sst", name);
+                if (File.Exists(remotePath))
+                {
+                    continue;
+                }
+
+                using var admission = await _sstPublicationAdmission.AdmitAsync(
+                        new FileInfo(localSst).Length,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                var bytes = File.ReadAllBytes(localSst);
                 AtomicStagedFile.Write(remotePath, bytes);
             }
 
             _failpoints.Hit(Failpoint.AfterCloudUpload);
         }
 
-        ValidateCapturedSstMetadata(metadata);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateCapturedSstMetadata(metadata, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         foreach (var fileName in MetadataFiles)
         {
@@ -524,12 +568,22 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         CollectObsoleteSsts();
 
         PruneCoveredWal(metadata);
+
+        IEnumerable<string> EnumerateLocalSsts() => Directory.Exists(localSstDirectory)
+            ? Directory.EnumerateFiles(
+                localSstDirectory,
+                "*.sst",
+                SearchOption.TopDirectoryOnly)
+            : Enumerable.Empty<string>();
     }
 
-    void ValidateCapturedSstMetadata(CloudControlMetadataSnapshot metadata)
+    void ValidateCapturedSstMetadata(
+        CloudControlMetadataSnapshot metadata,
+        CancellationToken cancellationToken)
     {
         foreach (var file in metadata.ReferencedSsts)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = ValidateSstName(file.Name);
             var path = Path.Combine(_cloudRoot, "sst", name);
             if (!File.Exists(path))
@@ -539,7 +593,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             }
 
             var source = LocalAsyncSstSource.Open(path);
-            var reader = AsyncSstReader.OpenAsync(source, file, CancellationToken.None)
+            var reader = AsyncSstReader.OpenAsync(source, file, cancellationToken)
                 .AsTask().GetAwaiter().GetResult();
             reader.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }

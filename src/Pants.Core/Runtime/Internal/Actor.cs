@@ -521,7 +521,10 @@ sealed class Actor : IAsyncDisposable
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulatedRoot,
                         diskStore.WriterEpoch,
-                        dependencies.Failpoints);
+                        dependencies.Failpoints,
+                        SstPublicationAdmission.Gated(
+                            maintenanceMemoryBudget,
+                            maintenanceMemoryGate));
                     cloudPersistence = simulatedPersistence;
                     cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
                         simulatedRoot,
