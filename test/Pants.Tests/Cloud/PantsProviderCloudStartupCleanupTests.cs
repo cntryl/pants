@@ -141,6 +141,11 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         Assert.Equal(0, coldStartSstFullReads);
         Assert.Equal(0, coldStartSstRangeReads);
         Assert.Equal(0L, coldStartSstRangeBytes);
+        Assert.Equal(0, metrics.RemoteRangeRequestsTotal);
+        Assert.Equal(0, metrics.RemoteRangeBytesTotal);
+        Assert.Equal(0, metrics.RemoteRangeFailuresTotal);
+        Assert.Equal(0, metrics.RemoteRangeLatencyNanosecondsTotal);
+        Assert.Equal(0, metrics.RemoteRangeLatencyNanosecondsMaximum);
         Assert.Equal(resolved.CompactionMemoryPoolBytes, metrics.MaintenanceMemoryCapacityBytes);
         Assert.InRange(
             metrics.MaintenanceMemoryPeakBytes,

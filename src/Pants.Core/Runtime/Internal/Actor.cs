@@ -641,7 +641,7 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         leaseHeartbeatInterval,
-                        new ProviderCloudSstSourceFactory(objectStores.Sst),
+                        new ProviderCloudSstSourceFactory(objectStores.Sst, telemetry),
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,

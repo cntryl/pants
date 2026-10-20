@@ -113,6 +113,16 @@ public sealed record PantsRuntimeMetrics
     public long HybridFreeBytes { get; init; }
     public int HybridUsagePercent { get; init; }
     public int HybridPendingEvictions { get; init; }
+    /// <summary>Submitted remote SST range requests from this runtime, excluding HEAD reads.</summary>
+    public long RemoteRangeRequestsTotal { get; init; }
+    /// <summary>Bytes returned by remote SST range requests, including rejected short responses.</summary>
+    public long RemoteRangeBytesTotal { get; init; }
+    /// <summary>Failed remote SST range requests, including caller-observed timeouts.</summary>
+    public long RemoteRangeFailuresTotal { get; init; }
+    /// <summary>Aggregate caller-observed remote SST range latency in nanoseconds.</summary>
+    public long RemoteRangeLatencyNanosecondsTotal { get; init; }
+    /// <summary>Maximum caller-observed remote SST range latency in nanoseconds.</summary>
+    public long RemoteRangeLatencyNanosecondsMaximum { get; init; }
     public long WalRecoveryRecordsReplayed { get; init; }
     public long WalRecoveryBytesReplayed { get; init; }
     public long IntentLogReplayRuns { get; init; }

@@ -10,6 +10,8 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
 
     public bool ChangeVersionOnRangeRead { get; init; }
 
+    public int ShortenRangeByBytes { get; init; }
+
     public int Puts => _puts;
 
     public int RangeGets => _rangeGets;
@@ -48,8 +50,9 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
             return ValueTask.FromResult<CloudObject?>(null);
         }
 
+        var returnedLength = Math.Max(0, length - ShortenRangeByBytes);
         return ValueTask.FromResult<CloudObject?>(new CloudObject(
-            value.Data.AsMemory(checked((int)offset), length),
+            value.Data.AsMemory(checked((int)offset), returnedLength),
             ChangeVersionOnRangeRead ? "changed" : value.Version));
     }
 

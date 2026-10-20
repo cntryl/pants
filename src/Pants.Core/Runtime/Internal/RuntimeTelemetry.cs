@@ -56,6 +56,11 @@ sealed class RuntimeTelemetry
     long _readOnlySnapshotCacheMisses;
     long _readOnlyTransactionsBegun;
     long _readsTotal;
+    long _remoteRangeBytesTotal;
+    long _remoteRangeFailuresTotal;
+    long _remoteRangeLatencyNanosecondsMaximum;
+    long _remoteRangeLatencyNanosecondsTotal;
+    long _remoteRangeRequestsTotal;
     long _runtimeAbandonedRequests;
     long _runtimeLateResponses;
     long _salvageModeOpens;
@@ -185,6 +190,18 @@ sealed class RuntimeTelemetry
         Volatile.Read(ref _readAmplificationCompactionTriggers);
 
     public long SstDataBlocksRead => Volatile.Read(ref _dataBlocksRead);
+
+    public long RemoteRangeRequestsTotal => Volatile.Read(ref _remoteRangeRequestsTotal);
+
+    public long RemoteRangeBytesTotal => Volatile.Read(ref _remoteRangeBytesTotal);
+
+    public long RemoteRangeFailuresTotal => Volatile.Read(ref _remoteRangeFailuresTotal);
+
+    public long RemoteRangeLatencyNanosecondsTotal =>
+        Volatile.Read(ref _remoteRangeLatencyNanosecondsTotal);
+
+    public long RemoteRangeLatencyNanosecondsMaximum =>
+        Volatile.Read(ref _remoteRangeLatencyNanosecondsMaximum);
 
     public long SalvageModeOpens => Volatile.Read(ref _salvageModeOpens);
 
@@ -334,6 +351,21 @@ sealed class RuntimeTelemetry
         }
 
         return sample.ExceedsBudget;
+    }
+
+    public void RecordRemoteRangeStarted() =>
+        Interlocked.Increment(ref _remoteRangeRequestsTotal);
+
+    public void RecordRemoteRangeCompleted(long returnedBytes, TimeSpan elapsed, bool failed)
+    {
+        Interlocked.Add(ref _remoteRangeBytesTotal, returnedBytes);
+        var nanoseconds = ToNanoseconds(elapsed);
+        Interlocked.Add(ref _remoteRangeLatencyNanosecondsTotal, nanoseconds);
+        SetMaximum(ref _remoteRangeLatencyNanosecondsMaximum, nanoseconds);
+        if (failed)
+        {
+            Interlocked.Increment(ref _remoteRangeFailuresTotal);
+        }
     }
 
     public void RecordReadAmplificationCompactionTrigger() =>

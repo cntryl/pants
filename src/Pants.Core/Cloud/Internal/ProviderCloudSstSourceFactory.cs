@@ -1,6 +1,10 @@
+using System.Diagnostics;
+
 namespace Cntryl.Pants.Cloud.Internal;
 
-sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstSourceFactory
+sealed class ProviderCloudSstSourceFactory(
+    ICloudObjectStore store,
+    RuntimeTelemetry telemetry) : IAsyncSstSourceFactory
 {
     readonly ICloudObjectStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
@@ -38,13 +42,15 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
         return new ProviderCloudSstSource(
             _store,
             objectKey,
-            metadata);
+            metadata,
+            telemetry);
     }
 
     sealed class ProviderCloudSstSource(
         ICloudObjectStore store,
         string objectKey,
-        CloudObjectMetadata metadata) : IAsyncSstSource
+        CloudObjectMetadata metadata,
+        RuntimeTelemetry telemetry) : IAsyncSstSource
     {
         int _disposed;
 
@@ -63,53 +69,70 @@ sealed class ProviderCloudSstSourceFactory(ICloudObjectStore store) : IAsyncSstS
                 throw new EndOfStreamException("The cloud SST range is outside the object.");
             }
 
-            CloudObject? value;
+            var startedAt = Stopwatch.GetTimestamp();
+            telemetry.RecordRemoteRangeStarted();
+            var returnedBytes = 0L;
+            var failed = true;
             try
             {
-                value = store is CloudObjectStore builtInStore
-                    ? await builtInStore.GetRangeAsync(
-                            objectKey,
-                            checked((ulong)offset),
-                            rangeLength,
-                            metadata,
-                            cancellationToken)
-                        .ConfigureAwait(false)
-                    : await store.GetRangeAsync(
-                            objectKey,
-                            checked((ulong)offset),
-                            rangeLength,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException exception) when (
-                cancellationToken.IsCancellationRequested &&
-                exception.CancellationToken != cancellationToken)
-            {
-                throw new OperationCanceledException(
-                    exception.Message,
-                    exception,
-                    cancellationToken);
-            }
+                CloudObject? value;
+                try
+                {
+                    value = store is CloudObjectStore builtInStore
+                        ? await builtInStore.GetRangeAsync(
+                                objectKey,
+                                checked((ulong)offset),
+                                rangeLength,
+                                metadata,
+                                cancellationToken)
+                            .ConfigureAwait(false)
+                        : await store.GetRangeAsync(
+                                objectKey,
+                                checked((ulong)offset),
+                                rangeLength,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException exception) when (
+                    cancellationToken.IsCancellationRequested &&
+                    exception.CancellationToken != cancellationToken)
+                {
+                    throw new OperationCanceledException(
+                        exception.Message,
+                        exception,
+                        cancellationToken);
+                }
 
-            if (value is null)
-            {
-                throw new PantsRecoveryFailedException(
-                    $"Manifest-owned cloud SST '{objectKey}' is missing during a ranged read.");
-            }
+                returnedBytes = value?.Data.Length ?? 0;
+                if (value is null)
+                {
+                    throw new PantsRecoveryFailedException(
+                        $"Manifest-owned cloud SST '{objectKey}' is missing during a ranged read.");
+                }
 
-            if (!StringComparer.Ordinal.Equals(value.Version, metadata.Version))
-            {
-                throw new PantsBusyException(
-                    $"Immutable cloud SST '{objectKey}' was replaced during a ranged read.");
-            }
+                if (!StringComparer.Ordinal.Equals(value.Version, metadata.Version))
+                {
+                    throw new PantsBusyException(
+                        $"Immutable cloud SST '{objectKey}' was replaced during a ranged read.");
+                }
 
-            if (value.Data.Length != rangeLength)
-            {
-                throw new PantsCorruptionException(
-                    $"Cloud SST '{objectKey}' returned a truncated range.");
-            }
+                if (value.Data.Length != rangeLength)
+                {
+                    throw new PantsCorruptionException(
+                        $"Cloud SST '{objectKey}' returned a truncated range.");
+                }
 
-            return value.Data.ToArray();
+                var bytes = value.Data.ToArray();
+                failed = false;
+                return bytes;
+            }
+            finally
+            {
+                telemetry.RecordRemoteRangeCompleted(
+                    returnedBytes,
+                    Stopwatch.GetElapsedTime(startedAt),
+                    failed);
+            }
         }
 
         public ValueTask DisposeAsync()

@@ -36,6 +36,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
+        var metricsBeforePointRead = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        handler.ResetSstReadMetrics();
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -46,6 +48,29 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         Assert.Equal(0, handler.SstFullReads);
         Assert.True(handler.SstRangeReads > 0);
         Assert.InRange(handler.SstRangeBytes, 1, handler.SstStoredBytes - 1);
+        var metricsAfterPointRead = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(
+            (long)handler.SstRangeReads,
+            metricsAfterPointRead.RemoteRangeRequestsTotal - metricsBeforePointRead.RemoteRangeRequestsTotal);
+        Assert.Equal(
+            handler.SstRangeBytes,
+            metricsAfterPointRead.RemoteRangeBytesTotal - metricsBeforePointRead.RemoteRangeBytesTotal);
+        Assert.Equal(
+            metricsBeforePointRead.RemoteRangeFailuresTotal,
+            metricsAfterPointRead.RemoteRangeFailuresTotal);
+        Assert.True(
+            metricsAfterPointRead.RemoteRangeLatencyNanosecondsTotal >
+            metricsBeforePointRead.RemoteRangeLatencyNanosecondsTotal);
+        Assert.True(metricsAfterPointRead.RemoteRangeLatencyNanosecondsMaximum > 0);
+
+        _ = await reader.GetAsync(Key(48));
+        var metricsAfterWarmPointRead = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(
+            metricsAfterPointRead.RemoteRangeRequestsTotal,
+            metricsAfterWarmPointRead.RemoteRangeRequestsTotal);
+        Assert.Equal(
+            metricsAfterPointRead.RemoteRangeBytesTotal,
+            metricsAfterWarmPointRead.RemoteRangeBytesTotal);
         handler.ResetSstReadMetrics();
 
         await using var scan = await reader.ScanAsync(new PantsScanQuery
@@ -63,6 +88,13 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             actual);
         Assert.Equal(0, handler.SstFullReads);
         Assert.InRange(handler.SstRangeBytes, 1, handler.SstStoredBytes - 1);
+        var metricsAfterScan = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(
+            (long)handler.SstRangeReads,
+            metricsAfterScan.RemoteRangeRequestsTotal - metricsAfterWarmPointRead.RemoteRangeRequestsTotal);
+        Assert.Equal(
+            handler.SstRangeBytes,
+            metricsAfterScan.RemoteRangeBytesTotal - metricsAfterWarmPointRead.RemoteRangeBytesTotal);
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
     }
 
@@ -78,6 +110,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
+        var metricsBeforeRead = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -87,6 +120,14 @@ public sealed class PantsProviderCloudDiskResidentReadTests
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
+        var metricsAfterRead = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(metricsAfterRead.RemoteRangeRequestsTotal > metricsBeforeRead.RemoteRangeRequestsTotal);
+        Assert.True(metricsAfterRead.RemoteRangeBytesTotal > metricsBeforeRead.RemoteRangeBytesTotal);
+        Assert.True(metricsAfterRead.RemoteRangeFailuresTotal > metricsBeforeRead.RemoteRangeFailuresTotal);
+        Assert.True(
+            metricsAfterRead.RemoteRangeLatencyNanosecondsTotal >
+            metricsBeforeRead.RemoteRangeLatencyNanosecondsTotal);
+        Assert.True(metricsAfterRead.RemoteRangeLatencyNanosecondsMaximum > 0);
     }
 
     [Fact]
@@ -190,6 +231,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(cloudHttpClient: client));
+        var metricsBeforeTimeout = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -206,6 +248,12 @@ public sealed class PantsProviderCloudDiskResidentReadTests
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
+        var metricsAfterTimeout = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(metricsAfterTimeout.RemoteRangeRequestsTotal > metricsBeforeTimeout.RemoteRangeRequestsTotal);
+        Assert.True(metricsAfterTimeout.RemoteRangeFailuresTotal > metricsBeforeTimeout.RemoteRangeFailuresTotal);
+        Assert.True(
+            metricsAfterTimeout.RemoteRangeLatencyNanosecondsTotal >
+            metricsBeforeTimeout.RemoteRangeLatencyNanosecondsTotal);
     }
 
     [Fact]

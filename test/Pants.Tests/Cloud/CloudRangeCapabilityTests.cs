@@ -45,7 +45,7 @@ public sealed class CloudRangeCapabilityTests
     public async Task ShouldNotDownloadAnSstThroughAnUnsupportedRangeFallback()
     {
         var store = new FullReadOnlyStore();
-        var factory = new ProviderCloudSstSourceFactory(store);
+        var factory = new ProviderCloudSstSourceFactory(store, new RuntimeTelemetry());
         await using var source = await factory.OpenAsync(new FileMeta { Name = "value.sst", SizeBytes = 4 }, CancellationToken.None);
         Assert.NotNull(source);
 
