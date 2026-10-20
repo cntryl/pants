@@ -174,7 +174,9 @@ static class CrashSoakChild
 
     /// <summary>
     ///     Commits and ledgers the outcome. Back-pressure is an authoritative rejection, so it is a
-    ///     failure the verifier holds the engine to; any other exception propagates as unexpected.
+    ///     failure the verifier holds the engine to. An admitted but unknown outcome keeps the
+    ///     dispatch entry unknown and kills the child so the parent can reconcile it before another
+    ///     mutation.
     /// </summary>
     static async Task<bool> CommitAsync(
         IPantsTransaction transaction,
@@ -192,6 +194,10 @@ static class CrashSoakChild
         try
         {
             await commit;
+        }
+        catch (PantsCommitOutcomeUnknownException)
+        {
+            killSwitch.Kill($"commit outcome unknown for dispatched op {operation.Id}");
         }
         catch (Exception exception) when (IsBackPressure(exception))
         {
