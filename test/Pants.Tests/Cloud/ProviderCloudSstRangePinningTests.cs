@@ -8,6 +8,31 @@ public sealed class ProviderCloudSstRangePinningTests
 {
     public static TheoryData<string> Providers => new("s3", "azure", "gcs-xml", "gcs-json");
 
+    [Fact]
+    public async Task ShouldCountShortReturnedRangeBytesWhenTheRuntimeRejectsTheRange()
+    {
+        const string objectKey = PantsCloudObjectLayout.SstPrefix + "read.sst";
+        var store = new RangeCountingCloudObjectStore { ShortenRangeByBytes = 1 };
+        Assert.True(await store.PutAsync(
+            objectKey,
+            new byte[] { 1, 2, 3, 4 },
+            new PantsCloudObjectWriteCondition.IfAbsent(),
+            CancellationToken.None));
+        var telemetry = new RuntimeTelemetry();
+        var factory = new ProviderCloudSstSourceFactory(store, telemetry);
+        await using var source = await factory.OpenAsync(
+            new FileMeta { Name = "read.sst", SizeBytes = 4 },
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() =>
+            source!.ReadExactlyAsync(0, 2, CancellationToken.None).AsTask());
+
+        Assert.Equal(1, telemetry.RemoteRangeRequestsTotal);
+        Assert.Equal(1, telemetry.RemoteRangeBytesTotal);
+        Assert.Equal(1, telemetry.RemoteRangeFailuresTotal);
+        Assert.True(telemetry.RemoteRangeLatencyNanosecondsTotal > 0);
+    }
+
     [Theory]
     [MemberData(nameof(Providers))]
     public async Task ShouldClassifyReplacementDuringSstRangeAsConcurrentChange(string provider)
@@ -15,7 +40,8 @@ public sealed class ProviderCloudSstRangePinningTests
         using var handler = new PinnedRangeHandler(provider, replaceAfterHead: true);
         using var client = new HttpClient(handler);
         await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
-        var factory = new ProviderCloudSstSourceFactory(store);
+        var telemetry = new RuntimeTelemetry();
+        var factory = new ProviderCloudSstSourceFactory(store, telemetry);
         await using var source = await factory.OpenAsync(
             new FileMeta { Name = "read.sst", SizeBytes = 4 },
             CancellationToken.None);
@@ -27,6 +53,11 @@ public sealed class ProviderCloudSstRangePinningTests
         Assert.True(handler.PinnedConditionObserved);
         Assert.Equal(1, handler.MetadataRequests);
         Assert.Equal(1, handler.RangeRequests);
+        Assert.Equal(1, telemetry.RemoteRangeRequestsTotal);
+        Assert.Equal(0, telemetry.RemoteRangeBytesTotal);
+        Assert.Equal(1, telemetry.RemoteRangeFailuresTotal);
+        Assert.True(telemetry.RemoteRangeLatencyNanosecondsTotal > 0);
+        Assert.True(telemetry.RemoteRangeLatencyNanosecondsMaximum > 0);
     }
 
     [Theory]
@@ -37,7 +68,8 @@ public sealed class ProviderCloudSstRangePinningTests
         using var handler = new PinnedRangeHandler(provider, body, rangeTotalLength: 5);
         using var client = new HttpClient(handler);
         await using var store = await CloudProviderTestFactory.OpenAsync(provider, client);
-        var factory = new ProviderCloudSstSourceFactory(store);
+        var telemetry = new RuntimeTelemetry();
+        var factory = new ProviderCloudSstSourceFactory(store, telemetry);
         await using var source = await factory.OpenAsync(
             new FileMeta { Name = "read.sst", SizeBytes = 4 },
             CancellationToken.None);
@@ -48,6 +80,9 @@ public sealed class ProviderCloudSstRangePinningTests
         Assert.True(body.Disposed);
         Assert.Equal(0, body.BytesRead);
         Assert.True(handler.PinnedConditionObserved);
+        Assert.Equal(1, telemetry.RemoteRangeRequestsTotal);
+        Assert.Equal(0, telemetry.RemoteRangeBytesTotal);
+        Assert.Equal(1, telemetry.RemoteRangeFailuresTotal);
     }
 
     sealed class PinnedRangeHandler : HttpMessageHandler
