@@ -526,9 +526,14 @@ sealed class Actor : IAsyncDisposable
                             maintenanceMemoryBudget,
                             maintenanceMemoryGate));
                     cloudPersistence = simulatedPersistence;
+                    var simulatedCompactionPublicationAdmission =
+                        SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget);
+                    compactionOutputPartitionTargetBytes =
+                        simulatedCompactionPublicationAdmission.PartitionTargetBytes;
                     cloudCompactionOutputPublisher = new SimulatedCloudCompactionPublisher(
                         simulatedRoot,
-                        dependencies.Failpoints).PublishAsync;
+                        dependencies.Failpoints,
+                        simulatedCompactionPublicationAdmission).PublishAsync;
                     cloudDdlCoordinator = new CloudDdlCoordinator(
                         simulatedRoot,
                         simulatedPersistence,
