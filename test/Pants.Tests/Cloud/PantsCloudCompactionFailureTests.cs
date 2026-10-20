@@ -8,6 +8,30 @@ namespace Cntryl.Pants.Cloud;
 public sealed class PantsCloudCompactionFailureTests
 {
     [Fact]
+    public async Task ShouldRejectCompactionIntentBeforePublishingWhenMetadataBudgetDoesNotFit()
+    {
+        using var directory = new TemporaryDirectory();
+        var intentPath = Path.Combine(directory.Path, "intent_log.json");
+        await File.WriteAllBytesAsync(intentPath, new byte[128 * 1024]);
+        var budget = new ResourceBudget(64 * 1024);
+        var publisher = new SimulatedCloudCompactionPublisher(
+            directory.Path,
+            NullPantsFailpointHandler.Instance,
+            SstPublicationAdmission.WithinCompactionRound(budget));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            publisher.PublishAsync([], CancellationToken.None).AsTask());
+
+        Assert.False(File.Exists(Path.Combine(
+            directory.Path,
+            "cloud_store",
+            "metadata",
+            "intent_log.json")));
+        Assert.Equal(0, budget.Current);
+        Assert.Equal(0, budget.Peak);
+    }
+
+    [Fact]
     public async Task ShouldRejectSimulatedCompactionOutputBeforeReadingWhenBudgetDoesNotFit()
     {
         using var directory = new TemporaryDirectory();
@@ -34,7 +58,10 @@ public sealed class PantsCloudCompactionFailureTests
             "sst",
             outputName)));
         Assert.Equal(0, budget.Current);
-        Assert.Equal(0, budget.Peak);
+        Assert.Equal(
+            ImmutablePublicationEnvelope.FixedWorkspaceBytes +
+            (long)"[]".Length * ImmutablePublicationEnvelope.CopyFactor,
+            budget.Peak);
     }
 
     [Fact]
