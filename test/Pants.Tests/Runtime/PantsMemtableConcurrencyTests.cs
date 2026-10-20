@@ -14,15 +14,19 @@ public sealed class PantsMemtableConcurrencyTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await snapshot.ScanAsync(new PantsScanQuery());
 
-        var writer = WriteGenerationAsync(database, "new");
+        var writerStarted = false;
         var observed = new List<string>();
         await foreach (var entry in scan)
         {
             observed.Add($"{TestBytes.ToText(entry.Key)}:{TestBytes.ToText(entry.Value)}");
-            await Task.Yield();
+            if (!writerStarted)
+            {
+                writerStarted = true;
+                await WriteGenerationAsync(database, "new").WaitAsync(TestTimeouts.Expected);
+            }
         }
 
-        await writer.WaitAsync(TestTimeouts.Expected);
+        Assert.True(writerStarted);
         Assert.Equal(
             Enumerable.Range(0, 100).Select(static index => $"key-{index:000}:old"),
             observed);
