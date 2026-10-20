@@ -33,7 +33,8 @@ sealed class RuntimeMetricsSnapshotFactory(
                 HybridTotalCommittedBytes = hybridMetrics?.TotalCommittedBytes ?? 0,
                 HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,
                 HybridUsagePercent = hybridMetrics?.UsagePercent ?? 0,
-                HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0
+                HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0,
+                HybridStorageBudget = hybridMetrics?.StorageBudgetSnapshot
             },
             state,
             walCloudDurableSequence);
@@ -268,6 +269,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             HybridFreeBytes = hybridMetrics?.FreeBytes ?? 0,
             HybridUsagePercent = hybridMetrics?.UsagePercent ?? 0,
             HybridPendingEvictions = hybridMetrics?.PendingEvictions ?? 0,
+            HybridStorageBudget = hybridMetrics?.StorageBudgetSnapshot,
             RemoteRangeRequestsTotal = telemetry.RemoteRangeRequestsTotal,
             RemoteRangeBytesTotal = telemetry.RemoteRangeBytesTotal,
             RemoteRangeFailuresTotal = telemetry.RemoteRangeFailuresTotal,

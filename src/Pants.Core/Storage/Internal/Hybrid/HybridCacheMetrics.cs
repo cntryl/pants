@@ -5,4 +5,5 @@ sealed record HybridCacheMetrics(
     long TotalCommittedBytes,
     long FreeBytes,
     int UsagePercent,
-    int PendingEvictions);
+    int PendingEvictions,
+    PantsHybridStorageBudgetSnapshot StorageBudgetSnapshot);

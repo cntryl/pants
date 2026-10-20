@@ -29,6 +29,40 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
+    public void ShouldBreakDownHybridStorageChargesWithoutChangingLegacyPhysicalMetrics()
+    {
+        var store = new SizedHybridCacheStore([new HybridLocalSst("resident.sst", 100)]);
+        using var manager = new HybridCacheManager(1000);
+        manager.BindStore(store);
+        using var wal = manager.Ledger.Reserve(StorageAdmissionKind.Wal, 20);
+        using var spill = manager.Ledger.Reserve(StorageAdmissionKind.TransactionSpill, 30);
+        using var recovery = manager.Ledger.Reserve(StorageAdmissionKind.RecoverySpool, 40);
+        using var hydration = manager.Ledger.Reserve(StorageAdmissionKind.Hydration, 50);
+        using var headroom = manager.Ledger.Reserve(StorageAdmissionKind.FlushHeadroom, 60);
+        using var flush = manager.Ledger.Reserve(StorageAdmissionKind.Flush, 70);
+        using var compaction = manager.Ledger.Reserve(StorageAdmissionKind.Compaction, 80);
+
+        var metrics = manager.GetMetrics(store);
+        var storage = metrics.StorageBudgetSnapshot;
+
+        Assert.Equal(100, metrics.TotalCommittedBytes);
+        Assert.Equal(450, storage.TotalCommittedBytes);
+        Assert.Equal(550, storage.FreeBytes);
+        Assert.Equal(45, storage.UsagePercent);
+        Assert.Equal(100, storage.Usage.ResidentSstBytes);
+        Assert.Equal(30, storage.Usage.TransactionSpillBytes);
+        Assert.Equal(60, storage.Usage.FlushHeadroomReservedBytes);
+        Assert.Equal(70, storage.Usage.FlushStagingReservedBytes);
+        Assert.Equal(80, storage.Usage.CompactionStagingReservedBytes);
+        Assert.Equal(20, storage.Usage.WalAppendReservedBytes);
+        Assert.Equal(40, storage.Usage.RecoverySpoolReservedBytes);
+        Assert.Equal(50, storage.Usage.HydrationReservedBytes);
+        Assert.Equal(0, storage.Usage.WalHeadroomReservedBytes);
+        Assert.Equal(2, storage.Usage.Reservations);
+        Assert.Equal(storage.TotalCommittedBytes, SumLocalStorageCharges(storage.Usage));
+    }
+
+    [Fact]
     public async Task ShouldFlushWhenCombinedSmallCloudFamiliesReachTheHybridMemtableThreshold()
     {
         using var directory = new TemporaryDirectory();
@@ -614,12 +648,32 @@ public sealed class PantsHybridStorageTests
 
         Assert.Single(LocalSsts(directory.Path));
         Assert.Empty(CloudSsts(directory.Path));
+
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        var storage = Assert.IsType<PantsHybridStorageBudgetSnapshot>(metrics.HybridStorageBudget);
+        Assert.True(storage.Usage.ResidentSstBytes > 0);
+        Assert.Equal(storage.TotalCommittedBytes, SumLocalStorageCharges(storage.Usage));
+        Assert.Null(storage.BlockedAdmission);
+
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var value = await reader.GetAsync("retained"u8.ToArray());
         Assert.Equal(120 * 1024, Assert.IsType<ReadOnlyMemory<byte>>(value).Length);
     }
+
+    static long SumLocalStorageCharges(PantsLocalStorageUsage usage) => checked(
+        usage.WalBytes +
+        usage.TransactionSpillBytes +
+        usage.ResidentSstBytes +
+        usage.StartupResidueBytes +
+        usage.FlushStagingReservedBytes +
+        usage.FlushHeadroomReservedBytes +
+        usage.CompactionStagingReservedBytes +
+        usage.WalHeadroomReservedBytes +
+        usage.WalAppendReservedBytes +
+        usage.RecoverySpoolReservedBytes +
+        usage.HydrationReservedBytes);
 
     [Fact]
     public async Task ShouldPublishSstBeforeEvictingLocalCacheFile()
@@ -755,7 +809,16 @@ public sealed class PantsHybridStorageTests
         {
             await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
                 PutAsync(database, "large-cloud-transaction", value).AsTask());
+            var rejected = await database.Diagnostics.GetRuntimeMetricsAsync();
+            var blocked = Assert.IsType<PantsStorageAdmissionBlock>(
+                rejected.HybridStorageBudget?.BlockedAdmission);
+            Assert.Equal(PantsStorageAdmissionKind.FlushHeadroom, blocked.Operation);
+            Assert.Equal(PantsStorageAdmissionReason.LocalCapacity, blocked.Reason);
+            Assert.True(blocked.RequestedBytes > blocked.FreeBytesAtRejection);
+
             await PutAsync(database, "after-rejection", "still-writable"u8.ToArray());
+            Assert.Null((await database.Diagnostics.GetRuntimeMetricsAsync())
+                .HybridStorageBudget?.BlockedAdmission);
         }
 
         await using var reopened = await OpenAsync(directory.Path, WalAdmissionBudgetBytes);
@@ -1008,6 +1071,12 @@ public sealed class PantsHybridStorageTests
         public List<string> Evicted { get; } = [];
 
         public long LocalCommittedBytes => _ssts.Sum(static sst => sst.SizeBytes);
+
+        public long LocalWalBytes => 0;
+
+        public long LocalSstBytes => LocalCommittedBytes;
+
+        public long LocalStartupResidueBytes => 0;
 
         public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() => [.. _ssts];
 

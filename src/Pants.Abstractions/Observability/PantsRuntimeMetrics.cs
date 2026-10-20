@@ -113,6 +113,8 @@ public sealed record PantsRuntimeMetrics
     public long HybridFreeBytes { get; init; }
     public int HybridUsagePercent { get; init; }
     public int HybridPendingEvictions { get; init; }
+    /// <summary>Detailed hybrid local-storage budget, or null outside hybrid storage.</summary>
+    public PantsHybridStorageBudgetSnapshot? HybridStorageBudget { get; init; }
     /// <summary>Submitted remote SST range requests from this runtime, excluding HEAD reads.</summary>
     public long RemoteRangeRequestsTotal { get; init; }
     /// <summary>Bytes returned by remote SST range requests, including rejected short responses.</summary>

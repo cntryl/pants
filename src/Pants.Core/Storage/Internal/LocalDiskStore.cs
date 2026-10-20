@@ -435,7 +435,7 @@ sealed class LocalDiskStore :
     public long LocalCommittedBytes => checked(
         LocalWalBytes + LocalSstBytes + LocalStartupResidueBytes);
 
-    long LocalStartupResidueBytes
+    public long LocalStartupResidueBytes
     {
         get
         {
@@ -3535,6 +3535,7 @@ sealed class LocalDiskStore :
         {
             _walRetirementDiagnostics.SetBlockedCause(
                 PantsWalRetirementBlockedCause.RetainedWalByteLimit);
+            _localStorageLedger?.RecordCapacityRejection(StorageAdmissionKind.Wal, additionalBytes);
             throw new PantsNoSpaceException(
                 $"WAL history retention is blocked by {_walRetirementDiagnostics.BlockedCause}: " +
                 $"the commit would retain {projectedBytes} bytes, above the " +
@@ -3545,6 +3546,7 @@ sealed class LocalDiskStore :
         {
             _walRetirementDiagnostics.SetBlockedCause(
                 PantsWalRetirementBlockedCause.RetainedWalSegmentLimit);
+            _localStorageLedger?.RecordCapacityRejection(StorageAdmissionKind.Wal, additionalBytes);
             throw new PantsNoSpaceException(
                 $"WAL history retention is blocked by {_walRetirementDiagnostics.BlockedCause}: " +
                 $"the commit would retain {projectedSegments} segments, above the " +

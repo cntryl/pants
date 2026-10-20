@@ -32,6 +32,7 @@ public sealed class PantsObservabilitySurfaceTests
         var offline = await PantsDatabase.VerifyPathAsync(directory.Path);
 
         Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
+        Assert.Null(metrics.HybridStorageBudget);
         Assert.True(metrics.SstCount >= 1);
         Assert.True(metrics.SstBytes > 0);
         Assert.True(metrics.ManifestLastPersistedSequence >= metrics.CurrentSequence);

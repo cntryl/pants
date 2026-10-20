@@ -4,6 +4,12 @@ interface IHybridCacheStore
 {
     long LocalCommittedBytes { get; }
 
+    long LocalWalBytes { get; }
+
+    long LocalSstBytes { get; }
+
+    long LocalStartupResidueBytes { get; }
+
     IReadOnlyList<HybridLocalSst> GetLocalManifestSsts();
 
     /// <summary>

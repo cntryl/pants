@@ -119,10 +119,13 @@ sealed class RecoveryCheckpointer
             _diskCapacityBytes is { } capacity &&
             bytes > capacity)
         {
+            _ledger?.RecordCapacityRejection(StorageAdmissionKind.Flush, bytes);
             throw new PantsNoSpaceException(
                 $"A WAL transaction needs {bytes} bytes to recover, but local storage leaves only " +
                 $"{capacity} bytes of recovery checkpoint capacity; the WAL was left untouched.");
         }
+
+        _ledger?.RecordAdmissionSuccess(StorageAdmissionKind.Flush);
     }
 
     /// <summary>
@@ -168,7 +171,7 @@ sealed class RecoveryCheckpointer
                 "recovery files are already over budget.");
         }
 
-        return _ledger.ReserveUnconditionally(bytes);
+        return _ledger.ReserveUnconditionally(StorageAdmissionKind.Flush, bytes);
     }
 
     static long EstimateBytes(WalMutation mutation) =>
