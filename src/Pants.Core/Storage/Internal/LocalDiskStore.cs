@@ -1923,7 +1923,7 @@ sealed class LocalDiskStore :
                          (!file.HasTrustedKeyBounds() ||
                           bounds.Overlaps(file.SmallestKey!, file.LargestKey!))))
             {
-                var reader = SstReader.Open(Path.Combine(_sstDirectory, file.Name));
+                var reader = _readerCache.OpenUncached(Path.Combine(_sstDirectory, file.Name));
                 readers.Add(reader);
                 for (var blockIndex = 0; blockIndex < reader.DataBlockCount; blockIndex++)
                 {
@@ -4923,7 +4923,7 @@ sealed class LocalDiskStore :
         {
             try
             {
-                return new LocalFileCursor(SstReader.Open(path), budget);
+                return new LocalFileCursor(_readerCache.OpenUncached(path), budget);
             }
             catch (Exception exception) when (
                 _remoteSstSourceFactory is not null &&
@@ -5026,7 +5026,7 @@ sealed class LocalDiskStore :
                     var path = Path.Combine(_sstDirectory, name);
                     if (File.Exists(path))
                     {
-                        using var reader = SstReader.Open(path);
+                        using var reader = _readerCache.OpenUncached(path);
                         continue;
                     }
 
