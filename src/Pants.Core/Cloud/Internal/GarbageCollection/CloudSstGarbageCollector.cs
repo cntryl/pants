@@ -30,7 +30,7 @@ sealed class CloudSstGarbageCollector
         try
         {
             _ensureAuthority();
-            var proof = await _captureProofAsync(cancellationToken).ConfigureAwait(false);
+            using var proof = await _captureProofAsync(cancellationToken).ConfigureAwait(false);
             var objectKeys = await _sstStore.ListAllAsync(
                 PantsCloudObjectLayout.SstPrefix,
                 cancellationToken).ConfigureAwait(false);
