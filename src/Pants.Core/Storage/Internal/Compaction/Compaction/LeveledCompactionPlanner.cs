@@ -170,6 +170,38 @@ static class LeveledCompactionPlanner
     }
 
     /// <summary>
+    ///     Checks that no target-level file was added to or removed from the span captured by a
+    ///     compaction plan while its worker was merging.
+    /// </summary>
+    public static bool HasSameTargetSpan(
+        CompactionPlan plan,
+        IReadOnlyList<FileMeta> currentFiles)
+    {
+        var sources = plan.Inputs
+            .Where(file => file.Level == plan.SourceLevel)
+            .ToArray();
+        if (sources.Length == 0)
+        {
+            return false;
+        }
+
+        var familyFiles = currentFiles
+            .Where(file => file.ColumnFamilyId == plan.ColumnFamilyId)
+            .ToArray();
+        var expectedTargetNames = plan.Inputs
+            .Where(file => file.Level == plan.TargetLevel)
+            .Select(static file => file.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var currentTargetNames = ExpandToCompleteTargetSpan(
+                sources,
+                FilesAtLevel(familyFiles, plan.TargetLevel))
+            .Where(file => file.Level == plan.TargetLevel)
+            .Select(static file => file.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        return expectedTargetNames.SetEquals(currentTargetNames);
+    }
+
+    /// <summary>
     ///     Builds a plan whose source set is bounded by <paramref name="maximumInputs" /> but whose
     ///     target span is always complete.
     /// </summary>

@@ -43,9 +43,11 @@ public sealed class ReadOnlyCoordinatorFastPathTests
                          family,
                          PantsTransactionMode.ReadOnly))
         {
+            Assert.Equal(before, database.CoordinatorCommandsEnqueued);
             Assert.Equal(
                 "sst-value"u8.ToArray(),
                 (await transaction.GetAsync("sst-key"u8.ToArray()))?.ToArray());
+            Assert.Equal(before, database.CoordinatorCommandsEnqueued);
         }
 
         Assert.Equal(before, database.CoordinatorCommandsEnqueued);

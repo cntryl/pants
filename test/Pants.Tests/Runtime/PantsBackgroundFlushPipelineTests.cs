@@ -97,6 +97,140 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
+    public async Task ShouldKeepCommitsAndPointReadsResponsiveWhileCompactionMergeIsBlocked()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new BlockingCompactionOutputFailpointHandler();
+        var options = CreateOptions(directory.Path).WithFlushAfterWalRecordsForTesting(1);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(handler));
+        var compactedFamily = database.ColumnFamilies.DefaultFamily;
+        var writableFamily = await database.ColumnFamilies.CreateAsync("compaction-responsive-write");
+        for (var generation = 0; generation < 2; generation++)
+        {
+            await CommitAsync(
+                database,
+                compactedFamily,
+                TestBytes.FromString($"key-{generation:D2}"),
+                new byte[48 * 1024]);
+            await database.Maintenance.FlushAsync(compactedFamily);
+        }
+
+        var compactTask = database.Maintenance.CompactAllAsync().AsTask();
+        try
+        {
+            await WaitForCompactionOutputAsync(handler, compactTask);
+
+            await CommitAsync(
+                    database,
+                    writableFamily,
+                    "foreground-during-merge"u8.ToArray(),
+                    "committed"u8.ToArray())
+                .AsTask().WaitAsync(TestTimeouts.Expected);
+            await CommitAsync(
+                    database,
+                    compactedFamily,
+                    "same-family-during-merge"u8.ToArray(),
+                    "flushed"u8.ToArray())
+                .AsTask().WaitAsync(TestTimeouts.Expected);
+            await database.Maintenance.FlushAsync(compactedFamily)
+                .AsTask().WaitAsync(TestTimeouts.Expected);
+            await using var reader = await database.Transactions.BeginAsync(
+                compactedFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.Equal(
+                new byte[48 * 1024],
+                (await reader.GetAsync("key-00"u8.ToArray()))!.Value.ToArray());
+            Assert.Equal(
+                "flushed"u8.ToArray(),
+                (await reader.GetAsync("same-family-during-merge"u8.ToArray()))!.Value.ToArray());
+        }
+        finally
+        {
+            handler.Release();
+        }
+
+        await compactTask.WaitAsync(TestTimeouts.Expected);
+        await using var verifyWrite = await database.Transactions.BeginAsync(
+            writableFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "committed"u8.ToArray(),
+            (await verifyWrite.GetAsync("foreground-during-merge"u8.ToArray()))!.Value.ToArray());
+    }
+
+    [Fact]
+    public async Task ShouldCancelBlockedCompactionOnShutdownAndReopenWithInputsIntact()
+    {
+        using var directory = new TemporaryDirectory();
+        var handler = new BlockingCompactionOutputFailpointHandler();
+        var database = await PantsDatabase.OpenForTestingAsync(
+            CreateOptions(directory.Path),
+            new RuntimeDependencies(handler));
+        var compactedFamily = database.ColumnFamilies.DefaultFamily;
+        for (var generation = 0; generation < 2; generation++)
+        {
+            await CommitAsync(
+                database,
+                compactedFamily,
+                TestBytes.FromString($"shutdown-key-{generation:D2}"),
+                new byte[48 * 1024]);
+            await database.Maintenance.FlushAsync(compactedFamily);
+        }
+
+        var before = await database.Diagnostics.GetStorageLayoutAsync();
+        var inputNames = before.Levels.SelectMany(static level => level.Files)
+            .Select(static file => file.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, before.Levels.SelectMany(static level => level.Files)
+            .Count(static file => file.Level == 0));
+        var compactTask = database.Maintenance.CompactAllAsync().AsTask();
+        var shutdownCompleted = false;
+        try
+        {
+            await WaitForCompactionOutputAsync(handler, compactTask);
+            await database.ShutdownAsync(TestTimeouts.Expected);
+            shutdownCompleted = true;
+            await Assert.ThrowsAsync<PantsAbortedException>(() => compactTask);
+
+            var sstDirectory = Path.Combine(directory.Path, "sst");
+            Assert.Equal(
+                inputNames,
+                Directory.GetFiles(sstDirectory, "*.sst")
+                    .Select(Path.GetFileName)
+                    .Order(StringComparer.Ordinal));
+            Assert.Empty(Directory.EnumerateFiles(
+                Path.Combine(sstDirectory, ".flush-staging"),
+                "*",
+                SearchOption.AllDirectories));
+        }
+        finally
+        {
+            handler.Release();
+            if (!shutdownCompleted)
+            {
+                await database.DisposeAsync();
+            }
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        var after = await reopened.Diagnostics.GetStorageLayoutAsync();
+        Assert.Equal(
+            inputNames,
+            after.Levels.SelectMany(static level => level.Files)
+                .Select(static file => file.Name)
+                .Order(StringComparer.Ordinal));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            new byte[48 * 1024],
+            (await reader.GetAsync("shutdown-key-00"u8.ToArray()))!.Value.ToArray());
+    }
+
+    [Fact]
     public async Task ShouldBoundMemtablePipelineWhileFlushPublicationIsBlocked()
     {
         const int flushThresholdBytes = 128 * 1024;
@@ -1916,8 +2050,10 @@ public sealed class PantsBackgroundFlushPipelineTests
             "unflushed",
             TestBytes.ToText((await read.GetAsync("racing-active"u8.ToArray()))!.Value));
 
-        var compacted = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.True(compacted.CompactionsRun >= 1);
+        var compacted = await WaitForMetricsAsync(
+            database,
+            static metrics => metrics.CompactionsRun >= 1,
+            TestTimeouts.Expected);
         Assert.True(compacted.TotalMemtableBytes > 0);
         Assert.Equal(0, compacted.WalPendingWrites);
     }
@@ -2659,6 +2795,18 @@ public sealed class PantsBackgroundFlushPipelineTests
             .WithMemtableLimits(512 * 1024, 128 * 1024)
             .WithTransactionMemoryPool(512 * 1024)
             .WithBackgroundCompaction(false);
+
+    static async Task WaitForCompactionOutputAsync(
+        BlockingCompactionOutputFailpointHandler handler,
+        Task compaction)
+    {
+        var completed = await Task.WhenAny(handler.Blocked, compaction)
+            .WaitAsync(TestTimeouts.Expected);
+        Assert.True(
+            ReferenceEquals(completed, handler.Blocked),
+            $"Compaction finished before writing its first output ({compaction.Exception?.GetBaseException()}).");
+        await handler.Blocked.WaitAsync(TestTimeouts.Expected);
+    }
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,

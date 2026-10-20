@@ -115,6 +115,31 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
+    public void ShouldDetectWhenThePlannedTargetSpanChanges()
+    {
+        FileMeta[] files =
+        [
+            File("l0-1.sst", 0, 1, "b", "c"),
+            File("l0-2.sst", 0, 2, "d", "e"),
+            File("l1-overlap.sst", 1, 3, "c", "d")
+        ];
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 2),
+            null,
+            true);
+
+        Assert.NotNull(plan);
+        Assert.True(LeveledCompactionPlanner.HasSameTargetSpan(
+            plan,
+            [.. files, File("l1-unrelated.sst", 1, 4, "x", "z")]));
+        Assert.False(LeveledCompactionPlanner.HasSameTargetSpan(
+            plan,
+            [.. files, File("l1-new-overlap.sst", 1, 5, "e", "f")]));
+    }
+
+    [Fact]
     public void ShouldForceL0CompactionBelowNormalTriggers()
     {
         FileMeta[] files =

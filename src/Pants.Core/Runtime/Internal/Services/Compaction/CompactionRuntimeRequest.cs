@@ -1,10 +1,13 @@
 namespace Cntryl.Pants.Runtime.Internal.Services.Compaction;
 
 sealed record CompactionRuntimeRequest(
-    RuntimeState State,
+    CompactionWorkSnapshot Snapshot,
+    CompactionWorkSnapshotProvider SnapshotProvider,
+    CompactionPublicationDispatcher PublicationDispatcher,
     bool Force,
     CloudCompactionOutputPublisher? OutputPublisher,
-    bool FlushMutableOperations,
     Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? PrepareInputs,
-    CompactionOutputStaging? Staging = null,
-    bool DrainDebt = false);
+    CompactionOutputStaging? Staging,
+    bool DrainDebt,
+    long Generation,
+    CancellationToken RequestCancellationToken);
