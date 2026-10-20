@@ -6,6 +6,7 @@ sealed class SimulatedCloudCompactionPublisher
     readonly string _cloudRoot;
     readonly IFailpointHandler _failpoints;
     readonly SstPublicationAdmission _sstPublicationAdmission;
+    readonly CloudMetadataWriteAdmission _intentWriteAdmission;
 
     readonly string _localRoot;
 
@@ -18,6 +19,7 @@ sealed class SimulatedCloudCompactionPublisher
         _cloudRoot = Path.Combine(_localRoot, "cloud_store");
         _failpoints = failpoints;
         _sstPublicationAdmission = sstPublicationAdmission;
+        _intentWriteAdmission = new CloudMetadataWriteAdmission(sstPublicationAdmission.Budget);
     }
 
     public async ValueTask PublishAsync(
@@ -26,9 +28,16 @@ sealed class SimulatedCloudCompactionPublisher
     {
         ArgumentNullException.ThrowIfNull(outputNames);
         cancellationToken.ThrowIfCancellationRequested();
-        AtomicStagedFile.Write(
-            Path.Combine(_cloudRoot, "metadata", IntentFileName),
-            File.ReadAllBytes(Path.Combine(_localRoot, IntentFileName)));
+        var intentPath = Path.Combine(_localRoot, IntentFileName);
+        using (_intentWriteAdmission.AdmitExisting(
+                   new FileInfo(intentPath).Length,
+                   "Cloud compaction intent"))
+        {
+            AtomicStagedFile.Write(
+                Path.Combine(_cloudRoot, "metadata", IntentFileName),
+                File.ReadAllBytes(intentPath));
+        }
+
         _failpoints.Hit(Failpoint.BeforeCloudUpload);
         foreach (var name in outputNames)
         {

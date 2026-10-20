@@ -6,6 +6,8 @@ sealed class ProviderCloudCompactionPublisher
     readonly ICloudObjectStore _controlStore;
     readonly IFailpointHandler _failpoints;
     readonly CloudLeaseCoordinator _lease;
+    readonly SstPublicationAdmission _sstPublicationAdmission;
+    readonly CloudMetadataWriteAdmission _intentWriteAdmission;
 
     readonly string _localRoot;
     readonly ProviderSstPublisher _sstPublisher;
@@ -16,18 +18,20 @@ sealed class ProviderCloudCompactionPublisher
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
         IFailpointHandler failpoints,
-        SstPublicationAdmission? admission = null,
+        SstPublicationAdmission admission,
         ProviderSstIdentityRegistry? identityRegistry = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _controlStore = controlStore;
         _lease = lease;
         _failpoints = failpoints;
+        _sstPublicationAdmission = admission;
+        _intentWriteAdmission = new CloudMetadataWriteAdmission(admission.Budget);
         _sstPublisher = new ProviderSstPublisher(
             sstStore,
             lease.EnsureValid,
             lease.ValidateRemoteAsync,
-            admission,
+            _sstPublicationAdmission,
             identityRegistry);
     }
 
@@ -56,9 +60,15 @@ sealed class ProviderCloudCompactionPublisher
     async ValueTask PublishIntentAsync(CancellationToken cancellationToken)
     {
         var path = Path.Combine(_localRoot, IntentFileName);
+        using var localIntentAdmission = _intentWriteAdmission.AdmitExisting(
+            new FileInfo(path).Length,
+            "Cloud compaction intent");
         var data = File.ReadAllBytes(path);
         var objectKey = PantsCloudObjectLayout.MetadataPrefix + IntentFileName;
-        var current = await _controlStore.GetAsync(objectKey, cancellationToken)
+        using var metadataReads = new ProviderCloudControlMetadataReadSet(
+            _controlStore,
+            _sstPublicationAdmission.Budget);
+        var current = await metadataReads.ReadAsync(objectKey, cancellationToken)
             .ConfigureAwait(false);
         await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var published = await _controlStore.PutAsync(
@@ -74,7 +84,7 @@ sealed class ProviderCloudCompactionPublisher
                 "Cloud compaction intent lost its conditional publication race.");
         }
 
-        var readback = await _controlStore.GetAsync(objectKey, cancellationToken)
+        var readback = await metadataReads.ReadAsync(objectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
             "Cloud compaction intent was acknowledged without an authoritative object.");
         _lease.EnsureValid();

@@ -87,7 +87,7 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
         if (workspaceBytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
-                $"{resourceName} repair needs {workspaceBytes} bytes of maintenance memory; " +
+                $"{resourceName} needs {workspaceBytes} bytes of maintenance memory; " +
                 $"the pool holds {budget.Limit}.");
         }
 

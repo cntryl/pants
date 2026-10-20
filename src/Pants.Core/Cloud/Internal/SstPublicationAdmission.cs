@@ -13,6 +13,8 @@ sealed class SstPublicationAdmission
     readonly ResourceBudget _budget;
     readonly MaintenanceMemoryGate? _gate;
 
+    internal ResourceBudget Budget => _budget;
+
     SstPublicationAdmission(ResourceBudget budget, MaintenanceMemoryGate? gate)
     {
         _budget = budget;
