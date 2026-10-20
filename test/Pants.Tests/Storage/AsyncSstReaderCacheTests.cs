@@ -277,6 +277,56 @@ public sealed class AsyncSstReaderCacheTests
     }
 
     [Fact]
+    public async Task ShouldKeepAsyncReaderReservationWhenOpenFailureCannotCloseItsSource()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        var file = new FileMeta { Name = "wrong-length.sst", SizeBytes = 1 };
+        var source = new FailingDisposeAsyncSstSource(LocalAsyncSstSource.Open(path));
+
+        await Assert.ThrowsAsync<AsyncSstSourceCleanupException>(async () =>
+            await cache.GetOrOpenAsync(
+                file,
+                token => AsyncSstReader.OpenAsync(source, file, token),
+                CancellationToken.None));
+
+        Assert.Equal(1, handleBudget.Current);
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await cache.OpenUncachedAsync(
+                _ => throw new Xunit.Sdk.XunitException("The open must not exceed the handle budget."),
+                CancellationToken.None));
+
+        await source.CloseInnerAsync();
+    }
+
+    [Fact]
+    public async Task ShouldKeepUncachedReaderReservationWhenOpenFailureCannotCloseItsSource()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        var file = new FileMeta { Name = "wrong-length.sst", SizeBytes = 1 };
+        var source = new FailingDisposeAsyncSstSource(LocalAsyncSstSource.Open(path));
+
+        await Assert.ThrowsAsync<AsyncSstSourceCleanupException>(async () =>
+            await cache.OpenUncachedAsync(
+                token => AsyncSstReader.OpenAsync(source, file, token),
+                CancellationToken.None));
+
+        Assert.Equal(1, handleBudget.Current);
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await cache.GetOrOpenAsync(
+                new FileMeta { Name = "blocked.sst" },
+                _ => throw new Xunit.Sdk.XunitException("The open must not exceed the handle budget."),
+                CancellationToken.None));
+
+        await source.CloseInnerAsync();
+    }
+
+    [Fact]
     public async Task ShouldReleaseAsyncReaderReservationWhenCacheIsDisposedDuringOpen()
     {
         using var directory = new TemporaryDirectory();
@@ -388,6 +438,48 @@ public sealed class AsyncSstReaderCacheTests
         {
             await reader.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task ShouldRetrySharedOpenForLiveWaiterWhenInitiatingCallerCancels()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var counter = new ReadCounter();
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        using var cancellation = new CancellationTokenSource();
+        var file = new FileMeta { Name = "a.sst" };
+        var openStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstOpen = cache.GetOrOpenAsync(
+            file,
+            async token =>
+            {
+                openStarted.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new Xunit.Sdk.XunitException("A cancelled first open must not continue.");
+            },
+            cancellation.Token).AsTask();
+
+        await openStarted.Task.WaitAsync(TestTimeouts.Expected);
+        var liveWaiter = cache.GetOrOpenAsync(
+            file,
+            token => OpenAsync(path, file, counter, token),
+            CancellationToken.None).AsTask();
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstOpen);
+        await using (var reader = await liveWaiter.WaitAsync(TestTimeouts.Expected))
+        {
+            Assert.True(reader.DataBlockCount > 0);
+            Assert.Equal(1, counter.Opens);
+            Assert.Equal(1, handleBudget.Current);
+        }
+
+        cache.Dispose();
+        Assert.Equal(0, handleBudget.Current);
     }
 
     [Fact]

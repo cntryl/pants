@@ -237,9 +237,17 @@ sealed class AsyncSstReader : IAsyncDisposable
                 metadata.SmallestKey,
                 metadata.LargestKey);
         }
-        catch
+        catch (Exception openException)
         {
-            await source.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupException)
+            {
+                throw new AsyncSstSourceCleanupException(openException, cleanupException);
+            }
+
             throw;
         }
     }
