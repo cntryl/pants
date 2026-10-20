@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal;
 using Cntryl.Pants.Storage.Internal.IO;
 
 namespace Cntryl.Pants.Cloud.Internal;
@@ -29,6 +30,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     readonly IFailpointHandler _failpoints;
 
     readonly string _localRoot;
+    readonly ResourceBudget _metadataSnapshotBudget = new(64L * 1024 * 1024);
     readonly ulong _writerEpoch;
 
     WalPublicationCatalog _catalog;
@@ -313,9 +315,14 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
 
         var nextSegmentId = _catalog.NextSegmentId;
-        var historyStartSegmentId = CloudControlMetadataSnapshot
-            .Capture(_localRoot, MetadataFiles)
-            .AuthoritativeManifest?.WalHistoryStart ?? 1;
+        ulong historyStartSegmentId;
+        using (var metadata = CloudControlMetadataSnapshot.Capture(
+                   _localRoot,
+                   MetadataFiles,
+                   _metadataSnapshotBudget))
+        {
+            historyStartSegmentId = metadata.AuthoritativeManifest?.WalHistoryStart ?? 1;
+        }
         var publishableSegments = new List<SealedWalSegment>(segments.Count);
         for (var index = 0; index < segments.Count; index++)
         {
@@ -442,7 +449,10 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public void MirrorMetadataAndSsts()
     {
-        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
+        using var metadata = CloudControlMetadataSnapshot.Capture(
+            _localRoot,
+            MetadataFiles,
+            _metadataSnapshotBudget);
         var localSstDirectory = Path.Combine(_localRoot, "sst");
         var localSsts = Directory.Exists(localSstDirectory)
             ? Directory.EnumerateFiles(
