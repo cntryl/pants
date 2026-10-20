@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Cloud.Internal;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -95,10 +96,106 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         Assert.Null(failure);
     }
 
-    static (FileMeta Metadata, byte[] Bytes) CreateSst(ulong sequence, byte[] key)
+    [Fact]
+    public async Task ShouldMirrorManySimulatedCloudSstsWithinPerSstPublicationBudget()
     {
+        using var cache = new TemporaryDirectory();
+        const int fileCount = 24;
+        const int valueBytes = 64 * 1024;
+        var ssts = Enumerable.Range(1, fileCount)
+            .Select(sequence => CreateSst(
+                checked((ulong)sequence),
+                System.Text.Encoding.UTF8.GetBytes($"key-{sequence:D2}"),
+                valueBytes))
+            .ToArray();
+        WriteLocalFixture(cache.Path, ssts);
+
+        var budget = new ResourceBudget(1024 * 1024);
+        var aggregateSstBytes = ssts.Sum(static sst => (long)sst.Bytes.Length);
+        Assert.True(aggregateSstBytes > budget.Limit);
+        var admission = SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate());
+        await using var persistence = new SimulatedCloudPersistence(
+            cache.Path,
+            1,
+            sstPublicationAdmission: admission);
+
+        Assert.InRange(budget.Peak, 1, budget.Limit);
+        Assert.True(budget.Peak < aggregateSstBytes);
+        Assert.Equal(0, budget.Current);
+        Assert.Equal(
+            fileCount,
+            Directory.GetFiles(Path.Combine(cache.Path, "cloud_store", "sst"), "*.sst").Length);
+        AssertSimulatedManifestDependencies(cache.Path);
+    }
+
+    [Fact]
+    public async Task ShouldHonorCancellationWhileWaitingForSstMirrorAdmission()
+    {
+        using var cache = new TemporaryDirectory();
+        var first = CreateSst(1, "a"u8.ToArray());
+        var second = CreateSst(2, "b"u8.ToArray());
+        WriteLocalFixture(cache.Path, [first]);
+
+        var budget = new ResourceBudget(1024 * 1024);
+        var gate = new MaintenanceMemoryGate();
+        var admission = SstPublicationAdmission.Gated(budget, gate);
+        await using var persistence = new SimulatedCloudPersistence(
+            cache.Path,
+            1,
+            sstPublicationAdmission: admission);
+        WriteSst(cache.Path, second);
+        WriteManifest(cache.Path, [first.Metadata, second.Metadata]);
+
+        using var gateHold = await gate.EnterAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var mirror = persistence.MirrorMetadataAndSstsAsync(cancellation.Token);
+
+        Assert.False(mirror.IsCompleted);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => mirror.AsTask());
+        Assert.False(File.Exists(Path.Combine(
+            cache.Path,
+            "cloud_store",
+            "sst",
+            second.Metadata.Name)));
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldRejectSimulatedSstBeforeUploadWhenPublicationBudgetDoesNotFit()
+    {
+        using var cache = new TemporaryDirectory();
+        var sst = CreateSst(1, "a"u8.ToArray());
+        WriteLocalFixture(cache.Path, [sst]);
+
+        var budget = new ResourceBudget(128 * 1024);
+        var admission = SstPublicationAdmission.Gated(budget, new MaintenanceMemoryGate());
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+        {
+            await using var persistence = new SimulatedCloudPersistence(
+                cache.Path,
+                1,
+                sstPublicationAdmission: admission);
+        });
+
+        Assert.False(Directory.Exists(Path.Combine(cache.Path, "cloud_store", "sst")));
+        Assert.Equal(0, budget.Current);
+        Assert.Equal(0, budget.Peak);
+    }
+
+    static (FileMeta Metadata, byte[] Bytes) CreateSst(ulong sequence, byte[] key)
+        => CreateSst(sequence, key, 5);
+
+    static (FileMeta Metadata, byte[] Bytes) CreateSst(
+        ulong sequence,
+        byte[] key,
+        int valueBytes)
+    {
+        var value = new byte[valueBytes];
+        new Random(checked((int)sequence)).NextBytes(value);
         var bytes = SstCodec.Encode(
-            [new SstEntry(key, "value"u8.ToArray(), sequence, null, false)],
+            [new SstEntry(key, value, sequence, null, false)],
             [],
             PantsPerformanceGoal.Latency);
         var name = $"000000_00_{sequence:00000000000000000000}.sst";
