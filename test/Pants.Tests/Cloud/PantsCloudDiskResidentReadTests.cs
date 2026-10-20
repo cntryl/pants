@@ -282,6 +282,43 @@ public sealed class PantsCloudDiskResidentReadTests
     }
 
     [Fact]
+    public async Task ShouldReadSnapshotSstsAfterCompactionReplacesTheActiveManifest()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.SimulatedCloud(
+                directory.Path,
+                "pants-tests",
+                "disk-resident-stale-snapshot/")
+            .WithCompaction(new PantsCompactionConfiguration(
+                L0FileCountTrigger: 2,
+                BackgroundEnabled: false));
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await CommitAndFlushAsync(database, "snapshot-1", "value-1");
+        await CommitAndFlushAsync(database, "snapshot-2", "value-2");
+        Assert.Equal(2, (await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
+
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var scan = await reader.ScanAsync(new PantsScanQuery());
+        await database.Maintenance.CompactAllAsync();
+        Assert.Equal(1, (await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
+
+        Assert.Equal(
+            "value-1",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync(TestBytes.FromString("snapshot-1")))));
+
+        var rows = new List<string>();
+        await foreach (var entry in scan)
+        {
+            rows.Add(TestBytes.ToText(entry.Key));
+        }
+
+        Assert.Equal(["snapshot-1", "snapshot-2"], rows);
+    }
+
+    [Fact]
     public async Task ShouldReleaseCloudMemtableTrackingAfterReadAmplificationCompaction()
     {
         using var directory = new TemporaryDirectory();

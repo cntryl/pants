@@ -2055,7 +2055,7 @@ sealed class Actor : IAsyncDisposable
             return _diskStore.TryReadPointValue(candidatesNewestFirst, key.Span, observation);
         }
 
-        if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        if (candidatesNewestFirst.Any(file => !_diskStore.IsSstLocalForReadView(file)))
         {
             // The failpoint historically guarded whole-file hydration. It now guards admission
             // to the equivalent remote ranged-read path.
@@ -2112,7 +2112,7 @@ sealed class Actor : IAsyncDisposable
             return [];
         }
 
-        if (_hybridCache is not null && candidates.Any(file => !_diskStore.IsSstLocal(file.Name)))
+        if (_hybridCache is not null && candidates.Any(file => !_diskStore.IsSstLocalForReadView(file)))
         {
             await Task.Yield();
             _failpoints.Hit(Failpoint.BeforeHybridSstHydration);

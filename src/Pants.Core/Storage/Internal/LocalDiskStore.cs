@@ -534,6 +534,16 @@ sealed class LocalDiskStore :
         return File.Exists(Path.Combine(_sstDirectory, name));
     }
 
+    /// <summary>
+    ///     Checks local presence for an SST selected by a transaction read view. Compaction may
+    ///     replace the active manifest while that snapshot still pins its older immutable files.
+    /// </summary>
+    public bool IsSstLocalForReadView(FileMeta file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        return File.Exists(Path.Combine(_sstDirectory, ValidateSstName(file.Name)));
+    }
+
     public async ValueTask HydrateLocalSstAsync(
         string name,
         CancellationToken cancellationToken)
@@ -1186,7 +1196,7 @@ sealed class LocalDiskStore :
         SstEntry? best = null;
         foreach (var candidate in candidatesNewestFirst)
         {
-            var tier = IsSstLocal(candidate.Name)
+            var tier = IsSstLocalForReadView(candidate)
                 ? PantsSstReadTier.Local
                 : PantsSstReadTier.HydratedFromCloud;
             await using var reader = await OpenAsyncSstReaderAsync(candidate, cancellationToken)
