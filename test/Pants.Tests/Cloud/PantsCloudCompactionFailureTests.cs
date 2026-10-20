@@ -1,3 +1,5 @@
+using Cntryl.Pants.Cloud.Internal;
+using Cntryl.Pants.Storage.Internal;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -5,6 +7,36 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudCompactionFailureTests
 {
+    [Fact]
+    public async Task ShouldRejectSimulatedCompactionOutputBeforeReadingWhenBudgetDoesNotFit()
+    {
+        using var directory = new TemporaryDirectory();
+        var localSstDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "sst"));
+        var outputName = "000000_00_00000000000000000001.sst";
+        await File.WriteAllBytesAsync(
+            Path.Combine(localSstDirectory.FullName, outputName),
+            new byte[256 * 1024]);
+        File.WriteAllText(Path.Combine(directory.Path, "intent_log.json"), "[]");
+
+        var budget = new ResourceBudget(512 * 1024);
+        var admission = SstPublicationAdmission.WithinCompactionRound(budget);
+        var publisher = new SimulatedCloudCompactionPublisher(
+            directory.Path,
+            NullPantsFailpointHandler.Instance,
+            admission);
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            publisher.PublishAsync([outputName], CancellationToken.None).AsTask());
+
+        Assert.False(File.Exists(Path.Combine(
+            directory.Path,
+            "cloud_store",
+            "sst",
+            outputName)));
+        Assert.Equal(0, budget.Current);
+        Assert.Equal(0, budget.Peak);
+    }
+
     [Fact]
     public async Task ShouldNotUploadRemoteCompactionOutputWhenIntentSaveFails()
     {
