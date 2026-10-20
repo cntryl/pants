@@ -20,6 +20,9 @@ static class StreamingCompactionMerger
     const int EntryOverheadBytes = 32;
     const int RangeTombstoneOverheadBytes = 24;
     const long ReservationGranularityBytes = 64 * 1024;
+    const int RangeWorkspaceSlotsPerTombstone = 4;
+    const int RangeWorkspaceArrayCount = 4;
+    const int ArrayHeaderAndAlignmentSlots = 4;
 
     public static IEnumerable<CompactionMergeResult> MergeAndPartition(
         IReadOnlyList<SstReader> readers,
@@ -49,6 +52,10 @@ static class StreamingCompactionMerger
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         var horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : (ulong?)null;
+        using var rangeWorkspace = ReserveRangeTombstoneWorkspaceOrDisposeStreams(
+            streams,
+            resourceBudget,
+            rangeTombstones.Count);
         var allRanges = rangeTombstones
             .OrderBy(static tombstone => tombstone.Start, ByteArrayComparer.Instance)
             .ThenByDescending(static tombstone => tombstone.Sequence)
@@ -191,6 +198,44 @@ static class StreamingCompactionMerger
             (long)entry.Key.Length + (entry.Value?.Length ?? 0) + EntryOverheadBytes) +
         partition.RangeTombstones.Sum(static range =>
             (long)range.Start.Length + range.End.Length + RangeTombstoneOverheadBytes));
+
+    static long EstimateRangeTombstoneWorkspaceBytes(int count)
+    {
+        if (count == 0)
+        {
+            return 0;
+        }
+
+        var pointerSlots = checked(
+            (long)count * RangeWorkspaceSlotsPerTombstone +
+            (long)RangeWorkspaceArrayCount * ArrayHeaderAndAlignmentSlots);
+        return checked(pointerSlots * IntPtr.Size);
+    }
+
+    static IDisposable? ReserveRangeTombstoneWorkspaceOrDisposeStreams(
+        IReadOnlyList<ICompactionEntryStream> streams,
+        ResourceBudget? resourceBudget,
+        int tombstoneCount)
+    {
+        if (resourceBudget is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return resourceBudget.Reserve(EstimateRangeTombstoneWorkspaceBytes(tombstoneCount));
+        }
+        catch
+        {
+            foreach (var stream in streams)
+            {
+                stream.Dispose();
+            }
+
+            throw;
+        }
+    }
 
     static void ReserveThrough(
         ResourceBudget? budget,
