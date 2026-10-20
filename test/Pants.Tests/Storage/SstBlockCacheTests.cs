@@ -213,6 +213,35 @@ public sealed class SstBlockCacheTests
     }
 
     [Fact]
+    public async Task ShouldAvoidCopyingDuplicateBlocksUnderConcurrentAdmission()
+    {
+        const int blockSize = 2 * 1024 * 1024;
+        const int workerCount = 8;
+        var cache = new SstBlockCache(PantsBlockCachePolicy.Lru, blockSize, 1);
+        var key = new SstBlockCacheKey(Sst("shared"), 0);
+        var content = new byte[blockSize];
+
+        var workers = Enumerable.Range(0, workerCount).Select(_ =>
+            Task.Factory.StartNew(
+                () =>
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    var accepted = cache.Add(key, content);
+                    return (Accepted: accepted, AllocatedBytes: GC.GetAllocatedBytesForCurrentThread() - before);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default)).ToArray();
+
+        var results = await Task.WhenAll(workers).WaitAsync(TestTimeouts.Expected);
+
+        Assert.All(results, result => Assert.True(result.Accepted));
+        Assert.Equal(1, results.Count(result => result.AllocatedBytes >= blockSize));
+        Assert.All(results, result => Assert.InRange(result.AllocatedBytes, 0, blockSize + 64 * 1024));
+        Assert.Equal(blockSize, cache.UsedBytes);
+    }
+
+    [Fact]
     public void ShouldRemoveAllCachedBlocksGivenObsoleteSst()
     {
         var cache = new SstBlockCache(

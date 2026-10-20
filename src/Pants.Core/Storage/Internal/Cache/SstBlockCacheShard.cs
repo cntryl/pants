@@ -59,7 +59,6 @@ sealed class SstBlockCacheShard
             return false;
         }
 
-        var ownedContent = content.ToArray();
         lock (_mutationGate)
         {
             if (_entries.ContainsKey(key))
@@ -68,6 +67,15 @@ sealed class SstBlockCacheShard
                 return true;
             }
 
+            while (content.Length > _capacityBytes - _usedBytes)
+            {
+                if (!TryEvictOne())
+                {
+                    return false;
+                }
+            }
+
+            var ownedContent = content.ToArray();
             var entry = new SstBlockCacheEntry(ownedContent);
             if (!_entries.TryAdd(key, entry))
             {
@@ -77,16 +85,7 @@ sealed class SstBlockCacheShard
 
             _usedBytes = checked(_usedBytes + entry.SizeBytes);
             _policy.RecordAccess(key);
-            while (_usedBytes > _capacityBytes)
-            {
-                if (!TryEvictOne())
-                {
-                    RemoveCore(key);
-                    return false;
-                }
-            }
-
-            return _entries.ContainsKey(key);
+            return true;
         }
     }
 
