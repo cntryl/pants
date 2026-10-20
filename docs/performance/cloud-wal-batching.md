@@ -23,6 +23,15 @@ Provider-store tests count requests for three segments:
 - four total PUTs instead of the six required by three individual catalog transitions; and
 - five total GETs instead of nine.
 
+`ShouldPublishOneCatalogTransitionGivenEpochCompatibleWalBatch` also compares one three-segment
+publication with three one-segment publications using the same lease epoch and segment bytes. The
+injected WAL store counts HEAD, GET, range GET, PUT, LIST, and DELETE operations; lease-store calls
+are excluded. It records 12 object-store requests and 1,771 payload bytes copied for the batch,
+versus 28 requests and 3,933 bytes copied for individual publication. All PUTs remain conditional,
+and both paths hydrate the same three published segment identities. Copied bytes count successful
+PUT payload copies into the test store's backing objects; they are not a process-wide allocation
+measurement.
+
 The simulated-provider subsystem benchmark publishes eight 4 KiB segments from the same epoch:
 
 ```text

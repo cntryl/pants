@@ -4,11 +4,20 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
 {
     readonly Dictionary<string, (byte[] Data, string Version)> _objects = new(StringComparer.Ordinal);
     int _getCount;
+    int _headCount;
     int _rangeGetCount;
     int _putCount;
+    int _ifAbsentPutCount;
+    int _ifVersionPutCount;
+    int _unconditionalPutCount;
+    int _listPageCount;
+    int _deleteCount;
     int _largestRangeBytes;
+    long _payloadBytesCopied;
 
     public int GetCount => Volatile.Read(ref _getCount);
+
+    public int HeadCount => Volatile.Read(ref _headCount);
 
     public int RangeGetCount => Volatile.Read(ref _rangeGetCount);
 
@@ -16,7 +25,16 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
 
     public int PutCount => Volatile.Read(ref _putCount);
 
-    public long PayloadBytesCopied { get; private set; }
+    public int ConditionalPutCount => checked(
+        Volatile.Read(ref _ifAbsentPutCount) + Volatile.Read(ref _ifVersionPutCount));
+
+    public int UnconditionalPutCount => Volatile.Read(ref _unconditionalPutCount);
+
+    public int RequestCount => checked(
+        HeadCount + GetCount + RangeGetCount + PutCount +
+        Volatile.Read(ref _listPageCount) + Volatile.Read(ref _deleteCount));
+
+    public long PayloadBytesCopied => Volatile.Read(ref _payloadBytesCopied);
 
     public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken)
     {
@@ -32,6 +50,7 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _headCount);
         return ValueTask.FromResult(_objects.TryGetValue(objectKey, out var value)
             ? new CloudObjectMetadata(checked((ulong)value.Data.Length), value.Version, null, null)
             : null);
@@ -67,6 +86,19 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         Interlocked.Increment(ref _putCount);
+        switch (condition)
+        {
+            case PantsCloudObjectWriteCondition.Unconditional:
+                Interlocked.Increment(ref _unconditionalPutCount);
+                break;
+            case PantsCloudObjectWriteCondition.IfAbsent:
+                Interlocked.Increment(ref _ifAbsentPutCount);
+                break;
+            case PantsCloudObjectWriteCondition.IfVersion:
+                Interlocked.Increment(ref _ifVersionPutCount);
+                break;
+        }
+
         var exists = _objects.TryGetValue(objectKey, out var current);
         var accepted = condition switch
         {
@@ -82,7 +114,7 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         }
 
         var copy = data.ToArray();
-        PayloadBytesCopied += copy.Length;
+        Interlocked.Add(ref _payloadBytesCopied, copy.Length);
         _objects[objectKey] = (copy, Guid.NewGuid().ToString("N"));
         return ValueTask.FromResult(true);
     }
@@ -93,6 +125,7 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _listPageCount);
         var keys = continuationToken is null
             ? _objects.Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal)).ToArray()
             : [];
@@ -118,6 +151,7 @@ sealed class CountingCloudObjectStore : ICloudObjectStore
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _deleteCount);
         if (!_objects.TryGetValue(objectKey, out var current))
         {
             return ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
