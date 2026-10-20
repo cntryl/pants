@@ -95,6 +95,50 @@ public sealed class TransactionSpillAdmissionTests
             $"Ledger holds {ledger.ReservedBytes} bytes but the spill wrote {writtenBytes}.");
     }
 
+    [Fact]
+    public async Task ShouldExposeTypedLocalCapacityPressureWhenACloudSpillIsRejected()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions
+            .SimulatedCloud(directory.Path, "pants-tests", "spill-pressure/")
+            .WithSimulatedCloudLocalStorageBudget(64 * 1024)
+            .WithTransactionMemoryPool(8 * 1024)
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenAsync(options);
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+
+        Assert.Throws<PantsNoSpaceException>(() => transaction.Put(
+            TestBytes.FromString("oversized"),
+            new byte[256 * 1024]));
+
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        var storage = Assert.IsType<PantsHybridStorageBudgetSnapshot>(metrics.HybridStorageBudget);
+        var blocked = Assert.IsType<PantsStorageAdmissionBlock>(storage.BlockedAdmission);
+        Assert.Equal(PantsStorageAdmissionKind.TransactionSpill, blocked.Operation);
+        Assert.Equal(PantsStorageAdmissionReason.LocalCapacity, blocked.Reason);
+        Assert.True(blocked.RequestedBytes > blocked.FreeBytesAtRejection);
+        Assert.True(blocked.Attempts > 0);
+        Assert.True(storage.AdmissionRejectionsTotal >= blocked.Attempts);
+        Assert.Equal(64 * 1024, storage.MaximumLocalBytes);
+        Assert.Equal(storage.TotalCommittedBytes, SumLocalStorageCharges(storage.Usage));
+        Assert.Equal(0, storage.Usage.TransactionSpillBytes);
+    }
+
+    static long SumLocalStorageCharges(PantsLocalStorageUsage usage) => checked(
+        usage.WalBytes +
+        usage.TransactionSpillBytes +
+        usage.ResidentSstBytes +
+        usage.StartupResidueBytes +
+        usage.FlushStagingReservedBytes +
+        usage.FlushHeadroomReservedBytes +
+        usage.CompactionStagingReservedBytes +
+        usage.WalHeadroomReservedBytes +
+        usage.WalAppendReservedBytes +
+        usage.RecoverySpoolReservedBytes +
+        usage.HydrationReservedBytes);
+
     static TransactionIntentOperation[] CreateIndexedOperations(int puts, int ranges, int endLength)
     {
         var family = new ColumnFamilyIdentity(0, "default", 0);

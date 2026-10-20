@@ -120,4 +120,49 @@ public sealed class StorageBudgetLedgerTests
             ledger.Reserve(StorageAdmissionKind.Compaction, 401));
         Assert.Equal(600, ledger.ReservedBytes);
     }
+
+    [Fact]
+    public void ShouldTrackReservationsByKindAndRetainTheOldestUnresolvedAdmission()
+    {
+        var resident = 0L;
+        var ledger = new StorageBudgetLedger(new HybridStorageBudgetPolicy(Budget), () => resident);
+
+        Assert.Throws<PantsNoSpaceException>(() => ledger.Reserve(StorageAdmissionKind.Wal, 981));
+        Assert.Throws<PantsNoSpaceException>(() => ledger.Reserve(StorageAdmissionKind.Wal, 982));
+        Assert.Throws<PantsNoSpaceException>(() => ledger.Reserve(StorageAdmissionKind.Flush, 1001));
+
+        var blocked = Assert.IsType<PantsStorageAdmissionBlock>(ledger.BlockedAdmission);
+        Assert.Equal(PantsStorageAdmissionKind.Wal, blocked.Operation);
+        Assert.Equal(PantsStorageAdmissionReason.LocalCapacity, blocked.Reason);
+        Assert.Equal(982, blocked.RequestedBytes);
+        Assert.Equal(Budget, blocked.FreeBytesAtRejection);
+        Assert.Equal(2, blocked.Attempts);
+        Assert.True(blocked.AgeMilliseconds >= 0);
+        Assert.Equal(3, ledger.AdmissionRejectionsTotal);
+
+        using (ledger.Reserve(StorageAdmissionKind.Wal, 1))
+        {
+            blocked = Assert.IsType<PantsStorageAdmissionBlock>(ledger.BlockedAdmission);
+            Assert.Equal(PantsStorageAdmissionKind.Flush, blocked.Operation);
+        }
+
+        using (ledger.Reserve(StorageAdmissionKind.Flush, 1))
+        {
+            Assert.Null(ledger.BlockedAdmission);
+        }
+    }
+
+    [Fact]
+    public void ShouldExposeOutstandingBytesByReservationKind()
+    {
+        var resident = 0L;
+        var ledger = new StorageBudgetLedger(new HybridStorageBudgetPolicy(Budget), () => resident);
+
+        using var spill = ledger.Reserve(StorageAdmissionKind.TransactionSpill, 200);
+        using var recovery = ledger.Reserve(StorageAdmissionKind.RecoverySpool, 100);
+
+        Assert.Equal(200, ledger.GetReservedBytes(StorageAdmissionKind.TransactionSpill));
+        Assert.Equal(100, ledger.GetReservedBytes(StorageAdmissionKind.RecoverySpool));
+        Assert.Equal(300, ledger.ReservedBytes);
+    }
 }

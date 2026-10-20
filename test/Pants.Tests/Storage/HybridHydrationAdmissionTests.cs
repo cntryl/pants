@@ -182,6 +182,12 @@ public sealed class HybridHydrationAdmissionTests
 
         public long LocalCommittedBytes => Hydrated.Count * sstSizeBytes;
 
+        public long LocalWalBytes => 0;
+
+        public long LocalSstBytes => LocalCommittedBytes;
+
+        public long LocalStartupResidueBytes => 0;
+
         public IReadOnlyList<HybridLocalSst> GetLocalManifestSsts() =>
             evictable
                 ? Hydrated.Select(name => new HybridLocalSst(name, sstSizeBytes)).ToArray()

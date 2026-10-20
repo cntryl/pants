@@ -209,6 +209,7 @@ sealed class HybridCacheManager : IDisposable
             footprint.MeasureUpperBound(performanceGoal));
         if (flushOutputBytes > MemtableFlushWindowBytes)
         {
+            Ledger.RecordCapacityRejection(StorageAdmissionKind.FlushHeadroom, flushOutputBytes);
             throw new PantsNoSpaceException(
                 $"The transaction's {flushOutputBytes}-byte SST output bound exceeds the " +
                 $"hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
@@ -249,10 +250,13 @@ sealed class HybridCacheManager : IDisposable
 
         if (Ledger.GetAvailableBytes(admissionKind) < requiredBytes)
         {
+            Ledger.RecordCapacityRejection(admissionKind, requiredBytes);
             throw new PantsNoSpaceException(
                 $"The hybrid local cache cannot admit {requiredBytes} bytes for the transaction: " +
                 $"{Ledger.ChargedBytes} of {_policy.MaximumLocalBytes} bytes are already charged.");
         }
+
+        Ledger.RecordAdmissionSuccess(admissionKind);
     }
 
     public async ValueTask EvictIfNeededAsync(
@@ -458,12 +462,52 @@ sealed class HybridCacheManager : IDisposable
 
     public HybridCacheMetrics GetMetrics(IHybridCacheStore store)
     {
-        var total = store.LocalCommittedBytes;
+        var usage = new PantsLocalStorageUsage
+        {
+            WalBytes = store.LocalWalBytes,
+            TransactionSpillBytes = Ledger.GetReservedBytes(StorageAdmissionKind.TransactionSpill),
+            ResidentSstBytes = store.LocalSstBytes,
+            StartupResidueBytes = store.LocalStartupResidueBytes,
+            FlushStagingReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.Flush),
+            FlushHeadroomReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.FlushHeadroom),
+            CompactionStagingReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.Compaction),
+            WalAppendReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.Wal),
+            RecoverySpoolReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.RecoverySpool),
+            HydrationReservedBytes = Ledger.GetReservedBytes(StorageAdmissionKind.Hydration),
+            Reservations = checked(
+                Ledger.GetReservationCount(StorageAdmissionKind.Flush) +
+                Ledger.GetReservationCount(StorageAdmissionKind.Compaction))
+        };
+        var total = checked(
+            usage.WalBytes +
+            usage.TransactionSpillBytes +
+            usage.ResidentSstBytes +
+            usage.StartupResidueBytes +
+            usage.FlushStagingReservedBytes +
+            usage.FlushHeadroomReservedBytes +
+            usage.CompactionStagingReservedBytes +
+            usage.WalHeadroomReservedBytes +
+            usage.WalAppendReservedBytes +
+            usage.RecoverySpoolReservedBytes +
+            usage.HydrationReservedBytes);
+        var storageBudget = new PantsHybridStorageBudgetSnapshot
+        {
+            MaximumLocalBytes = _policy.MaximumLocalBytes,
+            TotalCommittedBytes = total,
+            FreeBytes = _policy.GetFreeBytes(total),
+            UsagePercent = _policy.GetUsagePercent(total),
+            PendingEvictions = PendingEvictions,
+            Usage = usage,
+            BlockedAdmission = Ledger.BlockedAdmission,
+            AdmissionRejectionsTotal = Ledger.AdmissionRejectionsTotal
+        };
+        var committed = store.LocalCommittedBytes;
         return new HybridCacheMetrics(
             _policy.MaximumLocalBytes,
-            total,
-            _policy.GetFreeBytes(total),
-            _policy.GetUsagePercent(total),
-            PendingEvictions);
+            committed,
+            _policy.GetFreeBytes(committed),
+            _policy.GetUsagePercent(committed),
+            PendingEvictions,
+            storageBudget);
     }
 }
