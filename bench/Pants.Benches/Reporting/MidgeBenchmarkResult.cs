@@ -18,6 +18,5 @@ sealed record MidgeBenchmarkResult(
     string RunProfile,
     string ToolVersion)
 {
-    public string FixturePatchSha256 { get; init; } = string.Empty;
     public string CargoLockSha256 { get; init; } = string.Empty;
 }

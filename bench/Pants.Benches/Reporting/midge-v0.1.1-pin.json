@@ -1,0 +1,8 @@
+{
+  "release": "0.1.1",
+  "source_sha": "7d39f86217fdb07191a83bd885a514dd5ea9723f",
+  "stress_tool_version": "0.4.0",
+  "cargo_lock_sha256": "6ce7f8bff009ff908fb8c9ef372b944af597a62fb6261939caac5eeba9cbc623",
+  "scenario_inventory_file": "midge-v0.1.1-scenarios.txt",
+  "scenario_inventory_sha256": "4abbcf333646de1e2f04c387f18735e8a92cc5b62c0828f6820498a9dfbac0bd"
+}

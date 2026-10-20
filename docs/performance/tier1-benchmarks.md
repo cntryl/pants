@@ -15,7 +15,7 @@ Tier 1 measures isolated hot paths. It is intended for local regression analysis
 | `tier1_hotpath_trie` | `TrieBenchmarks` | Trie lookup, encode, and decode |
 | `tier1_hotpath_wal` | `WalBenchmarks` | WAL record encode and decode |
 | `tier1_hotpath_tlv_encoding` | `TlvBenchmarks` | Production WAL TLV encoding at fixed payload sizes |
-| `tier1_hotpath_singleflight` | `SingleflightBenchmarks` | Runtime response fan-out to 1, 4, 16, and 64 waiters |
+| `tier1_hotpath_keyed_group_commit` | `SingleflightBenchmarks` | Runtime response fan-out to 1, 4, 16, and 64 waiters; related by waiter completion only, not equivalent to Midge's keyed accumulator |
 | `tier1_hotpath_compression` | `CompressionBenchmarks` | LZ4 and Zstd3 block compression and decompression |
 | `tier1_hotpath_event_loop` | `EventLoopBenchmarks` | Single-reader/single-writer channel dispatch |
 
