@@ -1,3 +1,4 @@
+using Cntryl.Pants.Runtime.Internal;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -23,6 +24,40 @@ public sealed class RemoteWalReplayTests
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
         Assert.True(store.WriterEpoch > 0);
+    }
+
+    [Fact]
+    public async Task ShouldHonorStartupDeadlineDuringDeferredRemoteWalReplay()
+    {
+        using var directory = new TemporaryDirectory();
+        var segment = SealOneCommit(directory.Path);
+        File.Delete(segment.Path);
+        var remote = new BlockingBytesRemoteSegment(segment.Id, segment.Bytes);
+        var state = NewState();
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            remoteWalSegments: [remote],
+            deferWalReplay: true);
+        var deadline = OperationDeadline.FromBudget(TimeSpan.FromSeconds(1));
+        var replay = Task.Run(async () => await deadline.RunAsync(
+            token =>
+            {
+                store.ReplayDeferredWal(
+                    state,
+                    new StartupPhaseRecorder(null),
+                    static _ => { },
+                    token);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None));
+
+        await remote.ReadStarted.WaitAsync(TestTimeouts.Expected);
+
+        await Assert.ThrowsAsync<PantsTimeoutException>(() =>
+            replay.WaitAsync(TestTimeouts.Expected));
+        Assert.True(remote.ReadToken.CanBeCanceled);
+        Assert.True(remote.ReadToken.IsCancellationRequested);
     }
 
     [Fact]
@@ -106,6 +141,58 @@ public sealed class RemoteWalReplayTests
 
         public ulong SizeBytes => (ulong)bytes.Length;
 
-        public Stream OpenRead() => new MemoryStream(bytes, false);
+        public Stream OpenRead(CancellationToken cancellationToken = default) =>
+            new MemoryStream(bytes, false);
+    }
+
+    sealed class BlockingBytesRemoteSegment(ulong segmentId, byte[] bytes) : IRemoteWalSegment
+    {
+        readonly TaskCompletionSource _readStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ulong SegmentId => segmentId;
+
+        public string Name => $"remote-{segmentId}";
+
+        public ulong SizeBytes => (ulong)bytes.Length;
+
+        public Task ReadStarted => _readStarted.Task;
+
+        public CancellationToken ReadToken { get; private set; }
+
+        public Stream OpenRead(CancellationToken cancellationToken = default)
+        {
+            ReadToken = cancellationToken;
+            return new CancellationBlockingStream(bytes, _readStarted, cancellationToken);
+        }
+    }
+
+    sealed class CancellationBlockingStream(
+        byte[] bytes,
+        TaskCompletionSource readStarted,
+        CancellationToken cancellationToken) : MemoryStream(bytes, false)
+    {
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            WaitForCancellation();
+            return base.Read(buffer, offset, count);
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            WaitForCancellation();
+            return base.Read(buffer);
+        }
+
+        void WaitForCancellation()
+        {
+            readStarted.TrySetResult();
+            if (!cancellationToken.WaitHandle.WaitOne(TestTimeouts.Expected))
+            {
+                throw new TimeoutException("The startup deadline did not reach remote WAL replay.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 }

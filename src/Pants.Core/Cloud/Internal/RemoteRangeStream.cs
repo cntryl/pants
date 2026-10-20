@@ -8,7 +8,8 @@ sealed class RemoteRangeStream(
     ICloudObjectStore store,
     string objectKey,
     long length,
-    int pageBytes) : Stream
+    int pageBytes,
+    CancellationToken cancellationToken) : Stream
 {
     byte[]? _page;
     long _pageStart;
@@ -37,6 +38,7 @@ sealed class RemoteRangeStream(
 
     public override int Read(Span<byte> buffer)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_position >= length || buffer.IsEmpty)
         {
             return 0;
@@ -84,7 +86,7 @@ sealed class RemoteRangeStream(
 
         var start = _position - (_position % pageBytes);
         var size = (int)Math.Min(pageBytes, length - start);
-        var range = store.GetRangeAsync(objectKey, checked((ulong)start), size, CancellationToken.None)
+        var range = store.GetRangeAsync(objectKey, checked((ulong)start), size, cancellationToken)
             .AsTask().GetAwaiter().GetResult();
         if (range is null || range.Data.Length != size)
         {

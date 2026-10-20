@@ -11,6 +11,11 @@ sealed class ProviderRemoteWalSegment(
 
     public ulong SizeBytes => segment.SizeBytes;
 
-    public Stream OpenRead() =>
-        new RemoteRangeStream(walStore, segment.ObjectKey, checked((long)segment.SizeBytes), pageBytes);
+    public Stream OpenRead(CancellationToken cancellationToken = default) =>
+        new RemoteRangeStream(
+            walStore,
+            segment.ObjectKey,
+            checked((long)segment.SizeBytes),
+            pageBytes,
+            cancellationToken);
 }

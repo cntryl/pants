@@ -1984,7 +1984,8 @@ sealed class LocalDiskStore :
         int maxWalRetentionSegments = 16_384,
         bool validateLocalWalHistoryContinuity = true,
         ulong? localWalHistoryValidationStartSegmentId = null,
-        long? flushWorkingMemoryLimitBytes = null)
+        long? flushWorkingMemoryLimitBytes = null,
+        CancellationToken recoveryCancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(directory))
         {
@@ -2175,7 +2176,11 @@ sealed class LocalDiskStore :
             // bytes already resident from this store.
             hybridCache?.BindStore(store);
             lease.EnsureValid();
-            store.Recover(state, startupPhases, deferWalReplay);
+            store.Recover(
+                state,
+                startupPhases,
+                deferWalReplay,
+                recoveryCancellationToken);
             store.RestoreRecoveredWalDurability(state.Sequence);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
@@ -4981,11 +4986,13 @@ sealed class LocalDiskStore :
     public void ReplayDeferredWal(
         RuntimeState state,
         StartupPhaseRecorder startupPhases,
-        Action<IReadOnlyList<string>> publishCheckpoint)
+        Action<IReadOnlyList<string>> publishCheckpoint,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(startupPhases);
         ArgumentNullException.ThrowIfNull(publishCheckpoint);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_walStateGate)
         {
             ThrowIfDisposed();
@@ -4999,7 +5006,7 @@ sealed class LocalDiskStore :
             {
                 using (startupPhases.Measure(StartupPhase.WalReplay))
                 {
-                    ReplayWal(state);
+                    ReplayWal(state, cancellationToken);
                 }
 
                 state.Sequence = checked((long)_nextSequence);
@@ -5014,7 +5021,11 @@ sealed class LocalDiskStore :
         }
     }
 
-    void Recover(RuntimeState state, StartupPhaseRecorder startupPhases, bool deferWalReplay)
+    void Recover(
+        RuntimeState state,
+        StartupPhaseRecorder startupPhases,
+        bool deferWalReplay,
+        CancellationToken cancellationToken)
     {
         RestoreColumnFamilies(state);
         using (startupPhases.Measure(StartupPhase.SstHydration))
@@ -5061,18 +5072,22 @@ sealed class LocalDiskStore :
         {
             if (!deferWalReplay)
             {
-                ReplayWal(state);
+                ReplayWal(state, cancellationToken);
             }
         }
 
         state.Sequence = checked((long)_nextSequence);
     }
 
-    void ReplayWal(RuntimeState state)
+    void ReplayWal(RuntimeState state, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var activeFamilyIds = _familyIds.Values.ToHashSet();
-        var sealedSegments = CollectWalReplaySources();
-        var writerEpochFrontiers = DiscoverWriterEpochFrontiers(state, sealedSegments);
+        var sealedSegments = CollectWalReplaySources(cancellationToken);
+        var writerEpochFrontiers = DiscoverWriterEpochFrontiers(
+            state,
+            sealedSegments,
+            cancellationToken);
         using var recovery = new WalRecoveryStateMachine(
             Path.Combine(RootPath, "recovery"),
             _localStorageLedger);
@@ -5089,7 +5104,8 @@ sealed class LocalDiskStore :
                 activeFamilyIds,
                 sealedSegments,
                 writerEpochFrontiers,
-                recovery);
+                recovery,
+                cancellationToken);
         }
         finally
         {
@@ -5102,15 +5118,17 @@ sealed class LocalDiskStore :
         HashSet<uint> activeFamilyIds,
         List<WalReplaySource> sealedSegments,
         WalWriterEpochFrontiers writerEpochFrontiers,
-        WalRecoveryStateMachine recovery)
+        WalRecoveryStateMachine recovery,
+        CancellationToken cancellationToken)
     {
         var recoveredVersions = new WalRecoveredVersionTracker();
         var replayOrdinal = 0UL;
         for (var index = 0; index < sealedSegments.Count; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var sealedSegment = sealedSegments[index];
             WalReplayOutcome outcome;
-            using (var stream = sealedSegment.Open())
+            using (var stream = sealedSegment.Open(cancellationToken))
             {
                 outcome = ReplayWalStream(
                     state,
@@ -5121,7 +5139,8 @@ sealed class LocalDiskStore :
                     recoveredVersions,
                     writerEpochFrontiers,
                     ref replayOrdinal,
-                    activeFamilyIds);
+                    activeFamilyIds,
+                    cancellationToken);
             }
 
             if (outcome == WalReplayOutcome.Salvaged)
@@ -5150,7 +5169,8 @@ sealed class LocalDiskStore :
                 recoveredVersions,
                 writerEpochFrontiers,
                 ref replayOrdinal,
-                activeFamilyIds) == WalReplayOutcome.Salvaged)
+                activeFamilyIds,
+                cancellationToken) == WalReplayOutcome.Salvaged)
         {
             ResetActiveWalAfterSalvage();
         }
@@ -5161,14 +5181,16 @@ sealed class LocalDiskStore :
     ///     segment present both ways must match byte for byte and is replayed once, locally; a
     ///     divergence is corruption, never something salvage may paper over.
     /// </summary>
-    List<WalReplaySource> CollectWalReplaySources()
+    List<WalReplaySource> CollectWalReplaySources(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var sources = new List<WalReplaySource>();
         var historyStart = Volatile.Read(ref _manifestReadSnapshot).WalHistoryStart;
         var localIds = new HashSet<ulong>();
         foreach (var path in EnumerateSealedWalSegmentPaths(_walDirectory)
                      .Where(static path => Path.GetFileName(path) != "wal.log"))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var parsed = TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId);
             if (parsed && segmentId < Volatile.Read(ref _manifestReadSnapshot).WalHistoryStart)
             {
@@ -5188,6 +5210,7 @@ sealed class LocalDiskStore :
 
         foreach (var remote in _remoteWalSegments)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (remote.SegmentId < historyStart)
             {
                 continue;
@@ -5200,7 +5223,7 @@ sealed class LocalDiskStore :
             }
 
             var local = sources.First(source => source.Path is not null && source.SegmentId == remote.SegmentId);
-            RequireLocalMatchesRemote(local.Path!, remote);
+            RequireLocalMatchesRemote(local.Path!, remote, cancellationToken);
         }
 
         var orderedSources = sources
@@ -5209,13 +5232,15 @@ sealed class LocalDiskStore :
             .ToList();
         if (_validateLocalWalHistoryContinuity)
         {
-            ValidateLocalWalHistoryContinuity(orderedSources);
+            ValidateLocalWalHistoryContinuity(orderedSources, cancellationToken);
         }
 
         return orderedSources;
     }
 
-    void ValidateLocalWalHistoryContinuity(IReadOnlyList<WalReplaySource> sources)
+    void ValidateLocalWalHistoryContinuity(
+        IReadOnlyList<WalReplaySource> sources,
+        CancellationToken cancellationToken)
     {
         ulong historyStart;
         ulong nextSegmentId;
@@ -5231,6 +5256,7 @@ sealed class LocalDiskStore :
         var expectedSegmentId = validationStart;
         foreach (var source in sources)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (source.SegmentId == ulong.MaxValue ||
                 source.SegmentId < validationStart ||
                 (_localWalHistoryValidationStartSegmentId.HasValue && source.Path is null))
@@ -5263,14 +5289,17 @@ sealed class LocalDiskStore :
         }
     }
 
-    static void RequireLocalMatchesRemote(string localPath, IRemoteWalSegment remote)
+    static void RequireLocalMatchesRemote(
+        string localPath,
+        IRemoteWalSegment remote,
+        CancellationToken cancellationToken)
     {
         using var local = new FileStream(
             localPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read);
-        using var remoteStream = remote.OpenRead();
+        using var remoteStream = remote.OpenRead(cancellationToken);
         if ((ulong)local.Length != remote.SizeBytes)
         {
             throw new PantsCorruptionException(
@@ -5282,6 +5311,7 @@ sealed class LocalDiskStore :
         int read;
         while ((read = local.Read(localBuffer, 0, localBuffer.Length)) > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!DiskFormat.ReadExactly(remoteStream, remoteBuffer.AsSpan(0, read)) ||
                 !localBuffer.AsSpan(0, read).SequenceEqual(remoteBuffer.AsSpan(0, read)))
             {
@@ -5297,20 +5327,22 @@ sealed class LocalDiskStore :
         string? Path,
         IRemoteWalSegment? Remote)
     {
-        public Stream Open() => Remote is not null
-            ? Remote.OpenRead()
+        public Stream Open(CancellationToken cancellationToken) => Remote is not null
+            ? Remote.OpenRead(cancellationToken)
             : new FileStream(Path!, FileMode.Open, FileAccess.Read, FileShare.Read);
     }
 
     WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
         RuntimeState state,
-        IReadOnlyList<WalReplaySource> sealedSegments)
+        IReadOnlyList<WalReplaySource> sealedSegments,
+        CancellationToken cancellationToken)
     {
         var frontiers = new WalWriterEpochFrontiers();
         var ordinal = 0UL;
         foreach (var sealedSegment in sealedSegments)
         {
-            using var stream = sealedSegment.Open();
+            cancellationToken.ThrowIfCancellationRequested();
+            using var stream = sealedSegment.Open(cancellationToken);
             if (VisitWalStream(
                     state,
                     stream,
@@ -5320,7 +5352,8 @@ sealed class LocalDiskStore :
                     {
                         frontiers.Record(record, recordOrdinal);
                         return true;
-                    }) == WalReplayOutcome.Salvaged)
+                    },
+                    cancellationToken) == WalReplayOutcome.Salvaged)
             {
                 return frontiers;
             }
@@ -5336,7 +5369,8 @@ sealed class LocalDiskStore :
             {
                 frontiers.Record(record, recordOrdinal);
                 return true;
-            });
+            },
+            cancellationToken);
         return frontiers;
     }
 
@@ -5349,7 +5383,8 @@ sealed class LocalDiskStore :
         WalRecoveredVersionTracker recoveredVersions,
         WalWriterEpochFrontiers writerEpochFrontiers,
         ref ulong replayOrdinal,
-        HashSet<uint> activeFamilyIds)
+        HashSet<uint> activeFamilyIds,
+        CancellationToken cancellationToken)
         => VisitWalStream(
             state,
             stream,
@@ -5420,7 +5455,8 @@ sealed class LocalDiskStore :
                 CheckpointRecoveredMemtableIfOverTarget(state, recoveredVersions);
                 _walRecords++;
                 return true;
-            });
+            },
+            cancellationToken);
 
     /// <summary>
     ///     Publishes the recovered memtable as an SST and manifest entry once it reaches the
@@ -5477,18 +5513,21 @@ sealed class LocalDiskStore :
         Stream stream,
         bool allowIncompleteTail,
         ref ulong recordOrdinal,
-        Func<WalRecord, int, ulong, bool> visitor)
+        Func<WalRecord, int, ulong, bool> visitor,
+        CancellationToken cancellationToken)
     {
         Span<byte> header = stackalloc byte[8];
         while (stream.Position < stream.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var recordStart = stream.Position;
             if (!DiskFormat.ReadExactly(stream, header))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
 
-            if (header.IndexOfAnyExcept((byte)0) < 0 && WalFrameReader.IsZeroFilledTail(stream))
+            if (header.IndexOfAnyExcept((byte)0) < 0 &&
+                WalFrameReader.IsZeroFilledTail(stream, cancellationToken))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
             }
@@ -5504,7 +5543,7 @@ sealed class LocalDiskStore :
             if (length > stream.Length - stream.Position)
             {
                 if (allowIncompleteTail &&
-                    WalFrameReader.ContainsVerifiedFrameInRemainingBytes(stream))
+                    WalFrameReader.ContainsVerifiedFrameInRemainingBytes(stream, cancellationToken))
                 {
                     return HandleWalCorruption(
                         state,

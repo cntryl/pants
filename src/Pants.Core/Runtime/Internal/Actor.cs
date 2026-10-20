@@ -440,27 +440,31 @@ sealed class Actor : IAsyncDisposable
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.Local local:
-                diskStore = LocalDiskStore.Open(
-                    local.Path,
-                    state,
-                    options.MinimumEpoch,
-                    options.RecoveryPolicy,
-                    options.PerformanceGoal,
-                    options.LeaseClockSkewTolerance,
-                    options.LeaseLossCallback,
-                    dependencies.Failpoints,
-                    options.Compaction,
-                    options.TargetSstSizeBytes,
-                    options.BlockCachePolicy,
-                    options.BlockCacheBytes,
-                    leaseHeartbeatInterval,
-                    startupPhases: startupPhases,
-                    leaseClock: leaseClock,
-                    leaseTimeToLive: options.LeaseTimeToLive,
-                    leaseTimeProvider: runtimeTimeProvider,
-                    recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                    walRetirementDiagnostics: walRetirementDiagnostics,
-                    flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
+                diskStore = await OpenDiskStoreAsync(
+                    startupDeadline,
+                    token => LocalDiskStore.Open(
+                        local.Path,
+                        state,
+                        options.MinimumEpoch,
+                        options.RecoveryPolicy,
+                        options.PerformanceGoal,
+                        options.LeaseClockSkewTolerance,
+                        options.LeaseLossCallback,
+                        dependencies.Failpoints,
+                        options.Compaction,
+                        options.TargetSstSizeBytes,
+                        options.BlockCachePolicy,
+                        options.BlockCacheBytes,
+                        leaseHeartbeatInterval,
+                        startupPhases: startupPhases,
+                        leaseClock: leaseClock,
+                        leaseTimeToLive: options.LeaseTimeToLive,
+                        leaseTimeProvider: runtimeTimeProvider,
+                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                        walRetirementDiagnostics: walRetirementDiagnostics,
+                        flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes,
+                        recoveryCancellationToken: token),
+                    cancellationToken).ConfigureAwait(false);
                 cloudMode = false;
                 break;
             case PantsStorageConfiguration.SimulatedCloud simulated:
@@ -484,32 +488,36 @@ sealed class Actor : IAsyncDisposable
                         simulated.LocalStorageBudgetBytes ??
                         HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                         dependencies.Failpoints);
-                    diskStore = LocalDiskStore.Open(
-                        simulatedRoot,
-                        state,
-                        Math.Max(simulatedHydration.MinimumWriterEpoch, options.MinimumEpoch),
-                        options.RecoveryPolicy,
-                        options.PerformanceGoal,
-                        options.LeaseClockSkewTolerance,
-                        options.LeaseLossCallback,
-                        dependencies.Failpoints,
-                        options.Compaction,
-                        options.TargetSstSizeBytes,
-                        options.BlockCachePolicy,
-                        options.BlockCacheBytes,
-                        leaseHeartbeatInterval,
-                        new SimulatedCloudSstSourceFactory(simulatedRoot),
-                        startupPhases,
-                        leaseClock,
-                        options.LeaseTimeToLive,
-                        remoteNextWalSegmentId: simulatedHydration.NextWalSegmentId,
-                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                        hybridCache: hybridCache,
-                        deferWalReplay: true,
-                        walRetirementDiagnostics: walRetirementDiagnostics,
-                        validateLocalWalHistoryContinuity: true,
-                        localWalHistoryValidationStartSegmentId: simulatedHydration.NextWalSegmentId,
-                        flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
+                    diskStore = await OpenDiskStoreAsync(
+                        startupDeadline,
+                        token => LocalDiskStore.Open(
+                            simulatedRoot,
+                            state,
+                            Math.Max(simulatedHydration.MinimumWriterEpoch, options.MinimumEpoch),
+                            options.RecoveryPolicy,
+                            options.PerformanceGoal,
+                            options.LeaseClockSkewTolerance,
+                            options.LeaseLossCallback,
+                            dependencies.Failpoints,
+                            options.Compaction,
+                            options.TargetSstSizeBytes,
+                            options.BlockCachePolicy,
+                            options.BlockCacheBytes,
+                            leaseHeartbeatInterval,
+                            new SimulatedCloudSstSourceFactory(simulatedRoot),
+                            startupPhases,
+                            leaseClock,
+                            options.LeaseTimeToLive,
+                            remoteNextWalSegmentId: simulatedHydration.NextWalSegmentId,
+                            recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                            hybridCache: hybridCache,
+                            deferWalReplay: true,
+                            walRetirementDiagnostics: walRetirementDiagnostics,
+                            validateLocalWalHistoryContinuity: true,
+                            localWalHistoryValidationStartSegmentId: simulatedHydration.NextWalSegmentId,
+                            flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes,
+                            recoveryCancellationToken: token),
+                        cancellationToken).ConfigureAwait(false);
                     var simulatedPersistence = new SimulatedCloudPersistence(
                         simulatedRoot,
                         diskStore.WriterEpoch,
@@ -632,40 +640,44 @@ sealed class Actor : IAsyncDisposable
                             providerPersistence.FenceWalCatalogAsync,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    diskStore = LocalDiskStore.Open(
-                        cloud.LocalCachePath,
-                        state,
-                        cloudEpoch - 1,
-                        options.RecoveryPolicy,
-                        options.PerformanceGoal,
-                        options.LeaseClockSkewTolerance,
-                        options.LeaseLossCallback,
-                        dependencies.Failpoints,
-                        options.Compaction,
-                        options.TargetSstSizeBytes,
-                        options.BlockCachePolicy,
-                        options.BlockCacheBytes,
-                        leaseHeartbeatInterval,
-                        new ProviderCloudSstSourceFactory(
-                            objectStores.Sst,
-                            telemetry,
-                            sstIdentityRegistry),
-                        startupPhases,
-                        leaseClock,
-                        options.LeaseTimeToLive,
-                        remoteWalSegments: hydration.RemoteWalSegments,
-                        remoteNextWalSegmentId: hydration.NextWalSegmentId,
-                        authorizedWalSegmentIds: hydration.PublishedWalSegments.Keys.ToHashSet(),
-                        allowLocalWalTailRecovery: allowLocalWalTailRecovery,
-                        recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
-                        hybridCache: hybridCache,
-                        deferWalReplay: true,
-                        walRetirementDiagnostics: walRetirementDiagnostics,
-                        validateLocalWalHistoryContinuity: allowLocalWalTailRecovery,
-                        localWalHistoryValidationStartSegmentId: allowLocalWalTailRecovery
-                            ? hydration.NextWalSegmentId
-                            : null,
-                        flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes);
+                    diskStore = await OpenDiskStoreAsync(
+                        startupDeadline,
+                        token => LocalDiskStore.Open(
+                            cloud.LocalCachePath,
+                            state,
+                            cloudEpoch - 1,
+                            options.RecoveryPolicy,
+                            options.PerformanceGoal,
+                            options.LeaseClockSkewTolerance,
+                            options.LeaseLossCallback,
+                            dependencies.Failpoints,
+                            options.Compaction,
+                            options.TargetSstSizeBytes,
+                            options.BlockCachePolicy,
+                            options.BlockCacheBytes,
+                            leaseHeartbeatInterval,
+                            new ProviderCloudSstSourceFactory(
+                                objectStores.Sst,
+                                telemetry,
+                                sstIdentityRegistry),
+                            startupPhases,
+                            leaseClock,
+                            options.LeaseTimeToLive,
+                            remoteWalSegments: hydration.RemoteWalSegments,
+                            remoteNextWalSegmentId: hydration.NextWalSegmentId,
+                            authorizedWalSegmentIds: hydration.PublishedWalSegments.Keys.ToHashSet(),
+                            allowLocalWalTailRecovery: allowLocalWalTailRecovery,
+                            recoveryCheckpointBytes: options.MemtableSizeLimitBytes,
+                            hybridCache: hybridCache,
+                            deferWalReplay: true,
+                            walRetirementDiagnostics: walRetirementDiagnostics,
+                            validateLocalWalHistoryContinuity: allowLocalWalTailRecovery,
+                            localWalHistoryValidationStartSegmentId: allowLocalWalTailRecovery
+                                ? hydration.NextWalSegmentId
+                                : null,
+                            flushWorkingMemoryLimitBytes: options.FlushWorkingMemoryLimitBytes,
+                            recoveryCancellationToken: token),
+                        cancellationToken).ConfigureAwait(false);
                     cloudCompactionOutputPublisher = new ProviderCloudCompactionPublisher(
                         cloud.LocalCachePath,
                         objectStores.Sst,
@@ -780,6 +792,14 @@ sealed class Actor : IAsyncDisposable
             static _ => ValueTask.CompletedTask,
             cancellationToken);
 
+    static ValueTask<LocalDiskStore> OpenDiskStoreAsync(
+        OperationDeadline startupDeadline,
+        Func<CancellationToken, LocalDiskStore> open,
+        CancellationToken cancellationToken) =>
+        startupDeadline.RunAsync(
+            token => ValueTask.FromResult(open(token)),
+            cancellationToken);
+
     async ValueTask FinishStartupAsync(
         RuntimePlan options,
         RuntimeTelemetry telemetry,
@@ -793,23 +813,33 @@ sealed class Actor : IAsyncDisposable
             if (_cloudMode && _diskStore is not null && _cloudPersistence is not null)
             {
                 await CheckStartupDeadlineAsync(startupDeadline, cancellationToken).ConfigureAwait(false);
-                _diskStore.ReplayDeferredWal(
-                    _state,
-                    startupPhases,
-                    checkpointSsts =>
+                await startupDeadline.RunAsync(
+                    token =>
                     {
-                        Func<CancellationToken, ValueTask> publication =
-                            _cloudPersistence is ProviderCloudPersistence provider
-                                ? token => provider.PublishRecoveryCheckpointAsync(checkpointSsts, token)
-                                : _cloudPersistence.MirrorMetadataAndSstsAsync;
-                        startupDeadline.RunMutationAsync(publication, cancellationToken)
-                            .AsTask().GetAwaiter().GetResult();
-                        _failpoints.Hit(Failpoint.AfterRecoveryCheckpointPublishedBeforeLocalEviction);
-                        foreach (var name in checkpointSsts)
-                        {
-                            _diskStore.EvictLocalSst(name);
-                        }
-                    });
+                        _diskStore.ReplayDeferredWal(
+                            _state,
+                            startupPhases,
+                            checkpointSsts =>
+                            {
+                                Func<CancellationToken, ValueTask> publication =
+                                    _cloudPersistence is ProviderCloudPersistence provider
+                                        ? publicationToken => provider.PublishRecoveryCheckpointAsync(
+                                            checkpointSsts,
+                                            publicationToken)
+                                        : _cloudPersistence.MirrorMetadataAndSstsAsync;
+                                startupDeadline.RunMutationAsync(publication, token)
+                                    .AsTask().GetAwaiter().GetResult();
+                                _failpoints.Hit(
+                                    Failpoint.AfterRecoveryCheckpointPublishedBeforeLocalEviction);
+                                foreach (var name in checkpointSsts)
+                                {
+                                    _diskStore.EvictLocalSst(name);
+                                }
+                            },
+                            token);
+                        return ValueTask.CompletedTask;
+                    },
+                    cancellationToken).ConfigureAwait(false);
                 await CheckStartupDeadlineAsync(startupDeadline, cancellationToken).ConfigureAwait(false);
                 if (_cloudDdlCoordinator is not null)
                 {

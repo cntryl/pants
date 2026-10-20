@@ -13,5 +13,5 @@ interface IRemoteWalSegment
     ulong SizeBytes { get; }
 
     /// <summary>Opens a seekable read-only stream that fetches bounded ranges on demand.</summary>
-    Stream OpenRead();
+    Stream OpenRead(CancellationToken cancellationToken = default);
 }
