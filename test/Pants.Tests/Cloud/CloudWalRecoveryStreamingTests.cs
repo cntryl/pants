@@ -94,6 +94,40 @@ public sealed class CloudWalRecoveryStreamingTests
     }
 
     [Fact]
+    public async Task ShouldCancelRemoteWalRangeReadWhenItsReplayTokenIsCanceled()
+    {
+        using var cache = new TemporaryDirectory();
+        var walStore = new RangeTrackingCloudObjectStore();
+        await PublishSegmentAsync(cache.Path, walStore, new byte[4096]);
+        var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            PantsRecoveryPolicy.Strict,
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+        var remote = Assert.Single(hydrated.RemoteWalSegments!);
+        var rangeReadStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        walStore.BeforeNextRangeReadAsync = token =>
+        {
+            rangeReadStarted.TrySetResult();
+            return new ValueTask(Task.Delay(Timeout.InfiniteTimeSpan, token));
+        };
+        using var cancellation = new CancellationTokenSource();
+        using var stream = remote.OpenRead(cancellation.Token);
+        var read = Task.Run(stream.ReadByte);
+
+        await rangeReadStarted.Task.WaitAsync(TestTimeouts.Expected);
+        Assert.Equal(cancellation.Token, walStore.LastRangeReadCancellationToken);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            read.WaitAsync(TestTimeouts.Expected));
+    }
+
+    [Fact]
     public async Task ShouldRefuseWholeObjectRecoveryBeforeAnyGetWhenSegmentExceedsTheLimit()
     {
         using var cache = new TemporaryDirectory();
@@ -149,6 +183,10 @@ public sealed class CloudWalRecoveryStreamingTests
 
         public bool SupportsRanges { get; init; } = true;
 
+        public Func<CancellationToken, ValueTask>? BeforeNextRangeReadAsync { get; set; }
+
+        public CancellationToken LastRangeReadCancellationToken { get; private set; }
+
         public int LargestSingleReadBytes { get; private set; }
 
         public void ResetReadTracking() => LargestSingleReadBytes = 0;
@@ -165,12 +203,21 @@ public sealed class CloudWalRecoveryStreamingTests
             return ValueTask.FromResult<CloudObject?>(null);
         }
 
-        public ValueTask<CloudObject?> GetRangeAsync(
+        public async ValueTask<CloudObject?> GetRangeAsync(
             string objectKey,
             ulong offset,
             int length,
             CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastRangeReadCancellationToken = cancellationToken;
+            var beforeRead = BeforeNextRangeReadAsync;
+            BeforeNextRangeReadAsync = null;
+            if (beforeRead is not null)
+            {
+                await beforeRead(cancellationToken).ConfigureAwait(false);
+            }
+
             if (!SupportsRanges)
             {
                 throw new PantsNotSupportedException("Ranged reads are not supported.");
@@ -178,14 +225,13 @@ public sealed class CloudWalRecoveryStreamingTests
 
             if (!_objects.TryGetValue(objectKey, out var value))
             {
-                return ValueTask.FromResult<CloudObject?>(null);
+                return null;
             }
 
             var start = checked((int)offset);
             var count = Math.Max(0, Math.Min(length, value.Data.Length - start));
             LargestSingleReadBytes = Math.Max(LargestSingleReadBytes, count);
-            return ValueTask.FromResult<CloudObject?>(
-                new CloudObject(value.Data.AsMemory(start, count).ToArray(), value.Version));
+            return new CloudObject(value.Data.AsMemory(start, count).ToArray(), value.Version);
         }
 
         public ValueTask<CloudObjectMetadata?> HeadAsync(

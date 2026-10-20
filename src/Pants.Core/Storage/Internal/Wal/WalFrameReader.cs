@@ -40,7 +40,7 @@ static class WalFrameReader
 
             if (header.IndexOfAnyExcept((byte)0) < 0)
             {
-                var isZeroFilledTail = IsZeroFilledTail(stream);
+                var isZeroFilledTail = IsZeroFilledTail(stream, cancellationToken);
                 if (isZeroFilledTail)
                 {
                     if (tailPolicy == WalTailPolicy.AllowIncompleteFinalTail)
@@ -88,12 +88,15 @@ static class WalFrameReader
         }
     }
 
-    internal static bool IsZeroFilledTail(Stream stream)
+    internal static bool IsZeroFilledTail(
+        Stream stream,
+        CancellationToken cancellationToken = default)
     {
         var start = stream.Position;
         Span<byte> buffer = stackalloc byte[4096];
         while (stream.Position < stream.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var requested = checked((int)Math.Min(buffer.Length, stream.Length - stream.Position));
             var read = stream.Read(buffer[..requested]);
             if (read == 0 || buffer[..read].IndexOfAnyExcept((byte)0) >= 0)
