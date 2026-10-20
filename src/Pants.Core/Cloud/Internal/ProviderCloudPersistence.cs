@@ -416,7 +416,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     public async ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
+        using var metadata = CloudControlMetadataSnapshot.Capture(
+            _localRoot,
+            MetadataFiles,
+            _authorityMetadataBudget);
         await EnsureRemoteManifestNotAheadAsync(metadata, cancellationToken).ConfigureAwait(false);
         await PublishCapturedSstsAsync(metadata, cancellationToken).ConfigureAwait(false);
 
@@ -465,7 +468,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         try
         {
             _lease.EnsureValid();
-            var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, MetadataFiles);
+            using var metadata = CloudControlMetadataSnapshot.Capture(
+                _localRoot,
+                MetadataFiles,
+                _authorityMetadataBudget);
             var manifestMetadataMatchesRemote = true;
             foreach (var fileName in ManifestMetadataFiles)
             {
@@ -530,7 +536,10 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     public async ValueTask ValidateWriteAuthorityAsync(CancellationToken cancellationToken)
     {
         _lease.EnsureValid();
-        var metadata = CloudControlMetadataSnapshot.Capture(_localRoot, ManifestMetadataFiles);
+        using var metadata = CloudControlMetadataSnapshot.Capture(
+            _localRoot,
+            ManifestMetadataFiles,
+            _authorityMetadataBudget);
         await EnsureRemoteManifestNotAheadAsync(metadata, cancellationToken).ConfigureAwait(false);
         _lease.EnsureValid();
     }
