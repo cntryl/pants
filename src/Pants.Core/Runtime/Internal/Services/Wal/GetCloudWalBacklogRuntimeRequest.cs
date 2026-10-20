@@ -1,3 +1,3 @@
 namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 
-sealed record GetCloudWalBacklogRuntimeRequest : WalRuntimeRequest;
+sealed record GetCloudWalBacklogRuntimeRequest(ulong? ThroughSegmentId) : WalRuntimeRequest;
