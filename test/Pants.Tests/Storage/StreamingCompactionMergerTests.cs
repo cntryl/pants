@@ -168,6 +168,32 @@ public sealed class StreamingCompactionMergerTests
         Assert.Equal(0, budget.Current);
     }
 
+    [Fact]
+    public void ShouldDisposeEntryStreamsWhenRangeTombstoneAdmissionFails()
+    {
+        var stream = new TrackingEntryStream();
+        var tombstones = Enumerable.Range(0, 128)
+            .Select(index => new RangeTombstone(
+                TestBytes.FromString($"a{index:D3}"),
+                TestBytes.FromString($"b{index:D3}"),
+                (ulong)(index + 1)))
+            .ToArray();
+        var budget = new ResourceBudget(1024);
+
+        var exception = Assert.Throws<PantsResourceLimitException>(() =>
+            StreamingCompactionMerger.MergeAndPartition(
+                    [stream],
+                    tombstones,
+                    Plan(),
+                    1024,
+                    budget)
+                .ToArray());
+
+        Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+        Assert.True(stream.IsDisposed);
+        Assert.Equal(0, budget.Current);
+    }
+
     static void AssertEquivalent(
         IReadOnlyList<SstContents> contents,
         CompactionPlan plan,
@@ -261,5 +287,16 @@ public sealed class StreamingCompactionMergerTests
                 t.Sequence))
             .ToArray();
         return new SstContents(sstEntries, rangeTombstones, 1);
+    }
+
+    sealed class TrackingEntryStream : ICompactionEntryStream
+    {
+        public SstEntry Current => throw new InvalidOperationException("The stream has no entries.");
+
+        public bool IsDisposed { get; private set; }
+
+        public bool MoveNext() => false;
+
+        public void Dispose() => IsDisposed = true;
     }
 }

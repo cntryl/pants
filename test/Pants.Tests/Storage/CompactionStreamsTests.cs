@@ -119,6 +119,103 @@ public sealed class CompactionStreamsTests
     }
 
     [Fact]
+    public void ShouldAdmitAndReleaseRangeTombstoneWorkspaceInTheCompactionBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var tombstones = Enumerable.Range(0, 128)
+            .Select(index => ($"a{index:D3}", $"b{index:D3}", (ulong)(index + 1)))
+            .ToArray();
+        var file = WriteFile(directory.Path, "source.sst", 0, 1, [("z", 1UL, "v")], tombstones);
+        var plan = Plan(0, 1, [file]);
+        var limitedBudget = new ResourceBudget(8_000);
+        using (var streams = CompactionStreams.Create(
+                   plan,
+                   f => Path.Combine(directory.Path, f.Name),
+                   SstReader.Open,
+                   4,
+                   limitedBudget))
+        {
+            var inputReservation = limitedBudget.Current;
+            var exception = Assert.Throws<PantsResourceLimitException>(() =>
+                StreamingCompactionMerger.MergeAndPartition(
+                        streams.Streams,
+                        streams.RangeTombstones,
+                        plan,
+                        1024,
+                        limitedBudget)
+                    .ToArray());
+
+            Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+            Assert.Equal(inputReservation, limitedBudget.Current);
+            Assert.True(inputReservation > 0);
+        }
+
+        Assert.Equal(0, limitedBudget.Current);
+
+        var admittedBudget = new ResourceBudget(32 * 1024);
+        using (var streams = CompactionStreams.Create(
+                   plan,
+                   f => Path.Combine(directory.Path, f.Name),
+                   SstReader.Open,
+                   4,
+                   admittedBudget))
+        {
+            var inputReservation = admittedBudget.Current;
+            var partitions = StreamingCompactionMerger.MergeAndPartition(
+                    streams.Streams,
+                    streams.RangeTombstones,
+                    plan,
+                    1024,
+                    admittedBudget)
+                .ToArray();
+
+            Assert.Single(partitions);
+            Assert.Equal(inputReservation, admittedBudget.Current);
+            Assert.True(admittedBudget.Peak > inputReservation);
+        }
+
+        Assert.Equal(0, admittedBudget.Current);
+    }
+
+    [Fact]
+    public void ShouldReleaseRangeTombstoneWorkspaceWhenMergeEnumerationIsDisposedEarly()
+    {
+        using var directory = new TemporaryDirectory();
+        var entries = Enumerable.Range(0, 32)
+            .Select(index => ($"key-{index:D3}", (ulong)(index + 1), "v"))
+            .ToArray();
+        var tombstones = Enumerable.Range(0, 128)
+            .Select(index => ($"a{index:D3}", $"b{index:D3}", (ulong)(index + 1)))
+            .ToArray();
+        var file = WriteFile(directory.Path, "source.sst", 0, 1, entries, tombstones);
+        var plan = Plan(0, 1, [file]);
+        var budget = new ResourceBudget(64 * 1024);
+        using var streams = CompactionStreams.Create(
+            plan,
+            f => Path.Combine(directory.Path, f.Name),
+            SstReader.Open,
+            4,
+            budget);
+        var inputReservation = budget.Current;
+
+        using (var partitions = StreamingCompactionMerger.MergeAndPartition(
+                   streams.Streams,
+                   streams.RangeTombstones,
+                   plan,
+                   64,
+                   budget)
+               .GetEnumerator())
+        {
+            Assert.True(partitions.MoveNext());
+            Assert.NotEmpty(partitions.Current.Entries);
+            Assert.True(budget.Current > inputReservation);
+        }
+
+        Assert.Equal(inputReservation, budget.Current);
+        Assert.True(budget.Peak > inputReservation);
+    }
+
+    [Fact]
     public void ShouldMergeEqualKeyHistoryAcrossTargetFilesSharingABoundaryKey()
     {
         using var directory = new TemporaryDirectory();
