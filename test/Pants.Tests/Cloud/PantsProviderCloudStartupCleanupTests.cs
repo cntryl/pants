@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Abstractions;
 
@@ -104,9 +105,17 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         var resolved = PantsOpenOptionsResolver.Resolve(options);
 
         handler.ResetSstReadMetrics();
-        var coldOpen = System.Diagnostics.Stopwatch.StartNew();
+        using var process = Process.GetCurrentProcess();
+        await using var localCacheSampler = new DirectoryByteSampler(coldCache.Path);
+        process.Refresh();
+        var processCpuBeforeOpen = process.TotalProcessorTime;
+        var coldOpen = Stopwatch.StartNew();
         await using var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         coldOpen.Stop();
+        process.Refresh();
+        var processCpuDuringOpen = process.TotalProcessorTime - processCpuBeforeOpen;
+        await localCacheSampler.StopAsync();
+        var sampledPeakLocalCacheBytes = localCacheSampler.PeakBytes;
         var coldStartSstFullReads = handler.SstFullReads;
         var coldStartSstMetadataReads = handler.SstMetadataReads;
         var coldStartSstRangeReads = handler.SstRangeReads;
@@ -124,6 +133,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             metrics.HybridTotalCommittedBytes,
             0,
             LocalDiskProfileBudgetBytes);
+        Assert.InRange(sampledPeakLocalCacheBytes, 1, LocalDiskProfileBudgetBytes);
         Assert.Contains(StartupPhase.CloudControlHydration, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.WalReplay, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.ServiceStartup, measurements.Select(static item => item.Phase));
@@ -159,7 +169,9 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             $"{handler.SstStoredBytes} remote SST bytes; " +
             $"cold open {coldOpen.Elapsed.TotalMilliseconds:F1} ms; maintenance peak " +
             $"{metrics.MaintenanceMemoryPeakBytes}/{metrics.MaintenanceMemoryCapacityBytes} bytes; " +
-            $"local cache {metrics.HybridTotalCommittedBytes}/{metrics.HybridMaximumLocalBytes} bytes; " +
+            $"local cache committed {metrics.HybridTotalCommittedBytes}/{metrics.HybridMaximumLocalBytes} bytes, " +
+            $"sampled directory peak {sampledPeakLocalCacheBytes} bytes; " +
+            $"process CPU during open {processCpuDuringOpen.TotalMilliseconds:F1} ms; " +
             $"cold-start SST reads: {coldStartSstMetadataReads} metadata HEADs, " +
             $"{coldStartSstFullReads} full, {coldStartSstRangeReads} ranges / " +
             $"{coldStartSstRangeBytes} bytes; " +
@@ -177,6 +189,96 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         var value = new byte[4 * 1024];
         new Random(index).NextBytes(value);
         return value;
+    }
+
+    sealed class DirectoryByteSampler : IAsyncDisposable
+    {
+        static readonly TimeSpan SamplingInterval = TimeSpan.FromMilliseconds(1);
+        readonly string _rootPath;
+        readonly CancellationTokenSource _cancellation = new();
+        readonly Task _samplingTask;
+        int _stopped;
+        long _peakBytes;
+
+        public DirectoryByteSampler(string rootPath)
+        {
+            _rootPath = rootPath;
+            Sample();
+            _samplingTask = SampleUntilCanceledAsync();
+        }
+
+        public long PeakBytes => Volatile.Read(ref _peakBytes);
+
+        public async ValueTask StopAsync()
+        {
+            if (Interlocked.Exchange(ref _stopped, 1) == 0)
+            {
+                _cancellation.Cancel();
+                try
+                {
+                    try
+                    {
+                        await _samplingTask.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+                    {
+                        // Stopping the sampler is its normal completion path.
+                    }
+
+                    Sample();
+                }
+                finally
+                {
+                    _cancellation.Dispose();
+                }
+            }
+        }
+
+        public ValueTask DisposeAsync() => StopAsync();
+
+        async Task SampleUntilCanceledAsync()
+        {
+            using var timer = new PeriodicTimer(SamplingInterval);
+            while (await timer.WaitForNextTickAsync(_cancellation.Token).ConfigureAwait(false))
+            {
+                Sample();
+            }
+        }
+
+        void Sample()
+        {
+            var bytes = MeasureDirectoryBytes(_rootPath);
+            var observedPeak = Volatile.Read(ref _peakBytes);
+            while (bytes > observedPeak)
+            {
+                var priorPeak = Interlocked.CompareExchange(ref _peakBytes, bytes, observedPeak);
+                if (priorPeak == observedPeak)
+                {
+                    return;
+                }
+
+                observedPeak = priorPeak;
+            }
+        }
+
+        static long MeasureDirectoryBytes(string rootPath)
+        {
+            var total = 0L;
+            foreach (var path in Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    total = checked(total + new FileInfo(path).Length);
+                }
+                catch (Exception exception) when (
+                    exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    // Startup cleanup can remove a file between enumeration and measurement.
+                }
+            }
+
+            return total;
+        }
     }
 
     [Fact]

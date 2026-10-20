@@ -34,6 +34,31 @@ retirement, SST publication, and compaction because those operations share the s
 The maintenance peak is an admitted-resource high-water mark for that pool. It is not a process RSS
 measurement and does not include CLR overhead or resources outside the explicit Pants pools.
 
+## Cold-start resource qualification
+
+`PantsProviderCloudStartupCleanupTests.ShouldReportColdStartReadinessAndMaintenancePeakForGrowingRemoteHistory`
+qualifies a cold open with 128 CloudStrict writes, 16 remote SSTs, the 512 MiB runtime profile, a
+64 MiB local-cache budget, and a 30 second runtime response deadline. In one local Release run, the
+open completed in 59.2 ms and reported 22.6 ms of process CPU, a 36,348 byte sampled local-cache
+directory high-water, and a 387,344 / 107,374,182 byte maintenance-pool high-water / capacity.
+It recovered all 128 values and read SST metadata without downloading any SST body or range.
+
+The test samples logical local-cache file lengths every millisecond during startup. This sampled
+high-water can miss a shorter-lived file and does not measure allocated filesystem blocks; the
+hybrid storage ledger remains the enforcement path, admitting writes against resident bytes plus
+concurrent reservations before writing. Process CPU is `Process.TotalProcessorTime` for the test
+host around the open and includes the sampler and any other host activity. Treat it as a
+qualification measurement, not an isolated per-open CPU counter. The runtime response deadline
+bounds wall time, while this profile records CPU use without enforcing a separate CPU-time ceiling.
+
+Run the focused qualification with:
+
+```text
+dotnet test test/Pants.Tests/Pants.Tests.csproj --configuration Release --no-restore \
+  --filter 'FullyQualifiedName~PantsProviderCloudStartupCleanupTests.ShouldReportColdStartReadinessAndMaintenancePeakForGrowingRemoteHistory' \
+  --logger 'console;verbosity=detailed'
+```
+
 Cloud startup reads each control metadata object's HEAD before fetching its bytes. Before allocating
 a destination buffer, it reserves workspace equal to 16 times the encoded size plus a fixed parse
 allowance from the same maintenance pool. Built-in stores use identity-pinned ranges no larger than
