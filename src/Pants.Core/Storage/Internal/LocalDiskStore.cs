@@ -5253,15 +5253,19 @@ sealed class LocalDiskStore :
             return;
         }
 
+        var checkpointOperations = _mutableOperations.SnapshotAll();
+        var stagingBytes = checkpointOperations
+            .GroupBy(static operation => operation.ColumnFamilyId)
+            .Sum(group => SstFlushFootprint.MeasureUpperBound(group, _performanceGoal));
         checkpoints.Publish(
-            recoveredBytes,
+            stagingBytes,
             () =>
             {
                 _lease.EnsureValid();
                 var existingSsts = _manifest.Files
                     .Select(static file => file.Name)
                     .ToHashSet(StringComparer.Ordinal);
-                FlushOperations(_mutableOperations.SnapshotAll(), null);
+                FlushOperations(checkpointOperations, null);
                 var checkpointSsts = _manifest.Files
                     .Where(file => !existingSsts.Contains(file.Name))
                     .Select(static file => file.Name)

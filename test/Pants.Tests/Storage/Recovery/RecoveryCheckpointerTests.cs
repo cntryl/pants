@@ -82,6 +82,31 @@ public sealed class RecoveryCheckpointerTests
         checkpointer.RequireTransactionFits([CreatePut(1)]);
     }
 
+    [Fact]
+    public void ShouldRejectAnotherOversizedCheckpointWhileRetainedRecoveryFilesExceedBudget()
+    {
+        const long budgetBytes = 100;
+        var residentBytes = budgetBytes;
+        var ledger = new StorageBudgetLedger(
+            new HybridStorageBudgetPolicy(budgetBytes),
+            () => residentBytes);
+        var checkpointer = RecoveryCheckpointer.Create(
+            64,
+            ledger,
+            allowCheckpointCapacityOvershoot: true);
+
+        checkpointer.Publish(40, () => residentBytes += 40);
+
+        var publicationAttempted = false;
+        Assert.Throws<PantsNoSpaceException>(() => checkpointer.Publish(
+            40,
+            () => publicationAttempted = true));
+
+        Assert.False(publicationAttempted);
+        Assert.Equal(budgetBytes + 40, residentBytes);
+        Assert.Equal(0, ledger.ReservedBytes);
+    }
+
     static StorageBudgetLedger CreateLedger(long maximumBytes, long residentBytes) =>
         new(new HybridStorageBudgetPolicy(maximumBytes), () => residentBytes);
 

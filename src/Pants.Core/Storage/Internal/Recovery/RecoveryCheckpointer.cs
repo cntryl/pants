@@ -49,9 +49,10 @@ sealed class RecoveryCheckpointer
     /// <param name="memtableTargetBytes">The configured recovered-memtable target.</param>
     /// <param name="ledger">The optional local-storage budget ledger.</param>
     /// <param name="allowCheckpointCapacityOvershoot">
-    ///     Whether a hybrid cache checkpoint may proceed beyond its current soft local budget.
-    ///     The ledger still determines the checkpoint target and accounts for staging; this option
-    ///     only avoids rejecting a transaction based on transient cache headroom.
+    ///     Whether hybrid recovery may checkpoint an indivisible transaction without rejecting it
+    ///     solely because of transient cache headroom. Checkpoint output remains charged against
+    ///     the SST upper bound, and over-budget staging is permitted only while current charges are
+    ///     within the cache limit.
     /// </param>
     public static RecoveryCheckpointer Create(
         long memtableTargetBytes,
@@ -125,19 +126,21 @@ sealed class RecoveryCheckpointer
     }
 
     /// <summary>
-    ///     Runs <paramref name="publish" /> while <paramref name="recoveredBytes" /> of checkpoint
-    ///     staging is charged to the local-storage ledger.
+    ///     Runs <paramref name="publish" /> while <paramref name="stagingBytes" /> of checkpoint
+    ///     staging is charged to the local-storage ledger. Callers pass a conservative encoded SST
+    ///     upper bound, not the recovered memtable's logical size.
     /// </summary>
     /// <remarks>
-    ///     A checkpoint is what releases recovery memory, so like a flush it is admitted up to the
-    ///     real limit and proceeds charged even past it rather than wedging startup: the decision is
-    ///     bypassed, never the accounting.
+    ///     A checkpoint releases recovery memory, so hybrid recovery may exceed the soft cache
+    ///     budget to make progress. That allowance applies to one checkpoint at a time: if retained
+    ///     files already put the cache above budget, another over-budget checkpoint is rejected.
+    ///     The staging bytes remain charged even when admission is bypassed.
     /// </remarks>
-    public void Publish(long recoveredBytes, Action publish)
+    public void Publish(long stagingBytes, Action publish)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(recoveredBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(stagingBytes);
         ArgumentNullException.ThrowIfNull(publish);
-        using var reservation = ReserveStaging(recoveredBytes);
+        using var reservation = ReserveStaging(stagingBytes);
         publish();
     }
 
@@ -148,9 +151,24 @@ sealed class RecoveryCheckpointer
             return null;
         }
 
-        return _ledger.TryReserve(StorageAdmissionKind.Flush, bytes, out var reservation)
-            ? reservation
-            : _ledger.ReserveUnconditionally(bytes);
+        if (_ledger.TryReserve(StorageAdmissionKind.Flush, bytes, out var reservation))
+        {
+            return reservation;
+        }
+
+        if (!_allowCheckpointCapacityOvershoot)
+        {
+            return _ledger.Reserve(StorageAdmissionKind.Flush, bytes);
+        }
+
+        if (_ledger.ChargedBytes > _ledger.GetAdmissionCeilingBytes(StorageAdmissionKind.Flush))
+        {
+            throw new PantsNoSpaceException(
+                "A recovery checkpoint cannot exceed the local cache budget while retained " +
+                "recovery files are already over budget.");
+        }
+
+        return _ledger.ReserveUnconditionally(bytes);
     }
 
     static long EstimateBytes(WalMutation mutation) =>
