@@ -39,6 +39,7 @@ sealed class Actor : IAsyncDisposable
     int _activeCompactionRequests;
     bool _backgroundCompactionEnabled;
     bool _backgroundCompactionPending;
+    Task<CompactionResult>? _backgroundCompactionCompletion;
     readonly CloudCompactionOutputPublisher? _cloudCompactionOutputPublisher;
     readonly CloudDdlCoordinator? _cloudDdlCoordinator;
     readonly CloudFlushRetryScheduler _cloudFlushRetries;
@@ -62,6 +63,7 @@ sealed class Actor : IAsyncDisposable
     CompactionRuntimeService _compactionRuntime = null!;
     DatabaseVersion _currentVersion = null!;
     int _deferredCompactionScheduled;
+    Task? _deferredCompactionTask;
     readonly LocalDiskStore? _diskStore;
     readonly WalRetirementDiagnostics _walRetirementDiagnostics;
     int _disposed;
@@ -249,6 +251,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         await CaptureCleanupAsync(_cloudFlushRetries.DisposeAsync).ConfigureAwait(false);
+        _compactionRuntime.CancelOperations();
         _commands.Writer.TryComplete();
         try
         {
@@ -1587,61 +1590,132 @@ sealed class Actor : IAsyncDisposable
         ColumnFamilyIdentity identity,
         CancellationToken cancellationToken)
     {
+        var compactionAtStart = Volatile.Read(ref _backgroundCompactionCompletion);
+        var deferredAtStart = Volatile.Read(ref _deferredCompactionTask);
+        Task<CompactionResult>? compaction;
         if (UsesBackgroundImmutableFlushes)
         {
             await FlushImmutableMemtableAsync(identity, cancellationToken).ConfigureAwait(false);
             _failpoints.Hit(Failpoint.BeforeFlushCompactionAdmission);
-            _ = await SendAsync(
+            compaction = await SendAsync(
                 async state =>
                 {
-                    await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                    var scheduled = await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
                     PublishSnapshot(state);
-                    return true;
+                    return scheduled;
                 },
                 cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            compaction = await SendWithinDeadlineAsync(
+                async (state, deadline) =>
+                {
+                    ThrowIfShuttingDown(state);
+                    ThrowIfVerificationInProgress();
+                    EnsureCloudWriteAuthorityValid();
+                    ValidateActiveFamily(state, identity);
+                    if (_diskStore is not null)
+                    {
+                        var started = Stopwatch.GetTimestamp();
+                        await _flushRuntime
+                            .FlushAsync(state, identity)
+                            .ConfigureAwait(false);
+                        _telemetry.RecordFlush(Stopwatch.GetElapsedTime(started));
+                    }
+
+                    try
+                    {
+                        await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (
+                        _cloudPersistence is not null &&
+                        exception is not OperationCanceledException)
+                    {
+                        _telemetry.RecordFlushFailure();
+                        MarkPersistenceAnomaly(state);
+                        if (exception is IOException or PantsIOException or PantsTimeoutException)
+                        {
+                            ScheduleCloudFlushRetry(identity);
+                        }
+
+                        throw;
+                    }
+
+                    CompleteCloudFlush(state, identity);
+                    var scheduled = await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                    PublishSnapshot(state);
+                    return scheduled;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!ReferenceEquals(compaction, compactionAtStart))
+        {
+            await AwaitBackgroundCompactionAsync(compaction, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (compactionAtStart?.IsCompleted != false && deferredAtStart?.IsCompleted != false)
+        {
+            await AwaitNewDeferredCompactionAsync(deferredAtStart, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    async ValueTask AwaitNewDeferredCompactionAsync(
+        Task? previous,
+        CancellationToken cancellationToken)
+    {
+        var deadline = OperationDeadline.FromBudget(
+            _options.RuntimeResponseTimeout,
+            _runtimeTimeProvider);
+        while (true)
+        {
+            var current = Volatile.Read(ref _deferredCompactionTask);
+            if (current is null || ReferenceEquals(current, previous))
+            {
+                return;
+            }
+
+            try
+            {
+                await deadline.RunAsync(
+                        token => new ValueTask(current.WaitAsync(token)),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw RuntimeExceptionMapper.ToPublicException(exception, cancellationToken);
+            }
+
+            previous = current;
+        }
+    }
+
+    async ValueTask AwaitBackgroundCompactionAsync(
+        Task<CompactionResult>? completion,
+        CancellationToken cancellationToken)
+    {
+        if (completion is null)
+        {
             return;
         }
 
-        await SendWithinDeadlineAsync(
-            async (state, deadline) =>
-            {
-                ThrowIfShuttingDown(state);
-                ThrowIfVerificationInProgress();
-                EnsureCloudWriteAuthorityValid();
-                ValidateActiveFamily(state, identity);
-                if (_diskStore is not null)
-                {
-                    var started = Stopwatch.GetTimestamp();
-                    await _flushRuntime
-                        .FlushAsync(state, identity)
-                        .ConfigureAwait(false);
-                    _telemetry.RecordFlush(Stopwatch.GetElapsedTime(started));
-                }
-
-                try
-                {
-                    await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
-                }
-                catch (Exception exception) when (
-                    _cloudPersistence is not null &&
-                    exception is not OperationCanceledException)
-                {
-                    _telemetry.RecordFlushFailure();
-                    MarkPersistenceAnomaly(state);
-                    if (exception is IOException or PantsIOException or PantsTimeoutException)
-                    {
-                        ScheduleCloudFlushRetry(identity);
-                    }
-
-                    throw;
-                }
-
-                CompleteCloudFlush(state, identity);
-                await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
-                PublishSnapshot(state);
-                return true;
-            },
-            cancellationToken).ConfigureAwait(false);
+        var deadline = OperationDeadline.FromBudget(
+            _options.RuntimeResponseTimeout,
+            _runtimeTimeProvider);
+        try
+        {
+            await deadline.RunAsync(
+                    token => new ValueTask(completion.WaitAsync(token)),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            throw RuntimeExceptionMapper.ToPublicException(exception, cancellationToken);
+        }
     }
 
     public async ValueTask CompactAsync(CancellationToken cancellationToken)
@@ -1651,6 +1725,10 @@ sealed class Actor : IAsyncDisposable
         try
         {
             await CompactCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            throw RuntimeExceptionMapper.ToPublicException(exception, cancellationToken);
         }
         finally
         {
@@ -1669,65 +1747,134 @@ sealed class Actor : IAsyncDisposable
                 _failpoints.Hit(Failpoint.BeforeCompactionAdmission);
             }
 
-            var compacted = await SendWithinDeadlineAsync(
-                async (state, deadline) =>
+            await _compactionRuntime.WaitForIdleAsync(cancellationToken).ConfigureAwait(false);
+
+            var deadline = OperationDeadline.FromBudget(
+                _options.RuntimeResponseTimeout,
+                _runtimeTimeProvider);
+            var compacted = await deadline.RunMutationAsync(
+                async token =>
                 {
-                    ThrowIfShuttingDown(state);
-                    ThrowIfVerificationInProgress();
-                    EnsureCloudWriteAuthorityValid();
-                    if (UsesBackgroundImmutableFlushes)
-                    {
-                        foreach (var family in state.ActiveMemtableBytes
-                                     .Where(static pair => pair.Value > 0)
-                                     .Select(static pair => pair.Key)
-                                     .ToArray())
+                    var scheduled = await SendAsync(
+                        async state =>
                         {
-                            _ = await FreezeAndScheduleFlushAsync(state, family)
+                            ThrowIfShuttingDown(state);
+                            ThrowIfVerificationInProgress();
+                            EnsureCloudWriteAuthorityValid();
+                            if (_compactionRuntime.HasScheduledOperations)
+                            {
+                                return null;
+                            }
+
+                            if (UsesBackgroundImmutableFlushes)
+                            {
+                                foreach (var family in state.ActiveMemtableBytes
+                                             .Where(static pair => pair.Value > 0)
+                                             .Select(static pair => pair.Key)
+                                             .ToArray())
+                                {
+                                    _ = await FreezeAndScheduleFlushAsync(state, family)
+                                        .ConfigureAwait(false);
+                                }
+
+                                if (state.ImmutableMemtableFlushes.Count != 0 ||
+                                    state.UnflushedFamilies.Count != 0)
+                                {
+                                    return null;
+                                }
+                            }
+                            else
+                            {
+                                if (_diskStore is not null)
+                                {
+                                    await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
+                                    await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
+                                    state.UnflushedFamilies.Clear();
+                                    ClearMemtableAccounting(state);
+                                    _cloudMemtableSegments?.Reinitialize(
+                                        [],
+                                        _diskStore.CurrentWalSegmentId);
+                                    PublishSnapshot(state);
+                                }
+                            }
+
+                            _backgroundCompactionPending = false;
+                            _readAmplificationCompactionPending = false;
+                            if (_diskStore is null)
+                            {
+                                return new ScheduledCompaction(
+                                    Task.FromResult(new CompactionResult(0, 0, false)),
+                                    null);
+                            }
+
+                            var snapshot = _diskStore.CaptureCompactionWorkSnapshot(
+                                state,
+                                true,
+                                true);
+                            var staging = await ReserveCompactionStagingAsync(
+                                    snapshot.InputNames,
+                                    token)
+                                .ConfigureAwait(false);
+                            try
+                            {
+                                var completion = await _compactionRuntime.ScheduleDrainDebtAsync(
+                                        snapshot,
+                                        nextToken => CaptureNextCompactionWorkSnapshotAsync(
+                                            true,
+                                            true,
+                                            nextToken),
+                                        PublishCompactionOnActorAsync,
+                                        _cloudCompactionOutputPublisher,
+                                        PrepareCompactionInputsAsync,
+                                        staging?.Staging,
+                                        token)
+                                    .ConfigureAwait(false);
+                                return new ScheduledCompaction(completion, staging);
+                            }
+                            catch
+                            {
+                                staging?.Dispose();
+                                throw;
+                            }
+                        },
+                        token,
+                        enforceRuntimeResponseTimeout: false)
+                        .ConfigureAwait(false);
+
+                    if (scheduled is null)
+                    {
+                        return false;
+                    }
+
+                    CompactionResult result;
+                    try
+                    {
+                        result = await scheduled.Completion.WaitAsync(token)
+                            .ConfigureAwait(false);
+                        if (!result.PlanStale)
+                        {
+                            await SendAsync(
+                                    async state =>
+                                    {
+                                        if (!state.IsShuttingDown)
+                                        {
+                                            await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
+                                        }
+
+                                        return true;
+                                    },
+                                    token,
+                                    enforceRuntimeResponseTimeout: false)
                                 .ConfigureAwait(false);
                         }
-
-                        if (state.ImmutableMemtableFlushes.Count != 0 ||
-                            state.UnflushedFamilies.Count != 0)
-                        {
-                            return false;
-                        }
                     }
-
-                    if (_diskStore is not null)
+                    finally
                     {
-                        var inputs = _diskStore.GetCompactionDebtInputNames(state);
-                        using var staging = await ReserveCompactionStagingAsync(
-                                inputs,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                        var result = await deadline.RunMutationAsync(
-                                token => _compactionRuntime.DrainDebtAsync(
-                                    state,
-                                    _cloudCompactionOutputPublisher,
-                                    prepareInputs: PrepareCompactionInputsAsync,
-                                    staging: staging?.Staging,
-                                    cancellationToken: token),
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                        if (result.PersistenceAnomaly)
-                        {
-                            Volatile.Write(ref _persistenceAnomaly, 1);
-                            MarkPersistenceAnomaly(state);
-                        }
-
-                        PublishSnapshot(state);
+                        scheduled.Staging?.Dispose();
                     }
 
-                    await MirrorCloudStorageAsync(deadline).ConfigureAwait(false);
-                    _backgroundCompactionPending = false;
-                    _readAmplificationCompactionPending = false;
-                    state.UnflushedFamilies.Clear();
-                    ClearMemtableAccounting(state);
-                    _cloudMemtableSegments?.Reinitialize(
-                        [],
-                        _diskStore?.CurrentWalSegmentId ?? 0);
-                    PublishSnapshot(state);
-                    return true;
+                    await _compactionRuntime.WaitForIdleAsync(token).ConfigureAwait(false);
+                    return !result.PlanStale;
                 },
                 cancellationToken).ConfigureAwait(false);
             if (compacted)
@@ -2308,6 +2455,7 @@ sealed class Actor : IAsyncDisposable
 
                         Volatile.Write(ref _shutdownRequested, true);
                         state.IsShuttingDown = true;
+                        _compactionRuntime.CancelOperations();
                         state.ActiveTransactions.Clear();
                         state.DirectReadOnlyTransactions.Clear();
                         state.ActiveScanSnapshots.Clear();
@@ -4398,66 +4546,98 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
-    async ValueTask RunBackgroundCompactionAsync(RuntimeState state)
+    ValueTask<Task<CompactionResult>?> RunBackgroundCompactionAsync(RuntimeState state) =>
+        ScheduleBackgroundCompactionAsync(state, false, false);
+
+    ValueTask<Task<CompactionResult>?> RunReadAmplificationCompactionAsync(RuntimeState state) =>
+        ScheduleBackgroundCompactionAsync(state, true, true);
+
+    async ValueTask<Task<CompactionResult>?> ScheduleBackgroundCompactionAsync(
+        RuntimeState state,
+        bool force,
+        bool readAmplification)
     {
         if (_diskStore is null ||
-            (!_backgroundCompactionEnabled &&
+            (readAmplification && !_backgroundCompactionEnabled) ||
+            (!readAmplification && !_backgroundCompactionEnabled &&
              !MemtableWritePressure.HasAnyCriticalL0Debt(_options, state)))
         {
-            _backgroundCompactionPending = false;
-            return;
+            if (readAmplification)
+            {
+                _readAmplificationCompactionPending = false;
+            }
+            else
+            {
+                _backgroundCompactionPending = false;
+            }
+
+            return null;
         }
 
         if (state.IsShuttingDown)
         {
-            _backgroundCompactionPending = false;
-            return;
+            return null;
+        }
+
+        if (_compactionRuntime.HasScheduledOperations)
+        {
+            if (readAmplification)
+            {
+                _readAmplificationCompactionPending = true;
+            }
+            else
+            {
+                _backgroundCompactionPending = true;
+            }
+
+            var completion = Volatile.Read(ref _backgroundCompactionCompletion);
+            return completion is { IsCompleted: false } ? completion : null;
         }
 
         if (_verificationBarrier is not null)
         {
-            _backgroundCompactionPending = true;
-            return;
+            if (readAmplification)
+            {
+                _readAmplificationCompactionPending = true;
+            }
+            else
+            {
+                _backgroundCompactionPending = true;
+            }
+
+            return null;
         }
 
         if (UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0)
         {
-            _backgroundCompactionPending = true;
-            return;
+            if (readAmplification)
+            {
+                _readAmplificationCompactionPending = true;
+            }
+            else
+            {
+                _backgroundCompactionPending = true;
+            }
+
+            return null;
         }
 
-        _backgroundCompactionPending = false;
+        if (readAmplification)
+        {
+            _readAmplificationCompactionPending = false;
+            _backgroundCompactionPending = false;
+            _telemetry.RecordReadAmplificationCompactionTrigger();
+        }
+        else
+        {
+            _backgroundCompactionPending = false;
+        }
+
         EnsureCloudWriteAuthorityValid();
-        var inputs = _diskStore.GetCompactionInputNames(state, false);
-        using var staging = await ReserveCompactionStagingAsync(
-                inputs,
-                CancellationToken.None)
-            .ConfigureAwait(false);
-        var result = await _compactionRuntime
-            .CompactAsync(
-                state,
-                false,
-                _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes,
-                PrepareCompactionInputsAsync,
-                staging?.Staging)
-            .ConfigureAwait(false);
-
-        if (result.PersistenceAnomaly)
-        {
-            Volatile.Write(ref _persistenceAnomaly, 1);
-            MarkPersistenceAnomaly(state);
-        }
-
-        PublishSnapshot(state);
-
-        if (result.PublicationCount > 0 || _hybridCache is not null)
-        {
-            await MirrorCloudStorageAsync().ConfigureAwait(false);
-        }
-
         if (!UsesBackgroundImmutableFlushes)
         {
+            await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
+            await MirrorCloudStorageAsync().ConfigureAwait(false);
             state.UnflushedFamilies.Clear();
             ClearMemtableAccounting(state);
             _cloudMemtableSegments?.Reinitialize(
@@ -4465,72 +4645,198 @@ sealed class Actor : IAsyncDisposable
                 _diskStore.CurrentWalSegmentId);
             PublishSnapshot(state);
         }
+
+        var snapshot = _diskStore.CaptureCompactionWorkSnapshot(state, force);
+        if (snapshot.Plans.Count == 0 && snapshot.ReclaimableFamilies.Count == 0)
+        {
+            return null;
+        }
+
+        var staging = await ReserveCompactionStagingAsync(snapshot.InputNames, CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            var completion = await _compactionRuntime.ScheduleCompactAsync(
+                    snapshot,
+                    token => CaptureNextCompactionWorkSnapshotAsync(force, false, token),
+                    PublishCompactionOnActorAsync,
+                    force,
+                    _cloudCompactionOutputPublisher,
+                    PrepareCompactionInputsAsync,
+                    staging?.Staging)
+                .ConfigureAwait(false);
+            var observation = ObserveBackgroundCompactionAsync(completion, staging, !force);
+            var observedCompletion = AwaitCompactionObservationAsync(completion, observation);
+            Volatile.Write(ref _backgroundCompactionCompletion, observedCompletion);
+            return observedCompletion;
+        }
+        catch
+        {
+            staging?.Dispose();
+            throw;
+        }
     }
 
-    async ValueTask RunReadAmplificationCompactionAsync(RuntimeState state)
+    static async Task<CompactionResult> AwaitCompactionObservationAsync(
+        Task<CompactionResult> completion,
+        Task observation)
     {
-        if (!_backgroundCompactionEnabled || _diskStore is null)
+        CompactionResult? result = null;
+        Exception? failure = null;
+        try
         {
-            _readAmplificationCompactionPending = false;
-            return;
+            result = await completion.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
         }
 
-        if (state.IsShuttingDown)
+        try
         {
-            _readAmplificationCompactionPending = false;
-            return;
+            await observation.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failure ??= exception;
         }
 
-        if (_verificationBarrier is not null)
+        if (failure is not null)
         {
-            _readAmplificationCompactionPending = true;
-            return;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
-        if (UsesBackgroundImmutableFlushes && state.ImmutableMemtableFlushes.Count != 0)
-        {
-            _readAmplificationCompactionPending = true;
-            return;
-        }
+        return result ?? throw new PantsInternalException(
+            "Compaction observation completed without a compaction result.");
+    }
 
-        _readAmplificationCompactionPending = false;
-        _backgroundCompactionPending = false;
-        EnsureCloudWriteAuthorityValid();
-        _telemetry.RecordReadAmplificationCompactionTrigger();
-        var inputs = _diskStore!.GetCompactionInputNames(state, true);
-        using var staging = await ReserveCompactionStagingAsync(
-                inputs,
-                CancellationToken.None)
-            .ConfigureAwait(false);
-        var result = await _compactionRuntime
-            .CompactAsync(
-                state,
-                true,
-                _cloudCompactionOutputPublisher,
-                !UsesBackgroundImmutableFlushes,
-                PrepareCompactionInputsAsync,
-                staging?.Staging)
-            .ConfigureAwait(false);
-        if (!UsesBackgroundImmutableFlushes)
-        {
-            state.UnflushedFamilies.Clear();
-            ClearMemtableAccounting(state);
-            _cloudMemtableSegments?.Reinitialize(
-                [],
-                _diskStore.CurrentWalSegmentId);
-        }
+    ValueTask<CompactionWorkSnapshot?> CaptureNextCompactionWorkSnapshotAsync(
+        bool force,
+        bool drainDebt,
+        CancellationToken cancellationToken) =>
+        SendAsync(
+            state =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (state.IsShuttingDown || _diskStore is null)
+                {
+                    return ValueTask.FromResult<CompactionWorkSnapshot?>(null);
+                }
 
-        if (result.PersistenceAnomaly)
+                return ValueTask.FromResult<CompactionWorkSnapshot?>(
+                    _diskStore.CaptureCompactionWorkSnapshot(state, force, drainDebt));
+            },
+            cancellationToken,
+            enforceRuntimeResponseTimeout: false);
+
+    ValueTask<CompactionPublicationResult> PublishCompactionOnActorAsync(
+        Func<CompactionPublicationResult> publish,
+        CancellationToken cancellationToken) =>
+        SendAsync(
+            state =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (state.IsShuttingDown)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
+                var result = publish();
+                if (result.Published)
+                {
+                    if (result.PersistenceAnomaly)
+                    {
+                        Volatile.Write(ref _persistenceAnomaly, 1);
+                        MarkPersistenceAnomaly(state);
+                    }
+
+                    PublishSnapshot(state);
+                }
+
+                return ValueTask.FromResult(result);
+            },
+            CancellationToken.None,
+            enforceRuntimeResponseTimeout: false);
+
+    async Task ObserveBackgroundCompactionAsync(
+        Task<CompactionResult> completion,
+        CompactionStagingLease? staging,
+        bool retryStalePlan)
+    {
+        try
+        {
+            var result = await completion.ConfigureAwait(false);
+            await _compactionRuntime.WaitForIdleAsync(CancellationToken.None).ConfigureAwait(false);
+            var shouldRearm = await SendAsync(
+                async state =>
+                {
+                    if (state.IsShuttingDown)
+                    {
+                        return false;
+                    }
+
+                    if (result.PersistenceAnomaly)
+                    {
+                        Volatile.Write(ref _persistenceAnomaly, 1);
+                        MarkPersistenceAnomaly(state);
+                    }
+
+                    if (result.PublicationCount > 0 || _hybridCache is not null)
+                    {
+                        await MirrorCloudStorageAsync().ConfigureAwait(false);
+                    }
+
+                    if (result.PlanStale && retryStalePlan && _cloudCompactionOutputPublisher is null)
+                    {
+                        _backgroundCompactionPending = true;
+                    }
+
+                    return _backgroundCompactionPending || _readAmplificationCompactionPending;
+                },
+                CancellationToken.None,
+                enforceRuntimeResponseTimeout: false).ConfigureAwait(false);
+            if (shouldRearm)
+            {
+                await RearmDeferredCompactionAsync().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (
+            Volatile.Read(ref _shutdownRequested) || Volatile.Read(ref _disposed) != 0)
+        {
+        }
+        catch (PantsAbortedException) when (
+            Volatile.Read(ref _shutdownRequested) || Volatile.Read(ref _disposed) != 0)
+        {
+        }
+        catch (PantsAbortedException)
         {
             Volatile.Write(ref _persistenceAnomaly, 1);
-            MarkPersistenceAnomaly(state);
         }
-
-        PublishSnapshot(state);
-
-        if (result.PublicationCount > 0 || _hybridCache is not null)
+        catch (Exception)
         {
-            await MirrorCloudStorageAsync().ConfigureAwait(false);
+            Volatile.Write(ref _persistenceAnomaly, 1);
+            try
+            {
+                await SendAsync(
+                    state =>
+                    {
+                        if (!state.IsShuttingDown)
+                        {
+                            MarkPersistenceAnomaly(state);
+                        }
+
+                        return ValueTask.FromResult(true);
+                    },
+                    CancellationToken.None,
+                    enforceRuntimeResponseTimeout: false).ConfigureAwait(false);
+            }
+            catch (PantsAbortedException)
+            {
+            }
+        }
+        finally
+        {
+            staging?.Dispose();
         }
     }
 
@@ -4538,7 +4844,8 @@ sealed class Actor : IAsyncDisposable
     {
         if (Interlocked.CompareExchange(ref _deferredCompactionScheduled, 1, 0) == 0)
         {
-            _ = RunDeferredCompactionAsync();
+            var task = RunDeferredCompactionAsync();
+            Volatile.Write(ref _deferredCompactionTask, task);
         }
     }
 
@@ -4547,36 +4854,49 @@ sealed class Actor : IAsyncDisposable
         try
         {
             _failpoints.Hit(Failpoint.BeforeCompactionAdmission);
-            _ = await SendAsync(
+            var completion = await SendAsync(
                 async state =>
                 {
                     if (state.IsShuttingDown ||
                         (!_backgroundCompactionPending &&
                          !_readAmplificationCompactionPending))
                     {
-                        return true;
+                        return null;
                     }
 
                     if (_verificationBarrier is not null)
                     {
-                        return true;
+                        return null;
                     }
 
+                    Task<CompactionResult>? scheduled;
                     if (_readAmplificationCompactionPending)
                     {
-                        await RunReadAmplificationCompactionAsync(state).ConfigureAwait(false);
+                        scheduled = await RunReadAmplificationCompactionAsync(state)
+                            .ConfigureAwait(false);
                     }
                     else
                     {
-                        await RunBackgroundCompactionAsync(state).ConfigureAwait(false);
+                        scheduled = await RunBackgroundCompactionAsync(state)
+                            .ConfigureAwait(false);
                     }
 
                     PublishSnapshot(state);
-                    return true;
+                    return scheduled;
                 },
                 CancellationToken.None).ConfigureAwait(false);
+            if (completion is not null)
+            {
+                await completion.ConfigureAwait(false);
+            }
+
+            await _compactionRuntime.WaitForIdleAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (PantsAbortedException)
+        {
+        }
+        catch (OperationCanceledException) when (
+            Volatile.Read(ref _shutdownRequested) || Volatile.Read(ref _disposed) != 0)
         {
         }
         catch (Exception)
@@ -4854,7 +5174,16 @@ sealed class Actor : IAsyncDisposable
             .ConfigureAwait(false);
         try
         {
-            await EnsureHybridSstsLocalForMaintenanceAsync(names, cancellationToken)
+            await SendAsync(
+                    async state =>
+                    {
+                        ThrowIfShuttingDown(state);
+                        await EnsureHybridSstsLocalForMaintenanceAsync(names, cancellationToken)
+                            .ConfigureAwait(false);
+                        return true;
+                    },
+                    cancellationToken,
+                    enforceRuntimeResponseTimeout: false)
                 .ConfigureAwait(false);
             return protection;
         }
@@ -5477,4 +5806,8 @@ sealed class Actor : IAsyncDisposable
 
         completion.TrySetResult();
     }
+
+    sealed record ScheduledCompaction(
+        Task<CompactionResult> Completion,
+        CompactionStagingLease? Staging);
 }

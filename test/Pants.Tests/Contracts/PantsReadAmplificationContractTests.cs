@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Contracts;
@@ -150,11 +151,34 @@ public sealed class PantsReadAmplificationContractTests
 
         var amplification =
             await database.Diagnostics.GetReadAmplificationMetricsAsync();
-        var runtime = await database.Diagnostics.GetRuntimeMetricsAsync();
+        var runtime = await WaitForRuntimeMetricsAsync(
+            database,
+            static metrics => metrics.CompactionsRun >= 1);
         Assert.Equal(1, amplification.SstBudgetViolationsTotal);
         Assert.Equal(1, amplification.CompactionTriggersTotal);
         Assert.Equal(1, runtime.ReadAmplificationCompactionTriggersTotal);
         Assert.Equal(1, runtime.CompactionsRun);
+    }
+
+    static async ValueTask<PantsRuntimeMetrics> WaitForRuntimeMetricsAsync(
+        IPantsDatabase database,
+        Func<PantsRuntimeMetrics, bool> predicate)
+    {
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started) < TestTimeouts.Expected)
+        {
+            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync()
+                .AsTask()
+                .WaitAsync(TestTimeouts.Expected);
+            if (predicate(metrics))
+            {
+                return metrics;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
+        }
+
+        throw new TimeoutException("Read-amplification compaction did not complete.");
     }
 
     static async Task FlushGenerationAsync(IPantsDatabase database, int generation)

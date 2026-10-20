@@ -74,7 +74,7 @@ sealed class LocalDiskStore :
     readonly AsyncSstReaderCache _asyncReaderCache;
     readonly PantsRecoveryPolicy _recoveryPolicy;
     readonly IAsyncSstSourceFactory? _remoteSstSourceFactory;
-    readonly Dictionary<uint, ulong> _reservedFlushSstSequences = [];
+    readonly Dictionary<uint, ulong> _reservedSstSequences = [];
     readonly Dictionary<uint, List<FlushHeadroomClaim>> _mutableFlushHeadroom = [];
     readonly Dictionary<long, List<FlushHeadroomClaim>> _frozenFlushHeadroom = [];
     readonly List<FlushHeadroomClaim> _unresolvedFlushHeadroom = [];
@@ -634,18 +634,40 @@ sealed class LocalDiskStore :
 
     public int CountCompactionInputs(RuntimeState state, bool force)
     {
+        return CaptureCompactionWorkSnapshot(state, force, false)
+            .Plans.Sum(static plan => plan.Inputs.Count);
+    }
+
+    public CompactionWorkSnapshot CaptureCompactionWorkSnapshot(
+        RuntimeState state,
+        bool force,
+        bool drainDebt = false)
+    {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var snapshotHorizon = state.ActiveSnapshots
             .Select(static snapshot => snapshot.BeginSequence)
             .Cast<long?>()
             .Min();
-        return _familyIds.Values.Sum(familyId =>
-            LeveledCompactionPlanner.Pick(
-                manifest.Files,
-                familyId,
-                _compaction,
-                snapshotHorizon,
-                force)?.Inputs.Count ?? 0);
+        var plans = _familyIds.Values
+            .Select(familyId => drainDebt
+                ? LeveledCompactionPlanner.PickDebtDrain(
+                    manifest.Files,
+                    familyId,
+                    _compaction,
+                    snapshotHorizon)
+                : LeveledCompactionPlanner.Pick(
+                    manifest.Files,
+                    familyId,
+                    _compaction,
+                    snapshotHorizon,
+                    force))
+            .Where(static plan => plan is not null)
+            .Cast<CompactionPlan>()
+            .ToArray();
+        var reclaimableFamilies = manifest.ColumnFamilies
+            .Where(static family => family.DeletedAt is not null && !family.Reclaimed)
+            .ToArray();
+        return new CompactionWorkSnapshot(manifest, plans, reclaimableFamilies);
     }
 
     public ValueTask<CompactionResult> CompactAsync(
@@ -657,18 +679,30 @@ sealed class LocalDiskStore :
         CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
-        CancellationToken cancellationToken = default) =>
-        CompactAsync(
-            state,
+        CancellationToken cancellationToken = default)
+    {
+        if (flushMutableOperations)
+        {
+            Flush(state);
+        }
+
+        return CompactAsync(
+            CaptureCompactionWorkSnapshot(state, force),
+            token => ValueTask.FromResult<CompactionWorkSnapshot?>(
+                CaptureCompactionWorkSnapshot(state, force)),
+            static (publish, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return ValueTask.FromResult(publish());
+            },
             force,
             outputPublisher,
-            flushMutableOperations,
-            false,
             publicationCompleted,
             memory,
             prepareInputs,
             staging,
             cancellationToken);
+    }
 
     public void Flush(RuntimeState state)
     {
@@ -1319,43 +1353,12 @@ sealed class LocalDiskStore :
 
     public IReadOnlyList<string> GetCompactionDebtInputNames(RuntimeState state)
     {
-        var manifest = Volatile.Read(ref _manifestReadSnapshot);
-        var snapshotHorizon = state.ActiveSnapshots
-            .Select(static snapshot => snapshot.BeginSequence)
-            .Cast<long?>()
-            .Min();
-        return _familyIds.Values
-            .Select(familyId => LeveledCompactionPlanner.PickDebtDrain(
-                manifest.Files,
-                familyId,
-                _compaction,
-                snapshotHorizon))
-            .Where(static plan => plan is not null)
-            .SelectMany(static plan => plan!.Inputs)
-            .Select(static file => file.Name)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        return CaptureCompactionWorkSnapshot(state, true, true).InputNames;
     }
 
     public IReadOnlyList<string> GetCompactionInputNames(RuntimeState state, bool force)
     {
-        var manifest = Volatile.Read(ref _manifestReadSnapshot);
-        var snapshotHorizon = state.ActiveSnapshots
-            .Select(static snapshot => snapshot.BeginSequence)
-            .Cast<long?>()
-            .Min();
-        return _familyIds.Values
-            .Select(familyId => LeveledCompactionPlanner.Pick(
-                manifest.Files,
-                familyId,
-                _compaction,
-                snapshotHorizon,
-                force))
-            .Where(static plan => plan is not null)
-            .SelectMany(static plan => plan!.Inputs)
-            .Select(static file => file.Name)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        return CaptureCompactionWorkSnapshot(state, force).InputNames;
     }
 
     public PantsEngineHealth GetHealth(RuntimeState state)
@@ -3581,10 +3584,7 @@ sealed class LocalDiskStore :
             _unflushedCommitSequence = _mutableOperations.Count == 0
                 ? manifestState.LastPersistedSequence
                 : checked(_mutableOperations.LastSequence + 1);
-            var sstSequence = Math.Max(
-                manifestState.NextSstSequence,
-                _reservedFlushSstSequences.GetValueOrDefault(familyId, 1UL));
-            _reservedFlushSstSequences[familyId] = checked(sstSequence + 1);
+            var sstSequence = ReserveNextSstSequenceUnderGate(familyId, manifestState.NextSstSequence);
             var id = checked(++_nextFrozenFlushId);
             _frozenFlushIds.Add(id);
             var headroomClaims = _mutableFlushHeadroom.Remove(familyId, out var claims)
@@ -3951,6 +3951,25 @@ sealed class LocalDiskStore :
         return (
             snapshot.LastPersistedSequence,
             snapshot.NextSstSequences.GetValueOrDefault(familyId, 1UL));
+    }
+
+    ulong ReserveNextSstSequence(uint familyId)
+    {
+        lock (_walStateGate)
+        {
+            var manifestNext = Volatile.Read(ref _manifestReadSnapshot)
+                .NextSstSequences.GetValueOrDefault(familyId, 1UL);
+            return ReserveNextSstSequenceUnderGate(familyId, manifestNext);
+        }
+    }
+
+    ulong ReserveNextSstSequenceUnderGate(uint familyId, ulong manifestNext)
+    {
+        var sequence = Math.Max(
+            manifestNext,
+            _reservedSstSequences.GetValueOrDefault(familyId, 1UL));
+        _reservedSstSequences[familyId] = checked(sequence + 1);
+        return sequence;
     }
 
     FileMeta[] GetManifestFilesSnapshot()
@@ -4320,11 +4339,16 @@ sealed class LocalDiskStore :
         bool force,
         bool continueCompacting = false) =>
         CompactAsync(
-                state,
-                force,
+                CaptureCompactionWorkSnapshot(state, force),
+                _ => ValueTask.FromResult<CompactionWorkSnapshot?>(
+                    CaptureCompactionWorkSnapshot(state, force)),
+                static (publish, cancellationToken) =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return ValueTask.FromResult(publish());
+                },
+                force || continueCompacting,
                 null,
-                true,
-                continueCompacting,
                 null,
                 null,
                 null,
@@ -4339,25 +4363,35 @@ sealed class LocalDiskStore :
         RuntimeState state,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
-        CancellationToken cancellationToken = default) =>
-        CompactAsync(
-            state,
+        CancellationToken cancellationToken = default)
+    {
+        Flush(state);
+        return CompactAsync(
+            CaptureCompactionWorkSnapshot(state, force),
+            token => ValueTask.FromResult<CompactionWorkSnapshot?>(
+                CaptureCompactionWorkSnapshot(state, force)),
+            static (publish, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return ValueTask.FromResult(publish());
+            },
             force,
             outputPublisher,
-            true,
-            false,
             null,
             null,
             null,
             null,
             cancellationToken);
+    }
 
     /// <summary>
     ///     Drains compaction debt: repeats debt-drain rounds until no plan remains, then verifies
     ///     that no L0 file or overfull inner level is left.
     /// </summary>
     public async ValueTask<CompactionResult> DrainCompactionDebtAsync(
-        RuntimeState state,
+        CompactionWorkSnapshot snapshot,
+        CompactionWorkSnapshotProvider snapshotProvider,
+        CompactionPublicationDispatcher publicationDispatcher,
         CloudCompactionOutputPublisher? outputPublisher,
         Action<long>? publicationCompleted = null,
         CompactionMemory? memory = null,
@@ -4367,59 +4401,86 @@ sealed class LocalDiskStore :
     {
         var outputBytes = 0L;
         var publicationCount = 0;
+        var planStale = false;
         while (true)
         {
             // Each round holds the maintenance gate alone and releases it before the next round,
             // so publications waiting on the gate are served between rounds.
+            var shouldVerifyNoMoreWork = false;
             using (memory is null
                        ? null
                        : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
             {
                 var round = await CompactRoundAsync(
-                        state,
-                        false,
+                        snapshot,
                         outputPublisher,
-                        true,
                         publicationCompleted,
                         memory,
                         prepareInputs,
                         staging,
-                        cancellationToken,
-                        drainDebt: true)
+                        publicationDispatcher,
+                        cancellationToken)
                     .ConfigureAwait(false);
                 outputBytes = checked(outputBytes + round.OutputBytes);
-                publicationCount = checked(publicationCount + (round.HasCompactionPlan ? 1 : 0));
+                publicationCount = checked(publicationCount + (round.PublishedCompaction ? 1 : 0));
                 if (round.PersistenceAnomaly)
                 {
-                    return new CompactionResult(outputBytes, publicationCount, true);
+                    return new CompactionResult(outputBytes, publicationCount, true, planStale);
                 }
 
-                if (!round.HasCompactionPlan)
+                if (round.PlanStale)
+                {
+                    planStale = true;
+                    break;
+                }
+
+                if (!round.HasMoreCompactionWork)
+                {
+                    shouldVerifyNoMoreWork = true;
+                }
+            }
+
+            if (shouldVerifyNoMoreWork)
+            {
+                snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+                          throw new OperationCanceledException(cancellationToken);
+                if (snapshot.Plans.Count == 0 && snapshot.ReclaimableFamilies.Count == 0)
                 {
                     break;
                 }
+
+                continue;
             }
+
+            snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+                      throw new OperationCanceledException(cancellationToken);
         }
 
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
-        foreach (var (_, familyId) in _familyIds.ToList())
+        if (!planStale)
         {
-            if (!CompactionDebt.IsClear(manifest.Files, familyId, _compaction))
+            foreach (var familyId in snapshot.Manifest.Files
+                         .Select(static file => file.ColumnFamilyId)
+                         .Concat(snapshot.Plans.Select(static plan => plan.ColumnFamilyId))
+                         .Distinct())
             {
-                throw new PantsInternalException(
-                    "Compaction debt remains with no legal compaction plan.");
+                if (!CompactionDebt.IsClear(manifest.Files, familyId, _compaction))
+                {
+                    throw new PantsInternalException(
+                        "Compaction debt remains with no legal compaction plan.");
+                }
             }
         }
 
-        return new CompactionResult(outputBytes, publicationCount, false);
+        return new CompactionResult(outputBytes, publicationCount, false, planStale);
     }
 
-    async ValueTask<CompactionResult> CompactAsync(
-        RuntimeState state,
+    public async ValueTask<CompactionResult> CompactAsync(
+        CompactionWorkSnapshot snapshot,
+        CompactionWorkSnapshotProvider snapshotProvider,
+        CompactionPublicationDispatcher publicationDispatcher,
         bool force,
         CloudCompactionOutputPublisher? outputPublisher,
-        bool flushMutableOperations,
-        bool continueCompacting,
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs,
@@ -4427,81 +4488,73 @@ sealed class LocalDiskStore :
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        long outputBytes;
-        bool hasCompactionPlan;
-        bool persistenceAnomaly;
-        // Each round has the maintenance pool to itself: its merge buffers and its outputs'
-        // publication never contend with a concurrent SST publication. The gate is released before
-        // a continuation round so waiting publications are served between rounds.
-        using (memory is null
-                   ? null
-                   : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
+        var outputBytes = 0L;
+        var publicationCount = 0;
+        var planStale = false;
+        while (true)
         {
-            (outputBytes, hasCompactionPlan, persistenceAnomaly) = await CompactRoundAsync(
-                    state,
-                    force,
-                    outputPublisher,
-                    flushMutableOperations,
-                    publicationCompleted,
-                    memory,
-                    prepareInputs,
-                    staging,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            using (memory is null
+                       ? null
+                       : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var round = await CompactRoundAsync(
+                        snapshot,
+                        outputPublisher,
+                        publicationCompleted,
+                        memory,
+                        prepareInputs,
+                        staging,
+                        publicationDispatcher,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                outputBytes = checked(outputBytes + round.OutputBytes);
+                publicationCount = checked(publicationCount + (round.PublishedCompaction ? 1 : 0));
+                if (round.PersistenceAnomaly)
+                {
+                    return new CompactionResult(outputBytes, publicationCount, true, planStale);
+                }
+
+                if (round.PlanStale)
+                {
+                    planStale = true;
+                    break;
+                }
+
+                if (!force || !round.HasMoreCompactionWork)
+                {
+                    break;
+                }
+            }
+
+            snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+                      throw new OperationCanceledException(cancellationToken);
         }
 
-        var publicationCount = hasCompactionPlan ? 1 : 0;
-        if (!persistenceAnomaly && (force || continueCompacting) && hasCompactionPlan)
-        {
-            var continued = await CompactAsync(
-                state,
-                false,
-                outputPublisher,
-                flushMutableOperations,
-                true,
-                publicationCompleted,
-                memory,
-                prepareInputs,
-                staging,
-                cancellationToken).ConfigureAwait(false);
-            outputBytes = checked(outputBytes + continued.BytesRewritten);
-            publicationCount = checked(publicationCount + continued.PublicationCount);
-            persistenceAnomaly |= continued.PersistenceAnomaly;
-        }
-
-        return new CompactionResult(outputBytes, publicationCount, persistenceAnomaly);
+        return new CompactionResult(outputBytes, publicationCount, false, planStale);
     }
 
-    async ValueTask<(long OutputBytes, bool HasCompactionPlan, bool PersistenceAnomaly)> CompactRoundAsync(
-        RuntimeState state,
-        bool force,
+    async ValueTask<CompactionRoundResult> CompactRoundAsync(
+        CompactionWorkSnapshot work,
         CloudCompactionOutputPublisher? outputPublisher,
-        bool flushMutableOperations,
         Action<long>? publicationCompleted,
         CompactionMemory? memory,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs,
         CompactionOutputStaging? staging,
-        CancellationToken cancellationToken,
-        bool drainDebt = false)
+        CompactionPublicationDispatcher publicationDispatcher,
+        CancellationToken cancellationToken)
     {
         var compactionBudget = memory?.Budget;
         using var inputProtectionScope = new CompactionInputProtectionScope();
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
         ThrowIfWalFenced();
-        _lease.EnsureValid();
         if (HasManifestPublishedCompactionIntent())
         {
             throw new PantsBusyException(
                 "Compaction is fenced until manifest publication recovery completes.");
         }
 
-        if (flushMutableOperations)
-        {
-            Flush(state);
-        }
-
-        var manifest = Volatile.Read(ref _manifestReadSnapshot);
+        var manifest = work.Manifest;
         // A publisher with its own memory envelope (cloud upload and readback) can require
         // outputs smaller than the plain target size, and a hybrid compaction's outputs must fit
         // its fixed local staging window.
@@ -4513,33 +4566,13 @@ sealed class LocalDiskStore :
         var intents = new List<IntentEntry>();
         var outputNames = new List<string>();
         var outputBytes = 0L;
-        var hasCompactionPlan = false;
+        var hasCompactionPlan = work.Plans.Count != 0;
         try
         {
-            foreach (var (_, familyId) in _familyIds.ToList())
+            foreach (var plan in work.Plans)
             {
-                var snapshotHorizon = state.ActiveSnapshots
-                    .Select(static snapshot => snapshot.BeginSequence)
-                    .Cast<long?>()
-                    .Min();
-                var plan = drainDebt
-                    ? LeveledCompactionPlanner.PickDebtDrain(
-                        manifest.Files,
-                        familyId,
-                        _compaction,
-                        snapshotHorizon)
-                    : LeveledCompactionPlanner.Pick(
-                        manifest.Files,
-                        familyId,
-                        _compaction,
-                        snapshotHorizon,
-                        force);
-                if (plan is null)
-                {
-                    continue;
-                }
-
-                hasCompactionPlan = true;
+                cancellationToken.ThrowIfCancellationRequested();
+                var familyId = plan.ColumnFamilyId;
                 if (prepareInputs is not null)
                 {
                     var inputProtection = await prepareInputs(
@@ -4563,21 +4596,17 @@ sealed class LocalDiskStore :
                     _compaction.MaximumInputFiles,
                     compactionBudget);
                 var outputs = new List<FileMeta>();
-                var firstOutputSequence = manifest.NextSstSequences.TryGetValue(
-                    familyId,
-                    out var nextOutputSequence)
-                    ? nextOutputSequence
-                    : 1UL;
-                var outputIndex = 0UL;
                 foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
                              compactionStreams.Streams,
                              compactionStreams.RangeTombstones,
                              plan,
                              partitionTargetBytes,
-                             compactionBudget))
+                             compactionBudget,
+                             cancellationToken))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     staging?.AdmitPartition(StreamingCompactionMerger.EstimatePartitionBytes(partition));
-                    var outputSequence = checked(firstOutputSequence + outputIndex);
+                    var outputSequence = ReserveNextSstSequence(familyId);
                     outputNames.Add(CreateSstFileName(
                         familyId,
                         plan.TargetLevel,
@@ -4588,10 +4617,10 @@ sealed class LocalDiskStore :
                         partition.Entries,
                         partition.RangeTombstones,
                         Failpoint.AfterCompactionOutputDurable,
-                        outputSequence);
+                        outputSequence,
+                        cancellationToken);
                     outputs.Add(output);
                     edits.Add(CreateManifestEdit("AddSst", output));
-                    outputIndex = checked(outputIndex + 1);
                     if (staging is not null)
                     {
                         // Name every output so far in the intent before this one leaves the
@@ -4629,8 +4658,7 @@ sealed class LocalDiskStore :
             throw;
         }
 
-        foreach (var family in manifest.ColumnFamilies.Where(family =>
-                     family.DeletedAt is not null && !family.Reclaimed))
+        foreach (var family in work.ReclaimableFamilies)
         {
             var droppedFiles = manifest.Files
                 .Where(file => file.ColumnFamilyId == family.Id)
@@ -4647,7 +4675,7 @@ sealed class LocalDiskStore :
 
         if (edits.Count == 0)
         {
-            return (0, false, false);
+            return new CompactionRoundResult(0, false, false, false, false);
         }
 
         _lease.EnsureValid();
@@ -4678,51 +4706,119 @@ sealed class LocalDiskStore :
             _lease.EnsureValid();
         }
 
-        var persistenceAnomaly = false;
-        lock (_manifestGate)
+        CompactionPublicationResult Publish()
         {
-            _failpoints.Hit(Failpoint.BeforeCompactionManifestPublish);
-            _lease.EnsureValid();
-            DurablyApplyManifestBatch(edits);
-            if (hasCompactionPlan)
+            lock (_manifestGate)
             {
-                publicationCompleted?.Invoke(outputBytes);
-            }
+                if (!IsCompactionWorkSnapshotCurrent(work, Volatile.Read(ref _manifestReadSnapshot)))
+                {
+                    return new CompactionPublicationResult(false, false);
+                }
 
-            _failpoints.Hit(Failpoint.AfterCompactionManifestPublish);
-            _lease.EnsureValid();
-            TransitionCompactionIntents(intents, "ManifestPublished");
-            try
-            {
-                SaveManifestCheckpoint();
-            }
-            catch (Exception exception) when (
-                outputPublisher is null &&
-                exception is IOException or UnauthorizedAccessException)
-            {
-                persistenceAnomaly = true;
-            }
-
-            if (!persistenceAnomaly)
-            {
+                _failpoints.Hit(Failpoint.BeforeCompactionManifestPublish);
                 _lease.EnsureValid();
+                DurablyApplyManifestBatch(edits);
+                if (hasCompactionPlan)
+                {
+                    publicationCompleted?.Invoke(outputBytes);
+                }
+
+                _failpoints.Hit(Failpoint.AfterCompactionManifestPublish);
+                _lease.EnsureValid();
+                TransitionCompactionIntents(intents, "ManifestPublished");
+                var persistenceAnomaly = false;
+                try
+                {
+                    SaveManifestCheckpoint();
+                }
+                catch (Exception exception) when (
+                    outputPublisher is null &&
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                    persistenceAnomaly = true;
+                }
+
+                if (!persistenceAnomaly)
+                {
+                    _lease.EnsureValid();
+                    RemoveCompactionIntents(intents);
+                }
+
+                foreach (var name in obsoleteNames)
+                {
+                    _lease.EnsureValid();
+                    _snapshotPinnedObsoleteFiles.Add(name);
+                }
+
+                _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
+                return new CompactionPublicationResult(true, persistenceAnomaly);
+            }
+        }
+
+        var publication = await publicationDispatcher(Publish, cancellationToken)
+            .ConfigureAwait(false);
+        if (!publication.Published)
+        {
+            if (outputPublisher is null)
+            {
                 RemoveCompactionIntents(intents);
             }
+
+            DeleteUnpublishedCompactionOutputs(outputNames);
+            return new CompactionRoundResult(0, hasCompactionPlan, false, true, false);
         }
 
-        foreach (var name in obsoleteNames)
-        {
-            _lease.EnsureValid();
-            // The actor's current DatabaseVersion can still name these inputs until it publishes
-            // the manifest's new version. Queue every retired file; PublishSnapshot performs the
-            // first safe collection while direct-read admission is excluded.
-            _snapshotPinnedObsoleteFiles.Add(name);
-        }
-
-        _failpoints.Hit(Failpoint.AfterCompactionObsoleteFilesRetired);
-
-        return (outputBytes, hasCompactionPlan, persistenceAnomaly);
+        return new CompactionRoundResult(
+            outputBytes,
+            hasCompactionPlan,
+            hasCompactionPlan,
+            false,
+            publication.PersistenceAnomaly);
     }
+
+    static bool IsCompactionWorkSnapshotCurrent(
+        CompactionWorkSnapshot work,
+        ManifestReadSnapshot current)
+    {
+        foreach (var plan in work.Plans)
+        {
+            foreach (var input in plan.Inputs)
+            {
+                var currentInput = current.Files.SingleOrDefault(file => file.Name == input.Name);
+                if (currentInput is null || !HasSameFlushMetadata(input, currentInput))
+                {
+                    return false;
+                }
+            }
+
+            if (!LeveledCompactionPlanner.HasSameTargetSpan(plan, current.Files))
+            {
+                return false;
+            }
+        }
+
+        foreach (var expected in work.ReclaimableFamilies)
+        {
+            var currentFamily = current.ColumnFamilies.SingleOrDefault(family => family.Id == expected.Id);
+            if (currentFamily is null ||
+                currentFamily.Reclaimed ||
+                currentFamily.DeletedAt != expected.DeletedAt ||
+                currentFamily.DropSequence != expected.DropSequence ||
+                !currentFamily.DroppedSstNames.SequenceEqual(expected.DroppedSstNames, StringComparer.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    readonly record struct CompactionRoundResult(
+        long OutputBytes,
+        bool HasMoreCompactionWork,
+        bool PublishedCompaction,
+        bool PlanStale,
+        bool PersistenceAnomaly);
 
     static IntentEntry CreateCompactionPublishIntent(
         uint familyId,
@@ -5585,7 +5681,8 @@ sealed class LocalDiskStore :
         IReadOnlyList<SstEntry> entries,
         IReadOnlyList<RangeTombstone> ranges,
         Failpoint outputDurableFailpoint,
-        ulong? assignedSequence = null)
+        ulong? assignedSequence = null,
+        CancellationToken cancellationToken = default)
     {
         var output = StageSst(
             familyId,
@@ -5594,7 +5691,8 @@ sealed class LocalDiskStore :
             ranges,
             outputDurableFailpoint,
             assignedSequence,
-            $"{_lease.Epoch}.compaction");
+            $"{_lease.Epoch}.compaction",
+            cancellationToken);
         _lease.EnsureValid();
         FinalizeStagedSst(output);
         return output.Metadata;
@@ -5607,7 +5705,8 @@ sealed class LocalDiskStore :
         IReadOnlyList<RangeTombstone> ranges,
         Failpoint outputDurableFailpoint,
         ulong? assignedSequence,
-        string? stagingIdentity)
+        string? stagingIdentity,
+        CancellationToken cancellationToken = default)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var sequence = assignedSequence ??
@@ -5636,7 +5735,7 @@ sealed class LocalDiskStore :
 
         Interlocked.Add(ref _sstBytesWrittenTotal, sizeBytes);
 
-        _failpoints.Hit(outputDurableFailpoint);
+        _failpoints.HitCancellable(outputDurableFailpoint, cancellationToken);
         var (smallestKey, largestKey) = SstCodec.GetKeyBounds(entries, ranges);
         ulong? smallestSequence = null;
         ulong? largestSequence = null;

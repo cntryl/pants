@@ -25,7 +25,8 @@ static class StreamingCompactionMerger
         IReadOnlyList<SstReader> readers,
         CompactionPlan plan,
         long targetSizeBytes,
-        ResourceBudget? resourceBudget = null) =>
+        ResourceBudget? resourceBudget = null,
+        CancellationToken cancellationToken = default) =>
         MergeAndPartition(
             readers
                 .Select(reader => (ICompactionEntryStream)new ReaderEntryStream(reader, resourceBudget))
@@ -33,7 +34,8 @@ static class StreamingCompactionMerger
             readers.SelectMany(static reader => reader.RangeTombstones).ToArray(),
             plan,
             targetSizeBytes,
-            resourceBudget);
+            resourceBudget,
+            cancellationToken);
 
     /// <summary>Merges <paramref name="streams" />, which this call disposes.</summary>
     public static IEnumerable<CompactionMergeResult> MergeAndPartition(
@@ -41,8 +43,10 @@ static class StreamingCompactionMerger
         IReadOnlyList<RangeTombstone> rangeTombstones,
         CompactionPlan plan,
         long targetSizeBytes,
-        ResourceBudget? resourceBudget = null)
+        ResourceBudget? resourceBudget = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         var horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : (ulong?)null;
         var allRanges = rangeTombstones
@@ -64,6 +68,7 @@ static class StreamingCompactionMerger
                              new CompactionMergeResult([], retainedRanges),
                              targetSizeBytes))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     using var reservation = resourceBudget?.Reserve(
                         EstimatePartitionBytes(partition));
                     yield return partition;
@@ -94,8 +99,10 @@ static class StreamingCompactionMerger
                          horizon,
                          plan.PointTombstoneGcEligible,
                          droppedRanges,
-                         resourceBudget))
+                         resourceBudget,
+                         cancellationToken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 var entryBytes = EstimateEntryBytes(entry);
                 if (entryBytes > entryLimitBytes)
@@ -153,6 +160,7 @@ static class StreamingCompactionMerger
                              new CompactionMergeResult([], retainedRanges),
                              target))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     ReserveThrough(
                         resourceBudget,
                         reservations,
@@ -232,18 +240,22 @@ static class StreamingCompactionMerger
         ulong? horizon,
         bool pointTombstoneGcEligible,
         IReadOnlyList<RangeTombstone> droppedRanges,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var heads = new SstEntry?[iterators.Count];
             for (var i = 0; i < iterators.Count; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 heads[i] = iterators[i].MoveNext() ? iterators[i].Current : null;
             }
 
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 byte[]? minKey = null;
                 for (var i = 0; i < heads.Length; i++)
                 {
@@ -266,6 +278,7 @@ static class StreamingCompactionMerger
                 var retainedAtOrBelowHorizon = false;
                 while (TrySelectNewestHead(heads, minKey, out var sourceIndex, out var entry))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     // Advancing can release the iterator's decoded-block reservation. Hold a
                     // one-entry handoff reservation across that advance and any yield until the
                     // output partition has taken ownership, rather than materializing an
@@ -281,6 +294,7 @@ static class StreamingCompactionMerger
                     while (TrySelectNewestHead(heads, minKey, out var duplicateIndex, out var duplicate) &&
                            duplicate.Sequence == entry.Sequence)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         CompactionVersionIdentity.RequireMatchingContent(entry, duplicate);
                         heads[duplicateIndex] = iterators[duplicateIndex].MoveNext()
                             ? iterators[duplicateIndex].Current
