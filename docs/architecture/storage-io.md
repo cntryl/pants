@@ -123,10 +123,23 @@ remove them. This includes retained files under `cloud_recovery` and
 file lengths are checked during admission and stop counting once those files
 are deleted.
 
-Startup recovery remains a separate path. Recovery checkpoints still use the
-recovery working-set policy and can stage past the soft local-cache budget;
-that path is not covered by the live-write flush-headroom guarantee and remains
-part of the open local-budget work.
+Startup recovery remains a separate path. Each recovery checkpoint reserves the
+sum of `SstFlushFootprint` upper bounds for its per-family SST outputs before
+staging them. Strict local-storage mode rejects a checkpoint that does not fit.
+Hybrid recovery may cross the soft local-cache budget to release replay memory,
+but only while the currently charged cache is at or below that budget. If a
+failed publication leaves recovery SSTs retained over budget, another
+over-budget checkpoint fails with `NoSpace` until those files are removed.
+
+The recovery checkpoint runs after a whole WAL transaction reaches its target.
+The target is at most the configured memtable size; the transaction limit is
+eight times that size. Therefore a checkpoint contains less than one target
+plus one maximum transaction, or at most nine times the configured memtable
+size in recovered mutation accounting. The worst-case local-cache overage is
+bounded by the sum of per-family `SstFlushFootprint` upper bounds for that
+checkpoint's operations. Cloud recovery publishes the checkpoint before
+evicting its local SSTs, so a successfully published checkpoint releases that
+overage before recovery proceeds to another checkpoint.
 
 ## Flush Construction Memory
 

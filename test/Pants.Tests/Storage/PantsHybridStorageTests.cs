@@ -771,6 +771,46 @@ public sealed class PantsHybridStorageTests
     }
 
     [Fact]
+    public async Task ShouldRejectOversizedSpilledCloudTransactionBeforeWalAppend()
+    {
+        const long LocalStorageBudgetBytes = 8L * 1024 * 1024;
+        const long TransactionMemoryPoolBytes = 64 * 1024;
+        using var directory = new TemporaryDirectory();
+        var options = CreateOptions(directory.Path, LocalStorageBudgetBytes)
+            .WithTransactionMemoryPool(TransactionMemoryPoolBytes);
+        var value = CreateValue(5 * 1024 * 1024, 163);
+
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            var walBytesBefore = WalBytes(directory.Path);
+            await using (var transaction = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                transaction.Put(TestBytes.FromString("oversized-spilled"), value);
+                Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
+
+                await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                    transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
+            }
+
+            Assert.Equal(walBytesBefore, WalBytes(directory.Path));
+            await PutAsync(database, "after-spilled-rejection", "still-writable"u8.ToArray());
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Null(await reader.GetAsync("oversized-spilled"u8.ToArray()));
+        Assert.Equal(
+            "still-writable",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("after-spilled-rejection"u8.ToArray()))));
+    }
+
+    [Fact]
     public async Task ShouldEvictOnlyTheSstsNeededToAdmitAFlushWindow()
     {
         using var directory = new TemporaryDirectory();
