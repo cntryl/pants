@@ -50,6 +50,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     readonly ProviderWalCatalogStore _catalog;
     readonly ResourceBudget _authorityMetadataBudget;
     readonly CloudMetadataWriteAdmission _catalogWriteAdmission;
+    readonly WalPublicationAdmission? _walPublicationAdmission;
     readonly ProviderSstPublisher _sstPublisher;
     readonly ProviderWalRetirement _walRetirement;
     readonly ulong _writerEpoch;
@@ -73,7 +74,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         string? localWalCacheId = null,
         WalRetirementDiagnostics? walRetirementDiagnostics = null,
         ulong maximumRetainedWalBytes = MaximumRetainedWalBytes,
-        int maximumRetainedWalSegments = MaximumRetainedWalSegments)
+        int maximumRetainedWalSegments = MaximumRetainedWalSegments,
+        WalPublicationAdmission? walPublicationAdmission = null)
     {
         ArgumentOutOfRangeException.ThrowIfZero(maximumRetainedWalBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRetainedWalSegments);
@@ -91,6 +93,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             new ProviderWalCatalogReadAdmission(retirementSettings.Budget, retirementSettings.Gate),
             _catalogWriteAdmission);
         _sstStore = sstStore;
+        _walPublicationAdmission = walPublicationAdmission;
         _sstPublisher = new ProviderSstPublisher(
             sstStore,
             lease.EnsureValid,
@@ -174,8 +177,11 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         var publications = new ProviderPublishedWalSegment[segments.Count];
         for (var index = 0; index < segments.Count; index++)
         {
-            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var segment = segments[index];
+            using var publicationReservation = _walPublicationAdmission is null
+                ? null
+                : _walPublicationAdmission.Admit(segment.Bytes.LongLength);
+            await _lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
             var objectKey = PantsCloudObjectLayout.WalSegmentObjectKey(
                 segment.WriterEpoch,
                 segment.SegmentId);

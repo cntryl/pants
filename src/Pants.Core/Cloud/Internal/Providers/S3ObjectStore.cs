@@ -474,7 +474,7 @@ sealed class S3ObjectStore : CloudObjectStore
         var request = new HttpRequestMessage(method, uri);
         if (method == HttpMethod.Put)
         {
-            request.Content = new ByteArrayContent(data.ToArray());
+            request.Content = new ReadOnlyMemoryContent(data);
         }
 
         switch (condition)

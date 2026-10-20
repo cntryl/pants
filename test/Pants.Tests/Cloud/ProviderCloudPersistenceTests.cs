@@ -104,6 +104,70 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task ShouldAdmitWalUploadAndReadbackAgainstSharedMaintenanceBudget()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var payload = new byte[128 * 1024];
+        var walStore = new CountingCloudObjectStore();
+        var budget = new ResourceBudget(2 * 1024 * 1024);
+        await using var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease,
+            walPublicationAdmission: new WalPublicationAdmission(budget));
+
+        await persistence.PublishWalBatchAsync(
+            [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
+            CancellationToken.None);
+
+        Assert.Equal(ImmutablePublicationEnvelope.For(payload.Length), budget.Peak);
+        Assert.Equal(0, budget.Current);
+        Assert.True(walStore.GetCount >= 1, "The uploaded segment should be read back before authority changes.");
+    }
+
+    [Fact]
+    public async Task ShouldRejectWalUploadBeforeSubmissionWhenItsEnvelopeDoesNotFit()
+    {
+        using var cache = new TemporaryDirectory();
+        var leaseStore = new TestCloudLeaseStore();
+        using var lease = new CloudLeaseCoordinator(
+            leaseStore,
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            "writer",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.Zero);
+        var epoch = await lease.AcquireAsync(CancellationToken.None);
+        var payload = new byte[128 * 1024];
+        var walStore = new CountingCloudObjectStore();
+        var budget = new ResourceBudget(ImmutablePublicationEnvelope.For(payload.Length) - 1);
+        await using var persistence = new ProviderCloudPersistence(
+            cache.Path,
+            walStore,
+            new TestCloudObjectStore(),
+            new TestCloudObjectStore(),
+            lease,
+            walPublicationAdmission: new WalPublicationAdmission(budget));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            persistence.PublishWalBatchAsync(
+                [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
+                CancellationToken.None).AsTask());
+
+        Assert.Equal(0, walStore.PutCount);
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
     public async Task ShouldPublishOnlyTheLongestContiguousWalPrefix()
     {
         using var cache = new TemporaryDirectory();
