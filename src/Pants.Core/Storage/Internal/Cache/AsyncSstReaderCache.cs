@@ -5,11 +5,12 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 ///     budgets so repeated reads and scans stop re-fetching footers, indexes and blooms.
 /// </summary>
 /// <remarks>
-///     Concurrent first opens of one SST share a single open. A failed open fails every waiter and
-///     leaves nothing cached, so the next caller retries. Callers receive their own shared handle
-///     and dispose it as before; evicting or removing a reader only drops the cache's own handle, so
-///     a reader in use stays valid until its holders release it. Readers are keyed by manifest
-///     identity, so a name reused for a different manifest entry never shares the old reader.
+///     Concurrent first opens of one SST share a single open. A failed open leaves nothing cached;
+///     if the initiating caller cancels it, other live waiters retry, while other failures reach
+///     every waiter. Callers receive their own shared handle and dispose it as before; evicting or
+///     removing a reader only drops the cache's own handle, so a reader in use stays valid until its
+///     holders release it. Readers are keyed by manifest identity, so a name reused for a different
+///     manifest entry never shares the old reader.
 /// </remarks>
 sealed class AsyncSstReaderCache : IDisposable
 {
@@ -74,6 +75,7 @@ sealed class AsyncSstReaderCache : IDisposable
             Task? pending = null;
             Slot? opener = null;
             IDisposable? handleReservation = null;
+            CancellationToken openCancellationToken = default;
             AsyncSstReader? evicted = null;
             PantsResourceLimitException? capacityError = null;
             lock (_gate)
@@ -99,6 +101,7 @@ sealed class AsyncSstReaderCache : IDisposable
                         slot.Opening = newOpening;
                         opener = slot;
                         pending = newOpening.Task;
+                        openCancellationToken = cancellationToken;
                     }
                     else if (DetachLeastRecent() is { } reader)
                     {
@@ -124,13 +127,29 @@ sealed class AsyncSstReaderCache : IDisposable
 
             if (opener is not null)
             {
-                // Started outside the lock so a slow open never blocks unrelated SSTs.
-                _ = OpenAndPublishAsync(opener, openReader, handleReservation!);
+                // The first caller's deadline bounds the provider open. Other live waiters retry
+                // if that caller cancels the shared attempt.
+                _ = OpenAndPublishAsync(
+                    opener,
+                    openReader,
+                    handleReservation!,
+                    openCancellationToken);
             }
 
             if (pending is not null)
             {
-                await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (
+                    pending.IsCanceled &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    // A different caller cancelled the coalesced open. Retry with this caller's
+                    // token instead of surfacing the initiating caller's cancellation.
+                    continue;
+                }
             }
         }
     }
@@ -148,6 +167,7 @@ sealed class AsyncSstReaderCache : IDisposable
             .ConfigureAwait(false);
         AsyncSstReader? opened = null;
         var reservationTransferred = false;
+        var sourceMayStillBeOpen = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -164,6 +184,7 @@ sealed class AsyncSstReaderCache : IDisposable
         }
         catch (Exception exception)
         {
+            sourceMayStillBeOpen = exception is AsyncSstSourceCleanupException;
             if (opened is not null)
             {
                 try
@@ -177,7 +198,7 @@ sealed class AsyncSstReaderCache : IDisposable
                 }
             }
 
-            if (!reservationTransferred)
+            if (!reservationTransferred && !sourceMayStillBeOpen)
             {
                 handleReservation.Dispose();
             }
@@ -214,21 +235,23 @@ sealed class AsyncSstReaderCache : IDisposable
     async Task OpenAndPublishAsync(
         Slot slot,
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
-        IDisposable handleReservation)
+        IDisposable handleReservation,
+        CancellationToken cancellationToken)
     {
         var completion = slot.Opening!;
         AsyncSstReader? opened = null;
         var reservationTransferred = false;
+        var sourceMayStillBeOpen = false;
         try
         {
-            // The open is shared, so it must not be cancelled by whichever caller started it.
-            opened = await openReader(CancellationToken.None).ConfigureAwait(false);
+            opened = await openReader(cancellationToken).ConfigureAwait(false);
             opened.AttachHandleReservation(handleReservation);
             reservationTransferred = true;
         }
         catch (Exception exception)
         {
             Exception failure = exception;
+            sourceMayStillBeOpen = exception is AsyncSstSourceCleanupException;
             if (opened is not null)
             {
                 try
@@ -238,10 +261,11 @@ sealed class AsyncSstReaderCache : IDisposable
                 catch (Exception cleanupException)
                 {
                     failure = new AggregateException(exception, cleanupException);
+                    sourceMayStillBeOpen = true;
                 }
             }
 
-            if (!reservationTransferred)
+            if (!reservationTransferred && !sourceMayStillBeOpen)
             {
                 handleReservation.Dispose();
             }
@@ -252,7 +276,14 @@ sealed class AsyncSstReaderCache : IDisposable
                 RemoveEmptySlot(slot);
             }
 
-            completion.TrySetException(failure);
+            if (failure is OperationCanceledException && cancellationToken.IsCancellationRequested)
+            {
+                completion.TrySetCanceled(cancellationToken);
+            }
+            else
+            {
+                completion.TrySetException(failure);
+            }
             return;
         }
 
