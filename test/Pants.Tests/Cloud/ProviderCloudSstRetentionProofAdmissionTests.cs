@@ -135,6 +135,59 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         Assert.Equal(0, budget.Current);
     }
 
+    [Fact]
+    public async Task ShouldReleaseSstRetentionProofReservationsWhenIntentReadIsCancelled()
+    {
+        using var cache = new TemporaryDirectory();
+        using var lease = await AcquireLeaseAsync();
+        var controlStore = new ScriptedCloudObjectStore();
+        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
+        var manifestBytes = EncodeManifest(nextSstSequence: 2);
+        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
+        var intentBytes = "[]"u8.ToArray();
+        controlStore.Write(manifestKey, manifestBytes);
+        controlStore.Write(intentKey, intentBytes);
+        var budget = new ResourceBudget(1024 * 1024);
+        var intentReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var budgetAtIntentRead = 0L;
+        controlStore.BeforeRangeRead = async (objectKey, cancellationToken) =>
+        {
+            if (!StringComparer.Ordinal.Equals(objectKey, intentKey))
+            {
+                return;
+            }
+
+            budgetAtIntentRead = budget.Current;
+            intentReadStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        var sstStore = new ScriptedCloudObjectStore();
+        var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
+        sstStore.Write(objectKey, "orphan"u8.ToArray());
+        await using var persistence = CreatePersistence(
+            cache.Path,
+            new ScriptedCloudObjectStore(),
+            sstStore,
+            controlStore,
+            lease,
+            budget);
+        using var cancellation = new CancellationTokenSource();
+
+        var collection = persistence.CollectObsoleteSstsAsync(cancellation.Token).AsTask();
+        await intentReadStarted.Task.WaitAsync(TestTimeouts.Expected);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => collection);
+
+        Assert.Equal(
+            checked((manifestBytes.Length * 16L + 256) + (intentBytes.Length * 16L + 256)),
+            budgetAtIntentRead);
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(sstStore.Requests,
+            static request => request.Operation == StoreOperation.Delete);
+        Assert.True(sstStore.Contains(objectKey));
+    }
+
     static byte[] EncodeManifest(ulong nextSstSequence) =>
         JsonSerializer.SerializeToUtf8Bytes(
             new ManifestState
