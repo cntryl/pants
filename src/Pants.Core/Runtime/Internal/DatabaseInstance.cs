@@ -442,6 +442,9 @@ sealed class DatabaseInstance :
             endExclusive,
             cancellationToken);
 
+    internal IDisposable ReserveScanMemory(long bytes) =>
+        _runtime.Coordinator.ReserveScanMemory(bytes);
+
     internal IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>
         _runtime.Coordinator.CreateScanReadValidator(sources);

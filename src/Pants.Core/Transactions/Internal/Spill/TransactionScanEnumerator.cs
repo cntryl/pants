@@ -12,6 +12,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly IReadOnlyList<CommittedRangeTombstone> _snapshotRangeTombstones;
     readonly DateTimeOffset _snapshotTime;
+    readonly IDisposable? _sstFanInReservation;
     readonly bool[] _sstActivated;
     readonly SstEntry?[] _sstHeads;
     readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
@@ -30,6 +31,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         TransactionIntentReadView intents,
         ScanBounds bounds,
         IReadOnlyList<AsyncSstScanSource>? sstSources = null,
+        IDisposable? sstFanInReservation = null,
         CancellationToken cancellationToken = default)
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
@@ -43,6 +45,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         _cancellationToken = cancellationToken;
         _intents = intents;
         _direction = bounds.Direction;
+        _sstFanInReservation = sstFanInReservation;
         var snapshotKeys = _snapshot.Keys.Where(key => bounds.Matches(key));
         if (bounds.Direction == PantsScanDirection.Reverse)
         {
@@ -129,13 +132,48 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             return;
         }
 
-        _snapshotKeys.Dispose();
-        _intentKeys.Dispose();
-        for (var index = 0; index < _sstSources.Length; index++)
+        try
         {
-            await DisposeSourceAsync(index).ConfigureAwait(false);
+            _snapshotKeys.Dispose();
+            _intentKeys.Dispose();
+            for (var index = 0; index < _sstSources.Length; index++)
+            {
+                await DisposeSourceAsync(index).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _sstFanInReservation?.Dispose();
         }
     }
+
+    internal static long EstimateSstFanInMetadataBytes(
+        IReadOnlyList<AsyncSstScanSource> sources)
+    {
+        if (sources.Count == 0)
+        {
+            return 0;
+        }
+
+        long rangeTombstoneCount = 0;
+        foreach (var source in sources)
+        {
+            rangeTombstoneCount = checked(rangeTombstoneCount + source.RangeTombstones.Count);
+        }
+
+        var sourceReferenceArrayBytes = ReferenceArrayBytes(sources.Count);
+        var activationArrayBytes = checked(
+            (long)sources.Count + IntPtr.Size * 4L);
+        var rangeTombstoneArrayBytes = ReferenceArrayBytes(rangeTombstoneCount);
+        return checked(
+            sourceReferenceArrayBytes * 2 +
+            activationArrayBytes +
+            rangeTombstoneArrayBytes);
+    }
+
+    static long ReferenceArrayBytes(long count) => count == 0
+        ? 0
+        : checked((count + 4L) * IntPtr.Size);
 
     async ValueTask InitializeAsync()
     {
