@@ -17,6 +17,10 @@ public sealed class PantsCloudCrashRecoveryTests
     const string CloudStrictScenario = "cloud-strict";
     const string PublishedSstScenario = "published-sst";
     const string ReadyFileName = "cloud-crash-child.ready";
+    static readonly ColumnFamilyIdentity DefaultFamily = new(
+        0,
+        "default",
+        RuntimeState.DefaultFamilyVersion);
 
     [Fact]
     public async Task ShouldAbortGivenCloudCrashChildScenario()
@@ -249,6 +253,45 @@ public sealed class PantsCloudCrashRecoveryTests
 
         await using var cacheless = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
         await AssertValueAsync(cacheless, GetScenarioKey(SealedWalScenario), "crash-value");
+    }
+
+    [Fact]
+    public async Task ShouldDrainEveryPageOfTheCapturedCloudWalBacklogBeforeCachelessRecovery()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using (var store = LocalDiskStore.Open(directory.Path, state))
+        {
+            for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
+            {
+                _ = store.AppendCommit(
+                    CreateBacklogCommitPayload(state, index),
+                    state,
+                    PantsDurability.Buffered);
+                var segment = Assert.IsType<SealedWalSegment>(store.SealActiveWalForCloud());
+                store.CompleteCloudWalSeal(segment);
+            }
+        }
+
+        await using (var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
+        {
+            var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
+            Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
+            for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
+            {
+                await AssertValueAsync(reopened, GetBacklogKey(index), "backlog-value");
+            }
+        }
+
+        RemoveLocalCache(directory.Path);
+        await using var cacheless = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
+        {
+            await AssertValueAsync(cacheless, GetBacklogKey(index), "backlog-value");
+        }
     }
 
     [Fact]
@@ -580,6 +623,35 @@ public sealed class PantsCloudCrashRecoveryTests
             PantsTransactionMode.ReadOnly);
         Assert.Null(await reader.GetAsync(TestBytes.FromString(key)));
     }
+
+    static CommitPayload CreateBacklogCommitPayload(RuntimeState state, int index)
+    {
+        var operation = new TransactionIntentOperation(
+            0,
+            CommitOperationKind.Put,
+            DefaultFamily,
+            TestBytes.FromString(GetBacklogKey(index)),
+            null,
+            TestBytes.FromString("backlog-value"),
+            null,
+            null,
+            false);
+        var source = new TransactionOperationSource(
+            null,
+            [operation],
+            1,
+            DateTimeOffset.UnixEpoch);
+        return new CommitPayload(
+            index + 1,
+            PantsTransactionMode.ReadWrite,
+            PantsConflictPolicy.LastWriteWins,
+            DateTimeOffset.UnixEpoch,
+            state.CreateVersion(),
+            source,
+            []);
+    }
+
+    static string GetBacklogKey(int index) => $"bounded-cloud-backlog-{index:D2}";
 
     static ulong AssertSingleWriterEpoch(string path)
     {

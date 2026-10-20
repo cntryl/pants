@@ -328,6 +328,99 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     }
 
     [Fact]
+    public void ShouldPageSealedCloudWalWithinCountAndByteBoundsAndKeepItsInitialBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        using var store = LocalDiskStore.Open(directory.Path, state);
+        var createdSegments = new List<SealedWalSegment>();
+        for (var index = 0; index < 4; index++)
+        {
+            _ = store.AppendCommit(
+                CreateCommitPayload(
+                    state,
+                    TestBytes.FromString($"backlog-key-{index}"),
+                    TestBytes.FromString($"backlog-value-{index}"),
+                    checked((ulong)(index + 1))),
+                state,
+                PantsDurability.Buffered);
+            var segment = Assert.IsType<SealedWalSegment>(store.SealActiveWalForCloud());
+            store.CompleteCloudWalSeal(segment);
+            createdSegments.Add(segment);
+        }
+
+        var countBounded = store.GetSealedWalSegmentsForCloudPublication(
+            maximumSegments: 2,
+            maximumBytes: long.MaxValue);
+
+        Assert.Equal([1UL, 2UL], countBounded.Segments.Select(static segment => segment.SegmentId));
+        Assert.Equal(4UL, countBounded.ThroughSegmentId);
+        Assert.True(countBounded.Segments.Count <= 2);
+
+        foreach (var segment in countBounded.Segments)
+        {
+            store.DeleteCloudDurableWalSegment(segment);
+        }
+
+        _ = store.AppendCommit(
+            CreateCommitPayload(
+                state,
+                TestBytes.FromString("backlog-key-4"),
+                TestBytes.FromString("backlog-value-4"),
+                5),
+            state,
+            PantsDurability.Buffered);
+        var lateSegment = Assert.IsType<SealedWalSegment>(store.SealActiveWalForCloud());
+        store.CompleteCloudWalSeal(lateSegment);
+        createdSegments.Add(lateSegment);
+
+        var byteLimit = Math.Min(
+            createdSegments[2].Bytes.Length,
+            createdSegments[3].Bytes.Length);
+        var byteBounded = store.GetSealedWalSegmentsForCloudPublication(
+            countBounded.ThroughSegmentId,
+            maximumSegments: 16,
+            maximumBytes: byteLimit);
+
+        Assert.Single(byteBounded.Segments);
+        Assert.Equal(3UL, byteBounded.Segments[0].SegmentId);
+        Assert.True(byteBounded.Segments.Sum(static segment => segment.Bytes.Length) <= byteLimit ||
+                    byteBounded.Segments[0].Bytes.Length > byteLimit);
+        Assert.Equal(countBounded.ThroughSegmentId, byteBounded.ThroughSegmentId);
+
+        var oversized = store.GetSealedWalSegmentsForCloudPublication(
+            countBounded.ThroughSegmentId,
+            maximumSegments: 16,
+            maximumBytes: 1);
+
+        Assert.Single(oversized.Segments);
+        Assert.Equal(3UL, oversized.Segments[0].SegmentId);
+        Assert.True(oversized.Segments[0].Bytes.Length > 1);
+
+        store.DeleteCloudDurableWalSegment(oversized.Segments[0]);
+        var finalInSnapshot = store.GetSealedWalSegmentsForCloudPublication(
+            countBounded.ThroughSegmentId,
+            maximumSegments: 16,
+            maximumBytes: long.MaxValue);
+
+        Assert.Equal([4UL], finalInSnapshot.Segments.Select(static segment => segment.SegmentId));
+        store.DeleteCloudDurableWalSegment(finalInSnapshot.Segments[0]);
+
+        var completedSnapshot = store.GetSealedWalSegmentsForCloudPublication(
+            countBounded.ThroughSegmentId,
+            maximumSegments: 16,
+            maximumBytes: long.MaxValue);
+        Assert.Empty(completedSnapshot.Segments);
+
+        var laterBacklog = store.GetSealedWalSegmentsForCloudPublication(
+            maximumSegments: 16,
+            maximumBytes: long.MaxValue);
+        Assert.Equal([5UL], laterBacklog.Segments.Select(static segment => segment.SegmentId));
+    }
+
+    [Fact]
     public void ShouldFenceCloudWalRotationGivenLeaseIsLostAfterFlush()
     {
         using var directory = new TemporaryDirectory();
@@ -395,7 +488,11 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     static CommitPayload CreateCommitPayload(RuntimeState state) =>
         CreateCommitPayload(state, "rotation-key"u8.ToArray(), "rotation-value"u8.ToArray());
 
-    static CommitPayload CreateCommitPayload(RuntimeState state, byte[] key, byte[] value)
+    static CommitPayload CreateCommitPayload(
+        RuntimeState state,
+        byte[] key,
+        byte[] value,
+        ulong transactionId = 1)
     {
         var operation = new TransactionIntentOperation(
             0,
@@ -413,7 +510,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             1,
             DateTimeOffset.UnixEpoch);
         return new CommitPayload(
-            1,
+            checked((long)transactionId),
             PantsTransactionMode.ReadWrite,
             PantsConflictPolicy.LastWriteWins,
             DateTimeOffset.UnixEpoch,

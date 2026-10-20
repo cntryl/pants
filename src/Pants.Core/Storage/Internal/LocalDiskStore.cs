@@ -1032,18 +1032,60 @@ sealed class LocalDiskStore :
         }
     }
 
-    public IReadOnlyList<SealedWalSegment> GetSealedWalSegmentsForCloudPublication()
+    public SealedWalBacklogBatch GetSealedWalSegmentsForCloudPublication(
+        ulong? throughSegmentId = null,
+        int maximumSegments = SealedWalBacklogBatch.DefaultMaximumSegments,
+        long maximumBytes = SealedWalBacklogBatch.DefaultMaximumBytes)
     {
         ThrowIfDisposed();
         _lease.EnsureValid();
-        return EnumerateSealedWalSegmentPaths(_walDirectory)
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSegments);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+
+        var paths = EnumerateSealedWalSegmentPaths(_walDirectory)
             .OrderBy(static path =>
                 TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId)
                     ? segmentId
                     : ulong.MaxValue)
             .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
-            .Select(static path => ReadSealedWalSegment(path))
             .ToArray();
+        var boundarySegmentId = throughSegmentId ?? (paths.Length == 0
+            ? null
+            : GetSealedWalSegmentId(paths[^1]));
+        var segments = new List<SealedWalSegment>(Math.Min(maximumSegments, paths.Length));
+        long batchBytes = 0;
+        foreach (var path in paths)
+        {
+            var segmentId = GetSealedWalSegmentId(path);
+            if (boundarySegmentId is { } maximumSegmentId && segmentId > maximumSegmentId)
+            {
+                break;
+            }
+
+            if (segments.Count >= maximumSegments)
+            {
+                break;
+            }
+
+            var fileBytes = new FileInfo(path).Length;
+            if (segments.Count != 0 && fileBytes > maximumBytes - batchBytes)
+            {
+                break;
+            }
+
+            var segment = ReadSealedWalSegment(path);
+            segments.Add(segment);
+            batchBytes = checked(batchBytes + segment.Bytes.Length);
+
+            // WAL segments are indivisible. Permit one segment over the byte target so the
+            // retained prefix can still make progress, then stop before loading another segment.
+            if (batchBytes >= maximumBytes)
+            {
+                break;
+            }
+        }
+
+        return new SealedWalBacklogBatch(segments, boundarySegmentId);
     }
 
     public void DeleteCloudDurableWalSegment(SealedWalSegment segment)

@@ -3704,35 +3704,39 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        IReadOnlyList<SealedWalSegment> segments;
-        if (_workersStarted)
+        ulong? throughSegmentId = null;
+        while (true)
         {
-            segments = await _walRuntime.GetCloudBacklogAsync(cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            segments = _diskStore.GetSealedWalSegmentsForCloudPublication();
-        }
-
-        for (var start = 0; start < segments.Count;)
-        {
-            var writerEpoch = segments[start].WriterEpoch;
-            var end = start + 1;
-            while (end < segments.Count && segments[end].WriterEpoch == writerEpoch)
+            var backlog = _workersStarted
+                ? await _walRuntime.GetCloudBacklogAsync(throughSegmentId, cancellationToken)
+                    .ConfigureAwait(false)
+                : _diskStore.GetSealedWalSegmentsForCloudPublication(throughSegmentId);
+            throughSegmentId ??= backlog.ThroughSegmentId;
+            var segments = backlog.Segments;
+            if (segments.Count == 0)
             {
-                end++;
+                return;
             }
 
-            var batch = segments.Skip(start).Take(end - start).ToArray();
-            foreach (var segment in batch)
+            for (var start = 0; start < segments.Count;)
             {
-                _cloudWalUploads.Admit(segment);
-            }
+                var writerEpoch = segments[start].WriterEpoch;
+                var end = start + 1;
+                while (end < segments.Count && segments[end].WriterEpoch == writerEpoch)
+                {
+                    end++;
+                }
 
-            EnsureCloudWriteAuthorityValid();
-            await PublishCloudWalBatchAsync(batch, cancellationToken).ConfigureAwait(false);
-            start = end;
+                var batch = segments.Skip(start).Take(end - start).ToArray();
+                foreach (var segment in batch)
+                {
+                    _cloudWalUploads.Admit(segment);
+                }
+
+                EnsureCloudWriteAuthorityValid();
+                await PublishCloudWalBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+                start = end;
+            }
         }
     }
 

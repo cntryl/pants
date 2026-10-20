@@ -30,7 +30,10 @@ interface ILocalWalStore
 
     ulong? RotateActiveLocalWal(WalMetricsRecorder? metrics = null);
 
-    IReadOnlyList<SealedWalSegment> GetSealedWalSegmentsForCloudPublication();
+    SealedWalBacklogBatch GetSealedWalSegmentsForCloudPublication(
+        ulong? throughSegmentId = null,
+        int maximumSegments = SealedWalBacklogBatch.DefaultMaximumSegments,
+        long maximumBytes = SealedWalBacklogBatch.DefaultMaximumBytes);
 
     void DeleteCloudDurableWalSegment(SealedWalSegment segment);
 }

@@ -97,14 +97,15 @@ sealed class WalRuntimeService(
                 cancellationToken)
             .ConfigureAwait(false);
 
-    public async ValueTask<IReadOnlyList<SealedWalSegment>> GetCloudBacklogAsync(
+    public async ValueTask<SealedWalBacklogBatch> GetCloudBacklogAsync(
+        ulong? throughSegmentId,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(
-                new GetCloudWalBacklogRuntimeRequest(),
+                new GetCloudWalBacklogRuntimeRequest(throughSegmentId),
                 cancellationToken)
             .ConfigureAwait(false);
-        return result.CloudBacklog ?? [];
+        return result.CloudBacklog ?? new SealedWalBacklogBatch([], throughSegmentId);
     }
 
     protected override ValueTask<WalRuntimeResult> DispatchAsync(
@@ -135,9 +136,9 @@ sealed class WalRuntimeService(
             RotateLocalWalRuntimeRequest => ValueTask.FromResult(
                 new WalRuntimeResult(LocalMaximumSequence: store.RotateActiveLocalWal(_metrics))),
             DeleteCloudDurableWalRuntimeRequest delete => DeleteCloudDurableSegment(store, delete),
-            GetCloudWalBacklogRuntimeRequest => ValueTask.FromResult(
+            GetCloudWalBacklogRuntimeRequest backlog => ValueTask.FromResult(
                 new WalRuntimeResult(CloudBacklog:
-                    store.GetSealedWalSegmentsForCloudPublication())),
+                    store.GetSealedWalSegmentsForCloudPublication(backlog.ThroughSegmentId))),
             _ => throw new PantsInternalException(
                 $"Unknown WAL runtime request '{request.GetType().Name}'.")
         };
