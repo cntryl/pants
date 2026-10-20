@@ -15,6 +15,8 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
 
     public bool SupportsRanges { get; init; } = true;
 
+    public int ShortenRangeByBytes { get; init; }
+
     /// <summary>Runs before a ranged read reaches the objects; it may throw or wait.</summary>
     public Func<string, CancellationToken, ValueTask>? BeforeRangeRead { get; set; }
 
@@ -99,8 +101,10 @@ sealed class ScriptedCloudObjectStore : ICloudObjectStore
                 return null;
             }
 
+            ArgumentOutOfRangeException.ThrowIfNegative(ShortenRangeByBytes);
             var start = checked((int)offset);
-            var count = Math.Min(length, value.Data.Length - start);
+            var available = Math.Min(length, value.Data.Length - start);
+            var count = Math.Max(0, available - ShortenRangeByBytes);
             return new CloudObject(value.Data.AsSpan(start, count).ToArray(), value.Version);
         }
     }

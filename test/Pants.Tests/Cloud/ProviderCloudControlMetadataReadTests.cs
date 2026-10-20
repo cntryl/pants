@@ -202,6 +202,37 @@ public sealed class ProviderCloudControlMetadataReadTests
     }
 
     [Fact]
+    public async Task ShouldReleaseReservationAndPreserveAuthorityWhenProviderReadFails()
+    {
+        using var cache = new TemporaryDirectory();
+        var controlStore = new ScriptedCloudObjectStore();
+        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
+        controlStore.Write(manifestKey, new byte[32]);
+        controlStore.BeforeRangeRead = static (_, _) =>
+            ValueTask.FromException(new PantsIOException("synthetic control read failure"));
+        var walStore = new ScriptedCloudObjectStore();
+        var budget = new ResourceBudget(4096);
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            ProviderCloudPersistence.HydrateLocalCacheAsync(
+                    cache.Path,
+                    walStore,
+                    new ScriptedCloudObjectStore(),
+                    controlStore,
+                    PantsRecoveryPolicy.Strict,
+                    static _ => ValueTask.CompletedTask,
+                    CancellationToken.None,
+                    controlMetadataMemoryBudget: budget)
+                .AsTask());
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(controlStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+    }
+
+    [Fact]
     public async Task ShouldRejectWholeObjectFallbackAboveItsSmallObjectLimit()
     {
         const string objectKey = "metadata/manifest.snapshot.json";

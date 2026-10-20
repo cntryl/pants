@@ -235,6 +235,96 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         Assert.True(sstStore.Contains(objectKey));
     }
 
+    [Fact]
+    public async Task ShouldReleaseSstRetentionProofReservationsWhenProviderReadFails()
+    {
+        using var cache = new TemporaryDirectory();
+        using var lease = await AcquireLeaseAsync();
+        var controlStore = new ScriptedCloudObjectStore();
+        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
+        var manifestBytes = EncodeManifest(nextSstSequence: 2);
+        controlStore.Write(manifestKey, manifestBytes);
+        controlStore.BeforeRangeRead = static (_, _) =>
+            ValueTask.FromException(new PantsIOException("synthetic retention proof read failure"));
+        var sstStore = new ScriptedCloudObjectStore();
+        var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
+        sstStore.Write(objectKey, "orphan"u8.ToArray());
+        var budget = new ResourceBudget(1024 * 1024);
+        await using var persistence = CreatePersistence(
+            cache.Path,
+            new ScriptedCloudObjectStore(),
+            sstStore,
+            controlStore,
+            lease,
+            budget);
+
+        await persistence.CollectObsoleteSstsAsync(CancellationToken.None);
+
+        Assert.True(persistence.HasPersistenceAnomaly);
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(sstStore.Requests,
+            static request => request.Operation == StoreOperation.Delete);
+        Assert.True(sstStore.Contains(objectKey));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseSstRetentionProofReservationsWhenProviderReturnsAShortRange()
+    {
+        using var cache = new TemporaryDirectory();
+        using var lease = await AcquireLeaseAsync();
+        var controlStore = new ScriptedCloudObjectStore { ShortenRangeByBytes = 1 };
+        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
+        controlStore.Write(manifestKey, EncodeManifest(nextSstSequence: 2));
+        var sstStore = new ScriptedCloudObjectStore();
+        var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
+        sstStore.Write(objectKey, "orphan"u8.ToArray());
+        var budget = new ResourceBudget(1024 * 1024);
+        await using var persistence = CreatePersistence(
+            cache.Path,
+            new ScriptedCloudObjectStore(),
+            sstStore,
+            controlStore,
+            lease,
+            budget);
+
+        await persistence.CollectObsoleteSstsAsync(CancellationToken.None);
+
+        Assert.True(persistence.HasPersistenceAnomaly);
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(sstStore.Requests,
+            static request => request.Operation == StoreOperation.Delete);
+        Assert.True(sstStore.Contains(objectKey));
+    }
+
+    [Fact]
+    public async Task ShouldReleaseSstRetentionProofReservationsWhenManifestDecodeFails()
+    {
+        using var cache = new TemporaryDirectory();
+        using var lease = await AcquireLeaseAsync();
+        var controlStore = new ScriptedCloudObjectStore();
+        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
+        controlStore.Write(manifestKey, "{ torn"u8.ToArray());
+        var sstStore = new ScriptedCloudObjectStore();
+        var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
+        sstStore.Write(objectKey, "orphan"u8.ToArray());
+        var budget = new ResourceBudget(1024 * 1024);
+        await using var persistence = CreatePersistence(
+            cache.Path,
+            new ScriptedCloudObjectStore(),
+            sstStore,
+            controlStore,
+            lease,
+            budget);
+
+        await persistence.CollectObsoleteSstsAsync(CancellationToken.None);
+
+        Assert.True(persistence.HasPersistenceAnomaly);
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(sstStore.Requests,
+            static request => request.Operation == StoreOperation.Delete);
+        Assert.True(sstStore.Contains(objectKey));
+    }
+
     static byte[] EncodeManifest(ulong nextSstSequence) =>
         JsonSerializer.SerializeToUtf8Bytes(
             new ManifestState

@@ -375,6 +375,178 @@ public sealed class ProviderWalCatalogMirrorTests
         read.Dispose();
 
         Assert.Equal(0, budget.Current);
+
+        using (var retryRead = await catalog.ReadAsync(false, CancellationToken.None))
+        {
+            Assert.NotNull(retryRead.Catalog);
+            Assert.Equal(required, budget.Current);
+        }
+
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldRejectCatalogReadWhileControlMetadataUsesTheSharedPoolThenRetryAfterRelease()
+    {
+        const string controlKey = "metadata/test.json";
+        var controlStore = new ScriptedCloudObjectStore();
+        controlStore.Write(controlKey, new byte[16]);
+        var rangeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRange = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controlStore.BeforeRangeRead = async (_, cancellationToken) =>
+        {
+            rangeStarted.TrySetResult();
+            await releaseRange.Task.WaitAsync(cancellationToken);
+        };
+
+        var walStore = new ScriptedCloudObjectStore();
+        var catalogBytes = EncodeCatalog(1);
+        walStore.Write(Primary, catalogBytes);
+        walStore.Write(Mirror, catalogBytes);
+        var controlWorkspaceBytes = checked((16 * 16L) + 256);
+        var catalogWorkspaceBytes = checked(catalogBytes.Length * 2L * 16);
+        var budget = new ResourceBudget(Math.Max(controlWorkspaceBytes, catalogWorkspaceBytes));
+        using var controlReads = new ProviderCloudControlMetadataReadSet(controlStore, budget);
+        var controlRead = controlReads.ReadAsync(controlKey, CancellationToken.None).AsTask();
+        await rangeStarted.Task.WaitAsync(TestTimeouts.Expected);
+        var catalog = new ProviderWalCatalogStore(
+            walStore,
+            static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+            static () => { },
+            static _ => ValueTask.CompletedTask,
+            new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(controlWorkspaceBytes, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Get or StoreOperation.GetRange or
+                StoreOperation.Put or StoreOperation.Delete);
+        releaseRange.TrySetResult();
+        Assert.NotNull(await controlRead);
+        controlReads.Dispose();
+        Assert.Equal(0, budget.Current);
+
+        using (var retryRead = await catalog.ReadAsync(false, CancellationToken.None))
+        {
+            Assert.NotNull(retryRead.Catalog);
+            Assert.Equal(catalogWorkspaceBytes, budget.Current);
+        }
+
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCatalogReservationWhenObjectIdentityChangesDuringRead()
+    {
+        var walStore = new ScriptedCloudObjectStore();
+        var catalogBytes = EncodeCatalog(1);
+        walStore.Write(Primary, catalogBytes);
+        walStore.Write(Mirror, catalogBytes);
+        var budget = new ResourceBudget(1024 * 1024);
+        var changed = false;
+        walStore.BeforeRangeRead = (objectKey, _) =>
+        {
+            if (StringComparer.Ordinal.Equals(objectKey, Primary) && !changed)
+            {
+                changed = true;
+                walStore.Write(Primary, catalogBytes);
+            }
+
+            return ValueTask.CompletedTask;
+        };
+        var catalog = CreateAdmittedCatalogStore(walStore, budget);
+
+        await Assert.ThrowsAsync<PantsBusyException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCatalogReservationWhenProviderReturnsAShortRange()
+    {
+        var walStore = new ScriptedCloudObjectStore { ShortenRangeByBytes = 1 };
+        var catalogBytes = EncodeCatalog(1);
+        walStore.Write(Primary, catalogBytes);
+        walStore.Write(Mirror, catalogBytes);
+        var budget = new ResourceBudget(1024 * 1024);
+        var catalog = CreateAdmittedCatalogStore(walStore, budget);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCatalogReservationWhenRangeReadIsCancelled()
+    {
+        var walStore = new ScriptedCloudObjectStore();
+        var catalogBytes = EncodeCatalog(1);
+        walStore.Write(Primary, catalogBytes);
+        walStore.Write(Mirror, catalogBytes);
+        var rangeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        walStore.BeforeRangeRead = async (_, cancellationToken) =>
+        {
+            rangeStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        var budget = new ResourceBudget(1024 * 1024);
+        var catalog = CreateAdmittedCatalogStore(walStore, budget);
+        using var cancellation = new CancellationTokenSource();
+        var read = catalog.ReadAsync(false, cancellation.Token).AsTask();
+
+        await rangeStarted.Task.WaitAsync(TestTimeouts.Expected);
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCatalogReservationWhenProviderReadFails()
+    {
+        var walStore = new ScriptedCloudObjectStore();
+        var catalogBytes = EncodeCatalog(1);
+        walStore.Write(Primary, catalogBytes);
+        walStore.Write(Mirror, catalogBytes);
+        walStore.BeforeRangeRead = static (_, _) =>
+            ValueTask.FromException(new PantsIOException("synthetic catalog read failure"));
+        var budget = new ResourceBudget(1024 * 1024);
+        var catalog = CreateAdmittedCatalogStore(walStore, budget);
+
+        await Assert.ThrowsAsync<PantsIOException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseCatalogReservationWhenDecodeFails()
+    {
+        var walStore = new ScriptedCloudObjectStore();
+        walStore.Write(Primary, "{ torn"u8.ToArray());
+        walStore.Write(Mirror, "{ also torn"u8.ToArray());
+        var budget = new ResourceBudget(1024 * 1024);
+        var catalog = CreateAdmittedCatalogStore(walStore, budget);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(async () =>
+            await catalog.ReadAsync(false, CancellationToken.None));
+
+        Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(walStore.Requests,
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
     }
 
     [Fact]
@@ -441,4 +613,13 @@ public sealed class ProviderWalCatalogMirrorTests
     static byte[] EncodeCatalog(ulong fencingEpoch) => JsonSerializer.SerializeToUtf8Bytes(
         new ProviderWalCatalog { FencingEpoch = fencingEpoch },
         CatalogJsonOptions);
+
+    static ProviderWalCatalogStore CreateAdmittedCatalogStore(
+        ICloudObjectStore walStore,
+        ResourceBudget budget) => new(
+        walStore,
+        static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
+        static () => { },
+        static _ => ValueTask.CompletedTask,
+        new ProviderWalCatalogReadAdmission(budget, new MaintenanceMemoryGate()));
 }
