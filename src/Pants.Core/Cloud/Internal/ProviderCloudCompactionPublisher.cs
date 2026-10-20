@@ -16,7 +16,8 @@ sealed class ProviderCloudCompactionPublisher
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
         IFailpointHandler failpoints,
-        SstPublicationAdmission? admission = null)
+        SstPublicationAdmission? admission = null,
+        ProviderSstIdentityRegistry? identityRegistry = null)
     {
         _localRoot = Path.GetFullPath(localRoot);
         _controlStore = controlStore;
@@ -26,7 +27,8 @@ sealed class ProviderCloudCompactionPublisher
             sstStore,
             lease.EnsureValid,
             lease.ValidateRemoteAsync,
-            admission);
+            admission,
+            identityRegistry);
     }
 
     public async ValueTask PublishAsync(

@@ -4,29 +4,18 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 sealed class ProviderCloudSstSourceFactory(
     ICloudObjectStore store,
-    RuntimeTelemetry telemetry) : IAsyncSstSourceFactory
+    RuntimeTelemetry telemetry,
+    ProviderSstIdentityRegistry? identityRegistry = null) : IAsyncSstSourceFactory, IAsyncSstEvictionVerifier
 {
     readonly ICloudObjectStore _store = store ?? throw new ArgumentNullException(nameof(store));
+    readonly ProviderSstIdentityRegistry _identityRegistry = identityRegistry ?? new();
 
     public async ValueTask<IAsyncSstSource?> OpenAsync(
         FileMeta file,
         CancellationToken cancellationToken)
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
-        CloudObjectMetadata? metadata;
-        try
-        {
-            metadata = await _store.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException exception) when (
-            cancellationToken.IsCancellationRequested &&
-            exception.CancellationToken != cancellationToken)
-        {
-            throw new OperationCanceledException(
-                exception.Message,
-                exception,
-                cancellationToken);
-        }
+        var metadata = await ReadMetadataAsync(objectKey, cancellationToken).ConfigureAwait(false);
 
         if (metadata is null)
         {
@@ -44,6 +33,70 @@ sealed class ProviderCloudSstSourceFactory(
             objectKey,
             metadata,
             telemetry);
+    }
+
+    public async ValueTask VerifyRemoteSstForEvictionAsync(
+        FileMeta file,
+        long localLength,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_identityRegistry.TryGet(file.Name, out var identity))
+        {
+            throw new PantsRecoveryFailedException(
+                $"Cloud SST '{file.Name}' has no retained publication identity for safe eviction.");
+        }
+
+        if (localLength < 0 || checked((ulong)localLength) != identity.SizeBytes)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Local SST '{file.Name}' differs from its verified cloud publication.");
+        }
+
+        if (file.SizeBytes != 0 && file.SizeBytes != identity.SizeBytes)
+        {
+            throw new PantsCorruptionException(
+                $"Cloud SST '{file.Name}' length differs from its manifest.");
+        }
+
+        var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
+        var metadata = await ReadMetadataAsync(objectKey, cancellationToken).ConfigureAwait(false);
+        if (metadata is null)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Manifest cloud SST '{file.Name}' is unavailable for eviction.");
+        }
+
+        if (metadata.SizeBytes != identity.SizeBytes)
+        {
+            throw new PantsRecoveryFailedException(
+                $"Cloud SST '{file.Name}' differs from its verified publication size.");
+        }
+
+        if (!StringComparer.Ordinal.Equals(metadata.Version, identity.Version))
+        {
+            throw new PantsFencedException(
+                $"Immutable cloud SST '{objectKey}' changed identity after publication.");
+        }
+    }
+
+    async ValueTask<CloudObjectMetadata?> ReadMetadataAsync(
+        string objectKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _store.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (
+            cancellationToken.IsCancellationRequested &&
+            exception.CancellationToken != cancellationToken)
+        {
+            throw new OperationCanceledException(
+                exception.Message,
+                exception,
+                cancellationToken);
+        }
     }
 
     sealed class ProviderCloudSstSource(

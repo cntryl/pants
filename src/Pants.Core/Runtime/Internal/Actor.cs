@@ -612,6 +612,7 @@ sealed class Actor : IAsyncDisposable
                         maintenanceMemoryGate);
                     var localWalCacheId = LocalDiskStore.GetOrCreateWalCacheIdentity(
                         cloud.LocalCachePath);
+                    var sstIdentityRegistry = new ProviderSstIdentityRegistry();
                     providerPersistence = new ProviderCloudPersistence(
                         cloud.LocalCachePath,
                         objectStores.Wal,
@@ -624,7 +625,8 @@ sealed class Actor : IAsyncDisposable
                         catalogWriteAdmission,
                         localWalCacheId,
                         walRetirementDiagnostics,
-                        walPublicationAdmission: new WalPublicationAdmission(maintenanceMemoryBudget));
+                        walPublicationAdmission: new WalPublicationAdmission(maintenanceMemoryBudget),
+                        identityRegistry: sstIdentityRegistry);
                     cloudPersistence = providerPersistence;
                     var allowLocalWalTailRecovery = await startupDeadline.RunMutationAsync(
                             providerPersistence.FenceWalCatalogAsync,
@@ -644,7 +646,10 @@ sealed class Actor : IAsyncDisposable
                         options.BlockCachePolicy,
                         options.BlockCacheBytes,
                         leaseHeartbeatInterval,
-                        new ProviderCloudSstSourceFactory(objectStores.Sst, telemetry),
+                        new ProviderCloudSstSourceFactory(
+                            objectStores.Sst,
+                            telemetry,
+                            sstIdentityRegistry),
                         startupPhases,
                         leaseClock,
                         options.LeaseTimeToLive,
@@ -667,7 +672,8 @@ sealed class Actor : IAsyncDisposable
                         objectStores.Control,
                         cloudLease,
                         dependencies.Failpoints,
-                        SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget))
+                        SstPublicationAdmission.WithinCompactionRound(maintenanceMemoryBudget),
+                        sstIdentityRegistry)
                         .PublishAsync;
                     compactionOutputPartitionTargetBytes = mirrorPublicationAdmission.PartitionTargetBytes;
                     cloudDdlCoordinator = new CloudDdlCoordinator(

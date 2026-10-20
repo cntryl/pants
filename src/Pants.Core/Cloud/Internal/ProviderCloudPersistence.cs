@@ -75,7 +75,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         WalRetirementDiagnostics? walRetirementDiagnostics = null,
         ulong maximumRetainedWalBytes = MaximumRetainedWalBytes,
         int maximumRetainedWalSegments = MaximumRetainedWalSegments,
-        WalPublicationAdmission? walPublicationAdmission = null)
+        WalPublicationAdmission? walPublicationAdmission = null,
+        ProviderSstIdentityRegistry? identityRegistry = null)
     {
         ArgumentOutOfRangeException.ThrowIfZero(maximumRetainedWalBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRetainedWalSegments);
@@ -98,7 +99,8 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             sstStore,
             lease.EnsureValid,
             lease.ValidateRemoteAsync,
-            sstPublicationAdmission);
+            sstPublicationAdmission,
+            identityRegistry);
         _controlStore = controlStore;
         _lease = lease;
         _writerEpoch = lease.Epoch;

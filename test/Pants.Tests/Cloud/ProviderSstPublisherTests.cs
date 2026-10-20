@@ -24,6 +24,138 @@ public sealed class ProviderSstPublisherTests
         Assert.True(store.LargestRangeBytes <= ProviderSstPublisher.VerificationRangeBytes);
     }
 
+    [Theory]
+    [InlineData(128)]
+    [InlineData(2 * 1024 * 1024)]
+    public async Task ShouldVerifyEvictionWithOneHeadAndNoBodyReadsRegardlessOfSstSize(int sizeBytes)
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new RangeCountingCloudObjectStore();
+        var identities = new ProviderSstIdentityRegistry();
+        var publisher = CreatePublisher(store, identityRegistry: identities);
+        var path = WriteLocal(directory.Path, "a.sst", sizeBytes);
+        await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+        store.ResetCounters();
+        var resumedPublisher = CreatePublisher(store, identityRegistry: identities);
+        await resumedPublisher.EnsurePublishedAsync(
+            "a.sst",
+            path,
+            [new FileMeta { Name = "a.sst", SizeBytes = checked((ulong)sizeBytes) }],
+            CancellationToken.None);
+        Assert.Equal(1, store.HeadGets);
+        Assert.Equal(0, store.RangeGets);
+        store.ResetCounters();
+
+        var verifier = new ProviderCloudSstSourceFactory(
+            store,
+            new RuntimeTelemetry(),
+            identities);
+        await verifier.VerifyRemoteSstForEvictionAsync(
+            new FileMeta { Name = "a.sst", SizeBytes = checked((ulong)sizeBytes) },
+            sizeBytes,
+            CancellationToken.None);
+
+        Assert.Equal(1, store.HeadGets);
+        Assert.Equal(1, store.TotalCalls);
+        Assert.Equal(0, store.WholeGets);
+        Assert.Equal(0, store.RangeGets);
+    }
+
+    [Fact]
+    public async Task ShouldFailEvictionWhenPublicationIdentityIsMissing()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new RangeCountingCloudObjectStore();
+        var publisher = CreatePublisher(store);
+        var path = WriteLocal(directory.Path, "a.sst", 128);
+        await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+        store.ResetCounters();
+
+        var verifier = new ProviderCloudSstSourceFactory(store, new RuntimeTelemetry());
+
+        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            verifier.VerifyRemoteSstForEvictionAsync(
+                new FileMeta { Name = "a.sst", SizeBytes = 128 },
+                128,
+                CancellationToken.None).AsTask());
+
+        Assert.Equal(0, store.TotalCalls);
+    }
+
+    [Fact]
+    public async Task ShouldEvictLocalSstThroughTheProviderHeadOnlyVerifier()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await PantsDatabase.OpenAsync(
+                         PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false)))
+        {
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("evict"u8.ToArray(), new byte[128 * 1024]);
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        var localPath = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "sst"),
+            "*.sst",
+            SearchOption.TopDirectoryOnly));
+        var name = Path.GetFileName(localPath);
+        var sizeBytes = checked((ulong)new FileInfo(localPath).Length);
+        var identities = new ProviderSstIdentityRegistry();
+        var cloudStore = new RangeCountingCloudObjectStore();
+        var publisher = CreatePublisher(cloudStore, identityRegistry: identities);
+        await publisher.EnsurePublishedAsync(
+            name,
+            localPath,
+            [new FileMeta { Name = name, SizeBytes = sizeBytes }],
+            CancellationToken.None);
+        var telemetry = new RuntimeTelemetry();
+        var verifier = new ProviderCloudSstSourceFactory(cloudStore, telemetry, identities);
+        using var diskStore = LocalDiskStore.Open(
+            directory.Path,
+            new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), telemetry),
+            remoteSstSourceFactory: verifier);
+        cloudStore.ResetCounters();
+
+        await diskStore.VerifyRemoteSstMatchesLocalAsync(name, CancellationToken.None);
+        diskStore.EvictLocalSst(name);
+
+        Assert.False(File.Exists(localPath));
+        Assert.Equal(1, cloudStore.HeadGets);
+        Assert.Equal(1, cloudStore.TotalCalls);
+        Assert.Equal(0, cloudStore.WholeGets);
+        Assert.Equal(0, cloudStore.RangeGets);
+    }
+
+    [Fact]
+    public async Task ShouldFailEvictionWhenRemoteSstIdentityChangedAfterPublication()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new RangeCountingCloudObjectStore();
+        var identities = new ProviderSstIdentityRegistry();
+        var publisher = CreatePublisher(store, identityRegistry: identities);
+        var path = WriteLocal(directory.Path, "a.sst", 128);
+        await publisher.EnsurePublishedAsync("a.sst", path, [], CancellationToken.None);
+        store.ReplaceVersion(PantsCloudObjectLayout.SstPrefix + "a.sst");
+        store.ResetCounters();
+        var verifier = new ProviderCloudSstSourceFactory(
+            store,
+            new RuntimeTelemetry(),
+            identities);
+
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            verifier.VerifyRemoteSstForEvictionAsync(
+                new FileMeta { Name = "a.sst", SizeBytes = 128 },
+                128,
+                CancellationToken.None).AsTask());
+
+        Assert.Equal(1, store.HeadGets);
+        Assert.Equal(0, store.WholeGets);
+        Assert.Equal(0, store.RangeGets);
+    }
+
     [Fact]
     public async Task ShouldRejectSstUploadAfterSuccessorTakesRemoteLeaseAtWriteBoundary()
     {
@@ -312,10 +444,12 @@ public sealed class ProviderSstPublisherTests
 
     static ProviderSstPublisher CreatePublisher(
         ICloudObjectStore store,
-        SstPublicationAdmission? admission = null) =>
+        SstPublicationAdmission? admission = null,
+        ProviderSstIdentityRegistry? identityRegistry = null) =>
         new(
             store,
             static () => { },
             static _ => ValueTask.CompletedTask,
-            admission);
+            admission,
+            identityRegistry);
 }

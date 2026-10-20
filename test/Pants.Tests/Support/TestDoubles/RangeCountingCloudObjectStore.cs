@@ -7,6 +7,7 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
     int _rangeGets;
     int _total;
     int _wholeGets;
+    int _headGets;
 
     public bool ChangeVersionOnRangeRead { get; init; }
 
@@ -18,13 +19,15 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
 
     public int WholeGets => _wholeGets;
 
+    public int HeadGets => _headGets;
+
     public int TotalCalls => _total;
 
     public int LargestRangeBytes { get; private set; }
 
     public void ResetCounters()
     {
-        _puts = _rangeGets = _wholeGets = _total = 0;
+        _puts = _rangeGets = _wholeGets = _headGets = _total = 0;
     }
 
     public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken)
@@ -59,9 +62,18 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectMetadata?> HeadAsync(string objectKey, CancellationToken cancellationToken)
     {
         _total++;
+        _headGets++;
         return ValueTask.FromResult(_objects.TryGetValue(objectKey, out var value)
             ? new CloudObjectMetadata(checked((ulong)value.Data.Length), value.Version, null, null)
             : null);
+    }
+
+    public void ReplaceVersion(string objectKey)
+    {
+        if (_objects.TryGetValue(objectKey, out var value))
+        {
+            _objects[objectKey] = (value.Data, Guid.NewGuid().ToString("N"));
+        }
     }
 
     public ValueTask<bool> PutAsync(
