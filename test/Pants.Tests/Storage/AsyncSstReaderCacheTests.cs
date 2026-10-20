@@ -7,6 +7,125 @@ namespace Cntryl.Pants.Storage;
 public sealed class AsyncSstReaderCacheTests
 {
     [Fact]
+    public async Task ShouldEvictCachedAsyncReaderBeforeOpeningUncachedReaderWithinHandleBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var counter = new ReadCounter();
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        var cachedFile = new FileMeta { Name = "cached.sst" };
+
+        await using (var cached = await cache.GetOrOpenAsync(
+                         cachedFile,
+                         token => OpenAsync(path, cachedFile, counter, token),
+                         CancellationToken.None))
+        {
+        }
+
+        var uncachedFile = new FileMeta { Name = "uncached.sst" };
+        await using (var uncached = await cache.OpenUncachedAsync(
+                         token => OpenAsync(path, uncachedFile, counter, token),
+                         CancellationToken.None))
+        {
+            Assert.Equal(2, counter.Opens);
+            Assert.Equal(1, handleBudget.Current);
+            Assert.Equal(0, cache.CachedReaderCount);
+            Assert.True(uncached.DataBlockCount > 0);
+
+            var blockedFile = new FileMeta { Name = "blocked.sst" };
+            await Assert.ThrowsAsync<PantsResourceLimitException>(async () =>
+                await cache.GetOrOpenAsync(
+                    blockedFile,
+                    token => OpenAsync(path, blockedFile, counter, token),
+                    CancellationToken.None));
+            Assert.Equal(2, counter.Opens);
+        }
+
+        Assert.Equal(0, handleBudget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseUncachedAsyncReaderReservationWhenOpenFails()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var counter = new ReadCounter();
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await cache.OpenUncachedAsync(
+                _ => throw new IOException("injected"),
+                CancellationToken.None));
+
+        Assert.Equal(0, handleBudget.Current);
+        var file = new FileMeta { Name = "retry.sst" };
+        await using var reader = await cache.OpenUncachedAsync(
+            token => OpenAsync(path, file, counter, token),
+            CancellationToken.None);
+
+        Assert.Equal(1, handleBudget.Current);
+        Assert.Equal(1, counter.Opens);
+        Assert.True(reader.DataBlockCount > 0);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseUncachedAsyncReaderReservationWhenParsingFailsAfterSourceOpen()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        var file = new FileMeta { Name = "wrong-length.sst", SizeBytes = 1 };
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(async () =>
+            await cache.OpenUncachedAsync(
+                token => AsyncSstReader.OpenAsync(
+                    LocalAsyncSstSource.Open(path),
+                    file,
+                    token),
+                CancellationToken.None));
+
+        Assert.Equal(0, handleBudget.Current);
+    }
+
+    [Fact]
+    public async Task ShouldReleaseUncachedAsyncReaderReservationWhenCacheIsDisposedDuringOpen()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var handleBudget = new SstReaderHandleBudget(1);
+        using var cache = new AsyncSstReaderCache(long.MaxValue, handleBudget);
+        var file = new FileMeta { Name = "opening.sst" };
+        var openStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOpen = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var opening = cache.OpenUncachedAsync(
+            async token =>
+            {
+                openStarted.SetResult();
+                await releaseOpen.Task.WaitAsync(token);
+                return await AsyncSstReader.OpenAsync(
+                    LocalAsyncSstSource.Open(path),
+                    file,
+                    token);
+            },
+            CancellationToken.None).AsTask();
+
+        await openStarted.Task.WaitAsync(TestTimeouts.Expected);
+        Assert.Equal(1, handleBudget.Current);
+        cache.Dispose();
+        releaseOpen.SetResult();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await opening.WaitAsync(TestTimeouts.Expected));
+
+        Assert.Equal(0, handleBudget.Current);
+    }
+
+    [Fact]
     public async Task ShouldRejectOpenWhenAllAsyncReaderHandlesRemainLeased()
     {
         using var directory = new TemporaryDirectory();

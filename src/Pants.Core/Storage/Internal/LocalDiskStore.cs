@@ -616,10 +616,11 @@ sealed class LocalDiskStore :
                     $"Cloud SST '{name}' content checksum differs from its manifest.");
             }
 
-            var stagedSource = LocalAsyncSstSource.Open(stagingPath);
-            await using var stagedReader = await AsyncSstReader.OpenAsync(
-                    stagedSource,
-                    metadata,
+            await using var stagedReader = await _asyncReaderCache.OpenUncachedAsync(
+                    token => AsyncSstReader.OpenAsync(
+                        LocalAsyncSstSource.Open(stagingPath),
+                        metadata,
+                        token),
                     cancellationToken)
                 .ConfigureAwait(false);
 

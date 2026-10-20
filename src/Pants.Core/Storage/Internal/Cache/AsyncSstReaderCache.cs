@@ -136,6 +136,57 @@ sealed class AsyncSstReaderCache : IDisposable
     }
 
     /// <summary>
+    ///     Opens a reader that is not retained in this cache while reserving from the same source
+    ///     handle budget as cached readers.
+    /// </summary>
+    public async ValueTask<AsyncSstReader> OpenUncachedAsync(
+        Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(openReader);
+        var handleReservation = await ReserveOpenHandleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        AsyncSstReader? opened = null;
+        var reservationTransferred = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            opened = await openReader(cancellationToken).ConfigureAwait(false);
+            opened.AttachHandleReservation(handleReservation);
+            reservationTransferred = true;
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+            }
+
+            return opened;
+        }
+        catch (Exception exception)
+        {
+            if (opened is not null)
+            {
+                try
+                {
+                    await opened.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception cleanupException)
+                {
+                    // An uncertain close keeps the reservation held, preserving the hard bound.
+                    throw new AggregateException(exception, cleanupException);
+                }
+            }
+
+            if (!reservationTransferred)
+            {
+                handleReservation.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
     ///     Drops every cached reader published under <paramref name="name" />, whatever its manifest
     ///     identity.
     /// </summary>
@@ -282,6 +333,40 @@ sealed class AsyncSstReaderCache : IDisposable
         }
 
         return null;
+    }
+
+    async ValueTask<IDisposable> ReserveOpenHandleAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AsyncSstReader? evicted = null;
+            IDisposable? reservation = null;
+            PantsResourceLimitException? capacityError = null;
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_openReaderHandleBudget.TryReserve(out reservation))
+                {
+                    return reservation!;
+                }
+
+                evicted = DetachLeastRecent();
+                if (evicted is null)
+                {
+                    capacityError = CreateHandleBudgetException();
+                }
+            }
+
+            if (evicted is not null)
+            {
+                await evicted.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                throw capacityError!;
+            }
+        }
     }
 
     PantsResourceLimitException CreateHandleBudgetException() =>
