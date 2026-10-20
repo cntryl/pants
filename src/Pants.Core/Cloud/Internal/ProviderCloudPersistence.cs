@@ -1256,6 +1256,9 @@ sealed class ProviderCloudPersistence : ICloudPersistence
     async ValueTask<CloudSstRetentionProof> CaptureSstRetentionProofAsync(
         CancellationToken cancellationToken)
     {
+        using var metadataReads = new ProviderCloudControlMetadataReadSet(
+            _controlStore,
+            _authorityMetadataBudget);
         var protectedNames = new HashSet<string>(
             CloudSstReferenceReader.ReadLocalProtectedNames(_localRoot),
             StringComparer.Ordinal);
@@ -1266,7 +1269,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
         {
             _lease.EnsureValid();
             var objectKey = PantsCloudObjectLayout.MetadataPrefix + fileName;
-            var remote = await _controlStore.GetAsync(objectKey, cancellationToken)
+            var remote = await metadataReads.ReadAsync(objectKey, cancellationToken)
                 .ConfigureAwait(false);
             if (remote is null)
             {
@@ -1287,7 +1290,7 @@ sealed class ProviderCloudPersistence : ICloudPersistence
 
         var partialCompactionOutputs = new Dictionary<string, string>(StringComparer.Ordinal);
         var intentObjectKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
-        var remoteIntent = await _controlStore.GetAsync(intentObjectKey, cancellationToken)
+        var remoteIntent = await metadataReads.ReadAsync(intentObjectKey, cancellationToken)
             .ConfigureAwait(false);
         if (remoteIntent is not null)
         {
@@ -1306,11 +1309,21 @@ sealed class ProviderCloudPersistence : ICloudPersistence
             }
         }
 
-        return new CloudSstRetentionProof(
-            protectedNames,
-            partialCompactionOutputs,
-            remoteNextSequences ?? new Dictionary<uint, ulong>(),
-            guards);
+        var reservation = metadataReads.TransferReservations();
+        try
+        {
+            return new CloudSstRetentionProof(
+                protectedNames,
+                partialCompactionOutputs,
+                remoteNextSequences ?? new Dictionary<uint, ulong>(),
+                guards,
+                reservation);
+        }
+        catch
+        {
+            reservation.Dispose();
+            throw;
+        }
     }
 
     async ValueTask<IReadOnlyDictionary<string, string>> FindPartialCompactionOutputsAsync(
