@@ -500,6 +500,16 @@ sealed class LocalDiskStore :
                       throw new PantsInternalException(
                           "Hybrid SST verification requires a remote source factory.");
         await using var local = LocalAsyncSstSource.Open(path);
+        if (factory is IAsyncSstEvictionVerifier verifier)
+        {
+            await verifier.VerifyRemoteSstForEvictionAsync(
+                    metadata,
+                    local.Length,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         await using var remote = await factory.OpenAsync(metadata, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
             $"Hybrid SST '{name}' is not confirmed durable in cloud storage.");

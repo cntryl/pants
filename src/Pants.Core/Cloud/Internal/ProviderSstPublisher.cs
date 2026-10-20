@@ -10,11 +10,13 @@ sealed class ProviderSstPublisher(
     ICloudObjectStore sstStore,
     Action ensureLeaseValid,
     Func<CancellationToken, ValueTask> validateRemoteLeaseAsync,
-    SstPublicationAdmission? admission = null)
+    SstPublicationAdmission? admission = null,
+    ProviderSstIdentityRegistry? identityRegistry = null)
 {
     public const int VerificationRangeBytes = 64 * 1024;
 
     readonly Dictionary<string, ulong> _proven = new(StringComparer.Ordinal);
+    readonly ProviderSstIdentityRegistry _identityRegistry = identityRegistry ?? new();
     readonly Func<CancellationToken, ValueTask> _validateRemoteLeaseAsync = validateRemoteLeaseAsync;
 
     public bool IsProven(string name) => _proven.ContainsKey(name);
@@ -53,6 +55,7 @@ sealed class ProviderSstPublisher(
                 throw new PantsFencedException($"Immutable cloud SST '{objectKey}' conflicts.");
             }
 
+            _identityRegistry.Record(name, remote.SizeBytes, remote.Version);
             _proven[name] = remote.SizeBytes;
             return;
         }
@@ -73,8 +76,10 @@ sealed class ProviderSstPublisher(
             CloudSstValidator.Validate(local, proof);
         }
 
-        await UploadAndVerifyAsync(objectKey, local, cancellationToken).ConfigureAwait(false);
-        _proven[name] = checked((ulong)local.Length);
+        var metadata = await UploadAndVerifyAsync(objectKey, local, cancellationToken)
+            .ConfigureAwait(false);
+        _identityRegistry.Record(name, metadata.SizeBytes, metadata.Version);
+        _proven[name] = metadata.SizeBytes;
     }
 
     /// <summary>
@@ -100,13 +105,16 @@ sealed class ProviderSstPublisher(
         {
             await VerifyAsync(objectKey, local, existing, false, cancellationToken).ConfigureAwait(false);
             ensureLeaseValid();
+            _identityRegistry.Record(name, existing.SizeBytes, existing.Version);
             return;
         }
 
-        await UploadAndVerifyAsync(objectKey, local, cancellationToken).ConfigureAwait(false);
+        var metadata = await UploadAndVerifyAsync(objectKey, local, cancellationToken)
+            .ConfigureAwait(false);
+        _identityRegistry.Record(name, metadata.SizeBytes, metadata.Version);
     }
 
-    async ValueTask UploadAndVerifyAsync(
+    async ValueTask<CloudObjectMetadata> UploadAndVerifyAsync(
         string objectKey,
         byte[] local,
         CancellationToken cancellationToken)
@@ -123,6 +131,7 @@ sealed class ProviderSstPublisher(
                            $"Cloud SST '{objectKey}' is unavailable after publication.");
         await VerifyAsync(objectKey, local, metadata, created, cancellationToken).ConfigureAwait(false);
         ensureLeaseValid();
+        return metadata;
     }
 
     async ValueTask VerifyAsync(
