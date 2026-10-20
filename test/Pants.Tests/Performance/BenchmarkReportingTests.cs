@@ -92,8 +92,8 @@ public sealed class BenchmarkReportingTests
     [Fact]
     public void ShouldDiscoverEveryParameterizedScenarioGivenPracticalInventory()
     {
-        Assert.Equal(157, BenchmarkInventory.DiscoverScenarioIds().Count);
-        Assert.Equal(157, BenchmarkInventory.DiscoverScenarioIds().Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(163, BenchmarkInventory.DiscoverScenarioIds().Count);
+        Assert.Equal(163, BenchmarkInventory.DiscoverScenarioIds().Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
