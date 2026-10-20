@@ -401,7 +401,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                     _httpClient,
                     request,
                     expectedRangeObjectLength,
-                    linked.Token).ConfigureAwait(false);
+                    linked.Token,
+                    cancellationToken).ConfigureAwait(false);
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {
                     var statusCode = response.StatusCode;

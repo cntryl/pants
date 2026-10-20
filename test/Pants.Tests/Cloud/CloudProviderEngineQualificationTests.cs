@@ -1,9 +1,72 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudProviderEngineQualificationTests
 {
+    [Fact]
+    public async Task ShouldBoundHeadAndRangedGetAttemptsDuringS3CacheLossRecovery()
+    {
+        using var handler = new InMemoryCloudProviderHandler();
+        using var client = new HttpClient(handler);
+        using var sourceCache = new TemporaryDirectory();
+        using var replacementCache = new TemporaryDirectory();
+        var location = CreateS3Location("s3.example.test", "database");
+        var topology = PantsCloudStorageTopology.Shared(location);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var options = PantsOpenOptions.CloudMulti(sourceCache.Path, topology)
+            .WithBackgroundCompaction(false);
+        var payload = new byte[64 * 1024];
+        Array.Fill(payload, (byte)'v');
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("key"u8.ToArray(), payload);
+            await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        var activities = new ConcurrentQueue<Activity>();
+        using var listener = CreateActivityListener(activities);
+        ActivityTraceId recoveryTraceId;
+        IPantsDatabase recovered;
+        using (var recovery = new Activity("CloudCacheLossRecovery").Start())
+        {
+            recoveryTraceId = recovery.TraceId;
+            recovered = await PantsDatabase.OpenForTestingAsync(
+                PantsOpenOptions.CloudMulti(replacementCache.Path, topology)
+                    .WithBackgroundCompaction(false),
+                dependencies);
+        }
+
+        await using (recovered)
+        {
+            await using var reader = await recovered.Transactions.BeginAsync(
+                recovered.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            var value = await reader.GetAsync("key"u8.ToArray());
+            Assert.Equal(payload, Assert.IsType<ReadOnlyMemory<byte>>(value).ToArray());
+        }
+
+        var attempts = activities
+            .Where(activity => activity.TraceId == recoveryTraceId &&
+                               activity.DisplayName == "Pants.Cloud.HttpAttempt")
+            .ToArray();
+        var headCount = attempts.Count(activity =>
+            Equals(activity.GetTagItem("pants.cloud_io.method"), "HEAD"));
+        var rangedGetCount = attempts.Count(activity =>
+            Equals(activity.GetTagItem("pants.cloud_io.method"), "GET") &&
+            Equals(activity.GetTagItem("pants.cloud_io.range"), true));
+
+        Assert.InRange(headCount, 1, 32);
+        Assert.InRange(rangedGetCount, 1, 32);
+    }
+
     [Fact]
     public async Task ShouldRecoverEngineFromS3CompatibleProtocolAfterLocalCacheLoss()
     {
@@ -197,6 +260,19 @@ public sealed class CloudProviderEngineQualificationTests
             "value",
             TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                 await reader.GetAsync("key"u8.ToArray()))));
+    }
+
+    static ActivityListener CreateActivityListener(ConcurrentQueue<Activity> activities)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Pants",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => activities.Enqueue(activity)
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     static PantsCloudStorageLocation CreateS3Location(string host, string prefix) => new(
