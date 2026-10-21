@@ -33,11 +33,24 @@ internal static class Program
         {
             if (command.Format == PantsCliOutputFormat.Json)
             {
-                var output = JsonSerializer.SerializeToNode(
-                    report,
-                    JsonOptions)!.AsObject();
-                output["schema_version"] = 1;
-                output["verification_scope"] = "local_path";
+                var output = new JsonObject
+                {
+                    ["schema_version"] = 1,
+                    ["verification_scope"] = "local_path",
+                    ["manifest_epoch"] = report.ManifestEpoch,
+                    ["manifest_files_verified"] = report.ManifestFilesVerified,
+                    ["sst_files_verified"] = report.SstFilesVerified,
+                    ["bytes_verified"] = report.BytesVerified,
+                    ["data_blocks_verified"] = report.DataBlocksVerified,
+                    ["wal_boundary"] = report.WalBoundary is { } walBoundary
+                        ? JsonValue.Create(walBoundary)
+                        : null,
+                    ["wal_recovery_records_replayed"] = report.WalRecoveryRecordsReplayed,
+                    ["wal_recovery_bytes_replayed"] = report.WalRecoveryBytesReplayed,
+                    ["intent_entries_loaded"] = report.IntentEntriesLoaded,
+                    ["authoritative"] = report.Authoritative,
+                    ["health"] = report.Health.ToString()
+                };
                 Console.Out.WriteLine(output.ToJsonString(JsonOptions));
             }
             else

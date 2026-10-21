@@ -19,13 +19,13 @@
     "pantsCasesAtCapture": 2818,
     "pantsTestListRowsAtCapture": 2819,
     "mappingStatus": {
-      "verified-adapted": 77,
-      "unmapped": 3512,
+      "verified-adapted": 82,
+      "unmapped": 3507,
       "candidate": 334,
       "verified": 275
     }
   },
-  "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries require triage into a real Pants behavior test or a documented non-applicable reason.",
+  "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
   "entries": [
     {
       "source": "src/bin/midge.rs",
@@ -53087,9 +53087,18 @@
       "kind": "integration",
       "name": "should_emit_v1_corruption_error_json_given_future_format_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldEmitV1CorruptionErrorJsonGivenFutureFormatWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldEmitV1CorruptionErrorJsonGivenFutureFormatWhenPantsVerifyRuns",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "triageNote": "Adapted the future-format fixture to Pants FORMAT v4 because Pants currently supports FORMAT v3. The black-box CLI assertion preserves Midge v1 error JSON and exit-code behavior; this does not claim FORMAT v9 support.",
+      "verificationNote": "Compared the Midge process-level stdout, stderr, and exit-code assertions against the Pants process-level test. Focused Release verification_cli tests passed 7/7."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53097,9 +53106,18 @@
       "kind": "integration",
       "name": "should_emit_v1_json_given_degraded_local_database_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldEmitV1JsonGivenDegradedLocalDatabaseWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldEmitV1JsonGivenDegradedLocalDatabaseWhenPantsVerifyRuns",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "triageNote": "Creates and closes a Pants database, adds an orphan SST, then compares the CLI result with the Midge degraded v1 golden. This covers the same degraded health, exit code, field set, and empty-stderr contract.",
+      "verificationNote": "Compared the Midge process-level stdout, stderr, and exit-code assertions against the Pants process-level test. Focused Release verification_cli tests passed 7/7."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53107,9 +53125,18 @@
       "kind": "integration",
       "name": "should_emit_v1_json_given_populated_release_fixture_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldEmitV1JsonGivenPopulatedReleaseFixtureWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldEmitV1JsonGivenPopulatedSupportedFixtureWhenPantsVerifyRuns",
+          "evidence": [
+            "format-version-adaptation-only"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "unmapped",
+      "triageNote": "The adapted Pants test verifies a populated FORMAT v3 fixture against the Midge healthy v1 golden, but the current Midge release fixture is FORMAT v8. Running that exact v8 fixture through Pants returns corruption exit 4 and leaves it unchanged, so the source case remains open pending FORMAT v8 compatibility.",
+      "verificationNote": "The adapted Pants test verifies a populated FORMAT v3 fixture against the Midge healthy v1 golden, but the current Midge release fixture is FORMAT v8. Running that exact v8 fixture through Pants returns corruption exit 4 and leaves it unchanged, so the source case remains open pending FORMAT v8 compatibility."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53117,9 +53144,18 @@
       "kind": "integration",
       "name": "should_emit_v1_storage_error_json_given_missing_database_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldEmitV1StorageErrorJsonGivenMissingDatabaseWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldEmitV1StorageErrorJsonGivenMissingDatabaseWhenPantsVerifyRuns",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "triageNote": "Runs the real Pants CLI on a missing database path and checks the Midge v1 storage error schema, exit code, path-specific message, and empty stderr.",
+      "verificationNote": "Compared the Midge process-level stdout, stderr, and exit-code assertions against the Pants process-level test. Focused Release verification_cli tests passed 7/7."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53127,9 +53163,18 @@
       "kind": "integration",
       "name": "should_emit_v1_usage_error_json_given_missing_path_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldEmitV1UsageErrorJsonGivenMissingPathWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldEmitV1UsageErrorJsonGivenMissingPathWhenPantsVerifyRuns",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "triageNote": "Runs the real Pants CLI without the required path and checks the Midge v1 usage error schema, Pants command wording, exit code, and empty stderr.",
+      "verificationNote": "Compared the Midge process-level stdout, stderr, and exit-code assertions against the Pants process-level test. Focused Release verification_cli tests passed 7/7."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53137,9 +53182,18 @@
       "kind": "integration",
       "name": "should_reject_populated_v3_fixture_when_midge_verify_runs",
       "translatedPantsMethodName": "ShouldRejectPopulatedV3FixtureWhenMidgeVerifyRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldRejectPopulatedV2FixtureGivenUnsupportedFormatWhenPantsVerifyRuns",
+          "evidence": [
+            "format-version-adaptation-only"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "unmapped",
+      "triageNote": "The adapted Pants test rejects a populated FORMAT v2 fixture and verifies FORMAT bytes remain unchanged. The current Midge source expects populated FORMAT v3 to be rejected after advancing to v8, but Pants accepts that exact v3 fixture as healthy. The source case remains open pending format alignment.",
+      "verificationNote": "The adapted Pants test rejects a populated FORMAT v2 fixture and verifies FORMAT bytes remain unchanged. The current Midge source expects populated FORMAT v3 to be rejected after advancing to v8, but Pants accepts that exact v3 fixture as healthy. The source case remains open pending format alignment."
     },
     {
       "source": "tests/verification_cli.rs",
@@ -53147,9 +53201,18 @@
       "kind": "integration",
       "name": "should_verify_candidate_written_database_when_cli_runs",
       "translatedPantsMethodName": "ShouldVerifyCandidateWrittenDatabaseWhenCliRuns",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Compatibility.MidgeVerificationCliParityTests.ShouldVerifyCandidateWrittenDatabaseWhenPantsCliRuns",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "triageNote": "Writes, sync-commits, flushes, and shuts down a Pants database before running the CLI in a separate process; verifies v1 schema, healthy status, one SST, authoritative result, exit code, and empty stderr.",
+      "verificationNote": "Compared the Midge process-level stdout, stderr, and exit-code assertions against the Pants process-level test. Focused Release verification_cli tests passed 7/7."
     },
     {
       "source": "tests/wal_campaigns.rs",
