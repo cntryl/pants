@@ -1,8 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!-- Corvus Text Json reports this UTF-8 lookup suggestion across pre-existing tests. -->
+    <NoWarn>$(NoWarn);CTJ001</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Cntryl.Conventions.Testing.Analyzers"/>
     <PackageReference Include="Cntryl.Conventions.Testing.CodeFixes"/>
+    <PackageReference Include="Corvus.Text.Json.Validator" PrivateAssets="all"/>
     <PackageReference Include="coverlet.collector"/>
     <PackageReference Include="Microsoft.Extensions.Configuration"/>
     <PackageReference Include="Microsoft.NET.Test.Sdk"/>

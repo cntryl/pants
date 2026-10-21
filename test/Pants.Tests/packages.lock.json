@@ -14,6 +14,15 @@
         "resolved": "1.0.0",
         "contentHash": "bMLhHLjqYGxtkrFi01yNZ9GZrqMinhO3YH5iw5QcuPexb/mWEnKVCIqBWxFhVLcsxCvWYc5I9fDQYZRvOSRyFg=="
       },
+      "Corvus.Text.Json.Validator": {
+        "type": "Direct",
+        "requested": "[5.7.9, )",
+        "resolved": "5.7.9",
+        "contentHash": "Vb0uwjJV1Vui3o98sneNGmgjkHZxs0mgfyLyqhuQ40uI9SHe563lycLJ8K5/HhMWWKEqZGyPVtL2lQt/mhEL9w==",
+        "dependencies": {
+          "Corvus.Text.Json": "5.7.9"
+        }
+      },
       "coverlet.collector": {
         "type": "Direct",
         "requested": "[10.1.0, )",
@@ -75,6 +84,14 @@
         "type": "Transitive",
         "resolved": "2.9.1",
         "contentHash": "OE0sl1/sQ37bjVsPKKtwQlWDgqaxWgtme3xZz7JssWUzg5JpMIyHgCTY9MVMxOg48fJ1AgGT3tgdH5m/kQ5xhA=="
+      },
+      "Corvus.Text.Json": {
+        "type": "Transitive",
+        "resolved": "5.7.9",
+        "contentHash": "ShQwHlRoLw5EoihaqsOcNcQGdBVVp48YGnz1ExqWm6nz7P63InHmBOcB7qBVRXYpwOOg9D5r7/4UsJZ2Bcg+7A==",
+        "dependencies": {
+          "NodaTime": "3.3.1"
+        }
       },
       "Gee.External.Capstone": {
         "type": "Transitive",
@@ -202,6 +219,11 @@
         "dependencies": {
           "Microsoft.TestPlatform.ObjectModel": "18.11.0"
         }
+      },
+      "NodaTime": {
+        "type": "Transitive",
+        "resolved": "3.3.1",
+        "contentHash": "7zkTEqmakybTTuDuifpnzl5s8MkmpAdyvoqIPIO2+M2ThF8ixavPcPt1afPfFyCI+A6t3ySujgpGq/5iWc4/RQ=="
       },
       "Perfolizer": {
         "type": "Transitive",
