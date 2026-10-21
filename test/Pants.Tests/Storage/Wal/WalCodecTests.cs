@@ -146,11 +146,30 @@ public sealed class WalCodecTests
         Assert.Contains("compression", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData((byte)WalOperation.Delete)]
+    [InlineData((byte)WalOperation.TransactionBegin)]
+    public void ShouldRejectWalCompressionTagWithoutValueGivenOperationHasNoValue(
+        byte operationCode)
+    {
+        var payload = EncodeRawRecordWithCompression(
+            (WalOperation)operationCode,
+            "key"u8.ToArray(),
+            [],
+            1,
+            includeValue: false);
+
+        var exception = Assert.Throws<PantsCorruptionException>(() => WalCodec.DecodeRecord(payload));
+
+        Assert.Contains("VALUE", exception.Message, StringComparison.Ordinal);
+    }
+
     static byte[] EncodeRawRecordWithCompression(
         WalOperation operation,
         byte[] key,
         byte[] value,
-        byte compressionAlgorithm)
+        byte compressionAlgorithm,
+        bool includeValue = true)
     {
         using var payload = new MemoryStream();
         payload.Write("MW"u8);
@@ -160,7 +179,10 @@ public sealed class WalCodecTests
         WriteTlvUInt64(payload, 3, 5);
         WriteTlv(payload, 4, key);
         WriteTlvUInt64(payload, 10, 9);
-        WriteTlv(payload, 5, value);
+        if (includeValue)
+        {
+            WriteTlv(payload, 5, value);
+        }
         WriteTlv(payload, 9, [compressionAlgorithm]);
         return payload.ToArray();
     }
