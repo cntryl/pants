@@ -19,10 +19,10 @@
     "pantsCasesAtCapture": 2818,
     "pantsTestListRowsAtCapture": 2819,
     "mappingStatus": {
-      "verified-adapted": 76,
+      "verified-adapted": 77,
       "unmapped": 3512,
-      "candidate": 338,
-      "verified": 272
+      "candidate": 334,
+      "verified": 275
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries require triage into a real Pants behavior test or a documented non-applicable reason.",
@@ -37684,7 +37684,8 @@
         {
           "name": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenAssertionOnlySyncCommit",
           "evidence": [
-            "legacy-manifest"
+            "legacy-manifest",
+            "behavioral-parity-reviewed"
           ]
         }
       ],
@@ -37695,7 +37696,8 @@
           "rationale": null
         }
       ],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified",
+      "verificationNote": "Source and behavior comparison: both tests first buffer a guard value, then commit an assertion-only transaction with Sync and require exactly one physical WAL fsync. Pants samples WalFsyncCount around the assertion commit; the metric is recorded after FileStream.Flush(true) completes. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     },
     {
       "source": "tests/durability_sync_count.rs",
@@ -37707,7 +37709,8 @@
         {
           "name": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenEmptySyncCommit",
           "evidence": [
-            "legacy-manifest"
+            "legacy-manifest",
+            "behavioral-parity-reviewed"
           ]
         }
       ],
@@ -37718,7 +37721,8 @@
           "rationale": null
         }
       ],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified",
+      "verificationNote": "Source and behavior comparison: both Midge and Pants commit an empty ReadWrite transaction with Sync and require exactly one physical WAL fsync. Pants samples WalFsyncCount immediately around the commit; the metric is recorded after FileStream.Flush(true) completes. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     },
     {
       "source": "tests/durability_sync_count.rs",
@@ -37730,7 +37734,8 @@
         {
           "name": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenNonEmptySyncCommit",
           "evidence": [
-            "legacy-manifest"
+            "legacy-manifest",
+            "behavioral-parity-reviewed"
           ]
         }
       ],
@@ -37741,7 +37746,8 @@
           "rationale": null
         }
       ],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified",
+      "verificationNote": "Source and behavior comparison: Midge reads wal_fsync_count before and after a non-empty Sync transaction and requires a delta of exactly one. Pants uses the matching physical-boundary test, reads the per-engine WalFsyncCount around CommitAsync(PantsWriteOptions.Sync), and asserts a delta of one. In Pants, LocalDiskStore records the fsync metric only after SyncWal completes FileStream.Flush(true). The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     },
     {
       "source": "tests/durability_sync_count.rs",
@@ -37753,7 +37759,8 @@
         {
           "name": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenSpilledSyncCommit",
           "evidence": [
-            "legacy-manifest"
+            "legacy-manifest",
+            "behavioral-parity-reviewed"
           ]
         }
       ],
@@ -37764,7 +37771,8 @@
           "rationale": null
         }
       ],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The shared invariant is exactly one physical WAL fsync for a spilled synchronous transaction. Midge uses an 8 KiB transaction pool and four 8 KiB values; Pants uses a 1 KiB transaction pool, constrained memory, and six 900-byte values, then asserts that a transaction .run spill file exists before commit. Both assert one WAL fsync. Pants records WalFsyncCount after FileStream.Flush(true). This is a Pants-specific spill setup adaptation. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     },
     {
       "source": "tests/durability_sync_count.rs",
@@ -53915,6 +53923,34 @@
       "pantsTest": "Cntryl.Pants.Compatibility.MidgeFuzzRecoveryParityTests.ShouldReleaseStartupWorkersWhenReplayingRepeatedOneByteIntentFailures",
       "status": "verified-adapted",
       "evidence": "Uses the exact one-byte Midge intent_timeout_1.bin for 64 fresh databases. Each iteration requires offline verification and repeated strict opens to return RecoveryFailed, salvage to complete in SalvageMode while retaining the corrupt file and replacing the live intent with an empty array, then a strict successor open and shutdown. Pants rejects the input before starting runtime workers; the test verifies the observable recovery/lease cleanup boundary. Jev selected four native parity tests (Choice 1.0); shared-fixture fit Noul 0.64. Focused review prioritized resource release (Choice 0.80); possible false positive Noul 0.13. Source confirms failed startup disposes the disk store before rethrowing and strict recovery preserves the malformed bytes."
+    },
+    {
+      "midgeTarget": "durability_sync_count",
+      "midgeTestSuffix": "durability_sync_count::should_issue_one_physical_wal_sync_when_non_empty_sync_transaction_commits",
+      "pantsTest": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenNonEmptySyncCommit",
+      "status": "verified",
+      "evidence": "Source and behavior comparison: Midge reads wal_fsync_count before and after a non-empty Sync transaction and requires a delta of exactly one. Pants uses the matching physical-boundary test, reads the per-engine WalFsyncCount around CommitAsync(PantsWriteOptions.Sync), and asserts a delta of one. In Pants, LocalDiskStore records the fsync metric only after SyncWal completes FileStream.Flush(true). The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
+    },
+    {
+      "midgeTarget": "durability_sync_count",
+      "midgeTestSuffix": "durability_sync_count::should_issue_one_physical_wal_sync_when_empty_sync_transaction_commits",
+      "pantsTest": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenEmptySyncCommit",
+      "status": "verified",
+      "evidence": "Source and behavior comparison: both Midge and Pants commit an empty ReadWrite transaction with Sync and require exactly one physical WAL fsync. Pants samples WalFsyncCount immediately around the commit; the metric is recorded after FileStream.Flush(true) completes. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
+    },
+    {
+      "midgeTarget": "durability_sync_count",
+      "midgeTestSuffix": "durability_sync_count::should_issue_one_physical_wal_sync_when_assertion_only_sync_transaction_commits",
+      "pantsTest": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenAssertionOnlySyncCommit",
+      "status": "verified",
+      "evidence": "Source and behavior comparison: both tests first buffer a guard value, then commit an assertion-only transaction with Sync and require exactly one physical WAL fsync. Pants samples WalFsyncCount around the assertion commit; the metric is recorded after FileStream.Flush(true) completes. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
+    },
+    {
+      "midgeTarget": "durability_sync_count",
+      "midgeTestSuffix": "durability_sync_count::should_issue_one_physical_wal_sync_when_spilled_transaction_commits",
+      "pantsTest": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenSpilledSyncCommit",
+      "status": "verified-adapted",
+      "evidence": "The shared invariant is exactly one physical WAL fsync for a spilled synchronous transaction. Midge uses an 8 KiB transaction pool and four 8 KiB values; Pants uses a 1 KiB transaction pool, constrained memory, and six 900-byte values, then asserts that a transaction .run spill file exists before commit. Both assert one WAL fsync. Pants records WalFsyncCount after FileStream.Flush(true). This is a Pants-specific spill setup adaptation. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     }
   ],
   "featureGaps": [
