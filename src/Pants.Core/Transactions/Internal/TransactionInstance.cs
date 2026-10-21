@@ -319,14 +319,6 @@ sealed class TransactionInstance : IPantsTransaction
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
-        if (Mode != PantsTransactionMode.ReadOnly &&
-            !_database.IsSupported(options.Durability))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.NotSupported,
-                $"Durability '{options.Durability}' is not supported by this storage backend.");
-        }
-
         lock (_gate)
         {
             EnsureActive();
@@ -337,6 +329,14 @@ sealed class TransactionInstance : IPantsTransaction
         using var activity = PantsDiagnostics.ActivitySource.StartActivity("PantsTransaction.Commit");
         try
         {
+            if (Mode != PantsTransactionMode.ReadOnly &&
+                !_database.IsSupported(options.Durability))
+            {
+                throw PantsException.Create(
+                    PantsErrorCode.NotSupported,
+                    $"Durability '{options.Durability}' is not supported by this storage backend.");
+            }
+
             if (_coordinatorRegistered)
             {
                 await _database.CommitTransactionAsync(this, options, cancellationToken)

@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Contracts;
 
 public sealed class PantsHybridReadCancellationContractTests
 {
-    const long LocalBudgetBytes = 560 * 1024;
+    const long LocalBudgetBytes = 280 * 1024;
     static readonly TimeSpan PromptCancellationTimeout = TimeSpan.FromSeconds(1);
 
     [Fact]
@@ -55,6 +55,7 @@ public sealed class PantsHybridReadCancellationContractTests
             PantsTransactionMode.ReadOnly);
         using var cancellation = new CancellationTokenSource();
 
+        failpoint.Arm();
         var read = reader.GetWithDiagnosticsAsync(
             "hybrid-key"u8.ToArray(),
             cancellation.Token).AsTask();
@@ -87,6 +88,7 @@ public sealed class PantsHybridReadCancellationContractTests
         using var cancellation = new CancellationTokenSource();
         var enumerator = scan.GetAsyncEnumerator(cancellation.Token);
 
+        failpoint.Arm();
         var moveNext = enumerator.MoveNextAsync().AsTask();
         try
         {
@@ -118,24 +120,20 @@ public sealed class PantsHybridReadCancellationContractTests
             new RuntimeDependencies(failpoints));
         try
         {
-            await using (var writer = await database.Transactions.BeginAsync(
-                             database.ColumnFamilies.DefaultFamily,
-                             PantsTransactionMode.ReadWrite))
-            {
-                writer.Put("hybrid-key"u8.ToArray(), CreateValue(256 * 1024, 97));
-                await writer.CommitAsync(PantsWriteOptions.CloudStrict);
-            }
-
-            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            var value = CreateValue(24 * 1024, 97);
+            await CommitAndFlushAsync(database, "hybrid-key", value);
             var firstSstName = Path.GetFileName(Assert.Single(Directory.GetFiles(
                 Path.Combine(path, "cloud_store", "sst"),
                 "*.sst")));
+            for (var index = 0; index < 12; index++)
+            {
+                await CommitAndFlushAsync(
+                    database,
+                    $"eviction-seed-{index}",
+                    CreateValue(value.Length, 98 + index));
+            }
 
-            await using var evictor = await database.Transactions.BeginAsync(
-                database.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadWrite);
-            evictor.Put("eviction-window"u8.ToArray(), CreateValue(256 * 1024, 98));
-            await evictor.CommitAsync(PantsWriteOptions.CloudStrict);
+            await CommitAndFlushAsync(database, "eviction-window", CreateValue(value.Length, 110));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             Assert.DoesNotContain(
                 Directory.GetFiles(Path.Combine(path, "sst"), "*.sst"),
@@ -147,6 +145,19 @@ public sealed class PantsHybridReadCancellationContractTests
             await database.DisposeAsync();
             throw;
         }
+    }
+
+    static async Task CommitAndFlushAsync(
+        IPantsDatabase database,
+        string key,
+        byte[] value)
+    {
+        await using var writer = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        writer.Put(TestBytes.FromString(key), value);
+        await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static async ValueTask<IPantsDatabase> CreateProviderDatabaseWithMissingLocalSstAsync(

@@ -30,6 +30,50 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
+    public async Task ShouldPreservePublishedSstBytesGivenLaterFlushThenRestart()
+    {
+        using var directory = new TemporaryDirectory();
+        var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+        string firstSstPath;
+        byte[] publishedBytes;
+
+        await using (var database = await PantsDatabase.OpenAsync(options))
+        {
+            await using (var first = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                first.Put(TestBytes.FromString("first"), TestBytes.FromString("one"));
+                await first.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            firstSstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+            publishedBytes = await File.ReadAllBytesAsync(firstSstPath);
+
+            await using (var second = await database.Transactions.BeginAsync(
+                             database.ColumnFamilies.DefaultFamily,
+                             PantsTransactionMode.ReadWrite))
+            {
+                second.Put(TestBytes.FromString("second"), TestBytes.FromString("two"));
+                await second.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            Assert.Equal(publishedBytes, await File.ReadAllBytesAsync(firstSstPath));
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        Assert.Equal(publishedBytes, await File.ReadAllBytesAsync(firstSstPath));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("one", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("first")))!.Value));
+        Assert.Equal("two", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("second")))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldWriteFormatV3WalTlvAndSstV4()
     {
         using var directory = new TemporaryDirectory();

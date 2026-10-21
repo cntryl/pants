@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
+using Cntryl.Pants.Cloud.Internal;
+using Cntryl.Pants.Storage;
 using Cntryl.Pants.Storage.Internal.IO;
 using Cntryl.Pants.Storage.Internal.Wal;
 
@@ -522,7 +524,7 @@ sealed class Actor : IAsyncDisposable
                         simulatedRoot,
                         diskStore.WriterEpoch,
                         dependencies.Failpoints,
-                        SstPublicationAdmission.Gated(
+                        SstPublicationAdmission.DeferredWhenBusy(
                             maintenanceMemoryBudget,
                             maintenanceMemoryGate));
                     cloudPersistence = simulatedPersistence;
@@ -623,7 +625,7 @@ sealed class Actor : IAsyncDisposable
                         cloud.LocalStorageBudgetBytes ??
                         HybridStorageBudgetPolicy.DefaultMaximumLocalBytes,
                         dependencies.Failpoints);
-                    var mirrorPublicationAdmission = SstPublicationAdmission.Gated(
+                    var mirrorPublicationAdmission = SstPublicationAdmission.DeferredWhenBusy(
                         maintenanceMemoryBudget,
                         maintenanceMemoryGate);
                     var localWalCacheId = LocalDiskStore.GetOrCreateWalCacheIdentity(
@@ -1299,6 +1301,7 @@ sealed class Actor : IAsyncDisposable
                         state.FamilyData.Remove(identity);
                         state.RangeTombstones.Remove(identity);
                         state.ActiveMemtableBytes.Remove(identity);
+                        state.ActiveMemtableWalStartBytes.Remove(identity);
                         state.UnflushedFamilies.Remove(identity);
                         state.SignalWritePressureChanged();
                     }
@@ -2288,6 +2291,135 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
+    public async ValueTask<PantsBackupManifest> BackupAsync(
+        string destination,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        if (timeout < TimeSpan.Zero)
+        {
+            throw PantsException.InvalidArgument("Backup timeout must not be negative.");
+        }
+
+        if (timeout == TimeSpan.Zero)
+        {
+            throw new PantsTimeoutException("Backup could not acquire its capture barrier before the deadline.");
+        }
+
+        var storageKind = _options.Storage switch
+        {
+            PantsStorageConfiguration.Local => PantsBackupStorageKind.Local,
+            PantsStorageConfiguration.SimulatedCloud => PantsBackupStorageKind.CloudSimulated,
+            _ => throw new PantsNotSupportedException(
+                "Backup supports only local and simulated-cloud storage.")
+        };
+        var diskStore = _diskStore ?? throw new PantsNotSupportedException(
+            "In-memory storage has no persistent path to back up.");
+        if (!IsPrimaryLeaseHealthy)
+        {
+            throw new PantsFencedException("Backup requires a healthy primary lease.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var target = BackupArtifactStore.PrepareCapture(diskStore.RootPath, destination);
+        using var deadline = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            deadline.Token);
+        using var acquisitionCancellation = new CancellationTokenSource();
+        var acquisition = AcquireVerificationBarrierAsync(acquisitionCancellation.Token).AsTask();
+        OnlineVerificationBarrier barrier;
+        try
+        {
+            barrier = await acquisition.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            acquisitionCancellation.Cancel();
+            _ = ReleaseAbandonedVerificationBarrierAsync(acquisition);
+            throw new PantsTimeoutException("Backup could not acquire its capture barrier before the deadline.");
+        }
+        catch (OperationCanceledException)
+        {
+            acquisitionCancellation.Cancel();
+            _ = ReleaseAbandonedVerificationBarrierAsync(acquisition);
+            throw;
+        }
+
+        BackupArtifactStore.PinnedBackupFiles? pinnedFiles = null;
+        DateTimeOffset capturedAt;
+        try
+        {
+            if (barrier.RuntimeHealth != PantsEngineHealth.Healthy || !IsPrimaryLeaseHealthy)
+            {
+                throw new PantsFencedException("Backup requires a healthy primary lease and runtime.");
+            }
+
+            pinnedFiles = await SendAsync(
+                    async state =>
+                    {
+                        ThrowIfShuttingDown(state);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!diskStore.IsLeaseHealthy || !IsPrimaryLeaseHealthy)
+                        {
+                            throw new PantsFencedException(
+                                "The primary lease became unhealthy during backup capture.");
+                        }
+
+                        diskStore.FlushDurabilityBoundary(_walMetrics);
+                        var paths = diskStore.GetBackupFilePaths(
+                            storageKind == PantsBackupStorageKind.CloudSimulated);
+                        var files = await BackupArtifactStore.PinFilesAsync(
+                                diskStore.RootPath,
+                                paths,
+                                target.ObjectsPath,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (!diskStore.IsLeaseHealthy || !IsPrimaryLeaseHealthy)
+                        {
+                            files.Dispose();
+                            throw new PantsFencedException(
+                                "The primary lease became unhealthy during backup capture.");
+                        }
+
+                        return files;
+                    },
+                    cancellationToken,
+                    enforceRuntimeResponseTimeout: false)
+                .ConfigureAwait(false);
+            capturedAt = DateTimeOffset.UtcNow;
+        }
+        catch
+        {
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+            throw;
+        }
+
+        var capturedFiles = pinnedFiles ?? throw new PantsInternalException(
+            "Backup capture completed without pinned source files.");
+        try
+        {
+            await ReleaseVerificationBarrierAsync(barrier).ConfigureAwait(false);
+        }
+        catch
+        {
+            capturedFiles.Dispose();
+            throw;
+        }
+
+        using var pinnedCapture = capturedFiles;
+        return await BackupArtifactStore.CompleteCaptureAsync(
+                target,
+                pinnedCapture,
+                checked((ulong)barrier.Sequence),
+                storageKind,
+                capturedAt,
+                _failpoints,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     async ValueTask<OnlineVerificationBarrier> AcquireVerificationBarrierAsync(
         CancellationToken cancellationToken)
     {
@@ -2337,6 +2469,7 @@ sealed class Actor : IAsyncDisposable
                     var barrier = new OnlineVerificationBarrier(
                         token,
                         _diskStore?.RootPath,
+                        state.Sequence,
                         CaptureRuntimeHealth(state));
                     _verificationBarrier = barrier;
                     try
@@ -2532,6 +2665,11 @@ sealed class Actor : IAsyncDisposable
             throw;
         }
 
+        if (UsesBackgroundImmutableFlushes)
+        {
+            await WaitForImmutableFlushWorkersAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var preparation = SendAsync(
             async state =>
             {
@@ -2545,6 +2683,7 @@ sealed class Actor : IAsyncDisposable
                 // the lease and files that recovery needs instead of failing on the fence forever.
                 if (_diskStore is { IsWalFenced: false })
                 {
+                    var cloudWalDrained = false;
                     _ = await _walRuntime.FlushDurabilityBoundaryAsync(
                             Failpoint.BeforeShutdownWalDurabilityBoundary)
                         .ConfigureAwait(false);
@@ -2558,8 +2697,13 @@ sealed class Actor : IAsyncDisposable
                             CancelCloudWalSealDeadline();
                         }
 
-                        await TryDrainCloudWalBacklogOnShutdownAsync(state)
+                        cloudWalDrained = await TryDrainCloudWalBacklogOnShutdownAsync(state)
                             .ConfigureAwait(false);
+                    }
+
+                    if (_cloudPersistence is not null && cloudWalDrained)
+                    {
+                        await FlushActiveMemtablesForShutdownAsync(state).ConfigureAwait(false);
                     }
                 }
 
@@ -2610,6 +2754,22 @@ sealed class Actor : IAsyncDisposable
         {
             await WaitForImmutableFlushWorkersAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    async ValueTask FlushActiveMemtablesForShutdownAsync(RuntimeState state)
+    {
+        if (_diskStore is null || !state.ActiveMemtableBytes.Values.Any(static bytes => bytes > 0))
+        {
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        await _flushRuntime.FlushAsync(state).ConfigureAwait(false);
+        _telemetry.RecordFlush(Stopwatch.GetElapsedTime(started));
+        state.UnflushedFamilies.Clear();
+        ClearMemtableAccounting(state);
+        _cloudMemtableSegments?.Reinitialize([], _diskStore.CurrentWalSegmentId);
+        PublishSnapshot(state);
     }
 
     static async Task ObserveShutdownPreparationAsync(Task preparation)
@@ -3084,6 +3244,7 @@ sealed class Actor : IAsyncDisposable
         var durability = groupDurability ??
                          throw new PantsInternalException("A coalesced commit group has no durability policy.");
         var writtenWalSegmentId = diskStore.CurrentWalSegmentId;
+        var walBytesAtGroupStart = diskStore.WalBytesWrittenTotal;
         IReadOnlyList<PreparedCoalescedCommit> prepared;
         try
         {
@@ -3129,6 +3290,11 @@ sealed class Actor : IAsyncDisposable
                 .ConfigureAwait(false);
             return;
         }
+
+        RecordLocalWalMemtableStarts(
+            state,
+            prepared.SelectMany(static commit => commit.Families),
+            walBytesAtGroupStart);
 
         try
         {
@@ -3326,12 +3492,21 @@ sealed class Actor : IAsyncDisposable
             else
             {
                 writtenWalSegmentId = _diskStore.CurrentWalSegmentId;
+                var walBytesAtCommitStart = _diskStore.WalBytesWrittenTotal;
                 var automaticallyFlushed = await PersistCommitAsync(
                         state,
                         payload,
                         writeOptions.Durability,
                         deadline)
                     .ConfigureAwait(false);
+                if (!automaticallyFlushed)
+                {
+                    RecordLocalWalMemtableStarts(
+                        state,
+                        GetOperationFamilies(payload),
+                        walBytesAtCommitStart);
+                }
+
                 ApplyCommittedOperations(state, payload, state.Sequence);
                 TrackCloudMemtableWrites(payload, writtenWalSegmentId.Value);
                 if (automaticallyFlushed)
@@ -3985,18 +4160,21 @@ sealed class Actor : IAsyncDisposable
         }
     }
 
-    async ValueTask TryDrainCloudWalBacklogOnShutdownAsync(RuntimeState state)
+    async ValueTask<bool> TryDrainCloudWalBacklogOnShutdownAsync(RuntimeState state)
     {
         try
         {
             await _cloudWorker.ExecuteAsync(DrainCloudWalBacklogWithFailureTrackingAsync)
                 .ConfigureAwait(false);
+            return true;
         }
         catch (PantsException)
         {
             // CloudAsync acknowledges at the local WAL boundary. A failed
-            // shutdown upload must retain that WAL for startup recovery.
+            // shutdown upload must retain that WAL for startup recovery and must
+            // not publish an SST checkpoint that depends on the unpublished WAL.
             MarkPersistenceAnomaly(state);
+            return false;
         }
     }
 
@@ -4143,6 +4321,7 @@ sealed class Actor : IAsyncDisposable
                     }
                 }
 
+                await FlushAtLocalWalByteGapAsync(state).ConfigureAwait(false);
                 return;
             }
 
@@ -4157,7 +4336,66 @@ sealed class Actor : IAsyncDisposable
             return;
         }
 
-        await FlushCloudSegmentGapAsync(state).ConfigureAwait(false);
+        if (UsesBackgroundImmutableFlushes)
+        {
+            await FlushAtLocalWalByteGapAsync(state).ConfigureAwait(false);
+        }
+        else
+        {
+            await FlushCloudSegmentGapAsync(state).ConfigureAwait(false);
+        }
+    }
+
+    async ValueTask FlushAtLocalWalByteGapAsync(RuntimeState state)
+    {
+        var diskStore = _diskStore;
+        if (!UsesBackgroundImmutableFlushes || diskStore is null)
+        {
+            return;
+        }
+
+        var currentWalBytes = diskStore.WalBytesWrittenTotal;
+        var gapLimit = _options.MemtableFlushThresholdBytes > long.MaxValue / 4
+            ? long.MaxValue
+            : _options.MemtableFlushThresholdBytes * 4;
+        var eligible = state.ActiveMemtableBytes
+            .Where(static pair => pair.Value > 0)
+            .Select(pair => (
+                Family: pair.Key,
+                Gap: Math.Max(
+                    0,
+                    currentWalBytes - state.ActiveMemtableWalStartBytes.GetValueOrDefault(pair.Key))))
+            .Where(pair => pair.Gap >= gapLimit)
+            .OrderByDescending(static pair => pair.Gap)
+            .ThenBy(static pair => pair.Family.Id)
+            .ToArray();
+        if (eligible.Length == 0)
+        {
+            return;
+        }
+
+        var blockingFamilyId = diskStore.GetOldestWalPrefixBlockingFamilyId();
+        if (blockingFamilyId.HasValue)
+        {
+            var blockingFamily = state.ActiveMemtableBytes.Keys
+                .Where(family => family.Id == blockingFamilyId.Value &&
+                                 state.ActiveMemtableBytes.GetValueOrDefault(family) > 0)
+                .Select(static family => (ColumnFamilyIdentity?)family)
+                .FirstOrDefault();
+            if (blockingFamily is { } identity)
+            {
+                _ = await FreezeAndScheduleFlushAsync(state, identity, false)
+                    .ConfigureAwait(false);
+            }
+
+            return;
+        }
+
+        foreach (var candidate in eligible)
+        {
+            _ = await FreezeAndScheduleFlushAsync(state, candidate.Family, false)
+                .ConfigureAwait(false);
+        }
     }
 
     async ValueTask FlushAtWalRecordThresholdAsync(RuntimeState state)
@@ -4322,6 +4560,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         state.ActiveMemtableBytes[identity] = 0;
+        state.ActiveMemtableWalStartBytes.Remove(identity);
         var flush = new ImmutableMemtableFlush(frozen);
         state.ImmutableMemtableFlushes.Add(frozen.Id, flush);
         _telemetry.RecordFlushEnqueued();
@@ -5041,11 +5280,20 @@ sealed class Actor : IAsyncDisposable
 
         EnsureCloudWriteAuthorityValid();
         deadline = deadline.IsBounded ? deadline : OperationDeadline.Unbounded;
-        await ExecuteCloudWithinDeadlineAsync(
-                deadline,
-                MirrorCloudStorageWithFailureTrackingAsync,
-                true)
-            .ConfigureAwait(false);
+        try
+        {
+            await ExecuteCloudWithinDeadlineAsync(
+                    deadline,
+                    MirrorCloudStorageWithFailureTrackingAsync,
+                    true)
+                .ConfigureAwait(false);
+        }
+        catch (SstPublicationDeferredException)
+        {
+            _cloudMaintenanceScheduler.Signal();
+            return;
+        }
+
         ApplyPendingPersistenceAnomaly(_state);
     }
 
@@ -5143,6 +5391,10 @@ sealed class Actor : IAsyncDisposable
                         cancellationToken)
                     .ConfigureAwait(false);
             }
+        }
+        catch (SstPublicationDeferredException)
+        {
+            throw;
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -5253,6 +5505,26 @@ sealed class Actor : IAsyncDisposable
         {
             state.ActiveMemtableBytes[pair.Key] = checked(
                 state.ActiveMemtableBytes.GetValueOrDefault(pair.Key) + pair.Value);
+        }
+    }
+
+    void RecordLocalWalMemtableStarts(
+        RuntimeState state,
+        IEnumerable<ColumnFamilyIdentity> families,
+        long walBytesAtStart)
+    {
+        if (!UsesBackgroundImmutableFlushes)
+        {
+            return;
+        }
+
+        foreach (var family in families.Distinct(ColumnFamilyIdentityComparer.Instance))
+        {
+            if (state.ActiveMemtableBytes.GetValueOrDefault(family) == 0 &&
+                !state.ActiveMemtableWalStartBytes.ContainsKey(family))
+            {
+                state.ActiveMemtableWalStartBytes[family] = walBytesAtStart;
+            }
         }
     }
 
@@ -5407,6 +5679,7 @@ sealed class Actor : IAsyncDisposable
             }
 
             state.ActiveMemtableBytes[identity] = 0;
+            state.ActiveMemtableWalStartBytes.Remove(identity);
         }
     }
 
@@ -5420,6 +5693,7 @@ sealed class Actor : IAsyncDisposable
         }
 
         state.ActiveMemtableBytes[identity] = 0;
+        state.ActiveMemtableWalStartBytes.Remove(identity);
     }
 
     static PantsStorageLayout EmptyStorageLayout(RuntimeState state) => new(

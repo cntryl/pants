@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Cloud.Internal.WalRetirement;
 using Cntryl.Pants.Storage.Internal;
 using Cntryl.Pants.Storage.Internal.IO;
 
@@ -141,15 +142,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         return ValueTask.FromResult(true);
     }
 
-    public async ValueTask PublishWalBatchAsync(
+    public ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (PublishWalBatchCatalog(segments))
-        {
-            await MirrorMetadataAndSstsCoreAsync(cancellationToken).ConfigureAwait(false);
-        }
+        PublishWalBatchCatalog(segments);
+        return ValueTask.CompletedTask;
     }
 
     public ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken)
@@ -302,10 +301,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public void PublishWalBatch(IReadOnlyList<SealedWalSegment> segments)
     {
-        if (PublishWalBatchCatalog(segments))
-        {
-            MirrorMetadataAndSsts();
-        }
+        PublishWalBatchCatalog(segments);
     }
 
     bool PublishWalBatchCatalog(IReadOnlyList<SealedWalSegment> segments)
@@ -832,7 +828,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             historyStartChanged = true;
         }
 
-        var coveredSequence = manifest.LastPersistedSequence;
+        var coveredSequence = new WalCoverageIndex(manifest).MaximumSequenceWithDurableEvidence;
         if (coveredSequence == 0)
         {
             if (historyStartChanged)
@@ -882,7 +878,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     segment.WriterEpoch,
                     (ManifestState)manifest))
             {
-                continue;
+                // Retire only the oldest covered prefix so recovery never has to jump over a gap.
+                break;
             }
 
             retired.Add(segment);

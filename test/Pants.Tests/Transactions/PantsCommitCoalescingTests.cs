@@ -32,6 +32,9 @@ public sealed class PantsCommitCoalescingTests
                 await transaction.DisposeAsync();
             })));
             metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.True(
+                metrics.WalLocalDurableSequence >= metrics.CurrentSequence,
+                "Every acknowledged strict commit must be locally durable before shutdown.");
         }
 
         Assert.InRange(metrics.WalAppendCount, 1, 31);

@@ -5,6 +5,7 @@
   <Folder Name="/src/">
     <Project Path="src/Pants.Abstractions/Pants.Abstractions.csproj"/>
     <Project Path="src/Pants.Core/Pants.Core.csproj"/>
+    <Project Path="src/Pants.Cli/Pants.Cli.csproj"/>
     <Project Path="src/Pants.DependencyInjection/Pants.DependencyInjection.csproj"/>
   </Folder>
   <Folder Name="/test/">

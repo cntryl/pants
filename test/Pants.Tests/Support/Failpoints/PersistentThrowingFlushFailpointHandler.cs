@@ -26,5 +26,7 @@ sealed class PersistentThrowingFlushFailpointHandler(Failpoint target) :
     public async Task WaitUntilEnteredAsync(TimeSpan timeout) =>
         await _entered.Task.WaitAsync(timeout);
 
+    public void Arm() => Volatile.Write(ref _armed, 1);
+
     public void Release() => Volatile.Write(ref _armed, 0);
 }

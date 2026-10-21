@@ -2,23 +2,24 @@ namespace Cntryl.Pants.Cloud.Internal;
 
 /// <summary>
 ///     Admits SST publication memory (the upload body and its readback) against the shared
-///     maintenance pool before the file is read. Admission first enters the
-///     <see cref="MaintenanceMemoryGate" /> in arrival order, so a publication waits for an in-flight
-///     compaction round (whose SST and intent stay pending) instead of failing, and never makes a
-///     concurrent merge fail. Inside the gate the pool is exclusively the holder's, so the
-///     reservation itself cannot contend.
+///     maintenance pool before the file is read. Runtime mirror publications can defer when the
+///     gate is busy, so they do not occupy the cloud worker that compaction may need for manifest
+///     publication. Other callers retain FIFO waiting. Compaction output publication already owns
+///     the gate and uses <see cref="WithinCompactionRound(ResourceBudget)" />.
 /// </summary>
 sealed class SstPublicationAdmission
 {
     readonly ResourceBudget _budget;
     readonly MaintenanceMemoryGate? _gate;
+    readonly bool _deferWhenBusy;
 
     internal ResourceBudget Budget => _budget;
 
-    SstPublicationAdmission(ResourceBudget budget, MaintenanceMemoryGate? gate)
+    SstPublicationAdmission(ResourceBudget budget, MaintenanceMemoryGate? gate, bool deferWhenBusy = false)
     {
         _budget = budget;
         _gate = gate;
+        _deferWhenBusy = deferWhenBusy;
     }
 
     /// <summary>
@@ -30,6 +31,15 @@ sealed class SstPublicationAdmission
     /// <summary>Admission for publications outside compaction, such as the flush mirror.</summary>
     public static SstPublicationAdmission Gated(ResourceBudget budget, MaintenanceMemoryGate gate) =>
         new(budget, gate);
+
+    /// <summary>
+    ///     Admission for runtime mirror operations that must not wait on an actor-owned cloud
+    ///     worker while compaction waits for the actor to publish its manifest.
+    /// </summary>
+    public static SstPublicationAdmission DeferredWhenBusy(
+        ResourceBudget budget,
+        MaintenanceMemoryGate gate) =>
+        new(budget, gate, true);
 
     /// <summary>
     ///     Admission for compaction outputs, published by a compaction round that already holds the
@@ -44,8 +54,9 @@ sealed class SstPublicationAdmission
     ///     before the caller reads the SST; its local output and compaction intent remain available
     ///     for retry with a larger pool or a smaller partition.
     /// </summary>
-    public async ValueTask<IDisposable> AdmitAsync(long sizeBytes, CancellationToken cancellationToken)
+    public ValueTask<IDisposable> AdmitAsync(long sizeBytes, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var bytes = ImmutablePublicationEnvelope.For(sizeBytes);
         if (bytes > _budget.Limit)
         {
@@ -56,10 +67,30 @@ sealed class SstPublicationAdmission
 
         if (_gate is null)
         {
-            return _budget.Reserve(bytes);
+            return ValueTask.FromResult(_budget.Reserve(bytes));
         }
 
-        var hold = await _gate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        if (!_deferWhenBusy)
+        {
+            return AdmitAfterGateAsync(bytes, cancellationToken);
+        }
+
+        if (!_gate.TryEnter(out var hold))
+        {
+            throw new SstPublicationDeferredException();
+        }
+
+        return ValueTask.FromResult<IDisposable>(CreateAdmission(bytes, hold!));
+    }
+
+    async ValueTask<IDisposable> AdmitAfterGateAsync(long bytes, CancellationToken cancellationToken)
+    {
+        var hold = await _gate!.EnterAsync(cancellationToken).ConfigureAwait(false);
+        return CreateAdmission(bytes, hold);
+    }
+
+    Admission CreateAdmission(long bytes, IDisposable hold)
+    {
         try
         {
             return new Admission(_budget.Reserve(bytes), hold);

@@ -96,12 +96,12 @@ public sealed class TransactionSpillAdmissionTests
     }
 
     [Fact]
-    public async Task ShouldExposeTypedLocalCapacityPressureWhenACloudSpillIsRejected()
+    public async Task ShouldExposeTypedStoragePressureWhenTransactionSpillExceedsLocalCapacity()
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "spill-pressure/")
-            .WithSimulatedCloudLocalStorageBudget(64 * 1024)
+            .WithSimulatedCloudLocalStorageBudget(1024 * 1024)
             .WithTransactionMemoryPool(8 * 1024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
@@ -111,7 +111,7 @@ public sealed class TransactionSpillAdmissionTests
 
         Assert.Throws<PantsNoSpaceException>(() => transaction.Put(
             TestBytes.FromString("oversized"),
-            new byte[256 * 1024]));
+            new byte[2 * 1024 * 1024]));
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         var storage = Assert.IsType<PantsHybridStorageBudgetSnapshot>(metrics.HybridStorageBudget);
@@ -121,8 +121,11 @@ public sealed class TransactionSpillAdmissionTests
         Assert.True(blocked.RequestedBytes > blocked.FreeBytesAtRejection);
         Assert.True(blocked.Attempts > 0);
         Assert.True(storage.AdmissionRejectionsTotal >= blocked.Attempts);
-        Assert.Equal(64 * 1024, storage.MaximumLocalBytes);
+        Assert.Equal(1024 * 1024, storage.MaximumLocalBytes);
         Assert.Equal(storage.TotalCommittedBytes, SumLocalStorageCharges(storage.Usage));
+        Assert.Equal(
+            Math.Max(0, storage.MaximumLocalBytes - storage.TotalCommittedBytes),
+            storage.FreeBytes);
         Assert.Equal(0, storage.Usage.TransactionSpillBytes);
     }
 

@@ -285,6 +285,12 @@
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )"
         }
       },
+      "Cntryl.Pants.Cli": {
+        "type": "Project",
+        "dependencies": {
+          "Cntryl.Pants.Core": "[1.0.0, )"
+        }
+      },
       "Cntryl.Pants.Core": {
         "type": "Project",
         "dependencies": {

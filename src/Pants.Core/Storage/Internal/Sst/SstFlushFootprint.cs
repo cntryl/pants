@@ -14,6 +14,9 @@ sealed class SstFlushFootprint
     const long BlockLengthAndChecksumTrailerBytes = 9;
     const long MaximumEncodedPayloadCopies = 4;
     const long ConstructionScratchBytesPerOperation = 192;
+    const long ConservativePointEntryBytes = 256;
+    const long ConservativeRangeEntryBytes = 128;
+    const long ConservativeFixedSstBytes = 16 * 1024;
 
     long _operationCount;
     long _pointCount;
@@ -110,6 +113,31 @@ sealed class SstFlushFootprint
             compressionOverhead +
             blockCount * BlockLengthAndChecksumTrailerBytes +
             DiskFormat.SstFooterSize);
+    }
+
+    /// <summary>
+    ///     Bounds the hybrid cloud flush staging promised by one family before an indivisible
+    ///     transaction is appended to the WAL.
+    /// </summary>
+    public long MeasureCloudFlushStagingUpperBound()
+    {
+        if (_pointCount == 0 && _rangeCount == 0)
+        {
+            return 0;
+        }
+
+        var conservativePointBytes = checked(
+            _pointCount * ConservativePointEntryBytes +
+            _pointKeyBytes * 8 +
+            _valueBytes * 2);
+        var conservativeRangeBytes = checked(
+            _rangeCount * ConservativeRangeEntryBytes +
+            _rangeBoundBytes * 6);
+        var encodedUpperBound = checked(
+            ConservativeFixedSstBytes +
+            conservativePointBytes +
+            conservativeRangeBytes);
+        return checked(encodedUpperBound * 2);
     }
 
     public static long MeasureUpperBound(

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Cntryl.Pants.Storage;
 using Cntryl.Pants.Support.TestDoubles;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -284,6 +285,44 @@ public sealed class PantsOptionsPatternTests
             default:
                 throw new InvalidOperationException("Unexpected provider kind.");
         }
+    }
+
+    [Fact]
+    public async Task ShouldSelectJsonApiGivenApplicationDefaultGcsCredentials()
+    {
+        using var cache = new TemporaryDirectory();
+        var providerOptions = CreateProviderOptions(PantsCloudProviderKind.Gcs);
+        providerOptions.Credential = CreateCredentialOptions(
+            PantsCloudCredentialKind.GcsApplicationDefault);
+        var services = new ServiceCollection();
+        services.AddSingleton<IPantsDatabaseFactory>(new CapturingDatabaseFactory());
+        services.AddPants().Configure(options =>
+        {
+            options.Storage = new PantsStorageOptions
+            {
+                Kind = PantsStorageKind.Cloud,
+                Path = cache.Path,
+                Cloud = new PantsCloudStorageOptions
+                {
+                    Shared = new PantsCloudLocationOptions
+                    {
+                        Prefix = "database/",
+                        Provider = providerOptions
+                    }
+                }
+            };
+        });
+
+        await using var serviceProvider = services.BuildServiceProvider();
+        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await using var database = await serviceProvider
+            .GetRequiredService<IPantsDatabaseProvider>()
+            .GetDatabaseAsync();
+
+        var cloud = Assert.IsType<PantsStorageConfiguration.Cloud>(database.Options.Storage);
+        var provider = Assert.IsType<PantsGcsProvider>(cloud.Topology.Control.Provider);
+        Assert.Equal(PantsGcsApiStyle.Json, provider.ApiStyle);
+        Assert.IsType<PantsGcsCredentialSource.ApplicationDefault>(provider.Credential);
     }
 
     [Theory]
@@ -616,6 +655,12 @@ public sealed class PantsOptionsPatternTests
         public IPantsPersistentStorage? PersistentStorage => throw new NotSupportedException();
 
         public IPantsCloudDatabase? Cloud => throw new NotSupportedException();
+
+        public ValueTask<PantsBackupManifest> BackupAsync(
+            string destination,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public ValueTask ShutdownAsync(
             TimeSpan timeout,

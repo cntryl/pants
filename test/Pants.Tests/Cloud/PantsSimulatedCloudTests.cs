@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Cntryl.Pants.Runtime.Internal;
+using Cntryl.Pants.Support;
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -45,6 +48,42 @@ public sealed class PantsSimulatedCloudTests
     }
 
     [Fact]
+    public async Task ShouldCompleteCloudStrictWriteWhileCompactionWaitsForActorPublication()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new BlockingCompactionOutputFailpointHandler();
+        var options = PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "database/")
+            .WithFlushAfterWalRecordsForTesting(1)
+            .WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoints));
+
+        await CommitCloudStrictValueAsync(database, "seed/first", "value/first");
+        await CommitCloudStrictValueAsync(database, "seed/second", "value/second");
+
+        var compaction = database.Maintenance.CompactAllAsync().AsTask();
+        try
+        {
+            await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
+            await CommitCloudStrictValueAsync(database, "during-compaction", "acknowledged")
+                .WaitAsync(TestTimeouts.Expected);
+        }
+        finally
+        {
+            failpoints.Release();
+        }
+
+        await compaction.WaitAsync(TestTimeouts.Expected);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            "acknowledged",
+            TestBytes.ToText((await reader.GetAsync("during-compaction"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldRecoverCloudCommitAfterLosingLocalCache()
     {
         using var directory = new TemporaryDirectory();
@@ -86,7 +125,7 @@ public sealed class PantsSimulatedCloudTests
 
         Assert.Equal("remote/value", TestBytes.ToText((await reader.GetAsync("remote/key"u8.ToArray()))!.Value));
         using var repaired = JsonDocument.Parse(await File.ReadAllBytesAsync(primaryPath));
-        Assert.True(repaired.RootElement.GetProperty("segments").TryGetProperty("1", out _));
+        Assert.Equal(JsonValueKind.Object, repaired.RootElement.GetProperty("segments").ValueKind);
         Assert.Equal(
             await File.ReadAllBytesAsync(primaryPath),
             await File.ReadAllBytesAsync(mirrorPath));
@@ -97,6 +136,7 @@ public sealed class PantsSimulatedCloudTests
     {
         using var directory = new TemporaryDirectory();
         await CommitCloudStrictAsync(directory.Path);
+        RemoveCloudCheckpoints(directory.Path);
         var primaryPath = CatalogPath(directory.Path, "publication-catalog.v1.json");
         var mirrorPath = CatalogPath(directory.Path, "publication-catalog.v1.mirror.json");
         await File.WriteAllBytesAsync(primaryPath, "{ torn"u8.ToArray());
@@ -114,8 +154,18 @@ public sealed class PantsSimulatedCloudTests
     {
         using var directory = new TemporaryDirectory();
         await CommitCloudStrictAsync(directory.Path);
+        RemoveCloudCheckpoints(directory.Path);
         File.Delete(CatalogPath(directory.Path, "publication-catalog.v1.json"));
         File.Delete(CatalogPath(directory.Path, "publication-catalog.v1.mirror.json"));
+        var orphanWal = Path.Combine(
+            directory.Path,
+            "cloud_store",
+            "wal",
+            "epochs",
+            "00000000000000000001",
+            "00000000000000000099.wal");
+        Directory.CreateDirectory(Path.GetDirectoryName(orphanWal)!);
+        await File.WriteAllBytesAsync(orphanWal, [1]);
         RemoveLocalCache(directory.Path);
 
         var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(
@@ -135,8 +185,30 @@ public sealed class PantsSimulatedCloudTests
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
     }
 
+    static async Task CommitCloudStrictValueAsync(IPantsDatabase database, string key, string value)
+    {
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(System.Text.Encoding.UTF8.GetBytes(key), System.Text.Encoding.UTF8.GetBytes(value));
+        await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
+    }
+
     static string CatalogPath(string root, string name) =>
         Path.Combine(root, "cloud_store", "wal", name);
+
+    static void RemoveCloudCheckpoints(string root)
+    {
+        var cloudRoot = Path.Combine(root, "cloud_store");
+        foreach (var name in new[] { "metadata", "sst" })
+        {
+            var path = Path.Combine(cloudRoot, name);
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
 
     [Fact]
     public async Task ShouldMirrorFlushedSstAndRecoveryMetadata()

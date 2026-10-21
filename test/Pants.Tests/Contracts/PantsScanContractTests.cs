@@ -36,6 +36,77 @@ public sealed class PantsScanContractTests
     }
 
     [Fact]
+    public async Task ShouldStopPrefixScanBeforeNeighboringPrefix()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await WriteRowsAsync(database,
+            ("aa:1"u8.ToArray(), "one"u8.ToArray()),
+            ("aa:2"u8.ToArray(), "two"u8.ToArray()),
+            ("ab:0"u8.ToArray(), "other"u8.ToArray()));
+
+        var rows = await ScanAsync(database, new PantsScanQuery { Prefix = "aa:"u8.ToArray() });
+
+        Assert.Equal(["aa:1", "aa:2"], rows.Select(static row => TestBytes.ToText(row.Key)).ToArray());
+    }
+
+    [Fact]
+    public async Task ShouldIntersectPrefixWithExplicitEndBound()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await WriteRowsAsync(database,
+            ("scan:1"u8.ToArray(), "one"u8.ToArray()),
+            ("scan:2"u8.ToArray(), "two"u8.ToArray()),
+            ("scan:3"u8.ToArray(), "three"u8.ToArray()),
+            ("scao:0"u8.ToArray(), "neighbor"u8.ToArray()));
+
+        var rows = await ScanAsync(database, new PantsScanQuery
+        {
+            Prefix = "scan:"u8.ToArray(),
+            EndExclusive = "scan:2"u8.ToArray()
+        });
+
+        Assert.Equal(["scan:1"], rows.Select(static row => TestBytes.ToText(row.Key)).ToArray());
+    }
+
+    [Fact]
+    public async Task ShouldReturnEmptyGivenValidBoundsDisjointFromPrefix()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await WriteRowsAsync(database,
+            ("alpha:1"u8.ToArray(), "one"u8.ToArray()),
+            ("zulu:1"u8.ToArray(), "two"u8.ToArray()));
+
+        var rows = await ScanAsync(database, new PantsScanQuery
+        {
+            StartInclusive = "zulu"u8.ToArray(),
+            EndExclusive = "zulu;"u8.ToArray(),
+            Prefix = "alpha:"u8.ToArray()
+        });
+
+        Assert.Empty(rows);
+    }
+
+    [Fact]
+    public async Task ShouldScanBinaryPrefixWithoutFiniteSuccessor()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await WriteRowsAsync(database,
+            (new byte[] { 0xfe, 0xff }, "other"u8.ToArray()),
+            (new byte[] { 0xff }, "value"u8.ToArray()),
+            (new byte[] { 0xff, 0x00 }, "value"u8.ToArray()),
+            (new byte[] { 0xff, 0xff, 0x01 }, "value"u8.ToArray()));
+
+        var rows = await ScanAsync(database, new PantsScanQuery { Prefix = new byte[] { 0xff } });
+
+        Assert.Collection(
+            rows,
+            row => Assert.Equal(new byte[] { 0xff }, row.Key.ToArray()),
+            row => Assert.Equal(new byte[] { 0xff, 0x00 }, row.Key.ToArray()),
+            row => Assert.Equal(new byte[] { 0xff, 0xff, 0x01 }, row.Key.ToArray()));
+        Assert.All(rows, static row => Assert.Equal("value", TestBytes.ToText(row.Value)));
+    }
+
+    [Fact]
     public async Task ShouldHonorPrefixEndingInFf()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
@@ -145,5 +216,29 @@ public sealed class PantsScanContractTests
         }
 
         return entries;
+    }
+
+    static async Task WriteRowsAsync(
+        IPantsDatabase database,
+        params (byte[] Key, byte[] Value)[] rows)
+    {
+        await using var writer = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        foreach (var row in rows)
+        {
+            writer.Put(row.Key, row.Value);
+        }
+
+        await writer.CommitAsync(PantsWriteOptions.Buffered);
+    }
+
+    static async Task<IReadOnlyList<PantsEntry>> ScanAsync(IPantsDatabase database, PantsScanQuery query)
+    {
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var scan = await reader.ScanAsync(query);
+        return await CollectAsync(scan);
     }
 }

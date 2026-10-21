@@ -21,6 +21,9 @@ sealed class ManifestState
     [JsonPropertyName("wal_sequence_reservation_version")]
     public uint WalSequenceReservationVersion { get; set; }
 
+    [JsonPropertyName("reserved_commit_sequence")]
+    public ulong ReservedCommitSequence { get; set; }
+
     public Dictionary<uint, ulong> NextSstSeqs { get; set; } = [];
 
     [JsonPropertyName("flushed_through")]
@@ -51,6 +54,7 @@ sealed class ManifestState
         NextWalSeq = NextWalSeq,
         PendingWalSegmentId = PendingWalSegmentId,
         WalSequenceReservationVersion = WalSequenceReservationVersion,
+        ReservedCommitSequence = ReservedCommitSequence,
         NextSstSeqs = new Dictionary<uint, ulong>(NextSstSeqs),
         FlushedThrough = new Dictionary<uint, ulong>(FlushedThrough),
         WalHistoryStart = WalHistoryStart,
@@ -67,6 +71,7 @@ sealed class ManifestState
         NextWalSeq = source.NextWalSeq;
         PendingWalSegmentId = source.PendingWalSegmentId;
         WalSequenceReservationVersion = source.WalSequenceReservationVersion;
+        ReservedCommitSequence = source.ReservedCommitSequence;
         NextSstSeqs = source.NextSstSeqs;
         FlushedThrough = source.FlushedThrough;
         WalHistoryStart = source.WalHistoryStart;

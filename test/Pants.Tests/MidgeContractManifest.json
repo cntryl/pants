@@ -91,7 +91,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsBackgroundFlushPipelineTests.ShouldDeferDropUntilImmutableFlushPipelineCompletes"
+        "Cntryl.Pants.Runtime.PantsBackgroundFlushPipelineTests.ShouldDeferDropUntilImmutableFlushPipelineCompletes"
       ]
     },
     {
@@ -260,7 +260,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsBestEffortDurabilityTests.ShouldPersistBestEffortDataGivenExplicitFlushBeforeReopen"
+        "Cntryl.Pants.Runtime.PantsBestEffortDurabilityTests.ShouldPersistBestEffortDataGivenExplicitFlushBeforeReopen"
       ]
     },
     {
@@ -526,7 +526,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-"Cntryl.Pants.Cloud.PantsCloudCrashRecoveryTests.ShouldRecoverCloudStrictWriteWhenCacheLostAfterChildAbort"
+        "Cntryl.Pants.Cloud.PantsCloudCrashRecoveryTests.ShouldRecoverCloudStrictWriteWhenCacheLostAfterChildAbort"
       ]
     },
     {
@@ -760,7 +760,7 @@
       "status": "mapped",
       "issue": 7,
       "pantsTests": [
-"Cntryl.Pants.Cloud.PantsCloudWalPruningTests.ShouldFailStrictRecoveryGivenAuthoritativeRemoteSstMissingWhenReopening"
+        "Cntryl.Pants.Cloud.PantsCloudWalPruningTests.ShouldFailStrictRecoveryGivenAuthoritativeRemoteSstMissingWhenReopening"
       ]
     },
     {
@@ -1006,7 +1006,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-"Cntryl.Pants.Cloud.CloudProviderEngineQualificationTests.ShouldRouteTwoLocationTopologyThroughProviderProtocols"
+        "Cntryl.Pants.Cloud.CloudProviderEngineQualificationTests.ShouldRouteTwoLocationTopologyThroughProviderProtocols"
       ]
     },
     {
@@ -1258,7 +1258,7 @@
       "status": "mapped",
       "issue": 2,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
@@ -1402,10 +1402,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateCfAfterFlushGivenSameKeyWhenReading"
       ]
     },
     {
@@ -1418,10 +1415,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateCompactionGivenPerCfDataWhenCompacting"
       ]
     },
     {
@@ -1434,10 +1428,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateDataGivenDifferentDataVolumesWhenReading"
       ]
     },
     {
@@ -1450,10 +1441,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateDeletesGivenDeleteInOneCfWhenOtherCfHasSameKey"
       ]
     },
     {
@@ -1466,10 +1454,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateKeysGivenSameKeyInDifferentCfsWhenReading"
       ]
     },
     {
@@ -1499,7 +1484,7 @@
       "issue": 2,
       "pantsTests": [
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-"Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
         "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
       ]
@@ -1514,10 +1499,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldMaintainCfIsolationGivenManyCfsWhenOperating"
       ]
     },
     {
@@ -1546,10 +1528,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldPersistCfDataGivenRestartWhenDataFlushed"
       ]
     },
     {
@@ -1578,10 +1557,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldPersistCfMetadataGivenRestartWhenCfCreated"
       ]
     },
     {
@@ -1594,10 +1570,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldValidateNamesAndAllocateMonotonicColumnFamilyIdentities",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldIsolateAndPersistColumnFamiliesAcrossFlushAndCompaction",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldDistinguishSafeAndDestructiveColumnFamilyDrop",
-        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldRejectCommitThroughHandleDroppedAfterTransactionStart"
+        "Cntryl.Pants.Contracts.PantsColumnFamilyParityTests.ShouldPersistMultipleCfsGivenRestartWhenAllFlushed"
       ]
     },
     {
@@ -1754,7 +1727,7 @@
       "expectedError": null,
       "issue": 6,
       "pantsTests": [
-"Cntryl.Pants.Storage.PantsColumnFamilyReclamationTests.ShouldDeferReclamationUntilTheOldestSnapshotReleases"
+        "Cntryl.Pants.Storage.PantsColumnFamilyReclamationTests.ShouldDeferReclamationUntilTheOldestSnapshotReleases"
       ]
     },
     {
@@ -2001,7 +1974,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.Storage.Compression.PantsCompressionCompatibilityTests.ShouldStrictlyReopenCompletedAdaptiveCompaction"
+        "Cntryl.Pants.Storage.Compression.PantsCompressionCompatibilityTests.ShouldStrictlyReopenCompletedAdaptiveCompaction"
       ]
     },
     {
@@ -2254,7 +2227,7 @@
       "status": "mapped",
       "issue": 2,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsConfigurationParityTests.ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder",
+        "Cntryl.Pants.Contracts.PantsConfigurationParityTests.ShouldKeepOptionsImmutableAndDeriveTheSamePoolsRegardlessOfCallOrder",
         "Cntryl.Pants.Contracts.PantsConfigurationParityTests.ShouldDeriveDistinctWorkloadAndPerformanceProfilesWithinTheBudget",
         "Cntryl.Pants.Contracts.PantsConfigurationParityTests.ShouldValidateEveryExplicitConfigurationBoundary",
         "Cntryl.Pants.Contracts.PantsConfigurationContractTests.ShouldDeriveMemoryPoolsWithoutExceedingExplicitBudget"
@@ -2501,7 +2474,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
+        "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldDeleteProvenFlushOutputLeftBeforeManifestPublication",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
@@ -2752,7 +2725,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldPreserveOrderedWritesDeletesAndSequenceAcrossRepeatedReopens",
+        "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldPreserveOrderedWritesDeletesAndSequenceAcrossRepeatedReopens",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldRecoverAtomicCommitFromMidgeWalAfterReopen"
       ]
@@ -2986,7 +2959,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
+        "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverEveryConcurrentSyncCommitExactlyOnce",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldFailStrictRecoveryButSalvageValidWalPrefix",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.StrictRecoveryTruncatesZeroFilledActiveWalPreallocation",
@@ -3237,7 +3210,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsEdgeCaseBehaviorTests.ShouldRetrieveOnlyRecordAndMissOtherKey"
+        "Cntryl.Pants.Runtime.PantsEdgeCaseBehaviorTests.ShouldRetrieveOnlyRecordAndMissOtherKey"
       ]
     },
     {
@@ -3484,7 +3457,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-"Cntryl.Pants.Cloud.ProviderCloudEngineTests.ShouldScanInsertedKeysGivenProviderCloudMode"
+        "Cntryl.Pants.Cloud.ProviderCloudEngineTests.ShouldScanInsertedKeysGivenProviderCloudMode"
       ]
     },
     {
@@ -3739,7 +3712,7 @@
       "expectedError": null,
       "issue": 2,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsEngineExclusivityParityTests.ShouldFenceConcurrentLocalOpensAndReleaseLeaseAfterShutdown",
+        "Cntryl.Pants.Contracts.PantsEngineExclusivityParityTests.ShouldFenceConcurrentLocalOpensAndReleaseLeaseAfterShutdown",
         "Cntryl.Pants.Contracts.PantsEngineExclusivityParityTests.ShouldAllowExactlyOneWinnerWhenLocalOpensRace",
         "Cntryl.Pants.Contracts.PantsEngineExclusivityParityTests.ShouldSurviveRapidOpenShutdownCycles",
         "Cntryl.Pants.Contracts.PantsEngineExclusivityParityTests.ShouldFenceWritesAfterLocalLeaseOwnershipIsLost",
@@ -3992,7 +3965,7 @@
       "expectedError": null,
       "issue": 7,
       "pantsTests": [
-"Cntryl.Pants.Cloud.CloudSstGarbageCollectionTests.ShouldNotCollectCloudObjectsReferencedByManifest"
+        "Cntryl.Pants.Cloud.CloudSstGarbageCollectionTests.ShouldNotCollectCloudObjectsReferencedByManifest"
       ]
     },
     {
@@ -4239,7 +4212,7 @@
       "expectedError": null,
       "issue": 6,
       "pantsTests": [
-"Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
+        "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen"
       ]
     },
     {
@@ -4486,7 +4459,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.PantsTtlBehaviorTests.ShouldPreserveNonExpiredEntriesGivenCompactionWhenTtlNotExceeded"
+        "Cntryl.Pants.PantsTtlBehaviorTests.ShouldPreserveNonExpiredEntriesGivenCompactionWhenTtlNotExceeded"
       ]
     },
     {
@@ -4744,7 +4717,7 @@
       "expectedError": null,
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
+        "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
         "Cntryl.Pants.Contracts.PantsPersistenceBoundaryParityTests.ShouldRecoverAllDataAtEveryCompactionPublicationBoundary"
       ]
     },
@@ -4982,7 +4955,7 @@
       "status": "mapped",
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
+        "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
         "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldRetryIdenticalFlushAfterOutputBecomesDurableBeforePublication",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldSurfaceNoSpaceWithoutPublishingAndRemainUsable",
         "Cntryl.Pants.Contracts.PantsPersistenceBoundaryParityTests.ShouldKeepDdlStateAbsentWhenManifestAppendFails",
@@ -5237,7 +5210,7 @@
       "status": "mapped",
       "issue": 3,
       "pantsTests": [
-"Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
+        "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldFailBeforeWalAppendWithoutPublishingTransaction",
         "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldRetryIdenticalFlushAfterOutputBecomesDurableBeforePublication",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldSurfaceNoSpaceWithoutPublishingAndRemainUsable",
         "Cntryl.Pants.Contracts.PantsPersistenceBoundaryParityTests.ShouldKeepDdlStateAbsentWhenManifestAppendFails",
@@ -5739,7 +5712,7 @@
       "expectedError": null,
       "issue": 6,
       "pantsTests": [
-"Cntryl.Pants.Transactions.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns"
+        "Cntryl.Pants.Transactions.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns"
       ]
     },
     {
@@ -6001,7 +5974,7 @@
       "status": "mapped",
       "issue": 9,
       "pantsTests": [
-"Cntryl.Pants.Observability.PantsRuntimeMetricsCancellationContractTests.ShouldUnregisterResponseSlotWhenRuntimeMetricsResponseTimesOut"
+        "Cntryl.Pants.Observability.PantsRuntimeMetricsCancellationContractTests.ShouldUnregisterResponseSlotWhenRuntimeMetricsResponseTimesOut"
       ]
     },
     {
@@ -6244,7 +6217,7 @@
       "status": "mapped",
       "issue": 2,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsPersistenceBoundaryParityTests.ShouldRejectPersistedStateWithoutFormatMarker",
+        "Cntryl.Pants.Contracts.PantsPersistenceBoundaryParityTests.ShouldRejectPersistedStateWithoutFormatMarker",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldFailStrictRecoveryButSalvageValidWalPrefix",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldApplyRecoveryPolicyToCorruptControlMetadata"
       ]
@@ -6763,7 +6736,7 @@
       "expectedError": null,
       "issue": 6,
       "pantsTests": [
-"Cntryl.Pants.Storage.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
+        "Cntryl.Pants.Storage.SstBlockCacheTests.ShouldHandleZeroCapacityAndRapidManagedLifecycle"
       ]
     },
     {
@@ -6986,7 +6959,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.PantsSmokeBehaviorTests.ShouldAllowReadOnlySnapshotGivenCommittedValue"
+        "Cntryl.Pants.PantsSmokeBehaviorTests.ShouldAllowReadOnlySnapshotGivenCommittedValue"
       ]
     },
     {
@@ -7317,7 +7290,7 @@
       "expectedError": null,
       "issue": 6,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
+        "Cntryl.Pants.Contracts.PantsConfigurationContractTests.ShouldModelThreeIndependentCloudLocations"
       ]
     },
     {
@@ -7453,7 +7426,7 @@
       "expectedError": null,
       "issue": 5,
       "pantsTests": [
-"Cntryl.Pants.Storage.PantsSstReadIntegrationTests.ShouldHandleMemtableAndSstReads"
+        "Cntryl.Pants.Storage.PantsSstReadIntegrationTests.ShouldHandleMemtableAndSstReads"
       ]
     },
     {
@@ -7700,7 +7673,7 @@
       "status": "mapped",
       "issue": 6,
       "pantsTests": [
-        "Cntryl.Pants.Storage.PantsStreamingScanHardeningTests.ShouldYieldEarlierRowsBeforeAStickyLaterBlockFailure"
+        "Cntryl.Pants.Storage.PantsStreamingScanHardeningTests.ShouldSurfaceCorruptLaterSstBlockFromIteratorItem"
       ]
     },
     {
@@ -7724,7 +7697,7 @@
       "expectedError": null,
       "issue": 9,
       "pantsTests": [
-"Cntryl.Pants.Observability.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveAllValuesGivenCompactionWhenRequested"
+        "Cntryl.Pants.Observability.PantsTelemetryIntegrationBehaviorTests.ShouldPreserveAllValuesGivenCompactionWhenRequested"
       ]
     },
     {
@@ -7953,7 +7926,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
         "Cntryl.Pants.Transactions.PantsTransactionSpillTests.ShouldCommitAndCleanDurableSpillRuns",
         "Cntryl.Pants.Transactions.PantsTransactionSpillTests.ShouldRemoveOrphanedSpillRunsAfterAcquiringWriterLease",
         "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary"
@@ -8203,7 +8176,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldEnforceReadOnlyAndTerminalTransactionLifecycle",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldApplyInsertAndIntentOrderingAgainstFlushedState",
         "Cntryl.Pants.Contracts.PantsScanContractTests.ShouldReturnNoRowsForZeroLimit",
@@ -8455,7 +8428,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldCommitMixedOperationsAtomicallyAndRejectFurtherUse",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldEnforceReadOnlyAndTerminalTransactionLifecycle",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldApplyInsertAndIntentOrderingAgainstFlushedState",
         "Cntryl.Pants.Contracts.PantsScanContractTests.ShouldReturnNoRowsForZeroLimit",
@@ -8701,7 +8674,7 @@
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldValidateAssertionsAgainstSequenceAndSnapshotTime",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldShareTransactionMemoryBetweenAssertionsAndSpillableWrites",
-"Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode",
+        "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode",
         "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortAssertionCoveredByARecentRangeDelete"
       ]
     },
@@ -8953,7 +8926,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldValidateAssertionsAgainstSequenceAndSnapshotTime",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldValidateAssertionsAgainstSequenceAndSnapshotTime",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldShareTransactionMemoryBetweenAssertionsAndSpillableWrites",
         "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode",
@@ -9208,7 +9181,7 @@
       "status": "mapped",
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldValidateAssertionsAgainstSequenceAndSnapshotTime",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldValidateAssertionsAgainstSequenceAndSnapshotTime",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldRemainConsistentUnderConcurrentStrictAndLastWriteWinsCommits",
         "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldShareTransactionMemoryBetweenAssertionsAndSpillableWrites",
         "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode",
@@ -9458,7 +9431,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
+        "Cntryl.Pants.Contracts.PantsDurabilityParityTests.ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary",
         "Cntryl.Pants.Transactions.PantsCommitCoalescingTests.ShouldFanOutOneDurableSyncGivenConcurrentCommitsAndRecoverAll",
         "Cntryl.Pants.Runtime.PantsFailureInjectionTests.ShouldRecoverFullyAbsentTransactionGivenPartialWalFrame"
       ]
@@ -9713,7 +9686,7 @@
       "status": "mapped",
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldResolveOverlappingWritersByCommitOrderByDefault",
+        "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldResolveOverlappingWritersByCommitOrderByDefault",
         "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortOverlappingWriterWhenStrictConflictPolicyIsSelected",
         "Cntryl.Pants.Contracts.PantsTransactionContractTests.ShouldAbortPointWriteCoveredByRecentRangeDeleteInStrictMode"
       ]
@@ -9956,7 +9929,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldApplyInsertAndIntentOrderingAgainstFlushedState",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldApplyInsertAndIntentOrderingAgainstFlushedState",
         "Cntryl.Pants.Contracts.PantsScanContractTests.ShouldHonorPrefixEndingInFf",
         "Cntryl.Pants.Contracts.PantsScanContractTests.ShouldScanPrefixIntersectionInBothDirectionsWithLimit",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldPreservePointAndRangeDeletionsAcrossCompactionAndReopen",
@@ -10203,7 +10176,7 @@
       "expectedError": null,
       "issue": 1,
       "pantsTests": [
-"Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
+        "Cntryl.Pants.Contracts.PantsTransactionParityTests.ShouldKeepTransactionAndScanSnapshotsStableAcrossFlushCompactionAndDrop",
         "Cntryl.Pants.Contracts.PantsScanContractTests.ScanOwnsSnapshotPinAfterTransactionCompletes",
         "Cntryl.Pants.Storage.PantsDiskStorageTests.ShouldRetainCompactionInputsUntilActiveSnapshotCloses",
         "Cntryl.Pants.Runtime.PantsDatabaseLifecycleTests.ShouldRemainClosingWhenShutdownIsBlockedByTransaction",
@@ -10462,7 +10435,7 @@
       "expectedError": null,
       "issue": 10,
       "pantsTests": [
-"Cntryl.Pants.Transactions.Spill.PantsTransactionSpillHardeningBehaviorTests.ShouldFrameLargeTransactionWithOneCommitMarker"
+        "Cntryl.Pants.Transactions.Spill.PantsTransactionSpillHardeningBehaviorTests.ShouldFrameLargeTransactionWithOneCommitMarker"
       ]
     },
     {
@@ -10709,7 +10682,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -10956,7 +10929,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -11203,7 +11176,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -11463,7 +11436,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -11710,7 +11683,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -11957,7 +11930,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -12204,7 +12177,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -12451,7 +12424,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -12711,7 +12684,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {
@@ -12958,7 +12931,7 @@
       "expectedError": null,
       "issue": null,
       "pantsTests": [
-"Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
+        "Cntryl.Pants.PantsPublicApiTests.ShouldExposePublicSurfaceThroughInterfacesAndImmutableContracts"
       ]
     },
     {

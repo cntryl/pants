@@ -15,6 +15,7 @@ public sealed class PantsSstReadIntegrationTests
         }
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount > 0);
 
         Assert.Equal("value_from_sst", await ReadAsync(database, "key_000"));
         Assert.Equal("value_from_sst", await ReadAsync(database, "key_005"));
@@ -71,6 +72,7 @@ public sealed class PantsSstReadIntegrationTests
         await using var database = await OpenAsync(directory.Path);
         await PutAsync(database, "sst_key", "sst_value");
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount > 0);
         await PutAsync(database, "mem_key", "mem_value");
 
         Assert.Equal("sst_value", await ReadAsync(database, "sst_key"));

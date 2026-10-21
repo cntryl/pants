@@ -41,26 +41,99 @@ public sealed class PantsCloudEventualFlushTests
     [Fact]
     public async Task ShouldFlushCloudSegmentsOnShutdown()
     {
-        using var directory = new TemporaryDirectory();
+        using var cache = new TemporaryDirectory();
+        using var freshCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = new PantsCloudStorageLocation(
+            new PantsAzureBlobProvider(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=test")),
+            "shutdown/"
+        );
         var policy = CreatePolicy(128, int.MaxValue);
-        var options = CreateOptions(directory.Path, policy);
-        await using var database = await PantsDatabase.OpenAsync(options);
-        await CommitAsync(
-            database,
-            database.ColumnFamilies.DefaultFamily,
-            "shutdown",
-            PantsWriteOptions.CloudAsync);
-        Assert.Empty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "cloud_store", "wal"),
-            "*.wal",
-            SearchOption.AllDirectories));
+        var options = PantsOpenOptions.Cloud(cache.Path, location)
+            .WithCloudWritePolicy(policy)
+            .WithBackgroundCompaction(false);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            var family = database.ColumnFamilies.DefaultFamily;
+            for (var index = 0; index < 50; index++)
+            {
+                await using var transaction = await database.Transactions.BeginAsync(
+                    family,
+                    PantsTransactionMode.ReadWrite);
+                transaction.Put(
+                    Encoding.UTF8.GetBytes($"shutdown_key_{index:0000}"),
+                    Encoding.UTF8.GetBytes($"shutdown_value_{index:0000}"));
+                await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
+            }
 
-        await database.ShutdownAsync(TestTimeouts.Expected);
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
 
-        Assert.NotEmpty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "cloud_store", "wal"),
-            "*.wal",
-            SearchOption.AllDirectories));
+        var freshOptions = PantsOpenOptions.Cloud(freshCache.Path, location)
+            .WithCloudWritePolicy(policy)
+            .WithBackgroundCompaction(false);
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(freshOptions, dependencies);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        for (var index = 0; index < 50; index++)
+        {
+            Assert.Equal(
+                Encoding.UTF8.GetBytes($"shutdown_value_{index:0000}"),
+                (await reader.GetAsync(Encoding.UTF8.GetBytes($"shutdown_key_{index:0000}")))?.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task ShouldRecoverFromRemoteWalWhenShutdownSstMirrorHasNoObject()
+    {
+        using var cache = new TemporaryDirectory();
+        using var freshCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = new PantsCloudStorageLocation(
+            new PantsAzureBlobProvider(
+                "account",
+                "container",
+                new Uri("https://storage.example.test"),
+                new PantsAzureCredentialSource.SasToken("sig=test")),
+            "shutdown-mirror-failure/"
+        );
+        var policy = CreatePolicy(128, int.MaxValue);
+        var options = PantsOpenOptions.Cloud(cache.Path, location)
+            .WithCloudWritePolicy(policy)
+            .WithBackgroundCompaction(false);
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            await CommitAsync(
+                database,
+                database.ColumnFamilies.DefaultFamily,
+                "mirror-failure",
+                PantsWriteOptions.CloudAsync);
+            handler.AcknowledgeSstWritesWithoutPersisting = true;
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
+        Assert.False(handler.ContainsObjectPath("/sst/"));
+        handler.AcknowledgeSstWritesWithoutPersisting = false;
+
+        var freshOptions = PantsOpenOptions.Cloud(freshCache.Path, location)
+            .WithCloudWritePolicy(policy)
+            .WithBackgroundCompaction(false);
+        await using var reopened = await PantsDatabase.OpenForTestingAsync(freshOptions, dependencies);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("mirror-failure"u8.ToArray()))));
     }
 
     [Fact]
@@ -440,14 +513,14 @@ public sealed class PantsCloudEventualFlushTests
     }
 
     [Fact]
-    public async Task ShouldResetMemtableWalGapAfterReopenBeforeNewSegmentChurn()
+    public async Task ShouldResetMemtableWalGapGivenGracefulCheckpointReopen()
     {
         using var directory = new TemporaryDirectory();
         var policy = CreatePolicy(128, 1);
         var options = CreateOptions(directory.Path, policy);
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            for (var index = 0; index < 4; index++)
+            for (var index = 0; index < 16; index++)
             {
                 await CommitAsync(
                     database,
@@ -456,14 +529,16 @@ public sealed class PantsCloudEventualFlushTests
                     PantsWriteOptions.CloudAsync);
             }
 
-            Assert.True((await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId > 4);
+            var beforeShutdown = await database.Diagnostics.GetRuntimeMetricsAsync();
+            Assert.Equal(0, beforeShutdown.SstCount);
+            Assert.True(beforeShutdown.WalCurrentSegmentId > 10);
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.MaximumMemtableWalSegmentGap);
-        Assert.Equal(0, metrics.SstCount);
+        Assert.Equal(1, metrics.SstCount);
     }
 
     static async ValueTask CommitAsync(

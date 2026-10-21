@@ -1392,6 +1392,98 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task ShouldRecoverCloudAsyncWriteGivenWalUploadFailsAfterRemoteEffect()
+    {
+        using var cache = new TemporaryDirectory();
+        using var replacementCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = CreateAzureLocation();
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var options = PantsOpenOptions.Cloud(cache.Path, location)
+            .WithBackgroundCompaction(false)
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1));
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            handler.FailNextWalWriteAfterPersisting();
+            await CommitCloudAsyncAsync(database, "ambiguous-upload"u8.ToArray());
+            using (var timeout = new CancellationTokenSource(TestTimeouts.Expected))
+            {
+                await handler.WaitForFailedWalWriteAsync(timeout.Token);
+            }
+
+            Assert.Equal(1, handler.FailedWalWriteAttempts);
+            Assert.NotEmpty(handler.GetObjectPaths("/wal/epochs/"));
+
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        await using var recovered = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Cloud(replacementCache.Path, location),
+            dependencies);
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            "value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("ambiguous-upload"u8.ToArray()))));
+    }
+
+    [Fact]
+    public async Task ShouldRecoverCloudAsyncWriteGivenWalUploadEffectLandsLate()
+    {
+        using var cache = new TemporaryDirectory();
+        using var replacementCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = CreateAzureLocation();
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var options = PantsOpenOptions.Cloud(cache.Path, location)
+            .WithBackgroundCompaction(false)
+            .WithCloudWritePolicy(new PantsCloudWritePolicy(
+                long.MaxValue,
+                long.MaxValue,
+                TimeSpan.FromHours(1),
+                1));
+
+        await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            handler.FailNextWalWriteAndDeferItsEffect();
+            await CommitCloudAsyncAsync(database, "late-upload"u8.ToArray());
+            using (var timeout = new CancellationTokenSource(TestTimeouts.Expected))
+            {
+                await handler.WaitForFailedWalWriteAsync(timeout.Token);
+            }
+
+            Assert.Empty(handler.GetObjectPaths("/wal/epochs/"));
+            Assert.True(handler.LandLateWalWriteEffect());
+            Assert.NotEmpty(handler.GetObjectPaths("/wal/epochs/"));
+            handler.FailWalWrites = false;
+
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        await using var recovered = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Cloud(replacementCache.Path, location),
+            dependencies);
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.Equal(
+            "value",
+            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync("late-upload"u8.ToArray()))));
+    }
+
+    [Fact]
     public async Task ShouldAdvanceCloudDurabilityOnlyAfterContiguousWalUploads()
     {
         using var cache = new TemporaryDirectory();
@@ -1509,6 +1601,88 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task ShouldKeepStrictPutWhenAFreshCacheTakesOverAfterAFlush()
+    {
+        using var firstCache = new TemporaryDirectory();
+        using var freshCache = new TemporaryDirectory();
+        using var crashImage = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = CreateAzureLocation();
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        var flushedThrough = await PrepareFreshCacheSequenceFrontierAsync(
+            firstCache.Path,
+            location,
+            dependencies);
+        Assert.True(handler.ContainsObjectPath("/sst/"));
+
+        await using (var database = await OpenCloudCacheAsync(
+                         freshCache.Path,
+                         location,
+                         dependencies))
+        {
+            await CommitCloudStrictAsync(database, "after"u8.ToArray());
+            var written = (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
+
+            Assert.True(
+                written > flushedThrough,
+                $"fresh-cache sequence {written} did not advance past flushed frontier {flushedThrough}");
+            Assert.NotEmpty(handler.GetObjectPaths("/wal/epochs/"));
+            CopyCrashImage(freshCache.Path, crashImage.Path);
+            await ExpireCrashedProcessLeaseAsync(crashImage.Path);
+            handler.FailWalWrites = true;
+            handler.FailMetadataWrites = true;
+            await database.ShutdownAsync(TestTimeouts.Expected);
+            handler.FailWalWrites = false;
+            handler.FailMetadataWrites = false;
+        }
+
+        await using var recovered = await OpenCloudCacheAsync(
+            crashImage.Path,
+            location,
+            dependencies);
+        await using var reader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("flushed"u8.ToArray()))));
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("after"u8.ToArray()))));
+    }
+
+    [Fact]
+    public async Task ShouldFlushStrictPutWhenAFreshCacheTakesOverAfterAFlush()
+    {
+        using var firstCache = new TemporaryDirectory();
+        using var freshCache = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var location = CreateAzureLocation();
+        var dependencies = new RuntimeDependencies(cloudHttpClient: client);
+        _ = await PrepareFreshCacheSequenceFrontierAsync(firstCache.Path, location, dependencies);
+
+        await using (var database = await OpenCloudCacheAsync(
+                         freshCache.Path,
+                         location,
+                         dependencies))
+        {
+            await CommitCloudStrictAsync(database, "after"u8.ToArray());
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        await using var reopened = await OpenCloudCacheAsync(
+            freshCache.Path,
+            location,
+            dependencies);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await reader.GetAsync("after"u8.ToArray()))));
+    }
+
+    [Fact]
     public async Task ShouldRecoverFlushedSstThroughAzureProviderGivenEmptyCache()
     {
         using var firstCache = new TemporaryDirectory();
@@ -1583,7 +1757,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         using var client = new HttpClient(handler);
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
-            hybridLocalStorageBudgetBytes: 2200 * 1024);
+            hybridLocalStorageBudgetBytes: 4500 * 1024);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(cache.Path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),
@@ -1664,6 +1838,81 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 new Uri("https://storage.example.test"),
                 new PantsAzureCredentialSource.SasToken("sig=test")),
             "database");
+
+    static async Task<long> PrepareFreshCacheSequenceFrontierAsync(
+        string cachePath,
+        PantsCloudStorageLocation location,
+        RuntimeDependencies dependencies)
+    {
+        var options = PantsOpenOptions.Cloud(cachePath, location).WithBackgroundCompaction(false);
+        await using (var firstHost = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+        {
+            await CommitCloudStrictAsync(firstHost, "flushed"u8.ToArray());
+            await firstHost.ShutdownAsync(TestTimeouts.Expected);
+        }
+
+        await using var takeover = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        await takeover.Maintenance.FlushAsync(takeover.ColumnFamilies.DefaultFamily);
+        var flushedThrough = (await takeover.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
+        await takeover.ShutdownAsync(TestTimeouts.Expected);
+        return flushedThrough;
+    }
+
+    static ValueTask<IPantsDatabase> OpenCloudCacheAsync(
+        string cachePath,
+        PantsCloudStorageLocation location,
+        RuntimeDependencies dependencies) =>
+        PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Cloud(cachePath, location).WithBackgroundCompaction(false),
+            dependencies);
+
+    static void CopyCrashImage(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var sourceDirectory in Directory.EnumerateDirectories(
+                     source,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(
+                destination,
+                Path.GetRelativePath(source, sourceDirectory)));
+        }
+
+        foreach (var sourceFile in Directory.EnumerateFiles(
+                     source,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(source, sourceFile);
+            if (relativePath is "LOCK" or ".midge_leader.lock")
+            {
+                continue;
+            }
+
+            var destinationFile = Path.Combine(destination, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+            File.Copy(sourceFile, destinationFile, true);
+        }
+    }
+
+    static async Task ExpireCrashedProcessLeaseAsync(string databasePath)
+    {
+        var leasePath = Path.Combine(databasePath, ".midge_leader");
+        var lines = await File.ReadAllLinesAsync(leasePath);
+        for (var index = 0; index < lines.Length; index++)
+        {
+            if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
+            {
+                lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
+            }
+        }
+
+        await File.WriteAllLinesAsync(
+            leasePath,
+            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
+        File.Delete(Path.Combine(databasePath, ".midge_leader.lock"));
+    }
 
     static async Task CommitCloudAsyncAsync(
         IPantsDatabase database,

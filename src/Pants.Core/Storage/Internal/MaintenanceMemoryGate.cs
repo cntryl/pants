@@ -33,6 +33,22 @@ sealed class MaintenanceMemoryGate
         return WaitAsync(waiter, node, cancellationToken);
     }
 
+    public bool TryEnter(out IDisposable? hold)
+    {
+        lock (_gate)
+        {
+            if (_held || _waiters.Count != 0)
+            {
+                hold = null;
+                return false;
+            }
+
+            _held = true;
+            hold = new Hold(this);
+            return true;
+        }
+    }
+
     async ValueTask<IDisposable> WaitAsync(
         TaskCompletionSource<IDisposable> waiter,
         LinkedListNode<TaskCompletionSource<IDisposable>> node,

@@ -10,10 +10,20 @@ public sealed class PantsBufferedWalSyncWindowTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         var before = (await database.Diagnostics.GetRuntimeMetricsAsync()).WalLastSyncedSequence;
+        var value = new byte[16];
 
-        await CommitBufferedAsync(database, "key", new byte[16]);
+        await CommitBufferedAsync(database, "key", value);
+        var committedSequence = (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
 
         await WaitForNewSyncAsync(database, before);
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.True(metrics.WalLocalDurableSequence >= committedSequence);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(
+            value,
+            (await reader.GetAsync(TestBytes.FromString("key")))!.Value.ToArray());
     }
 
     [Fact]

@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\bench\Pants.Benches\Cntryl.Pants.Benches.csproj"/>
     <ProjectReference Include="..\..\src\Pants.Abstractions\Pants.Abstractions.csproj"/>
+    <ProjectReference Include="..\..\src\Pants.Cli\Pants.Cli.csproj"/>
     <ProjectReference Include="..\..\src\Pants.Core\Pants.Core.csproj"/>
     <ProjectReference Include="..\..\src\Pants.DependencyInjection\Pants.DependencyInjection.csproj"/>
   </ItemGroup>

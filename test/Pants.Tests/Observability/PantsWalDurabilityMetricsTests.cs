@@ -166,6 +166,7 @@ public sealed class PantsWalDurabilityMetricsTests
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(committedSequence, metrics.CurrentSequence);
         Assert.Equal(currentSegment, metrics.WalCurrentSegmentId);
         Assert.Equal(0, metrics.WalPendingWrites);
         Assert.Equal(0, metrics.WalLastSyncedSequence);

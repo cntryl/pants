@@ -278,6 +278,21 @@ public sealed class PantsStorageVerificationOutcomeTests
         Assert.Null(outcome.PathFailure);
     }
 
+    [Fact]
+    public void ShouldReportStorageWhenWriteOutcomeNeedsReconciliation()
+    {
+        var exception = new PantsCommitOutcomeUnknownException("sync acknowledgment was lost");
+
+        var outcome = PantsStorageVerificationOutcome.FromException(exception);
+
+        Assert.Equal(PantsStorageVerificationOutcomeKind.Storage, outcome.Kind);
+        Assert.Equal(3, outcome.ExitCode);
+        Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, outcome.ErrorCode);
+        Assert.Equal("sync acknowledgment was lost", outcome.Message);
+        Assert.Null(outcome.Report);
+        Assert.Null(outcome.PathFailure);
+    }
+
     static bool CanStillEnumerate(string path)
     {
         try

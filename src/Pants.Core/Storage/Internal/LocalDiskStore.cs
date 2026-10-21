@@ -52,6 +52,8 @@ sealed class LocalDiskStore :
     readonly ManifestState _manifest;
     const byte ManifestDurabilityMarkerRecordType = 9;
     const long DefaultReaderCacheBytes = 16L * 1024 * 1024;
+    const ulong CommitSequenceReservationBlock = 1UL << 20;
+    const ulong CommitSequenceReservationRefillThreshold = CommitSequenceReservationBlock / 2;
     static readonly string[] PersistedManifestRootEntries =
     [
         "manifest.json",
@@ -180,7 +182,7 @@ sealed class LocalDiskStore :
             _manifest.LastPersistedSequence,
             visibleSequenceFloor);
         _manifestReadSnapshot = ManifestReadSnapshot.Create(manifest);
-        _nextSequence = visibleSequenceFloor;
+        _nextSequence = Math.Max(visibleSequenceFloor, manifest.ReservedCommitSequence);
         _unflushedCommitSequence = visibleSequenceFloor;
     }
 
@@ -242,6 +244,62 @@ sealed class LocalDiskStore :
     }
 
     public string RootPath { get; }
+
+    internal IReadOnlyList<string> GetBackupFilePaths(bool includeSimulatedCloudObjects)
+    {
+        StoragePathGuard.EnsureTreeHasNoLinks(RootPath);
+        var paths = new HashSet<string>(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+        AddIfPresent(Path.Combine(RootPath, "FORMAT"));
+        foreach (var name in PersistedManifestRootEntries)
+        {
+            AddIfPresent(Path.Combine(RootPath, name));
+        }
+
+        AddIfPresent(_walPath);
+        foreach (var path in EnumerateSealedWalSegmentPaths(_walDirectory))
+        {
+            if (TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) &&
+                segmentId >= _manifest.WalHistoryStart &&
+                segmentId < _manifest.NextWalSeq)
+            {
+                AddIfPresent(path);
+            }
+        }
+
+        AddDirectoryFiles(_sstDirectory);
+        if (includeSimulatedCloudObjects)
+        {
+            AddDirectoryFiles(Path.Combine(RootPath, "cloud_store"));
+        }
+
+        return paths.Order(StringComparer.Ordinal).ToArray();
+
+        void AddIfPresent(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            StoragePathGuard.EnsureNotLink(path);
+            paths.Add(Path.GetFullPath(path));
+        }
+
+        void AddDirectoryFiles(string directory)
+        {
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                AddIfPresent(path);
+            }
+        }
+    }
 
     internal IAsyncSstSourceFactory? RemoteSstSourceFactory => _remoteSstSourceFactory;
 
@@ -902,6 +960,11 @@ sealed class LocalDiskStore :
             {
                 throw new PantsInternalException(
                     "The coalesced WAL sequence reservation moved backwards.");
+            }
+
+            if (reservedSequence > state.Sequence)
+            {
+                EnsureCommitSequenceReservation(checked((ulong)reservedSequence));
             }
 
             var unflushedCommitSequence = _unflushedCommitSequence;
@@ -2007,6 +2070,7 @@ sealed class LocalDiskStore :
         FileStream? walStream = null;
         FileLease? lease = null;
         IDisposable? rootTrust = null;
+        LocalDiskStore? openedStore = null;
         var failpointHandler = failpoints ?? NullPantsFailpointHandler.Instance;
         startupPhases ??= new StartupPhaseRecorder(null);
         try
@@ -2171,6 +2235,7 @@ sealed class LocalDiskStore :
                 _validateLocalWalHistoryContinuity = validateLocalWalHistoryContinuity,
                 _localWalHistoryValidationStartSegmentId = localWalHistoryValidationStartSegmentId
             };
+            openedStore = store;
             rootTrust = null;
             // Recovery admits its spool and checkpoints against the ledger, which measures the
             // bytes already resident from this store.
@@ -2181,7 +2246,7 @@ sealed class LocalDiskStore :
                 startupPhases,
                 deferWalReplay,
                 recoveryCancellationToken);
-            store.RestoreRecoveredWalDurability(state.Sequence);
+            store.RestoreRecoveredWalDurability(state);
             lease.EnsureValid();
             store.SaveManifestCheckpoint();
             if (recoveryMetadata.ClearRecoveredIntents)
@@ -2197,18 +2262,34 @@ sealed class LocalDiskStore :
         }
         catch (PantsException)
         {
-            walStream?.Dispose();
-            lease?.Dispose();
-            lockStream?.Dispose();
-            rootTrust?.Dispose();
+            if (openedStore is not null)
+            {
+                openedStore.Dispose();
+            }
+            else
+            {
+                walStream?.Dispose();
+                lease?.Dispose();
+                lockStream?.Dispose();
+                rootTrust?.Dispose();
+            }
+
             throw;
         }
         catch (Exception ex)
         {
-            walStream?.Dispose();
-            lease?.Dispose();
-            lockStream?.Dispose();
-            rootTrust?.Dispose();
+            if (openedStore is not null)
+            {
+                openedStore.Dispose();
+            }
+            else
+            {
+                walStream?.Dispose();
+                lease?.Dispose();
+                lockStream?.Dispose();
+                rootTrust?.Dispose();
+            }
+
             throw new StorageException($"Could not open Pants database at '{root}'.", ex);
         }
     }
@@ -2818,6 +2899,7 @@ sealed class LocalDiskStore :
         state.FamilyData.Remove(droppedIdentity);
         state.RangeTombstones.Remove(droppedIdentity);
         state.ActiveMemtableBytes.Remove(droppedIdentity);
+        state.ActiveMemtableWalStartBytes.Remove(droppedIdentity);
         state.UnflushedFamilies.Remove(droppedIdentity);
         _familyIds.Remove(droppedIdentity);
     }
@@ -2958,6 +3040,7 @@ sealed class LocalDiskStore :
 
         reservedSequence = SequenceSpace.CommitSequenceAfter(_nextSequence, payload.Operations.Count);
         var commitSequence = (ulong)reservedSequence;
+        EnsureCommitSequenceReservation(commitSequence);
         _nextSequence = commitSequence;
         state.Sequence = reservedSequence;
         List<WalMutation>? residentMutations = null;
@@ -3158,14 +3241,49 @@ sealed class LocalDiskStore :
         _walLocalDurableSequence = state.LocalDurableSequence;
     }
 
-    void RestoreRecoveredWalDurability(long recoveredSequence)
+    void EnsureCommitSequenceReservation(ulong throughSequence)
+    {
+        var reservedThrough = _manifest.ReservedCommitSequence;
+        if (throughSequence <= reservedThrough &&
+            reservedThrough - throughSequence >= CommitSequenceReservationRefillThreshold)
+        {
+            return;
+        }
+
+        var maximumLiveSequence = checked((ulong)(long.MaxValue - 1));
+        var nextReservation = throughSequence > maximumLiveSequence - CommitSequenceReservationBlock
+            ? maximumLiveSequence
+            : throughSequence + CommitSequenceReservationBlock;
+        if (nextReservation <= reservedThrough)
+        {
+            return;
+        }
+
+        DurablyApplyManifestEdit(CreateManifestEdit(
+            "ReserveCommitSequence",
+            new { through_sequence = nextReservation }));
+    }
+
+    void RestoreRecoveredWalDurability(RuntimeState state)
     {
         lock (_walStateGate)
         {
+            if (_walStream.Length != 0)
+            {
+                // A process restart can replay active-WAL bytes that never crossed an fsync
+                // before the previous writer died. Persist those bytes before recovery exposes
+                // their mutations as locally durable.
+                SyncWal();
+            }
+
+            var recoveredCommitSequence = Math.Max(
+                _manifest.LastPersistedSequence,
+                _unflushedCommitSequence);
+            state.Sequence = checked((long)recoveredCommitSequence);
             _walPendingWrites = 0;
-            _walLastAppendedSequence = recoveredSequence;
+            _walLastAppendedSequence = checked((long)recoveredCommitSequence);
             _walLastSyncedSequence = 0;
-            _walLocalDurableSequence = recoveredSequence;
+            _walLocalDurableSequence = checked((long)recoveredCommitSequence);
         }
     }
 
@@ -3728,6 +3846,48 @@ sealed class LocalDiskStore :
     /// </summary>
     public void DisableLocalWalPruning() => _localWalPruningEnabled = false;
 
+    /// <summary>
+    ///     Returns the family with an unflushed mutation in the oldest retained sealed WAL
+    ///     segment, if one exists. Local eventual flush uses it to advance the prefix that WAL
+    ///     retirement is allowed to remove.
+    /// </summary>
+    public uint? GetOldestWalPrefixBlockingFamilyId()
+    {
+        lock (_walStateGate)
+        {
+            ThrowIfDisposed();
+            Dictionary<uint, ulong> flushedThrough;
+            HashSet<uint> activeFamilyIds;
+            ulong historyStart;
+            lock (_manifestGate)
+            {
+                flushedThrough = new Dictionary<uint, ulong>(_manifest.FlushedThrough);
+                activeFamilyIds = _familyIds.Values.ToHashSet();
+                historyStart = _manifest.WalHistoryStart;
+            }
+
+            var oldest = EnumerateSealedWalSegmentPaths(_walDirectory)
+                .Where(path =>
+                    TryParseSealedWalSegmentId(Path.GetFileName(path), out var id) && id >= historyStart)
+                .OrderBy(static path =>
+                {
+                    _ = TryParseSealedWalSegmentId(Path.GetFileName(path), out var id);
+                    return id;
+                })
+                .FirstOrDefault();
+            if (oldest is null)
+            {
+                return null;
+            }
+
+            return WalSegmentCoverage.Evaluate(
+                File.ReadAllBytes(oldest),
+                flushedThrough,
+                activeFamilyIds,
+                Path.Combine(RootPath, "recovery")).FirstUncoveredFamilyId;
+        }
+    }
+
     void PruneCoveredWalSegments()
     {
         if (!_localWalPruningEnabled)
@@ -3847,6 +4007,7 @@ sealed class LocalDiskStore :
         }
 
         var length = new FileInfo(path).Length;
+        _failpoints.Hit(Failpoint.BeforeLocalWalRetirementDelete);
         File.Delete(path);
         _walRetainedBytes = checked(_walRetainedBytes - length);
         _walRetainedSegments = checked(_walRetainedSegments - 1);
@@ -5010,7 +5171,7 @@ sealed class LocalDiskStore :
                 }
 
                 state.Sequence = checked((long)_nextSequence);
-                RestoreRecoveredWalDurability(state.Sequence);
+                RestoreRecoveredWalDurability(state);
                 _walStream.Seek(0, SeekOrigin.End);
                 _walReplayDeferred = false;
             }
@@ -5500,6 +5661,7 @@ sealed class LocalDiskStore :
         foreach (var identity in state.ActiveMemtableBytes.Keys.ToArray())
         {
             state.ActiveMemtableBytes[identity] = 0;
+            state.ActiveMemtableWalStartBytes.Remove(identity);
             state.FamilyData[identity] = RuntimeState.EmptyFamily;
         }
 
@@ -5521,6 +5683,7 @@ sealed class LocalDiskStore :
         {
             cancellationToken.ThrowIfCancellationRequested();
             var recordStart = stream.Position;
+            _failpoints.Hit(Failpoint.BeforeWalReplayRead);
             if (!DiskFormat.ReadExactly(stream, header))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
@@ -5554,6 +5717,7 @@ sealed class LocalDiskStore :
             }
 
             var payload = new byte[length];
+            _failpoints.Hit(Failpoint.BeforeWalReplayRead);
             if (!DiskFormat.ReadExactly(stream, payload))
             {
                 return HandleIncompleteWalTail(state, stream, recordStart, allowIncompleteTail);
@@ -5672,6 +5836,7 @@ sealed class LocalDiskStore :
         state.FamilyData.Clear();
         state.RangeTombstones.Clear();
         state.ActiveMemtableBytes.Clear();
+        state.ActiveMemtableWalStartBytes.Clear();
         if (!_manifest.ColumnFamilies.Any(family => family.Id == 0 && family.Name == "default"))
         {
             var defaultIdentity = new ColumnFamilyIdentity(0, "default", RuntimeState.DefaultFamilyVersion);
@@ -6778,6 +6943,13 @@ sealed class LocalDiskStore :
 
     static void ValidateManifestSstNames(ManifestState manifest)
     {
+        if (manifest.ReservedCommitSequence >= (ulong)long.MaxValue)
+        {
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "The manifest commit sequence reservation exceeds the live sequence space.");
+        }
+
         try
         {
             foreach (var file in manifest.Files)
@@ -7346,7 +7518,7 @@ sealed class LocalDiskStore :
                 }
             }
 
-            if (recordType is < 1 or > 11)
+            if (recordType is < 1 or > 14)
             {
                 throw PantsException.Create(
                     PantsErrorCode.Corruption,
@@ -7423,7 +7595,7 @@ sealed class LocalDiskStore :
         {
             var remaining = bytes.Length - cursor;
             var recordType = bytes[cursor];
-            if (remaining < 9 || recordType is < 1 or > 11)
+            if (remaining < 9 || recordType is < 1 or > 14)
             {
                 continue;
             }
@@ -7582,6 +7754,19 @@ sealed class LocalDiskStore :
                     manifest.LastPersistedSequence,
                     GetRequiredUInt64(value, "seq"));
                 break;
+            case "ReserveCommitSequence":
+                {
+                    var throughSequence = GetRequiredUInt64(value, "through_sequence");
+                    if (throughSequence <= manifest.ReservedCommitSequence)
+                    {
+                        throw PantsException.Create(
+                            PantsErrorCode.Corruption,
+                            "A commit sequence reservation did not advance the durable watermark.");
+                    }
+
+                    manifest.ReservedCommitSequence = throughSequence;
+                    break;
+                }
             case "BumpNextSstSeq":
                 {
                     var id = GetRequiredUInt32(value, "cf_id");
@@ -7699,6 +7884,7 @@ sealed class LocalDiskStore :
         "ReclaimColumnFamily" => 11,
         "AdvanceFlushFrontier" => 12,
         "AdvanceWalHistoryStart" => 13,
+        "ReserveCommitSequence" => 14,
         _ => throw PantsException.Create(
             PantsErrorCode.Corruption,
             $"The manifest edit '{variant}' is unknown.")

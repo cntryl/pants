@@ -163,6 +163,7 @@ public sealed class PantsCompressionCompatibilityTests
 
     [Theory]
     [InlineData((byte)CompressionAlgorithm.Lz4)]
+    [InlineData((byte)CompressionAlgorithm.Zstd3)]
     [InlineData((byte)CompressionAlgorithm.Zstd9)]
     public void ShouldRejectCorruptCompressedPayloadForEveryShippingCodec(byte algorithmCode)
     {

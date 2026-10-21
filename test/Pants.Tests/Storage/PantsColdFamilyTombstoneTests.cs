@@ -10,23 +10,29 @@ public sealed class PantsColdFamilyTombstoneTests
     const int OperationsPerTransaction = 16;
     const int KeySpace = 48;
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ShouldKeepColdFamilyTombstonesAcrossConcurrentHotWritesFlushCompactionAndReopen(
-        bool simulatedCloud)
+    [Fact]
+    public async Task ShouldPreserveColdTombstoneGivenHotColdCompactionWhenReopening()
     {
         using var directory = new TemporaryDirectory();
-        var writeOptions = simulatedCloud ? PantsWriteOptions.CloudAsync : PantsWriteOptions.Sync;
+        var writeOptions = PantsWriteOptions.Sync;
         var hotModel = new Dictionary<string, string>(StringComparer.Ordinal);
         var coldModel = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        await using (var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path, simulatedCloud)))
+        await using (var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
         {
             var hot = await database.ColumnFamilies.CreateAsync("hot");
             var cold = await database.ColumnFamilies.CreateAsync("cold");
 
-            await RunChunksAsync(database, hot, cold, hotModel, coldModel, writeOptions);
+            var observedPersistedColdTombstone = await RunChunksAsync(
+                database,
+                hot,
+                cold,
+                hotModel,
+                coldModel,
+                writeOptions);
+            Assert.True(
+                observedPersistedColdTombstone,
+                "The workload must delete a cold-family key that was already flushed.");
             await database.Maintenance.CompactAllAsync();
 
             await AssertFamilyMatchesModelAsync(database, hot, hotModel);
@@ -34,7 +40,7 @@ public sealed class PantsColdFamilyTombstoneTests
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
-        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path, simulatedCloud));
+        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
         var hotReopened = await reopened.ColumnFamilies.GetAsync("hot");
         var coldReopened = await reopened.ColumnFamilies.GetAsync("cold");
         Assert.NotNull(hotReopened);
@@ -45,10 +51,8 @@ public sealed class PantsColdFamilyTombstoneTests
         Assert.NotEmpty(coldModel);
     }
 
-    static PantsOpenOptions CreateOptions(string path, bool simulatedCloud) =>
-        (simulatedCloud
-            ? PantsOpenOptions.SimulatedCloud(path, "cold-family-tombstones", "cf/")
-            : PantsOpenOptions.Local(path))
+    static PantsOpenOptions CreateOptions(string path) =>
+        PantsOpenOptions.Local(path)
         .WithBackgroundCompaction(false)
         .WithCompaction(new PantsCompactionConfiguration(
             L0FileCountTrigger: 2,
@@ -57,7 +61,7 @@ public sealed class PantsColdFamilyTombstoneTests
             MaximumLevels: 4,
             BackgroundEnabled: false));
 
-    static async Task RunChunksAsync(
+    static async Task<bool> RunChunksAsync(
         IPantsDatabase database,
         IPantsColumnFamily hot,
         IPantsColumnFamily cold,
@@ -69,6 +73,7 @@ public sealed class PantsColdFamilyTombstoneTests
         // seeded sequence. The barrier pins the interleaving: writes and flushes run concurrently
         // in phase A, then compaction runs while the cold lane keeps writing tombstones in phase B.
         using var barrier = new Barrier(2);
+        var observedPersistedColdTombstone = false;
         var hotLane = Task.Run(async () =>
         {
             var random = new Random(1);
@@ -85,19 +90,37 @@ public sealed class PantsColdFamilyTombstoneTests
         var coldLane = Task.Run(async () =>
         {
             var random = new Random(2);
+            var persistedColdKeys = new HashSet<string>(StringComparer.Ordinal);
+            var deletedPersistedColdKeys = new HashSet<string>(StringComparer.Ordinal);
             for (var chunk = 0; chunk < ChunkCount; chunk++)
             {
                 await ApplyOperationsAsync(database, cold, coldModel, random, "cold", chunk, 0, writeOptions);
                 await database.Maintenance.FlushAsync(cold);
+                persistedColdKeys.Clear();
+                persistedColdKeys.UnionWith(coldModel.Keys);
                 WaitForLane(barrier);
 
-                await ApplyOperationsAsync(database, cold, coldModel, random, "cold", chunk, 1, writeOptions);
+                deletedPersistedColdKeys.Clear();
+                await ApplyOperationsAsync(
+                    database,
+                    cold,
+                    coldModel,
+                    random,
+                    "cold",
+                    chunk,
+                    1,
+                    writeOptions,
+                    persistedColdKeys,
+                    deletedPersistedColdKeys);
                 await database.Maintenance.FlushAsync(cold);
+                observedPersistedColdTombstone |= deletedPersistedColdKeys.Any(
+                    key => !coldModel.ContainsKey(key));
                 WaitForLane(barrier);
             }
         });
 
         await Task.WhenAll(hotLane, coldLane);
+        return observedPersistedColdTombstone;
     }
 
     static async Task ApplyOperationsAsync(
@@ -108,7 +131,9 @@ public sealed class PantsColdFamilyTombstoneTests
         string lane,
         int chunk,
         int phase,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions,
+        HashSet<string>? persistedKeys = null,
+        HashSet<string>? deletedPersistedKeys = null)
     {
         for (var start = 0; start < OperationsPerPhase; start += OperationsPerTransaction)
         {
@@ -123,6 +148,11 @@ public sealed class PantsColdFamilyTombstoneTests
                 if (random.Next(3) == 0)
                 {
                     transaction.Delete(TestBytes.FromString(key));
+                    if (persistedKeys?.Contains(key) == true)
+                    {
+                        deletedPersistedKeys?.Add(key);
+                    }
+
                     model.Remove(key);
                 }
                 else

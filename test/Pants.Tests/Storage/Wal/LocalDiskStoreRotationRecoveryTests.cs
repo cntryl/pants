@@ -165,6 +165,9 @@ public sealed class LocalDiskStoreRotationRecoveryTests
             CreateCommitPayload(recoveredState),
             recoveredState,
             PantsDurability.Sync);
+        Assert.True(
+            recoveredState.Sequence > state.Sequence,
+            "The next commit must allocate beyond the durable commit-sequence reservation.");
         _ = reopened.RotateActiveLocalWal();
 
         Assert.True(File.Exists(Path.Combine(

@@ -9,6 +9,7 @@ namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version)
 {
     readonly Dictionary<string, FileMeta> _coveringFiles = new(StringComparer.Ordinal);
+    readonly Dictionary<uint, ulong> _coveringDroppedFamilies = [];
 
     public ProviderPublishedWalSegment Segment { get; } = segment;
 
@@ -25,6 +26,8 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
     public bool IsRead => Offset == Length;
 
     public IReadOnlyDictionary<string, FileMeta> CoveringFiles => _coveringFiles;
+
+    public IReadOnlyDictionary<uint, ulong> CoveringDroppedFamilies => _coveringDroppedFamilies;
 
     /// <summary>
     ///     The manifest under which the frame at <see cref="Offset" /> was found uncovered, or null.
@@ -67,15 +70,30 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
                 exception);
         }
 
-        var covering = new FileMeta[mutations.Count];
+        var coveringFiles = new List<FileMeta>(mutations.Count);
+        var coveringDroppedFamilies = new Dictionary<uint, ulong>();
         for (var index = 0; index < mutations.Count; index++)
         {
-            if (coverage.FindCovering(mutations[index]) is not { } file)
+            if (!coverage.TryFindCovering(
+                    mutations[index],
+                    out var file,
+                    out var droppedFamilyDropSequence))
             {
                 return false;
             }
 
-            covering[index] = file;
+            if (file is not null)
+            {
+                coveringFiles.Add(file);
+            }
+            else if (droppedFamilyDropSequence is { } dropSequence)
+            {
+                coveringDroppedFamilies[mutations[index].ColumnFamilyId] = dropSequence;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         ObservedWriterEpoch = record.WriterEpoch;
@@ -83,9 +101,14 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
         Checksum = DiskFormat.Crc32CAppend(Checksum, frame);
         Offset = checked(Offset + frame.Length);
         UncoveredUnder = null;
-        foreach (var file in covering)
+        foreach (var file in coveringFiles)
         {
             _coveringFiles[file.Name] = file;
+        }
+
+        foreach (var (familyId, dropSequence) in coveringDroppedFamilies)
+        {
+            _coveringDroppedFamilies[familyId] = dropSequence;
         }
 
         return true;

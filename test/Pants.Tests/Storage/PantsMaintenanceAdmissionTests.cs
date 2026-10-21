@@ -16,14 +16,14 @@ public sealed class PantsMaintenanceAdmissionTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "admission/")
-                .WithSimulatedCloudLocalStorageBudget(96 * 1024)
+                .WithSimulatedCloudLocalStorageBudget(128 * 1024)
                 .WithBackgroundCompaction(false)
                 .WithCompaction(new PantsCompactionConfiguration(
                     L0FileCountTrigger: 2,
                     BackgroundEnabled: false)));
         var family = database.ColumnFamilies.DefaultFamily;
 
-        for (var index = 0; index < 12; index++)
+        for (var index = 0; index < 20; index++)
         {
             try
             {
@@ -32,7 +32,7 @@ public sealed class PantsMaintenanceAdmissionTests
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(
                     TestBytes.FromString($"key-{index}"),
-                    new byte[8 * 1024]);
+                    new byte[7 * 1024]);
                 await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
                 await database.Maintenance.FlushAsync(family);
             }

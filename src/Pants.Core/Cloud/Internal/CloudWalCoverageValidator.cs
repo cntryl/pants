@@ -1,3 +1,5 @@
+using Cntryl.Pants.Cloud.Internal.WalRetirement;
+
 namespace Cntryl.Pants.Cloud.Internal;
 
 static class CloudWalCoverageValidator
@@ -34,6 +36,7 @@ static class CloudWalCoverageValidator
         var observedMaximumSequence = 0UL;
         ulong? observedWriterEpoch = null;
         var mutations = new List<WalMutation>();
+        var coverage = new WalCoverageIndex(manifest);
         try
         {
             WalFrameReader.Visit(
@@ -83,7 +86,8 @@ static class CloudWalCoverageValidator
                 "A published cloud WAL segment writer epoch differs from its catalog entry.");
         }
 
-        return mutations.All(mutation => manifest.Files.Any(file => Covers(file, mutation)));
+        return mutations.All(mutation =>
+            coverage.TryFindCovering(mutation, out _, out _));
     }
 
     internal static bool Covers(FileMeta file, WalMutation mutation)
