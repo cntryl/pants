@@ -116,6 +116,284 @@ public sealed class StreamingCompactionMergerTests
     }
 
     [Fact]
+    public void ShouldPreserveRawSourceHistoryAndSplitRangeTombstoneAtFragmentBoundary()
+    {
+        var source = Build(
+            [("a", 8, "new"), ("a", 3, "old"), ("b", 6, null), ("b", 2, "masked"), ("z", 9, "right")],
+            [("b", "y", 7)]);
+        using var directory = new TemporaryDirectory();
+        WriteSst(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+        using var streams = CompactionStreams.Create(
+            plan,
+            file => Path.Combine(directory.Path, file.Name),
+            SstReader.Open,
+            4,
+            null);
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition(
+                streams.Streams,
+                streams.RangeTombstones,
+                plan,
+                1024 * 1024)
+            .ToArray();
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Equal(
+            source.Entries.Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)),
+            partitions.SelectMany(static partition => partition.Entries).Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)));
+        Assert.Equal(
+            [(Start: "b", End: "m", Sequence: 7UL)],
+            partitions[0].RangeTombstones.Select(range => (
+                Start: TestBytes.ToText(range.Start),
+                End: TestBytes.ToText(range.End),
+                range.Sequence)));
+        Assert.Equal(
+            [(Start: "m", End: "y", Sequence: 7UL)],
+            partitions[1].RangeTombstones.Select(range => (
+                Start: TestBytes.ToText(range.Start),
+                End: TestBytes.ToText(range.End),
+                range.Sequence)));
+    }
+
+    [Fact]
+    public void ShouldRejectShadowedConflictingVersionsWhileFragmentingRawHistory()
+    {
+        var source = Build(
+            [("a", 1, "left"), ("z", 9, "new"), ("z", 3, "old-one"), ("z", 3, "old-two")],
+            []);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+
+        var exception = Assert.Throws<PantsCorruptionException>(() =>
+            StreamingCompactionMerger.MergeAndPartition([reader], plan, 1024 * 1024).ToArray());
+
+        Assert.Equal(PantsErrorCode.Corruption, exception.Code);
+    }
+
+    [Fact]
+    public void ShouldRejectFragmentPlansWithInvalidShape()
+    {
+        var valid = FragmentPlan("a", "z", "m");
+        CompactionPlan[] invalidPlans =
+        [
+            valid with { SourceLevel = 0 },
+            valid with { TargetLevel = 3 },
+            valid with { Inputs = [] },
+            valid with { FragmentSplitKey = [] },
+            valid with { PointTombstoneGcEligible = true },
+            valid with { RangeTombstoneGcEligible = true },
+            valid with
+            {
+                Inputs =
+                [
+                    .. valid.Inputs,
+                    new FileMeta
+                    {
+                        Name = "other.sst",
+                        Level = 2,
+                        SmallestKey = TestBytes.FromString("a"),
+                        LargestKey = TestBytes.FromString("z"),
+                        KeyBoundsComplete = true
+                    }
+                ]
+            }
+        ];
+
+        foreach (var plan in invalidPlans)
+        {
+            var stream = new TrackingEntryStream();
+            var exception = Assert.Throws<PantsCorruptionException>(() =>
+                StreamingCompactionMerger.MergeAndPartition([stream], [], plan, 1024).ToArray());
+
+            Assert.Equal(PantsErrorCode.Corruption, exception.Code);
+            Assert.True(stream.IsDisposed);
+        }
+    }
+
+    [Fact]
+    public void ShouldRejectFragmentBoundariesThatAreNotStrictlyInterior()
+    {
+        foreach (var boundary in new[] { "", "a", "z", "zz" })
+        {
+            var stream = new TrackingEntryStream();
+            var plan = FragmentPlan("a", "z", boundary);
+
+            var exception = Assert.Throws<PantsCorruptionException>(() =>
+                StreamingCompactionMerger.MergeAndPartition([stream], [], plan, 1024).ToArray());
+
+            Assert.Equal(PantsErrorCode.Corruption, exception.Code);
+            Assert.True(stream.IsDisposed);
+        }
+    }
+
+    [Fact]
+    public void ShouldKeepFragmentOrdinalsContiguousWhenSoftRollPrecedesTheForcedCut()
+    {
+        var source = Build([("z", 2, "right")], [("a", "b", 1)]);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition([reader], plan, 1).ToArray();
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Empty(partitions[0].Entries);
+        Assert.Equal(["z"], partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(("a", "b"), (
+            TestBytes.ToText(Assert.Single(partitions[0].RangeTombstones).Start),
+            TestBytes.ToText(partitions[0].RangeTombstones[0].End)));
+    }
+
+    [Fact]
+    public void ShouldDisposeFragmentStreamWhenRawKeyGroupExceedsMemoryBudget()
+    {
+        var entries = Enumerable.Range(0, 8)
+            .Select(index => new SstEntry(
+                TestBytes.FromString("a"),
+                new byte[100],
+                checked((ulong)(20 - index)),
+                null,
+                false))
+            .ToArray();
+        var stream = new TrackingEntryStream(entries);
+        var plan = FragmentPlan("a", "z", "m");
+        var budget = new ResourceBudget(512);
+
+        var exception = Assert.Throws<PantsResourceLimitException>(() =>
+            StreamingCompactionMerger.MergeAndPartition(
+                    [stream],
+                    [],
+                    plan,
+                    1,
+                    budget)
+                .ToArray());
+
+        Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+        Assert.True(stream.IsDisposed);
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
+    public void ShouldFragmentRangeOnlySourceWhenInteriorBoundaryHasNoPointEntry()
+    {
+        var source = Build([], [("a", "z", 11)]);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition(
+                [reader],
+                plan,
+                1024)
+            .ToArray();
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Empty(partitions.SelectMany(static partition => partition.Entries));
+        Assert.Equal(
+            [(Start: "a", End: "m", Sequence: 11UL)],
+            partitions[0].RangeTombstones.Select(range => (
+                Start: TestBytes.ToText(range.Start),
+                End: TestBytes.ToText(range.End),
+                range.Sequence)));
+        Assert.Equal(
+            [(Start: "m", End: "z", Sequence: 11UL)],
+            partitions[1].RangeTombstones.Select(range => (
+                Start: TestBytes.ToText(range.Start),
+                End: TestBytes.ToText(range.End),
+                range.Sequence)));
+    }
+
+    [Fact]
+    public void ShouldAssignEntriesAtRangeBoundaryToTheRightFragment()
+    {
+        var source = Build(
+            [("m", 4, "new"), ("m", 3, null)],
+            [("a", "m", 1), ("m", "z", 2)]);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition(
+                [reader],
+                plan,
+                1024)
+            .ToArray();
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Empty(partitions[0].Entries);
+        Assert.Equal(
+            [("m", 4UL, "new"), ("m", 3UL, (string?)null)],
+            partitions[1].Entries.Select(entry => (
+                TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                entry.Value is null ? null : TestBytes.ToText(entry.Value))));
+        Assert.Equal(("a", "m"), (
+            TestBytes.ToText(Assert.Single(partitions[0].RangeTombstones).Start),
+            TestBytes.ToText(partitions[0].RangeTombstones[0].End)));
+        Assert.Equal(("m", "z"), (
+            TestBytes.ToText(Assert.Single(partitions[1].RangeTombstones).Start),
+            TestBytes.ToText(partitions[1].RangeTombstones[0].End)));
+    }
+
+    [Fact]
+    public void ShouldKeepFinalKeyWithItsEndingRangeWithinOneFragmentOutput()
+    {
+        var source = Build(
+            [("a", 1, "value"), ("m", 2, "value"), ("n", 3, "value"), ("z", 4, "value")],
+            [("a", "z", 5)]);
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "source.sst", source);
+        var plan = FragmentPlan("a", "z", "m");
+
+        var partitions = StreamingCompactionMerger.MergeAndPartition(
+                [reader],
+                plan,
+                100)
+            .ToArray();
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Equal(
+            ["m", "n", "z"],
+            partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(("m", "z"), (
+            TestBytes.ToText(Assert.Single(partitions[1].RangeTombstones).Start),
+            TestBytes.ToText(partitions[1].RangeTombstones[0].End)));
+    }
+
+    [Fact]
+    public void ShouldDisposeFragmentStreamWhenSplitBoundaryExceedsMemoryBudget()
+    {
+        var stream = new TrackingEntryStream();
+        var splitKey = new byte[2048];
+        Array.Fill(splitKey, (byte)'b');
+        var plan = FragmentPlan("a", "z", splitKey);
+        var budget = new ResourceBudget(1024);
+
+        var exception = Assert.Throws<PantsResourceLimitException>(() =>
+            StreamingCompactionMerger.MergeAndPartition(
+                    [stream],
+                    [],
+                    plan,
+                    1024,
+                    budget)
+                .ToArray());
+
+        Assert.Equal(PantsErrorCode.ResourceLimit, exception.Code);
+        Assert.True(stream.IsDisposed);
+        Assert.Equal(0, budget.Current);
+    }
+
+    [Fact]
     public void ShouldChargeInputBlocksAndKeepOnlyOneOutputPartitionReservedAtATime()
     {
         var entries = Enumerable.Range(0, 100)
@@ -244,13 +522,19 @@ public sealed class StreamingCompactionMergerTests
     static SstReader OpenReader(string directory, string fileName, SstContents content)
     {
         var path = Path.Combine(directory, fileName);
+        WriteSst(directory, fileName, content);
+        return SstReader.Open(path);
+    }
+
+    static void WriteSst(string directory, string fileName, SstContents content)
+    {
+        var path = Path.Combine(directory, fileName);
         File.WriteAllBytes(
             path,
             SstCodec.Encode(
                 content.Entries.ToArray(),
                 content.RangeTombstones.ToArray(),
                 PantsPerformanceGoal.Latency));
-        return SstReader.Open(path);
     }
 
     static CompactionPlan Plan(
@@ -264,6 +548,28 @@ public sealed class StreamingCompactionMergerTests
         pointTombstoneGcEligible,
         rangeTombstoneGcEligible,
         []);
+
+    static CompactionPlan FragmentPlan(string smallest, string largest, string splitKey) =>
+        FragmentPlan(smallest, largest, TestBytes.FromString(splitKey));
+
+    static CompactionPlan FragmentPlan(string smallest, string largest, byte[] splitKey) => new(
+        2,
+        2,
+        0,
+        4,
+        false,
+        false,
+        [new FileMeta
+        {
+            Name = "source.sst",
+            Level = 2,
+            ColumnFamilyId = 0,
+            SmallestKey = TestBytes.FromString(smallest),
+            LargestKey = TestBytes.FromString(largest),
+            KeyBoundsComplete = true
+        }],
+        CompactionPurpose.Fragment,
+        splitKey);
 
     static SstContents Build(params (string Key, ulong Sequence, string? Value)[] entries) =>
         Build(entries, []);
@@ -291,11 +597,18 @@ public sealed class StreamingCompactionMergerTests
 
     sealed class TrackingEntryStream : ICompactionEntryStream
     {
-        public SstEntry Current => throw new InvalidOperationException("The stream has no entries.");
+        readonly SstEntry[] _entries;
+        int _index = -1;
+
+        public TrackingEntryStream(params SstEntry[] entries) => _entries = entries;
+
+        public SstEntry Current => _index >= 0 && _index < _entries.Length
+            ? _entries[_index]
+            : throw new InvalidOperationException("The stream has no current entry.");
 
         public bool IsDisposed { get; private set; }
 
-        public bool MoveNext() => false;
+        public bool MoveNext() => ++_index < _entries.Length;
 
         public void Dispose() => IsDisposed = true;
     }

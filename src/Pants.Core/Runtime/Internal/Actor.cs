@@ -1864,11 +1864,18 @@ sealed class Actor : IAsyncDisposable
                                 .ConfigureAwait(false);
                             try
                             {
+                                var preferredWorkBytes = GetPreferredCompactionWorkBytes(staging?.Staging);
+                                snapshot = _diskStore.CaptureCompactionWorkSnapshot(
+                                    state,
+                                    true,
+                                    true,
+                                    preferredWorkBytes);
                                 var completion = await _compactionRuntime.ScheduleDrainDebtAsync(
                                         snapshot,
                                         nextToken => CaptureNextCompactionWorkSnapshotAsync(
                                             true,
                                             true,
+                                            preferredWorkBytes,
                                             nextToken),
                                         PublishCompactionOnActorAsync,
                                         _cloudCompactionOutputPublisher,
@@ -4941,9 +4948,19 @@ sealed class Actor : IAsyncDisposable
             .ConfigureAwait(false);
         try
         {
+            var preferredWorkBytes = GetPreferredCompactionWorkBytes(staging?.Staging);
+            snapshot = _diskStore.CaptureCompactionWorkSnapshot(
+                state,
+                force,
+                false,
+                preferredWorkBytes);
             var completion = await _compactionRuntime.ScheduleCompactAsync(
                     snapshot,
-                    token => CaptureNextCompactionWorkSnapshotAsync(force, false, token),
+                    token => CaptureNextCompactionWorkSnapshotAsync(
+                        force,
+                        false,
+                        preferredWorkBytes,
+                        token),
                     PublishCompactionOnActorAsync,
                     force,
                     _cloudCompactionOutputPublisher,
@@ -4998,6 +5015,7 @@ sealed class Actor : IAsyncDisposable
     ValueTask<CompactionWorkSnapshot?> CaptureNextCompactionWorkSnapshotAsync(
         bool force,
         bool drainDebt,
+        long? preferredWorkBytes,
         CancellationToken cancellationToken) =>
         SendAsync(
             state =>
@@ -5009,7 +5027,11 @@ sealed class Actor : IAsyncDisposable
                 }
 
                 return ValueTask.FromResult<CompactionWorkSnapshot?>(
-                    _diskStore.CaptureCompactionWorkSnapshot(state, force, drainDebt));
+                    _diskStore.CaptureCompactionWorkSnapshot(
+                        state,
+                        force,
+                        drainDebt,
+                        preferredWorkBytes));
             },
             cancellationToken,
             enforceRuntimeResponseTimeout: false);
@@ -5861,6 +5883,26 @@ sealed class Actor : IAsyncDisposable
         return new CompactionStagingLease(
             reservation,
             new CompactionOutputStaging(windowBytes, _cloudCompactionOutputPublisher));
+    }
+
+    long GetPreferredCompactionWorkBytes(CompactionOutputStaging? staging)
+    {
+        var partitionTarget = Math.Min(
+            _options.TargetSstSizeBytes,
+            Math.Max(1, _compactionMemory.Budget.Limit / 2));
+        if (_compactionMemory.OutputPartitionTargetBytes is { } publicationTarget)
+        {
+            partitionTarget = Math.Min(partitionTarget, publicationTarget);
+        }
+
+        if (staging is not null)
+        {
+            partitionTarget = Math.Min(partitionTarget, staging.PartitionTargetBytes);
+        }
+
+        return partitionTarget > long.MaxValue / 4
+            ? long.MaxValue
+            : partitionTarget * 4;
     }
 
     /// <summary>

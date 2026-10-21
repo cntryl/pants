@@ -11,14 +11,16 @@ static class LeveledCompactionPlanner
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
         long? snapshotHorizon,
-        bool force) =>
+        bool force,
+        long? preferredWorkBytes = null) =>
         PickCore(
             files,
             columnFamilyId,
             configuration,
             snapshotHorizon,
             l0ForceFloor: force ? 2 : int.MaxValue,
-            innerForceFloor: force ? 2 : int.MaxValue);
+            innerForceFloor: force ? 2 : int.MaxValue,
+            preferredWorkBytes);
 
     /// <summary>
     ///     Picks the next step of a manual debt drain. Any L0 file is drained, and inner levels are
@@ -28,14 +30,16 @@ static class LeveledCompactionPlanner
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
-        long? snapshotHorizon) =>
+        long? snapshotHorizon,
+        long? preferredWorkBytes = null) =>
         PickCore(
             files,
             columnFamilyId,
             configuration,
             snapshotHorizon,
             l0ForceFloor: 1,
-            innerForceFloor: int.MaxValue);
+            innerForceFloor: int.MaxValue,
+            preferredWorkBytes);
 
     /// <summary>
     ///     Shared selection. A level is forced once it holds at least its floor in files; a floor of
@@ -47,9 +51,15 @@ static class LeveledCompactionPlanner
         PantsCompactionConfiguration configuration,
         long? snapshotHorizon,
         int l0ForceFloor,
-        int innerForceFloor)
+        int innerForceFloor,
+        long? preferredWorkBytes)
     {
         ValidateConfiguration(configuration);
+        if (preferredWorkBytes is <= 0)
+        {
+            throw PantsException.InvalidArgument("The preferred compaction work target must be positive.");
+        }
+
         var familyFiles = files.Where(file => file.ColumnFamilyId == columnFamilyId).ToArray();
         ValidateMetadata(familyFiles, columnFamilyId, configuration.MaximumLevels);
         if (familyFiles.Length == 0)
@@ -68,7 +78,7 @@ static class LeveledCompactionPlanner
                 .Take(Math.Min(l0Files.Length, configuration.L0FileCountTrigger))
                 .ToArray();
             return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, 1), 0, 1,
-                columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
+                columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon, null);
         }
 
         for (uint level = 1; level < configuration.MaximumLevels - 1; level++)
@@ -83,7 +93,8 @@ static class LeveledCompactionPlanner
                     .Take(configuration.L0FileCountTrigger)
                     .ToArray();
                 return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, level + 1), level,
-                    level + 1, columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon);
+                    level + 1, columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon,
+                    preferredWorkBytes);
             }
         }
 
@@ -99,7 +110,7 @@ static class LeveledCompactionPlanner
         uint level)
     {
         var levelSize = levelFiles.Aggregate(0UL, static (total, file) =>
-            checked(total + file.SizeBytes));
+            SaturatingAdd(total, file.SizeBytes));
         return levelSize > LevelTargetBytes(configuration, level);
     }
 
@@ -177,6 +188,11 @@ static class LeveledCompactionPlanner
         CompactionPlan plan,
         IReadOnlyList<FileMeta> currentFiles)
     {
+        if (plan.Purpose == CompactionPurpose.Fragment)
+        {
+            return HasSameFragmentBoundary(plan, currentFiles);
+        }
+
         var sources = plan.Inputs
             .Where(file => file.Level == plan.SourceLevel)
             .ToArray();
@@ -199,6 +215,34 @@ static class LeveledCompactionPlanner
             .Select(static file => file.Name)
             .ToHashSet(StringComparer.Ordinal);
         return expectedTargetNames.SetEquals(currentTargetNames);
+    }
+
+    static bool HasSameFragmentBoundary(CompactionPlan plan, IReadOnlyList<FileMeta> currentFiles)
+    {
+        if (plan.SourceLevel == 0 || plan.TargetLevel != plan.SourceLevel ||
+            plan.Inputs.Count != 1 || plan.Inputs[0].Level != plan.SourceLevel ||
+            plan.FragmentSplitKey is not { Length: > 0 } splitKey)
+        {
+            return false;
+        }
+
+        var familyFiles = currentFiles
+            .Where(file => file.ColumnFamilyId == plan.ColumnFamilyId)
+            .ToArray();
+        var source = familyFiles.SingleOrDefault(file => file.Name == plan.Inputs[0].Name);
+        if (source is null || !source.HasTrustedKeyBounds() ||
+            ByteArrayComparer.Instance.Compare(source.SmallestKey, splitKey) >= 0 ||
+            ByteArrayComparer.Instance.Compare(splitKey, source.LargestKey) >= 0)
+        {
+            return false;
+        }
+
+        return TryGetFragmentationSplitKey(
+                   source,
+                   FilesAtLevel(familyFiles, plan.SourceLevel),
+                   FilesAtLevel(familyFiles, plan.SourceLevel + 1),
+                   out var currentSplitKey) &&
+               ByteArrayComparer.Instance.Equals(splitKey, currentSplitKey);
     }
 
     /// <summary>
@@ -224,19 +268,40 @@ static class LeveledCompactionPlanner
         uint targetLevel,
         uint columnFamilyId,
         int maximumInputs,
-        long? snapshotHorizon)
+        long? snapshotHorizon,
+        long? preferredWorkBytes)
     {
         var sources = sourceFiles.ToList();
         List<FileMeta> selected;
         while (true)
         {
             selected = ExpandToCompleteTargetSpan(sources, targetFiles);
-            if (selected.Count <= maximumInputs || sources.Count == 1)
+            var overFileLimit = selected.Count > maximumInputs;
+            if (!overFileLimit || sources.Count == 1)
             {
                 break;
             }
 
             sources.RemoveAt(sources.Count - 1);
+        }
+
+        if (sources.Count > 1 && preferredWorkBytes is { } workTarget &&
+            ExceedsWorkTarget(selected, workTarget))
+        {
+            sources.RemoveRange(1, sources.Count - 1);
+            selected = ExpandToCompleteTargetSpan(sources, targetFiles);
+        }
+
+        if (sources.Count == 1 && preferredWorkBytes is { } targetBytes &&
+            ExceedsWorkTarget(selected, targetBytes) &&
+            TryGetFragmentationSplitKey(
+                sources[0],
+                FilesAtLevel(familyFiles, sourceLevel),
+                FilesAtLevel(familyFiles, targetLevel),
+                out var splitKey))
+        {
+            return new CompactionPlan(sourceLevel, sourceLevel, columnFamilyId, null,
+                false, false, [sources[0]], CompactionPurpose.Fragment, splitKey);
         }
 
         var selectedSmallest = selected.Select(GetSmallestKey).Min(ByteArrayComparer.Instance)!;
@@ -253,6 +318,74 @@ static class LeveledCompactionPlanner
                 .ThenBy(static file => file.SstSequence)
                 .ThenBy(static file => file.Name, StringComparer.Ordinal)
                 .ToArray());
+    }
+
+    static bool ExceedsWorkTarget(IReadOnlyList<FileMeta> files, long workTargetBytes)
+    {
+        ulong total = 0;
+        foreach (var file in files)
+        {
+            if (ulong.MaxValue - total < file.SizeBytes)
+            {
+                return true;
+            }
+
+            total += file.SizeBytes;
+        }
+
+        return total > checked((ulong)workTargetBytes);
+    }
+
+    static bool TryGetFragmentationSplitKey(
+        FileMeta source,
+        IReadOnlyList<FileMeta> sourceLevelFiles,
+        IReadOnlyList<FileMeta> targetLevelFiles,
+        out byte[] splitKey)
+    {
+        splitKey = [];
+        if (!sourceLevelFiles.All(static file => file.HasTrustedKeyBounds()) ||
+            !targetLevelFiles.All(static file => file.HasTrustedKeyBounds()) ||
+            HasOverlappingFiles(sourceLevelFiles) || HasOverlappingFiles(targetLevelFiles))
+        {
+            return false;
+        }
+
+        var smallest = GetSmallestKey(source);
+        var largest = GetLargestKey(source);
+        var siblingBoundaries = sourceLevelFiles
+            .Where(file => !string.Equals(file.Name, source.Name, StringComparison.Ordinal))
+            .SelectMany(static file => new[] { GetSmallestKey(file), GetLargestKey(file) })
+            .ToHashSet(ByteArrayComparer.Instance);
+        var cuts = targetLevelFiles
+            .Select(GetSmallestKey)
+            .Where(key => ByteArrayComparer.Instance.Compare(smallest, key) < 0 &&
+                          ByteArrayComparer.Instance.Compare(key, largest) < 0 &&
+                          !siblingBoundaries.Contains(key))
+            .Distinct(ByteArrayComparer.Instance)
+            .Order(ByteArrayComparer.Instance)
+            .ToArray();
+        if (cuts.Length == 0)
+        {
+            return false;
+        }
+
+        splitKey = cuts[cuts.Length / 2].ToArray();
+        return true;
+    }
+
+    static bool HasOverlappingFiles(IReadOnlyList<FileMeta> files)
+    {
+        var ordered = files.OrderBy(GetSmallestKey, ByteArrayComparer.Instance).ToArray();
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ByteArrayComparer.Instance.Compare(
+                    GetSmallestKey(ordered[index]), GetLargestKey(ordered[index - 1])) < 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     static FileMeta[] FilesAtLevel(IEnumerable<FileMeta> files, uint level) =>
@@ -285,6 +418,9 @@ static class LeveledCompactionPlanner
 
     static ulong SaturatingMultiply(ulong value, ulong multiplier) =>
         value > ulong.MaxValue / multiplier ? ulong.MaxValue : value * multiplier;
+
+    static ulong SaturatingAdd(ulong value, ulong addend) =>
+        ulong.MaxValue - value < addend ? ulong.MaxValue : value + addend;
 
     static byte[] GetSmallestKey(FileMeta file) =>
         file.SmallestKey!;

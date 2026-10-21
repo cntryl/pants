@@ -96,6 +96,329 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
+    public void ShouldFragmentSourceWhenSingleSourceOverlapExceedsPreferredWorkTarget()
+    {
+        const ulong mib = 1024 * 1024;
+        FileMeta[] files =
+        [
+            File("source-0.sst", 2, 1, "b", "y", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "z", "zz", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "zzz", "zzzz", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "zzzzz", "zzzzzz", 32 * mib, keyBoundsComplete: true),
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("target-2.sst", 3, 7, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "m", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "q", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "u", "x", 128 * mib, keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+            42,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Fragment, plan.Purpose);
+        Assert.Equal(2u, plan.SourceLevel);
+        Assert.Equal(2u, plan.TargetLevel);
+        Assert.Equal("source-0.sst", Assert.Single(plan.Inputs).Name);
+        Assert.Equal(TestBytes.FromString("m"), plan.FragmentSplitKey);
+        Assert.Null(plan.SnapshotHorizon);
+        Assert.False(plan.PointTombstoneGcEligible);
+        Assert.False(plan.RangeTombstoneGcEligible);
+        Assert.True(LeveledCompactionPlanner.HasSameTargetSpan(plan, files));
+        Assert.False(LeveledCompactionPlanner.HasSameTargetSpan(
+            plan,
+            [.. files, File("new-overlap.sst", 2, 11, "g", "h", keyBoundsComplete: true)]));
+        Assert.False(LeveledCompactionPlanner.HasSameTargetSpan(
+            plan with { FragmentSplitKey = TestBytes.FromString("n") },
+            files));
+    }
+
+    [Fact]
+    public void ShouldKeepCompleteOverlapWhenNoInteriorTargetBoundaryCanFragmentTheSource()
+    {
+        const ulong mib = 1024 * 1024;
+        FileMeta[] files =
+        [
+            File("source.sst", 2, 1, "b", "y", 128 * mib, keyBoundsComplete: true),
+            File("target.sst", 3, 2, "a", "zzzz", 768 * mib, keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l1TargetSizeBytes: 1),
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+        Assert.Equal(2u, plan.SourceLevel);
+        Assert.Equal(3u, plan.TargetLevel);
+        Assert.Equal(["source.sst", "target.sst"], plan.Inputs.Select(static file => file.Name));
+    }
+
+    [Fact]
+    public void ShouldKeepSourceBatchWhenWorkExactlyMatchesPreferredTarget()
+    {
+        const ulong mib = 1024 * 1024;
+        FileMeta[] files =
+        [
+            File("source-0.sst", 2, 1, "b", "d", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "m", "n", 32 * mib, keyBoundsComplete: true),
+            File("target.sst", 3, 5, "a", "z", 128 * mib, keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+        Assert.Equal(3, plan.Inputs.Count(file => file.Level == 2));
+        Assert.Equal(1, plan.Inputs.Count(file => file.Level == 3));
+        Assert.Equal(512UL * 1024 * 1024,
+            plan.Inputs.Aggregate(0UL, static (total, file) => total + file.SizeBytes));
+    }
+
+    [Fact]
+    public void ShouldShrinkSourceBatchWhenSingletonWorkFits()
+    {
+        const ulong mib = 1024 * 1024;
+        FileMeta[] files =
+        [
+            File("source-0.sst", 2, 1, "b", "d", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "z", "zz", 32 * mib, keyBoundsComplete: true),
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("target-2.sst", 3, 7, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "m", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "q", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "u", "x", 128 * mib, keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+        Assert.Equal(["source-0.sst", "target-0.sst"], plan.Inputs.Select(static file => file.Name));
+        Assert.Equal(256UL * 1024 * 1024,
+            plan.Inputs.Aggregate(0UL, static (total, file) => total + file.SizeBytes));
+    }
+
+    [Fact]
+    public void ShouldAdvanceFragmentationWhenPriorCutRemainsAnInclusiveBound()
+    {
+        const ulong mib = 1024 * 1024;
+        var files = new List<FileMeta>
+        {
+            File("source-0.sst", 2, 1, "b", "m", 64 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "z", "zz", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "zzz", "zzzz", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "zzzzz", "zzzzzz", 128 * mib, keyBoundsComplete: true),
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("target-2.sst", 3, 7, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "m", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "q", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "u", "x", 128 * mib, keyBoundsComplete: true)
+        };
+        var configuration = Configuration(
+            l0FileCountTrigger: 3,
+            l1TargetSizeBytes: 40L * 1024 * 1024);
+
+        var next = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            configuration,
+            null,
+            false,
+            512L * 1024 * 1024);
+        files[0].LargestKey = TestBytes.FromString("i");
+        files[0].SizeBytes = 32 * mib;
+        var settled = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            configuration,
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(next);
+        Assert.Equal(CompactionPurpose.Fragment, next.Purpose);
+        Assert.Equal(TestBytes.FromString("i"), next.FragmentSplitKey);
+        Assert.NotNull(settled);
+        Assert.Equal(CompactionPurpose.Merge, settled.Purpose);
+        Assert.Equal("source-0.sst", Assert.Single(settled.Inputs, file => file.Level == 2).Name);
+        Assert.Equal(3, settled.Inputs.Count(file => file.Level == 3));
+        Assert.True(settled.Inputs.Aggregate(0UL, static (total, file) => total + file.SizeBytes)
+                    <= 512UL * 1024 * 1024);
+    }
+
+    [Fact]
+    public void ShouldKeepEqualityChainWhenNoFurtherInteriorSplitExists()
+    {
+        const ulong mib = 1024 * 1024;
+        var files = new List<FileMeta>
+        {
+            File("source-0.sst", 2, 1, "b", "d", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "z", "zz", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "zzz", "zzzz", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "zzzzz", "zzzzzz", 32 * mib, keyBoundsComplete: true),
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "d", "h", 128 * mib, keyBoundsComplete: true),
+            File("target-2.sst", 3, 7, "h", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "l", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "p", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "t", "x", 128 * mib, keyBoundsComplete: true)
+        };
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+        Assert.Equal("source-0.sst", Assert.Single(plan.Inputs, file => file.Level == 2).Name);
+        Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
+        Assert.True(plan.Inputs.Aggregate(0UL, static (total, file) => total + file.SizeBytes)
+                    > 512UL * 1024 * 1024);
+    }
+
+    [Fact]
+    public void ShouldTreatOverflowingLevelWorkEstimateAsOverfull()
+    {
+        FileMeta[] files =
+        [
+            File("first.sst", 2, 1, "a", "b", ulong.MaxValue, keyBoundsComplete: true),
+            File("second.sst", 2, 2, "c", "d", 1, keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l1TargetSizeBytes: 1024),
+            null,
+            false,
+            512L * 1024 * 1024);
+
+        Assert.NotNull(plan);
+        Assert.Equal("first.sst", Assert.Single(plan.Inputs).Name);
+    }
+
+    [Fact]
+    public void ShouldKeepExistingPlanWhenPreferredWorkTargetIsDisabled()
+    {
+        const ulong mib = 1024 * 1024;
+        var files = new List<FileMeta>
+        {
+            File("source-0.sst", 2, 1, "b", "y", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "z", "zz", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "zzz", "zzzz", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "zzzzz", "zzzzzz", 32 * mib, keyBoundsComplete: true)
+        };
+        files.AddRange(new[]
+        {
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "e", "h", 128 * mib, keyBoundsComplete: true),
+            File("target-2.sst", 3, 7, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "m", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "q", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "u", "x", 128 * mib, keyBoundsComplete: true)
+        });
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+        Assert.Equal(3, plan.Inputs.Count(file => file.Level == 2));
+        Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
+    }
+
+    [Fact]
+    public void ShouldKeepCompleteOverlapWhenFragmentationBoundsAreUntrustedOrOverlapping()
+    {
+        const ulong mib = 1024 * 1024;
+        FileMeta[] baseline =
+        [
+            File("source-0.sst", 2, 1, "b", "y", 128 * mib, keyBoundsComplete: true),
+            File("source-1.sst", 2, 2, "p", "zz", 128 * mib, keyBoundsComplete: true),
+            File("source-2.sst", 2, 3, "zzz", "zzzz", 128 * mib, keyBoundsComplete: true),
+            File("source-3.sst", 2, 4, "zzzzz", "zzzzzz", 32 * mib, keyBoundsComplete: true),
+            File("target-0.sst", 3, 5, "a", "d", 128 * mib, keyBoundsComplete: true),
+            File("target-1.sst", 3, 6, "e", "h", 128 * mib, keyBoundsComplete: false),
+            File("target-2.sst", 3, 7, "i", "l", 128 * mib, keyBoundsComplete: true),
+            File("target-3.sst", 3, 8, "m", "p", 128 * mib, keyBoundsComplete: true),
+            File("target-4.sst", 3, 9, "q", "t", 128 * mib, keyBoundsComplete: true),
+            File("target-5.sst", 3, 10, "u", "x", 128 * mib, keyBoundsComplete: true)
+        ];
+
+        for (var scenario = 0; scenario < 4; scenario++)
+        {
+            var files = baseline.Select(static file => file.Clone()).ToArray();
+            switch (scenario)
+            {
+                case 0:
+                    files[0].KeyBoundsComplete = false;
+                    break;
+                case 1:
+                    files[5].KeyBoundsComplete = false;
+                    break;
+                case 2:
+                    files[1].SmallestKey = TestBytes.FromString("p");
+                    break;
+                case 3:
+                    files[5].SmallestKey = TestBytes.FromString("c");
+                    break;
+            }
+
+            var plan = LeveledCompactionPlanner.Pick(
+                files,
+                0,
+                Configuration(l0FileCountTrigger: 3, l1TargetSizeBytes: 40L * 1024 * 1024),
+                null,
+                false,
+                512L * 1024 * 1024);
+
+            Assert.NotNull(plan);
+            Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+            Assert.Equal(2u, plan.SourceLevel);
+            Assert.Equal(3u, plan.TargetLevel);
+            Assert.Equal(1, plan.Inputs.Count(file => file.Level == 2));
+            Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
+        }
+    }
+
+    [Fact]
     public void ShouldAbsorbTransitivelyOverlappingTargetFiles()
     {
         FileMeta[] files =
@@ -349,7 +672,8 @@ public sealed class LeveledCompactionPlannerTests
         string smallest,
         string largest,
         ulong sizeBytes = 1024,
-        uint columnFamilyId = 0) => new()
+        uint columnFamilyId = 0,
+        bool keyBoundsComplete = false) => new()
         {
             Name = name,
             Level = level,
@@ -357,6 +681,7 @@ public sealed class LeveledCompactionPlannerTests
             SstSequence = sequence,
             SizeBytes = sizeBytes,
             SmallestKey = TestBytes.FromString(smallest).ToArray(),
-            LargestKey = TestBytes.FromString(largest).ToArray()
+            LargestKey = TestBytes.FromString(largest).ToArray(),
+            KeyBoundsComplete = keyBoundsComplete
         };
 }

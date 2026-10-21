@@ -720,7 +720,8 @@ sealed class LocalDiskStore :
     public CompactionWorkSnapshot CaptureCompactionWorkSnapshot(
         RuntimeState state,
         bool force,
-        bool drainDebt = false)
+        bool drainDebt = false,
+        long? preferredWorkBytes = null)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var snapshotHorizon = state.ActiveSnapshots
@@ -733,13 +734,15 @@ sealed class LocalDiskStore :
                     manifest.Files,
                     familyId,
                     _compaction,
-                    snapshotHorizon)
+                    snapshotHorizon,
+                    preferredWorkBytes)
                 : LeveledCompactionPlanner.Pick(
                     manifest.Files,
                     familyId,
                     _compaction,
                     snapshotHorizon,
-                    force))
+                    force,
+                    preferredWorkBytes))
             .Where(static plan => plan is not null)
             .Cast<CompactionPlan>()
             .ToArray();
