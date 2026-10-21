@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "midgeCommit": "d582fd1127741fd69067914423ec76ad6adf0657",
-  "lsmSpecCommit": "bbf7c718d449011def985a6157e58325939ac731",
-  "pantsCommitAtCapture": "82961e3f7bcc4fef183c273e866455a231e0754e",
+  "lsmSpecCommit": "c3b6bfbe29c91557cf1b7ed8ca5cf70dd561549c",
+  "pantsCommitAtCapture": "071057a6ba3494113625e47622c17c51b2aba585",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
     "cargo test --locked --offline --features failpoints --test fault_injection -- --list",
@@ -17,15 +17,15 @@
       "integration": 652,
       "lib": 3377
     },
-    "pantsCasesAtHead": 2847,
-    "pantsWorkingTreeTestAdditionsAtCapture": 19,
-    "pantsCasesAtCapture": 2866,
-    "pantsTestListRowsAtCapture": 2867,
+    "pantsCasesAtHead": 2866,
+    "pantsWorkingTreeTestAdditionsAtCapture": 7,
+    "pantsCasesAtCapture": 2873,
+    "pantsTestListRowsAtCapture": 2874,
     "mappingStatus": {
       "verified": 276,
-      "verified-adapted": 97,
+      "verified-adapted": 101,
       "candidate": 339,
-      "unmapped": 3529
+      "unmapped": 3525
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
@@ -3860,7 +3860,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3879,7 +3878,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3904,7 +3902,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3923,7 +3920,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3942,7 +3938,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3961,7 +3956,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3980,7 +3974,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -3999,7 +3992,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -13739,9 +13731,17 @@
       "kind": "lib",
       "name": "runtime::event_loop::compaction::fragmentation_tests::should_recover_fragment_when_publication_stops_after_durable_manifest_batch",
       "translatedPantsMethodName": "ShouldRecoverFragmentWhenPublicationStopsAfterDurableManifestBatch",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRecoverPublishedFragmentAfterManifestBatchWithRawHistoryIntact",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Pants recovers an OutputDurable fragment intent from the durable manifest, then verifies exact raw source rows, split range-tombstone coverage, unchanged targets, cleared intent, and current reads after reopen."
     },
     {
       "source": "src/lib.rs",
@@ -13749,9 +13749,23 @@
       "kind": "lib",
       "name": "runtime::event_loop::compaction::fragmentation_tests::should_recover_fragmented_source_when_critical_l0_work_interrupts_promotion",
       "translatedPantsMethodName": "ShouldRecoverFragmentedSourceWhenCriticalL0WorkInterruptsPromotion",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldPublishValidFragmentWhenCriticalL0WorkArrivesDuringItsBuild",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldPrioritizeCriticalL0WorkBeforeFurtherFragmentPromotion",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Pants builds a real source fragment while critical L0 files arrive, completes the fragment without changing target SSTs, then drains L0; the planner regression separately verifies critical L0 wins over another fragment plan."
     },
     {
       "source": "src/lib.rs",
@@ -13759,9 +13773,23 @@
       "kind": "lib",
       "name": "runtime::event_loop::compaction::fragmentation_tests::should_reject_fragment_publication_when_cut_or_source_neighbors_change",
       "translatedPantsMethodName": "ShouldRejectFragmentPublicationWhenCutOrSourceNeighborsChange",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentOutputThatDoesNotPreserveTheCapturedCut",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentPlanWhenSourceNeighborTopologyChanges",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Pants fences a generated replacement missing the captured cut before publication and rejects a changed same-level neighbor topology through the stale-work snapshot guard."
     },
     {
       "source": "src/lib.rs",
@@ -13769,9 +13797,23 @@
       "kind": "lib",
       "name": "runtime::event_loop::compaction::fragmentation_tests::should_reject_fragment_publication_when_source_or_replacement_changes",
       "translatedPantsMethodName": "ShouldRejectFragmentPublicationWhenSourceOrReplacementChanges",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentPlanWhenCapturedSourceIdentityChanges",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentOutputOutsideCapturedSourceBoundsBeforePublication",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Pants rejects a changed captured source identity and fences real generated output that escapes the captured source bounds before creating publication intent; both cases preserve authoritative inputs and existing target bytes."
     },
     {
       "source": "src/lib.rs",
@@ -34532,7 +34574,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34551,7 +34592,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34570,7 +34610,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34589,7 +34628,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34608,7 +34646,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34627,7 +34664,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34646,7 +34682,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -34671,7 +34706,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -38431,7 +38465,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -38450,7 +38483,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -38469,7 +38501,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -38488,7 +38519,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -38507,7 +38537,6 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "Midge exposes public backup and restore operations for local and simulated-cloud storage. Pants currently has no backup or restore operation in its public abstraction or core implementation. Under the requested full test parity goal, this is a product feature gap, not a Rust-only check.",
       "verificationNote": "Compared the Midge behavior with the referenced Pants behavior test."
     },
     {
@@ -54621,18 +54650,5 @@
       "evidence": "The shared invariant is exactly one physical WAL fsync for a spilled synchronous transaction. Midge uses an 8 KiB transaction pool and four 8 KiB values; Pants uses a 1 KiB transaction pool, constrained memory, and six 900-byte values, then asserts that a transaction .run spill file exists before commit. Both assert one WAL fsync. Pants records WalFsyncCount after FileStream.Flush(true). This is a Pants-specific spill setup adaptation. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
     }
   ],
-  "featureGaps": [
-    {
-      "id": "backup-restore",
-      "midgeCases": 21,
-      "scope": "Public local and simulated-cloud backup capture and restore behavior, including consistent capture, artifact validation, path isolation, and atomic target publication.",
-      "pantsSurface": "No equivalent API is present in Pants.Abstractions or Pants.Core.",
-      "triage": "missing-feature",
-      "jevJudgment": {
-        "choice": "mark_not_applicable",
-        "confidence": 0.33,
-        "handling": "Rejected as a completion classification because the evidence shows a public Midge contract and the user explicitly requested full inventory parity."
-      }
-    }
-  ]
+  "featureGaps": []
 }

@@ -4849,6 +4849,11 @@ sealed class LocalDiskStore :
                     }
                 }
 
+                if (plan.Purpose == CompactionPurpose.Fragment)
+                {
+                    ValidateFragmentReplacement(plan, outputs);
+                }
+
                 if (outputs.Count > 0)
                 {
                     edits.Add(CreateManifestEdit(
@@ -4993,7 +4998,7 @@ sealed class LocalDiskStore :
             publication.PersistenceAnomaly);
     }
 
-    static bool IsCompactionWorkSnapshotCurrent(
+    internal static bool IsCompactionWorkSnapshotCurrent(
         CompactionWorkSnapshot work,
         ManifestReadSnapshot current)
     {
@@ -5028,6 +5033,44 @@ sealed class LocalDiskStore :
         }
 
         return true;
+    }
+
+    static void ValidateFragmentReplacement(
+        CompactionPlan plan,
+        List<FileMeta> outputs)
+    {
+        if (plan.SourceLevel == 0 ||
+            plan.TargetLevel != plan.SourceLevel ||
+            plan.Inputs.Count != 1 ||
+            plan.Inputs[0].Level != plan.SourceLevel ||
+            !plan.Inputs[0].HasTrustedKeyBounds() ||
+            plan.FragmentSplitKey is not { Length: > 0 } splitKey ||
+            ByteArrayComparer.Instance.Compare(plan.Inputs[0].SmallestKey, splitKey) >= 0 ||
+            ByteArrayComparer.Instance.Compare(splitKey, plan.Inputs[0].LargestKey) >= 0)
+        {
+            throw new PantsFencedException(
+                "The source-fragment plan no longer has a valid captured range and cut.");
+        }
+
+        var source = plan.Inputs[0];
+        var outputsAreContainedAndOrdered = outputs.Count > 1 &&
+            outputs.All(output =>
+                output.ColumnFamilyId == plan.ColumnFamilyId &&
+                output.Level == plan.TargetLevel &&
+                output.HasTrustedKeyBounds() &&
+                ByteArrayComparer.Instance.Compare(output.SmallestKey, source.SmallestKey) >= 0 &&
+                ByteArrayComparer.Instance.Compare(output.SmallestKey, output.LargestKey) <= 0 &&
+                ByteArrayComparer.Instance.Compare(output.LargestKey, source.LargestKey) <= 0) &&
+            outputs.Zip(outputs.Skip(1)).All(static pair =>
+                ByteArrayComparer.Instance.Compare(pair.First.LargestKey, pair.Second.SmallestKey) <= 0);
+        var splitIsPreserved = outputs.Zip(outputs.Skip(1)).Any(pair =>
+            ByteArrayComparer.Instance.Compare(pair.First.LargestKey, splitKey) <= 0 &&
+            ByteArrayComparer.Instance.Compare(pair.Second.SmallestKey, splitKey) >= 0);
+        if (!outputsAreContainedAndOrdered || !splitIsPreserved)
+        {
+            throw new PantsFencedException(
+                "Source-fragment outputs changed the captured source bounds or split.");
+        }
     }
 
     readonly record struct CompactionRoundResult(

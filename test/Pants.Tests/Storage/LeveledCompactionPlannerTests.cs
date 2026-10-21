@@ -140,6 +140,40 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
+    public void ShouldPrioritizeCriticalL0WorkBeforeFurtherFragmentPromotion()
+    {
+        FileMeta[] files =
+        [
+            File("source.sst", 1, 1, "a", "z", 256, keyBoundsComplete: true),
+            File("target-1.sst", 2, 2, "b", "c", 256, keyBoundsComplete: true),
+            File("target-2.sst", 2, 3, "f", "g", 256, keyBoundsComplete: true),
+            File("target-3.sst", 2, 4, "j", "k", 256, keyBoundsComplete: true)
+        ];
+        var configuration = Configuration(l0FileCountTrigger: 2, l1TargetSizeBytes: 1);
+        var fragment = LeveledCompactionPlanner.PickDebtDrain(
+            files,
+            0,
+            configuration,
+            null,
+            preferredWorkBytes: 512);
+        var l0Debt = LeveledCompactionPlanner.PickDebtDrain(
+            [
+                .. files,
+                File("l0-1.sst", 0, 5, "l", "m"),
+                File("l0-2.sst", 0, 6, "n", "o")
+            ],
+            0,
+            configuration,
+            null,
+            preferredWorkBytes: 512);
+
+        Assert.NotNull(fragment);
+        Assert.Equal(CompactionPurpose.Fragment, fragment.Purpose);
+        Assert.NotNull(l0Debt);
+        Assert.Equal(0u, l0Debt.SourceLevel);
+    }
+
+    [Fact]
     public void ShouldKeepCompleteOverlapWhenNoInteriorTargetBoundaryCanFragmentTheSource()
     {
         const ulong mib = 1024 * 1024;
