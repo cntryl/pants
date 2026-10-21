@@ -92,17 +92,18 @@ public sealed class PantsStreamingScanHardeningTests
     }
 
     [Fact]
-    public async Task ShouldYieldEarlierRowsBeforeAStickyLaterBlockFailure()
+    public async Task ShouldSurfaceCorruptLaterSstBlockFromIteratorItem()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await CreateMultiBlockDatabaseAsync(directory.Path);
-        CorruptDataBlock(directory.Path, 1);
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
+        CorruptDataBlock(directory.Path, 1);
         var enumerator = scan.GetAsyncEnumerator();
         var emitted = 0;
+        string? firstKey = null;
         PantsCorruptionException? first = null;
         while (first is null)
         {
@@ -113,6 +114,7 @@ public sealed class PantsStreamingScanHardeningTests
                     break;
                 }
 
+                firstKey ??= TestBytes.ToText(enumerator.Current.Key);
                 emitted++;
             }
             catch (PantsCorruptionException exception)
@@ -122,11 +124,77 @@ public sealed class PantsStreamingScanHardeningTests
         }
 
         Assert.True(emitted > 0);
+        Assert.Equal("key-0000", firstKey);
         Assert.NotNull(first);
         var second = await Assert.ThrowsAsync<PantsCorruptionException>(() => enumerator.MoveNextAsync().AsTask());
         Assert.Same(first, second);
         Assert.True(scan.IsFailed);
+        Assert.Equal(PantsIteratorState.Failed, scan.State);
+        Assert.False(scan.IsExhausted);
         Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ScanBufferUsedBytes);
+    }
+
+    [Fact]
+    public async Task ShouldPreserveSnapshotVisibilityDuringStreamingScan()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var seed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            seed.Put("stable"u8.ToArray(), "old"u8.ToArray());
+            await seed.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var oldSnapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using (var update = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            update.Put("stable"u8.ToArray(), "new"u8.ToArray());
+            update.Put("new-key"u8.ToArray(), "new"u8.ToArray());
+            await update.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var scan = await oldSnapshot.ScanAsync(new PantsScanQuery());
+        var row = Assert.Single(await CollectAsync(scan));
+
+        Assert.Equal("stable", TestBytes.ToText(row.Key));
+        Assert.Equal("old", TestBytes.ToText(row.Value));
+    }
+
+    [Fact]
+    public async Task ShouldApplyRangeTombstonesBeforeStreamingRows()
+    {
+        await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+        await using (var seed = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            seed.Put("range:a"u8.ToArray(), "a"u8.ToArray());
+            seed.Put("range:b"u8.ToArray(), "b"u8.ToArray());
+            seed.Put("range:c"u8.ToArray(), "c"u8.ToArray());
+            await seed.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using (var delete = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            delete.DeleteRange("range:b"u8.ToArray(), "range:d"u8.ToArray());
+            await delete.CommitAsync(PantsWriteOptions.Buffered);
+        }
+
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        await using var scan = await reader.ScanAsync(new PantsScanQuery());
+        var row = Assert.Single(await CollectAsync(scan));
+
+        Assert.Equal("range:a", TestBytes.ToText(row.Key));
+        Assert.Equal("a", TestBytes.ToText(row.Value));
     }
 
     [Fact]

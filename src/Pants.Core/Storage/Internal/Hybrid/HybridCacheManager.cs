@@ -215,6 +215,16 @@ sealed class HybridCacheManager : IDisposable
                 $"hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
         }
 
+        var flushStagingBytes = footprints.Values.Max(footprint =>
+            footprint.MeasureCloudFlushStagingUpperBound());
+        if (flushStagingBytes > MemtableFlushWindowBytes)
+        {
+            Ledger.RecordCapacityRejection(StorageAdmissionKind.FlushHeadroom, flushStagingBytes);
+            throw new PantsNoSpaceException(
+                $"The transaction's {flushStagingBytes}-byte conservative SST staging bound " +
+                $"exceeds the hybrid memtable flush window of {MemtableFlushWindowBytes} bytes.");
+        }
+
         var walBytes = 0L;
         if (durability != PantsDurability.BestEffort)
         {

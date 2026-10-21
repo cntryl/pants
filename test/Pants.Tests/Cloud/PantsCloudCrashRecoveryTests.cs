@@ -15,6 +15,7 @@ public sealed class PantsCloudCrashRecoveryTests
     const string LocalWalScenario = "local-wal";
     const string SealedWalScenario = "sealed-wal";
     const string CloudStrictScenario = "cloud-strict";
+    const string CorruptWalScenario = "corrupt-wal";
     const string PublishedSstScenario = "published-sst";
     const string ReadyFileName = "cloud-crash-child.ready";
     static readonly ColumnFamilyIdentity DefaultFamily = new(
@@ -52,6 +53,28 @@ public sealed class PantsCloudCrashRecoveryTests
         if (StringComparer.Ordinal.Equals(scenario, PublishedSstScenario))
         {
             await PreparePublishedSstScenarioAsync(database);
+        }
+        else if (StringComparer.Ordinal.Equals(scenario, CorruptWalScenario))
+        {
+            await CommitAsync(
+                database,
+                "prefix-key",
+                "prefix-value",
+                PantsWriteOptions.CloudStrict);
+            await CommitAsync(
+                database,
+                "truncated-key",
+                "truncated-value",
+                PantsWriteOptions.CloudStrict);
+            await WaitForMetricsAsync(
+                database,
+                static candidate =>
+                    candidate.CurrentSequence >= 2 &&
+                    candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+            Assert.NotEmpty(Directory.EnumerateFiles(
+                Path.Combine(path, "cloud_store", "wal"),
+                "*.wal",
+                SearchOption.AllDirectories));
         }
         else
         {
@@ -157,22 +180,18 @@ public sealed class PantsCloudCrashRecoveryTests
         Assert.True(new FileInfo(activeWal).Length > 0);
         var crashedWriterEpoch = AssertSingleWriterEpoch(activeWal);
 
-        await using (var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
-        {
-            await CommitAsync(
-                reopened,
-                "cloud-strict-after-reopen-key",
-                "cloud-strict-after-reopen-value",
-                PantsWriteOptions.CloudStrict);
-        }
-
-        await using var verified = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        await CommitAsync(
+            reopened,
+            "cloud-strict-after-reopen-key",
+            "cloud-strict-after-reopen-value",
+            PantsWriteOptions.CloudStrict);
         await AssertValueAsync(
-            verified,
+            reopened,
             GetScenarioKey(ActiveWalScenario),
             "crash-value");
         await AssertValueAsync(
-            verified,
+            reopened,
             "cloud-strict-after-reopen-key",
             "cloud-strict-after-reopen-value");
 
@@ -243,12 +262,12 @@ public sealed class PantsCloudCrashRecoveryTests
                     candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
             Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
             await AssertValueAsync(reopened, GetScenarioKey(SealedWalScenario), "crash-value");
+            Assert.NotEmpty(Directory.EnumerateFiles(
+                Path.Combine(directory.Path, "cloud_store", "wal"),
+                "*.wal",
+                SearchOption.AllDirectories));
         }
 
-        Assert.NotEmpty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "cloud_store", "wal"),
-            "*.wal",
-            SearchOption.AllDirectories));
         RemoveLocalCache(directory.Path);
 
         await using var cacheless = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
@@ -351,13 +370,12 @@ public sealed class PantsCloudCrashRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
-        await using (var database = await PantsDatabase.OpenAsync(options))
+        using (var child = await StartReadyCrashChildAsync(directory.Path, CorruptWalScenario))
         {
-            await CommitAsync(database, "prefix-key", "prefix-value", PantsWriteOptions.CloudStrict);
-            await CommitAsync(database, "truncated-key", "truncated-value", PantsWriteOptions.CloudStrict);
-            await database.ShutdownAsync(TestTimeouts.Expected);
+            await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
+        await ExpireCrashedProcessLeaseAsync(directory.Path);
         var remoteWal = Directory.EnumerateFiles(
                 Path.Combine(directory.Path, "cloud_store", "wal"),
                 "*.wal",
@@ -367,7 +385,7 @@ public sealed class PantsCloudCrashRecoveryTests
         var corruptBytes = await File.ReadAllBytesAsync(remoteWal);
         await File.WriteAllBytesAsync(remoteWal, corruptBytes[..^1]);
         var retainedBytes = await File.ReadAllBytesAsync(remoteWal);
-        ResetDirectory(Path.Combine(directory.Path, "wal"));
+        RemoveLocalCache(directory.Path);
 
         await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => PantsDatabase.OpenAsync(options).AsTask());
 
@@ -672,6 +690,7 @@ public sealed class PantsCloudCrashRecoveryTests
         StringComparer.Ordinal.Equals(scenario, LocalWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, SealedWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, CloudStrictScenario) ||
+        StringComparer.Ordinal.Equals(scenario, CorruptWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, PublishedSstScenario);
 
     static string GetScenarioKey(string? scenario) => scenario switch

@@ -20,8 +20,13 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     bool _failMetadataWrites;
     bool _failSstDeletes;
     bool _failSstList;
+    int _deferNextWalWriteEffect;
+    int _failNextWalWriteAfterPersisting;
     bool _failWalWrites;
     int _failedWalWriteAttempts;
+    string? _targetWalSegmentFailureSuffix;
+    int _targetWalSegmentFailuresRemaining;
+    int _failedTargetWalSegmentWriteAttempts;
     int _replaceSstOnNextRange;
     int _sstDeleteAttempts;
     int _sstFullReads;
@@ -29,6 +34,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     long _sstRangeBytes;
     int _sstRangeReads;
     int _unconditionalSstDeleteAttempts;
+    (string Key, byte[] Data, bool IfAbsent)? _lateWalWrite;
 
     public bool FailWalWrites
     {
@@ -80,6 +86,9 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     public int FailedWalWriteAttempts => Volatile.Read(ref _failedWalWriteAttempts);
 
+    public int FailedTargetWalSegmentWriteAttempts =>
+        Volatile.Read(ref _failedTargetWalSegmentWriteAttempts);
+
     public int SstDeleteAttempts => Volatile.Read(ref _sstDeleteAttempts);
 
     public int UnconditionalSstDeleteAttempts =>
@@ -125,6 +134,42 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     public void AcknowledgeNextMissingSstWriteWithoutPersisting() =>
         Volatile.Write(ref _acknowledgeNextSstWriteWithoutPersisting, 1);
+
+    public void FailNextWalWriteAfterPersisting() =>
+        Volatile.Write(ref _failNextWalWriteAfterPersisting, 1);
+
+    public void FailWalSegmentWrites(ulong segmentId, int attempts)
+    {
+        ArgumentOutOfRangeException.ThrowIfZero(segmentId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(attempts);
+        Volatile.Write(ref _failedTargetWalSegmentWriteAttempts, 0);
+        Volatile.Write(ref _targetWalSegmentFailuresRemaining, attempts);
+        Volatile.Write(ref _targetWalSegmentFailureSuffix, $"/{segmentId:D20}.wal");
+    }
+
+    public void FailNextWalWriteAndDeferItsEffect() =>
+        Volatile.Write(ref _deferNextWalWriteEffect, 1);
+
+    public bool LandLateWalWriteEffect()
+    {
+        lock (_gate)
+        {
+            if (_lateWalWrite is not { } late)
+            {
+                return false;
+            }
+
+            _lateWalWrite = null;
+            var exists = _objects.TryGetValue(late.Key, out var current);
+            if (late.IfAbsent && exists)
+            {
+                return true;
+            }
+
+            _objects[late.Key] = (late.Data, exists ? current.Version + 1 : 1);
+            return true;
+        }
+    }
 
     public void ReplaceSstOnNextRange() =>
         Volatile.Write(ref _replaceSstOnNextRange, 1);
@@ -296,8 +341,9 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             return CreateListResponse(request.RequestUri);
         }
 
-        if (FailWalWrites && request.Method == HttpMethod.Put &&
-            key.Contains("/wal/epochs/", StringComparison.Ordinal))
+        if (request.Method == HttpMethod.Put &&
+            key.Contains("/wal/epochs/", StringComparison.Ordinal) &&
+            (FailWalWrites || ShouldFailTargetWalSegmentWrite(key)))
         {
             Interlocked.Increment(ref _failedWalWriteAttempts);
             _failedWalWrite.TrySetResult();
@@ -427,6 +473,24 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
         var bytes = await request.Content!.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+        if (key.Contains("/wal/epochs/", StringComparison.Ordinal) &&
+            Interlocked.Exchange(ref _deferNextWalWriteEffect, 0) == 1)
+        {
+            lock (_gate)
+            {
+                _lateWalWrite = (
+                    key,
+                    bytes,
+                    request.Headers.IfNoneMatch.Any(static value => value.Tag == "*"));
+            }
+
+            FailWalWrites = true;
+            Interlocked.Increment(ref _failedWalWriteAttempts);
+            _failedWalWrite.TrySetResult();
+            throw new HttpRequestException(
+                "Injected WAL upload response loss before its deferred remote effect.");
+        }
+
         lock (_gate)
         {
             var exists = _objects.TryGetValue(key, out var current);
@@ -444,6 +508,15 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
             var next = (bytes, exists ? current.Version + 1 : 1);
             _objects[key] = next;
+            if (key.Contains("/wal/epochs/", StringComparison.Ordinal) &&
+                Interlocked.Exchange(ref _failNextWalWriteAfterPersisting, 0) == 1)
+            {
+                Interlocked.Increment(ref _failedWalWriteAttempts);
+                _failedWalWrite.TrySetResult();
+                throw new HttpRequestException(
+                    "Injected WAL upload response loss after remote persistence.");
+            }
+
             return CreateResponse(HttpStatusCode.Created, next);
         }
     }
@@ -461,6 +534,33 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         {
             return !_objects.ContainsKey(key) &&
                    Interlocked.Exchange(ref _acknowledgeNextSstWriteWithoutPersisting, 0) == 1;
+        }
+    }
+
+    bool ShouldFailTargetWalSegmentWrite(string key)
+    {
+        var suffix = Volatile.Read(ref _targetWalSegmentFailureSuffix);
+        if (suffix is null || !key.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            var remaining = Volatile.Read(ref _targetWalSegmentFailuresRemaining);
+            if (remaining == 0)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref _targetWalSegmentFailuresRemaining,
+                    remaining - 1,
+                    remaining) == remaining)
+            {
+                Interlocked.Increment(ref _failedTargetWalSegmentWriteAttempts);
+                return true;
+            }
         }
     }
 

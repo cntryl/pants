@@ -41,11 +41,12 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
             SpilledCommitTrigger);
         await using var database = await TransactionSpillHardeningTestHarness.OpenLocalForTestingAsync(
             databasePath,
-            handler);
+            handler,
+            8 * 1_024);
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
-        TransactionSpillHardeningTestHarness.Fill(transaction, "crash", 12);
+        TransactionSpillHardeningTestHarness.Fill(transaction, "crash", 12, 8 * 1_024);
         var spillCount = TransactionSpillHardeningTestHarness.FindArtifacts(databasePath).Length;
         await PublishSignalAsync(
             Path.Combine(databasePath, ReadyFileName),
@@ -97,9 +98,28 @@ public sealed class PantsTransactionSpillCrashRecoveryTests
         Assert.DoesNotContain(TransactionCommitOperation, operations);
         Assert.DoesNotContain(TransactionBatchOperation, operations);
 
-        await using var reopened = await TransactionSpillHardeningTestHarness.OpenLocalAsync(directory.Path);
+        await using var reopened = await TransactionSpillHardeningTestHarness.OpenLocalAsync(
+            directory.Path,
+            8 * 1_024);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        for (var index = 0; index < 12; index++)
+        {
+            Assert.Null(await reader.GetAsync(TestBytes.FromString($"crash-{index:000}")));
+        }
 
-        Assert.Null(await TransactionSpillHardeningTestHarness.ReadTextAsync(reopened, "crash-000"));
+        await using var scan = await reader.ScanAsync(new PantsScanQuery
+        {
+            Prefix = "crash-"u8.ToArray()
+        });
+        var scannedRows = 0;
+        await foreach (var _ in scan)
+        {
+            scannedRows++;
+        }
+
+        Assert.Equal(0, scannedRows);
         Assert.Empty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
     }
 

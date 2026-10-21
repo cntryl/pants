@@ -205,6 +205,18 @@ static class ManifestEditValidator
                 }
 
                 return;
+            case "ReserveCommitSequence":
+                if (value.ValueKind != JsonValueKind.Object ||
+                    !value.TryGetProperty("through_sequence", out var reservedSequenceElement) ||
+                    !reservedSequenceElement.TryGetUInt64(out var reservedThrough) ||
+                    reservedThrough >= (ulong)long.MaxValue)
+                {
+                    throw PantsException.Create(
+                        PantsErrorCode.InvalidArgument,
+                        "A commit sequence reservation must contain a valid through_sequence.");
+                }
+
+                return;
         }
     }
 

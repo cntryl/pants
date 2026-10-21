@@ -2,7 +2,8 @@ namespace Cntryl.Pants.Support.Failpoints;
 
 sealed class FlushPipelineFailpointHandler(
     Failpoint target,
-    bool throwOnHit = false) : IFailpointHandler, IDisposable
+    bool throwOnHit = false,
+    bool armOnConstruction = true) : IFailpointHandler, IDisposable
 {
     static readonly TimeSpan MaximumBlockTime = TestTimeouts.Expected;
 
@@ -11,6 +12,7 @@ sealed class FlushPipelineFailpointHandler(
 
     readonly ManualResetEventSlim _release = new(false);
     int _hit;
+    int _armed = armOnConstruction ? 1 : 0;
 
     public int HitCount => Volatile.Read(ref _hit);
 
@@ -20,9 +22,13 @@ sealed class FlushPipelineFailpointHandler(
         _release.Dispose();
     }
 
+    public void Arm() => Volatile.Write(ref _armed, 1);
+
     public void Hit(Failpoint failpoint)
     {
-        if (failpoint != target || Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
+        if (failpoint != target ||
+            Volatile.Read(ref _armed) == 0 ||
+            Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;
         }

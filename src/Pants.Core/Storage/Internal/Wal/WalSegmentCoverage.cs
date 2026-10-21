@@ -20,6 +20,7 @@ static class WalSegmentCoverage
         ulong minimumEpoch = ulong.MaxValue;
         ulong maximumEpoch = 0;
         var covered = true;
+        uint? firstUncoveredFamilyId = null;
         using var recovery = new WalRecoveryStateMachine(scratchDirectory);
         WalFrameReader.Visit(
             segmentBytes,
@@ -35,13 +36,17 @@ static class WalSegmentCoverage
                             commitSequence > flushedThrough.GetValueOrDefault(mutation.ColumnFamilyId))
                         {
                             covered = false;
+                            firstUncoveredFamilyId = firstUncoveredFamilyId is { } first
+                                ? Math.Min(first, mutation.ColumnFamilyId)
+                                : mutation.ColumnFamilyId;
                         }
                     });
             });
         return new WalSegmentCoverageResult(
             covered && !recovery.HasOpenTransactions,
             minimumEpoch,
-            maximumEpoch);
+            maximumEpoch,
+            firstUncoveredFamilyId);
     }
 
     /// <summary>
@@ -86,4 +91,5 @@ static class WalSegmentCoverage
 readonly record struct WalSegmentCoverageResult(
     bool Covered,
     ulong MinimumWriterEpoch,
-    ulong MaximumWriterEpoch);
+    ulong MaximumWriterEpoch,
+    uint? FirstUncoveredFamilyId = null);

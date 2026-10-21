@@ -242,6 +242,52 @@ public sealed class SstBlockCacheTests
     }
 
     [Fact]
+    public async Task ShouldPreserveSharedCacheEntriesWhenAnotherOwnerDrops()
+    {
+        const int entryCount = 100;
+        SstBlockCache? droppingOwner = new(PantsBlockCachePolicy.Lru, 1024 * 1024, 1);
+        var cacheClone = droppingOwner ?? throw new InvalidOperationException();
+        var cacheCheck = cacheClone;
+        var expected = new byte[100];
+        var halfPopulated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continuePopulation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var worker = Task.Run(async () =>
+        {
+            var successes = 0;
+            for (var index = 0; index < entryCount; index++)
+            {
+                if (cacheClone.Add(new SstBlockCacheKey(Sst($"shared-{index}"), 0), expected))
+                {
+                    successes++;
+                }
+
+                if (index == entryCount / 2 - 1)
+                {
+                    halfPopulated.SetResult();
+                    await continuePopulation.Task;
+                }
+            }
+
+            return successes;
+        });
+
+        await halfPopulated.Task.WaitAsync(TestTimeouts.Expected);
+        droppingOwner = null;
+        continuePopulation.SetResult();
+
+        Assert.Equal(entryCount, await worker.WaitAsync(TestTimeouts.Expected));
+        Assert.Equal(entryCount, cacheCheck.Count);
+        for (var index = 0; index < entryCount; index++)
+        {
+            Assert.True(cacheCheck.TryGet(
+                new SstBlockCacheKey(Sst($"shared-{index}"), 0),
+                out var entry));
+            Assert.Equal(expected, Assert.IsType<SstBlockCacheEntry>(entry).Content.ToArray());
+        }
+    }
+
+    [Fact]
     public void ShouldRemoveAllCachedBlocksGivenObsoleteSst()
     {
         var cache = new SstBlockCache(

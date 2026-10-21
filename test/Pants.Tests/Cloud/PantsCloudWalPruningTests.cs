@@ -82,12 +82,14 @@ public sealed class PantsCloudWalPruningTests
     }
 
     [Fact]
-    public async Task ShouldPreserveProviderWalWhenUnflushedColumnFamilyStillDependsOnItGivenPartialGc()
+    public async Task ShouldRetainProviderWalForUnflushedFamilyBeforeShutdownCheckpointGivenPartialGc()
     {
         using var cache = new TemporaryDirectory();
+        using var freshCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var options = PantsOpenOptions.Cloud(cache.Path, CreateProviderLocation())
+        var location = CreateProviderLocation();
+        var options = PantsOpenOptions.Cloud(cache.Path, location)
             .WithBackgroundCompaction(false);
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
@@ -110,23 +112,22 @@ public sealed class PantsCloudWalPruningTests
                 "provider-default-last"u8.ToArray(),
                 PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+            Assert.NotEmpty(ReadProviderCatalogSegments(handler));
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
-        ResetDirectory(Path.Combine(cache.Path, "wal"));
-        await using (var reopened = await PantsDatabase.OpenForTestingAsync(
-                         options,
-                         new RuntimeDependencies(cloudHttpClient: client)))
-        {
-            await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
-            Assert.NotEmpty(ReadProviderCatalogSegments(handler));
-            await reopened.ShutdownAsync(TestTimeouts.Expected);
-        }
-
-        ResetDirectory(Path.Combine(cache.Path, "wal"));
         await using var recovered = await PantsDatabase.OpenForTestingAsync(
-            options,
+            PantsOpenOptions.Cloud(freshCache.Path, location)
+                .WithBackgroundCompaction(false),
             new RuntimeDependencies(cloudHttpClient: client));
+        await using var defaultReader = await recovered.Transactions.BeginAsync(
+            recovered.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await defaultReader.GetAsync("provider-default-first"u8.ToArray()))));
+        Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+            await defaultReader.GetAsync("provider-default-last"u8.ToArray()))));
+
         var recoveredOther = Assert.IsAssignableFrom<IPantsColumnFamily>(
             await recovered.ColumnFamilies.GetAsync("provider-other"));
         await using var reader = await recovered.Transactions.BeginAsync(

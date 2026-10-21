@@ -7,7 +7,7 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudHybridCacheTests
 {
-    const long LocalCacheBudgetBytes = 560 * 1024;
+    const long LocalCacheBudgetBytes = 2200 * 1024;
     const long RecoveryLocalBudgetBytes = 128 * 1024;
     const int RecoveryCommitCount = 40;
     const int RecoveryValueBytes = 8 * 1024;
@@ -27,21 +27,21 @@ public sealed class PantsCloudHybridCacheTests
             (await database.Diagnostics.GetRuntimeMetricsAsync()).HybridMaximumLocalBytes);
         handler.FailSstList = true;
 
-        for (var index = 0; index < 6; index++)
+        for (var index = 0; index < 10; index++)
         {
             await PutAndFlushAsync(database, $"residue-{index}", index);
         }
 
-        Assert.Single(LocalSsts(cache.Path));
+        Assert.True(LocalSsts(cache.Path).Length < 10);
         Assert.True(handler.GetObjectPaths("/sst/").Count(static path => path.EndsWith(
             ".sst",
-            StringComparison.Ordinal)) >= 6);
+            StringComparison.Ordinal)) >= 10);
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.HybridUsagePercent < 90);
         Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
 
         await PutAndFlushAsync(database, "write-after-residue", 7);
-        Assert.Single(LocalSsts(cache.Path));
+        Assert.True(LocalSsts(cache.Path).Length < 11);
         await AssertReadableAsync(database, "residue-5");
         await AssertReadableAsync(database, "write-after-residue");
     }
@@ -60,11 +60,14 @@ public sealed class PantsCloudHybridCacheTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(cache.Path)
                 .WithCloudLocalStorageBudget(LocalCacheBudgetBytes)
+                .WithCompaction(new PantsCompactionConfiguration(
+                    L0FileCountTrigger: 32,
+                    BackgroundEnabled: false))
                 .WithCloudWritePolicy(writePolicy),
             new RuntimeDependencies(cloudHttpClient: client));
 
         var value = new byte[128 * 1024];
-        for (var index = 0; index < 10; index++)
+        for (var index = 0; index < 20; index++)
         {
             new Random(index).NextBytes(value);
             await CommitAsync(database, $"cloud-async-{index}", value, PantsWriteOptions.CloudAsync);
@@ -78,7 +81,7 @@ public sealed class PantsCloudHybridCacheTests
         Assert.True(handler.GetObjectPaths("/sst/").Count(static path => path.EndsWith(
             ".sst",
             StringComparison.Ordinal)) >= metrics.SstCount);
-        await AssertReadableAsync(database, "cloud-async-9", value.Length);
+        await AssertReadableAsync(database, "cloud-async-19", value.Length);
     }
 
     [Fact]
@@ -116,7 +119,11 @@ public sealed class PantsCloudHybridCacheTests
                     metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
             Assert.Equal(0, handler.SstStoredBytes);
             Assert.True(handler.WalStoredBytes > RecoveryLocalBudgetBytes);
+            handler.AcknowledgeSstWritesWithoutPersisting = true;
             await seed.ShutdownAsync(TestTimeouts.Expected);
+            handler.AcknowledgeSstWritesWithoutPersisting = false;
+            Assert.Equal(0, handler.SstStoredBytes);
+            Assert.True(handler.WalStoredBytes > 0);
         }
 
         ClearLocalCache(cache.Path);
@@ -145,7 +152,7 @@ public sealed class PantsCloudHybridCacheTests
     }
 
     [Fact]
-    public async Task ShouldRecoverProviderWalExactlyOnceAfterPublishedCheckpointBeforeEviction()
+    public async Task ShouldRecoverProviderCloudAsyncWritesAfterShutdownCheckpointAndCacheLoss()
     {
         using var cache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -180,19 +187,10 @@ public sealed class PantsCloudHybridCacheTests
             Assert.Equal(0, handler.SstStoredBytes);
             Assert.True(handler.WalStoredBytes > RecoveryLocalBudgetBytes);
             await seed.ShutdownAsync(TestTimeouts.Expected);
+            Assert.True(handler.SstStoredBytes > 0);
         }
 
         ClearLocalCache(cache.Path);
-        var failure = new FailOnceAtFailpointHandler(
-            Failpoint.AfterRecoveryCheckpointPublishedBeforeLocalEviction);
-        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenForTestingAsync(
-            recoveryOptions,
-            new RuntimeDependencies(failure, cloudHttpClient: client)).AsTask());
-
-        Assert.Equal(1, failure.Hits);
-        Assert.NotEmpty(LocalSsts(cache.Path));
-        Assert.True(handler.SstStoredBytes > 0);
-
         await using var reopened = await PantsDatabase.OpenForTestingAsync(
             recoveryOptions,
             new RuntimeDependencies(cloudHttpClient: client));

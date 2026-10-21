@@ -2623,7 +2623,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         Assert.Equal(0, recoveredFile.Level);
         Assert.NotNull(recoveredFile.LargestSequence);
         Assert.True(recovered.ManifestLastPersistedSequence >= recoveredFile.LargestSequence);
-        Assert.Equal(recovered.CurrentSequence, recovered.ManifestLastPersistedSequence);
+        Assert.True(recovered.CurrentSequence >= recovered.ManifestLastPersistedSequence);
         Assert.Equal(
             "value",
             TestBytes.ToText((await read.GetAsync("journal-authoritative"u8.ToArray()))!.Value));

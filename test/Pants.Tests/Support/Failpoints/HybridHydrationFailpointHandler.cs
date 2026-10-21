@@ -8,6 +8,7 @@ sealed class HybridHydrationFailpointHandler : IFailpointHandler, IDisposable
         TaskCreationOptions.RunContinuationsAsynchronously);
 
     readonly ManualResetEventSlim _release = new(false);
+    int _armed;
     int _hit;
 
     public void Dispose()
@@ -19,6 +20,7 @@ sealed class HybridHydrationFailpointHandler : IFailpointHandler, IDisposable
     public void Hit(Failpoint failpoint)
     {
         if (failpoint != Failpoint.BeforeHybridSstHydration ||
+            Volatile.Read(ref _armed) == 0 ||
             Interlocked.CompareExchange(ref _hit, 1, 0) != 0)
         {
             return;
@@ -33,6 +35,8 @@ sealed class HybridHydrationFailpointHandler : IFailpointHandler, IDisposable
 
     public Task WaitUntilEnteredAsync(TimeSpan timeout) =>
         _entered.Task.WaitAsync(timeout);
+
+    public void Arm() => Volatile.Write(ref _armed, 1);
 
     public void Release() => _release.Set();
 }

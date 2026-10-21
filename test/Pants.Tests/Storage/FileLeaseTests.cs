@@ -202,6 +202,49 @@ public sealed class FileLeaseTests
     }
 
     [Fact]
+    public void ShouldAllowSuccessorWhenPowerLossFollowsCompletedLeaseRelease()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
+        var lease = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+        byte[]? lastDurableLockImage = null;
+        var lockRemovalWasSynchronized = false;
+        lease.MutationLockDisposalInterferenceHookForTesting = () =>
+            lastDurableLockImage = File.ReadAllBytes(lockPath);
+        lease.MutationLockDeleteDirectorySyncForTesting = () => lockRemovalWasSynchronized = true;
+
+        lease.Dispose();
+
+        Assert.NotNull(lastDurableLockImage);
+        Assert.False(File.Exists(lockPath));
+        if (!lockRemovalWasSynchronized)
+        {
+            // The sentinel write synced the directory before unlinking this lock. Restore that
+            // last durable namespace image to model power loss after shutdown.
+            File.WriteAllBytes(lockPath, lastDurableLockImage);
+        }
+
+        using var successor = FileLease.Acquire(
+            directory.Path,
+            0,
+            TimeSpan.Zero,
+            null,
+            LongHeartbeatInterval,
+            clock,
+            TimeSpan.FromSeconds(60));
+
+        Assert.Equal(lease.Epoch + 1, successor.Epoch);
+    }
+
+    [Fact]
     public async Task ShouldAcceptRecordWithoutChecksumForBackwardCompatibility()
     {
         using var directory = new TemporaryDirectory();

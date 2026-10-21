@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>pants</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pants.Core\Pants.Core.csproj" />
+    <InternalsVisibleTo Include="Cntryl.Pants.Tests" />
+  </ItemGroup>
+
+</Project>

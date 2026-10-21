@@ -10,8 +10,14 @@ static class TransactionSpillHardeningTestHarness
 
     internal static ValueTask<IPantsDatabase> OpenLocalAsync(
         string path,
-        long transactionMemoryPoolBytes = DefaultPoolBytes) =>
-        PantsDatabase.OpenAsync(CreateLocalOptions(path, transactionMemoryPoolBytes));
+        long transactionMemoryPoolBytes = DefaultPoolBytes,
+        long memtableSizeLimitBytes = 24 * 1_024,
+        long memoryBudgetBytes = 128 * 1_024) =>
+        PantsDatabase.OpenAsync(CreateLocalOptions(
+            path,
+            transactionMemoryPoolBytes,
+            memtableSizeLimitBytes,
+            memoryBudgetBytes));
 
     internal static ValueTask<IPantsDatabase> OpenLocalForTestingAsync(
         string path,
@@ -23,10 +29,12 @@ static class TransactionSpillHardeningTestHarness
 
     internal static PantsOpenOptions CreateLocalOptions(
         string path,
-        long transactionMemoryPoolBytes = DefaultPoolBytes) =>
+        long transactionMemoryPoolBytes = DefaultPoolBytes,
+        long memtableSizeLimitBytes = 24 * 1_024,
+        long memoryBudgetBytes = 128 * 1_024) =>
         PantsOpenOptions.Local(path)
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1_024))
-            .WithMemtableLimits(24 * 1_024)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(memoryBudgetBytes))
+            .WithMemtableLimits(memtableSizeLimitBytes)
             .WithTransactionMemoryPool(transactionMemoryPoolBytes)
             .WithBackgroundCompaction(false);
 

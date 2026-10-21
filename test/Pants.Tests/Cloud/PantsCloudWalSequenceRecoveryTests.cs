@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cntryl.Pants.Support.TestDoubles;
@@ -32,7 +33,9 @@ public sealed class PantsCloudWalSequenceRecoveryTests
                          dependencies))
         {
             await AssertValueAsync(recovered, "first", "one");
-            Assert.Equal(2UL, ReadManifestNextWalSequence(secondCache.Path));
+            Assert.Equal(
+                ReadProviderNextWalSegmentId(handler),
+                ReadManifestNextWalSequence(secondCache.Path));
             await CommitAsync(recovered, "second", "two");
         }
 
@@ -44,14 +47,14 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         {
             await AssertValueAsync(recoveredAgain, "first", "one");
             await AssertValueAsync(recoveredAgain, "second", "two");
-            Assert.Equal(3UL, ReadManifestNextWalSequence(thirdCache.Path));
+            Assert.Equal(
+                ReadProviderNextWalSegmentId(handler),
+                ReadManifestNextWalSequence(thirdCache.Path));
         }
 
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
-        var segments = catalog.RootElement.GetProperty("segments");
-        Assert.True(segments.TryGetProperty("1", out _));
-        Assert.True(segments.TryGetProperty("2", out _));
+        AssertCatalogSegmentIdsPrecedeNextId(catalog.RootElement);
     }
 
     [Fact]
@@ -69,7 +72,10 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         await using (var recovered = await PantsDatabase.OpenAsync(options))
         {
             await AssertValueAsync(recovered, "first", "one");
-            Assert.Equal(2UL, ReadManifestNextWalSequence(directory.Path));
+            Assert.Equal(3UL, ReadManifestNextWalSequence(directory.Path));
+            Assert.Equal(
+                ReadSimulatedNextWalSegmentId(directory.Path),
+                ReadManifestNextWalSequence(directory.Path));
             await CommitAsync(recovered, "second", "two");
         }
 
@@ -79,7 +85,10 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         {
             await AssertValueAsync(recoveredAgain, "first", "one");
             await AssertValueAsync(recoveredAgain, "second", "two");
-            Assert.Equal(3UL, ReadManifestNextWalSequence(directory.Path));
+            Assert.Equal(5UL, ReadManifestNextWalSequence(directory.Path));
+            Assert.Equal(
+                ReadSimulatedNextWalSegmentId(directory.Path),
+                ReadManifestNextWalSequence(directory.Path));
         }
 
         using var catalog = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(
@@ -87,9 +96,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
             "cloud_store",
             "wal",
             "publication-catalog.v1.json")));
-        var segments = catalog.RootElement.GetProperty("segments");
-        Assert.True(segments.TryGetProperty("1", out _));
-        Assert.True(segments.TryGetProperty("2", out _));
+        AssertCatalogSegmentIdsPrecedeNextId(catalog.RootElement);
     }
 
     static async ValueTask CommitAsync(
@@ -168,6 +175,9 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         var manifest = JsonNode.Parse(manifestJson)?.AsObject() ??
                        throw new InvalidOperationException("The cloud manifest was empty.");
         manifest["next_wal_seq"] = nextWalSequence;
+        manifest["wal_history_start"] = Math.Min(
+            manifest["wal_history_start"]?.GetValue<ulong>() ?? 1,
+            nextWalSequence);
         return manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
@@ -179,6 +189,33 @@ public sealed class PantsCloudWalSequenceRecoveryTests
             : Path.Combine(root, "manifest.json");
         using var manifest = JsonDocument.Parse(File.ReadAllBytes(path));
         return manifest.RootElement.GetProperty("next_wal_seq").GetUInt64();
+    }
+
+    static ulong ReadProviderNextWalSegmentId(InMemoryAzureBlobHandler handler)
+    {
+        using var catalog = JsonDocument.Parse(
+            handler.GetObjectText("/wal/publication-catalog.v1.json"));
+        return catalog.RootElement.GetProperty("next_segment_id").GetUInt64();
+    }
+
+    static ulong ReadSimulatedNextWalSegmentId(string root)
+    {
+        using var catalog = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            root,
+            "cloud_store",
+            "wal",
+            "publication-catalog.v1.json")));
+        return catalog.RootElement.GetProperty("next_segment_id").GetUInt64();
+    }
+
+    static void AssertCatalogSegmentIdsPrecedeNextId(JsonElement catalog)
+    {
+        var nextSegmentId = catalog.GetProperty("next_segment_id").GetUInt64();
+        Assert.True(nextSegmentId >= 3);
+        foreach (var segment in catalog.GetProperty("segments").EnumerateObject())
+        {
+            Assert.True(ulong.Parse(segment.Name, CultureInfo.InvariantCulture) < nextSegmentId);
+        }
     }
 
     static void RemoveSimulatedLocalCache(string root)

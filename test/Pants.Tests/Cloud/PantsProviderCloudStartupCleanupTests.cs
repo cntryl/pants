@@ -301,8 +301,10 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
                          dependencies))
         {
             await CommitCloudStrictAsync(database);
+            handler.FailMetadataWrites = true;
         }
 
+        handler.FailMetadataWrites = false;
         var remoteWal = Assert.Single(handler.GetObjectPaths("/wal/epochs/"));
         handler.ReplaceObjectText(remoteWal, "corrupt");
         var recoveryOptions = PantsOpenOptions.Cloud(recoveryCache.Path, location)

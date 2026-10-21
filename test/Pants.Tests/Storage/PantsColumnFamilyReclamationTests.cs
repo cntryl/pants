@@ -16,7 +16,11 @@ public sealed class PantsColumnFamilyReclamationTests
         await using var database = await PantsDatabase.OpenAsync(CreateOptions(
             directory.Path,
             simulatedCloud));
-        var family = await CreateFlushedFamilyAsync(database, "reclaim-now");
+        var family = await CreateFlushedFamilyAsync(
+            database,
+            "reclaim-now",
+            RetainedKey(),
+            RetainedValue());
         Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
 
         await database.ColumnFamilies.DropAsync(family);
@@ -36,19 +40,64 @@ public sealed class PantsColumnFamilyReclamationTests
         await using var database = await PantsDatabase.OpenAsync(CreateOptions(
             directory.Path,
             simulatedCloud));
-        var family = await CreateFlushedFamilyAsync(database, "reclaim-later");
+        var retainedKey = RetainedKey();
+        var retainedValue = RetainedValue();
+        var family = await CreateFlushedFamilyAsync(
+            database,
+            "reclaim-later",
+            retainedKey,
+            retainedValue);
         await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
 
         await database.ColumnFamilies.DropAsync(family);
 
-        Assert.Equal(
-            "value",
-            TestBytes.ToText((await snapshot.GetAsync(TestBytes.FromString("key")))!.Value));
+        Assert.Equal(retainedValue, (await snapshot.GetAsync(retainedKey))!.Value.ToArray());
         Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
+        Assert.Contains(
+            (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
+            file => file.ColumnFamilyId == family.Id);
         await snapshot.RollbackAsync();
         Assert.Empty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
+        Assert.DoesNotContain(
+            (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
+            file => file.ColumnFamilyId == family.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldPreserveSnapshotVisibilityGivenColumnFamilyDropWhenOldSnapshotIsActive(
+        bool simulatedCloud)
+    {
+        using var directory = new TemporaryDirectory();
+        await using var database = await PantsDatabase.OpenAsync(CreateOptions(
+            directory.Path,
+            simulatedCloud));
+        var retainedKey = RetainedKey();
+        var retainedValue = RetainedValue();
+        var family = await CreateFlushedFamilyAsync(
+            database,
+            "snapshot-drop",
+            retainedKey,
+            retainedValue);
+        await using var snapshot = await database.Transactions.BeginAsync(
+            family,
+            PantsTransactionMode.ReadOnly);
+
+        await database.ColumnFamilies.DropAsync(family);
+
+        Assert.Equal(retainedValue, (await snapshot.GetAsync(retainedKey))!.Value.ToArray());
+        var beginError = await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
+            database.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly).AsTask());
+        Assert.Equal(PantsErrorCode.InvalidArgument, beginError.Code);
+
+        await snapshot.RollbackAsync();
+        await WaitForFamilyReclamationAsync(directory.Path, family.Id, simulatedCloud);
+        Assert.DoesNotContain(
+            (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
+            file => file.ColumnFamilyId == family.Id);
     }
 
     [Theory]
@@ -236,20 +285,28 @@ public sealed class PantsColumnFamilyReclamationTests
 
     static async ValueTask<IPantsColumnFamily> CreateFlushedFamilyAsync(
         IPantsDatabase database,
-        string name)
+        string name,
+        byte[]? key = null,
+        byte[]? value = null)
     {
         var family = await database.ColumnFamilies.CreateAsync(name);
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
-        transaction.Put(TestBytes.FromString("key"), TestBytes.FromString("value"));
+        transaction.Put(
+            key ?? TestBytes.FromString("key"),
+            value ?? TestBytes.FromString("value"));
         await transaction.CommitAsync(
             database.Options.Storage is PantsStorageConfiguration.SimulatedCloud
                 ? PantsWriteOptions.CloudStrict
-                : PantsWriteOptions.Buffered);
+                : PantsWriteOptions.Sync);
         await database.Maintenance.FlushAsync(family);
         return family;
     }
+
+    static byte[] RetainedKey() => TestBytes.FromString("retained-key");
+
+    static byte[] RetainedValue() => Enumerable.Repeat((byte)'x', 32 * 1024).ToArray();
 
     static PantsOpenOptions CreateOptions(string path, bool simulatedCloud) =>
         (simulatedCloud

@@ -27,6 +27,8 @@ sealed class RuntimeState
             ColumnFamilyIdentityComparer.Instance);
         ActiveMemtableBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
+        ActiveMemtableWalStartBytes = new Dictionary<ColumnFamilyIdentity, long>(
+            ColumnFamilyIdentityComparer.Instance);
         ActiveTransactions = [];
         DirectReadOnlyTransactions = [];
         ActiveScanSnapshots = [];
@@ -59,6 +61,13 @@ sealed class RuntimeState
     public Dictionary<ColumnFamilyIdentity, ImmutableArray<CommittedRangeTombstone>> RangeTombstones { get; }
 
     public Dictionary<ColumnFamilyIdentity, long> ActiveMemtableBytes { get; }
+
+    /// <summary>
+    ///     WAL byte count when each non-empty active memtable generation began. A missing entry
+    ///     means the generation was reconstructed from WAL during open and began at this process's
+    ///     byte-count origin.
+    /// </summary>
+    public Dictionary<ColumnFamilyIdentity, long> ActiveMemtableWalStartBytes { get; }
 
     public Dictionary<long, TransactionInfo> ActiveTransactions { get; }
 

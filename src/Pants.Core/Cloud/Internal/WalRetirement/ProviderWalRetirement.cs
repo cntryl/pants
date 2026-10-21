@@ -120,7 +120,7 @@ sealed class ProviderWalRetirement
         try
         {
             var manifest = await _manifests.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (manifest is null || manifest.LastPersistedSequence == 0)
+            if (manifest is null || manifest.Coverage.MaximumSequenceWithDurableEvidence == 0)
             {
                 return RetirementTurn.Settled;
             }
@@ -144,7 +144,7 @@ sealed class ProviderWalRetirement
             foreach (var segment in catalog.Segments.Values.OrderBy(static segment => segment.SegmentId))
             {
                 // The contiguous oldest prefix only: the first segment that cannot retire ends it.
-                if (segment.MaximumSequence > manifest.LastPersistedSequence)
+                if (segment.MaximumSequence > manifest.Coverage.MaximumSequenceWithDurableEvidence)
                 {
                     blockedCause = PantsWalRetirementBlockedCause.FamilyFlushFrontier;
                     break;

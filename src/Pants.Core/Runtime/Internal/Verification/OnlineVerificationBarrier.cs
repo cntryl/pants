@@ -8,16 +8,20 @@ sealed class OnlineVerificationBarrier
     public OnlineVerificationBarrier(
         long token,
         string? path,
+        long sequence,
         PantsEngineHealth runtimeHealth)
     {
         Token = token;
         Path = path;
+        Sequence = sequence;
         RuntimeHealth = runtimeHealth;
     }
 
     public long Token { get; }
 
     public string? Path { get; }
+
+    public long Sequence { get; }
 
     public PantsEngineHealth RuntimeHealth { get; }
 

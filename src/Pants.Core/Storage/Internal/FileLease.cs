@@ -63,6 +63,12 @@ sealed class FileLease : IDisposable
     /// </summary>
     internal Action? MutationLockDisposalInterferenceHookForTesting { get; set; }
 
+    /// <summary>
+    ///     Test hook invoked after the release mutation lock has been removed and its parent
+    ///     directory has been synchronized.
+    /// </summary>
+    internal Action? MutationLockDeleteDirectorySyncForTesting { get; set; }
+
     public void Dispose()
     {
         lock (_gate)
@@ -98,7 +104,8 @@ sealed class FileLease : IDisposable
                 _lockPath,
                 _holderId,
                 _clock,
-                MutationLockDisposalInterferenceHookForTesting);
+                MutationLockDisposalInterferenceHookForTesting,
+                MutationLockDeleteDirectorySyncForTesting);
             var current = ReadRecord(_leaderPath);
             if (current?.Epoch == Epoch && current.HolderId == _holderId)
             {
@@ -446,7 +453,8 @@ sealed class FileLease : IDisposable
         string path,
         string holderId,
         IPantsClock clock,
-        Action? disposalInterferenceHook = null)
+        Action? disposalInterferenceHook = null,
+        Action? afterDeleteDirectorySyncHook = null)
     {
         StoragePathGuard.EnsureNotLink(path);
         try
@@ -458,7 +466,12 @@ sealed class FileLease : IDisposable
                 $"holder_id={holderId}\nowner_token={ownerToken}\ncreated_at={clock.UtcNow:O}\n");
             writer.Flush();
             stream.Flush(true);
-            return new LeaseMutationLock(stream, path, ownerToken, disposalInterferenceHook);
+            return new LeaseMutationLock(
+                stream,
+                path,
+                ownerToken,
+                disposalInterferenceHook,
+                afterDeleteDirectorySyncHook);
         }
         catch (IOException ex)
         {
@@ -500,6 +513,7 @@ sealed class FileLease : IDisposable
     sealed class LeaseMutationLock : IDisposable
     {
         readonly Action? _disposalInterferenceHook;
+        readonly Action? _afterDeleteDirectorySyncHook;
         readonly string _ownerToken;
         readonly string _path;
         readonly FileStream _stream;
@@ -508,12 +522,14 @@ sealed class FileLease : IDisposable
             FileStream stream,
             string path,
             string ownerToken,
-            Action? disposalInterferenceHook)
+            Action? disposalInterferenceHook,
+            Action? afterDeleteDirectorySyncHook)
         {
             _stream = stream;
             _path = path;
             _ownerToken = ownerToken;
             _disposalInterferenceHook = disposalInterferenceHook;
+            _afterDeleteDirectorySyncHook = afterDeleteDirectorySyncHook;
         }
 
         public void Dispose()
@@ -529,6 +545,8 @@ sealed class FileLease : IDisposable
                 {
                     StoragePathGuard.EnsureNotLink(_path);
                     File.Delete(_path);
+                    AtomicStagedFile.FlushDirectory(Path.GetDirectoryName(Path.GetFullPath(_path))!);
+                    _afterDeleteDirectorySyncHook?.Invoke();
                 }
             }
             catch

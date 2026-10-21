@@ -387,15 +387,16 @@ public sealed class PantsRuntimeMetricActivityContractTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
-            Failpoint.BeforeHybridSstEviction);
+            Failpoint.BeforeHybridSstEviction,
+            armOnConstruction: false);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "metrics-hybrid-eviction/")
-            .WithSimulatedCloudLocalStorageBudget(560 * 1024)
+            .WithSimulatedCloudLocalStorageBudget(280 * 1024)
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
-        var value = new byte[256 * 1024];
+        var value = new byte[24 * 1024];
         new Random(17).NextBytes(value);
         await CommitCloudValueAsync(
             database,
@@ -403,6 +404,17 @@ public sealed class PantsRuntimeMetricActivityContractTests
             "evict"u8.ToArray(),
             value);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        for (var index = 0; index < 12; index++)
+        {
+            await CommitCloudValueAsync(
+                database,
+                database.ColumnFamilies.DefaultFamily,
+                TestBytes.FromString($"eviction-seed-{index}"),
+                value);
+            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+        }
+
+        failpoint.Arm();
         var write = CommitCloudValueAsync(
             database,
             database.ColumnFamilies.DefaultFamily,

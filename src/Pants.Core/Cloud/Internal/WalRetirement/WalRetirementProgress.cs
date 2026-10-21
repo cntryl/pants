@@ -31,7 +31,7 @@ sealed class WalRetirementProgress
         if (_proofs.TryGetValue(segment.SegmentId, out var proof) &&
             proof.Segment == segment &&
             StringComparer.Ordinal.Equals(proof.Version, version) &&
-            coverage.StillContains(proof.CoveringFiles))
+            coverage.StillContains(proof.CoveringFiles, proof.CoveringDroppedFamilies))
         {
             return proof;
         }

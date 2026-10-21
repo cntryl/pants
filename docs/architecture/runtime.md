@@ -179,6 +179,11 @@ Shutdown retries that arrive while deferred cleanup is waiting on a worker remai
 release barrier, so a caller receives its own `Timeout` rather than a successful close or an aborted
 runtime result before ownership is released.
 
+After active flush workers quiesce, graceful shutdown seals and drains cloud WAL publication before
+checkpointing any remaining WAL-backed memtables locally. It then mirrors the checkpointed storage
+state so a fresh cache can recover from the published SSTs as well as any retained WAL segments.
+This keeps accepted writes recoverable if local checkpointing or cloud publication fails.
+
 `PantsException.Severity` (`PantsErrorSeverity`) is the single classification for hosts deciding
 whether to retry, back off, step down or halt. Caller errors are not retryable; transient errors may
 succeed later; backpressure clears when a bounded resource frees; fenced means this writer lost

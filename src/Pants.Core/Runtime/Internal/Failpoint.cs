@@ -34,6 +34,7 @@ enum Failpoint
     AfterWalReplacementWriterCreate,
     BeforeWalReplacementDirectorySync,
     AfterWalReplacementDirectorySync,
+    BeforeLocalWalRetirementDelete,
     BeforeWalPruneDirectorySync,
     BeforeWalRotationRecoveryStreamReopen,
     AfterWalRotation,
@@ -89,5 +90,12 @@ enum Failpoint
     BeforeLeaseAcquire,
     AfterLeaseAcquire,
     BeforeLeaseRenewal,
-    AfterLeaseRenewal
+    AfterLeaseRenewal,
+    BeforeBackupObjectCopy,
+    AfterBackupObjectCopy,
+    BeforeBackupPublish,
+    BeforeRestoreObjectCopy,
+    AfterRestoreObjectCopy,
+    BeforeRestorePublish,
+    BeforeWalReplayRead
 }

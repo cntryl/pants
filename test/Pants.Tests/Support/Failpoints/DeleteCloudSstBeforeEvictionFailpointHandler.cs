@@ -4,6 +4,10 @@ sealed class DeleteCloudSstBeforeEvictionFailpointHandler(string databasePath) :
 {
     int _armed = 1;
 
+    public void Arm() => Volatile.Write(ref _armed, 1);
+
+    public void Disarm() => Volatile.Write(ref _armed, 0);
+
     public void Hit(Failpoint failpoint)
     {
         if (failpoint != Failpoint.BeforeHybridSstEviction ||

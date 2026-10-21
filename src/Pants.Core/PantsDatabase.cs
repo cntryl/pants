@@ -1,3 +1,4 @@
+using Cntryl.Pants.Storage;
 using Cntryl.Pants.Storage.Internal.Lease;
 
 namespace Cntryl.Pants;
@@ -58,6 +59,23 @@ public static class PantsDatabase
         string path,
         CancellationToken cancellationToken = default) =>
         StorageVerifier.VerifyPathAsync(path, cancellationToken);
+
+    public static ValueTask<PantsBackupManifest> RestoreBackupAsync(
+        string artifact,
+        PantsOpenOptions options,
+        CancellationToken cancellationToken = default) =>
+        BackupArtifactStore.RestoreAsync(
+            artifact,
+            options,
+            NullPantsFailpointHandler.Instance,
+            cancellationToken);
+
+    internal static ValueTask<PantsBackupManifest> RestoreBackupForTestingAsync(
+        string artifact,
+        PantsOpenOptions options,
+        IFailpointHandler failpoints,
+        CancellationToken cancellationToken = default) =>
+        BackupArtifactStore.RestoreAsync(artifact, options, failpoints, cancellationToken);
 
     /// <summary>
     ///     Verifies a local storage directory like <see cref="VerifyPathAsync" />, but classifies

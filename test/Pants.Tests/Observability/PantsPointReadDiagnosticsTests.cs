@@ -5,7 +5,7 @@ namespace Cntryl.Pants.Observability;
 
 public sealed class PantsPointReadDiagnosticsTests
 {
-    const long HybridLocalBudgetBytes = 560 * 1024;
+    const long HybridLocalBudgetBytes = 280 * 1024;
 
     [Fact]
     public void ShouldKeepSstTraceUnchangedWhenTheSourceCollectionIsMutated()
@@ -120,12 +120,21 @@ public sealed class PantsPointReadDiagnosticsTests
             PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "diagnostics/")
                 .WithSimulatedCloudLocalStorageBudget(HybridLocalBudgetBytes)
                 .WithBackgroundCompaction(false));
-        var expected = CreateValue(256 * 1024, 83);
+        var expected = CreateValue(24 * 1024, 83);
         await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
+        for (var index = 0; index < 12; index++)
+        {
+            await FlushAsync(
+                database,
+                $"diagnostics-seed-{index}",
+                CreateValue(expected.Length, 84 + index),
+                PantsWriteOptions.CloudStrict);
+        }
+
         await FlushAsync(
             database,
             "eviction-window",
-            CreateValue(256 * 1024, 84),
+            CreateValue(expected.Length, 90),
             PantsWriteOptions.CloudStrict);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -135,7 +144,7 @@ public sealed class PantsPointReadDiagnosticsTests
         var resident = await reader.GetWithDiagnosticsAsync("cloud-key"u8.ToArray());
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(hydrated.Value).ToArray());
-        Assert.Equal(1, hydrated.Trace.KeyRangeRejects);
+        Assert.Equal(12, hydrated.Trace.KeyRangeRejects);
         var hydratedSst = Assert.Single(hydrated.Trace.Ssts);
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
         Assert.Equal(PantsBloomFilterOutcome.TruePositive, hydratedSst.BloomFilterOutcome);
@@ -145,7 +154,7 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(1, hydratedSst.DataBlocksRead);
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(resident.Value).ToArray());
-        Assert.Equal(1, resident.Trace.KeyRangeRejects);
+        Assert.Equal(12, resident.Trace.KeyRangeRejects);
         var residentSst = Assert.Single(resident.Trace.Ssts);
         Assert.Equal(hydratedSst.Name, residentSst.Name);
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, residentSst.Tier);

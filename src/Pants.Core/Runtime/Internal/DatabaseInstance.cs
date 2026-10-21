@@ -1,4 +1,5 @@
 using System.Text;
+using Cntryl.Pants.Storage;
 
 namespace Cntryl.Pants.Runtime.Internal;
 
@@ -276,6 +277,15 @@ sealed class DatabaseInstance :
     {
         EnsureOpen();
         return _runtime.Coordinator.VerifyStorageAsync(timeout, cancellationToken);
+    }
+
+    public ValueTask<PantsBackupManifest> BackupAsync(
+        string destination,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.BackupAsync(destination, timeout, cancellationToken);
     }
 
     public async ValueTask<IPantsTransaction> BeginAsync(

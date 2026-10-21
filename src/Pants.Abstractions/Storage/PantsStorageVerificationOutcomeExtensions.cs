@@ -15,12 +15,15 @@ public static class PantsStorageVerificationOutcomeExtensions
         };
 
     /// <summary>
-    ///     Classifies a verification failure. Missing data and invalid paths are storage outcomes;
-    ///     everything else follows <see cref="PantsErrorCodeExtensions.GetSeverity" />, with
-    ///     backpressure reported as degraded because it is an operational condition to retry.
+    ///     Classifies a verification failure. Missing data, invalid paths, and unknown write
+    ///     outcomes that need reconciliation are storage outcomes; everything else follows
+    ///     <see cref="PantsErrorCodeExtensions.GetSeverity" />, with backpressure reported as
+    ///     degraded because it is an operational condition to retry.
     /// </summary>
     public static PantsStorageVerificationOutcomeKind GetVerificationOutcomeKind(this PantsErrorCode code) =>
-        code is PantsErrorCode.NotFound or PantsErrorCode.InvalidPath
+        code is PantsErrorCode.NotFound or
+            PantsErrorCode.InvalidPath or
+            PantsErrorCode.CommitOutcomeUnknown
             ? PantsStorageVerificationOutcomeKind.Storage
             : code.GetSeverity() switch
             {
