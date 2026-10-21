@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cntryl/lsm-spec/schema/manifest.schema.json",
+  "title": "Manifest",
+  "description": "FORMAT 8 JSON shape for manifest.snapshot.json and the read-only legacy manifest.json fallback. Reader defaults and cross-field checks are specified in format/manifest.md §§5.3-5.7.",
+  "$defs": {
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "sstName": {
+      "type": "string",
+      "pattern": "^(?!\\.sst$)[^/\\\\:\\u0000]+\\.sst$",
+      "description": "One relative SST filename."
+    },
+    "fileMeta": {
+      "type": "object",
+      "required": [
+        "name",
+        "level",
+        "size_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/sstName"
+        },
+        "level": {
+          "$ref": "#/$defs/u32"
+        },
+        "size_bytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "content_crc32c": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "cf_id": {
+          "$ref": "#/$defs/u32",
+          "default": 0
+        },
+        "sst_seq": {
+          "$ref": "#/$defs/u64",
+          "default": 0
+        },
+        "smallest_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{2})*$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lowercase hexadecimal key bytes or null when unknown."
+        },
+        "largest_key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{2})*$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lowercase hexadecimal key bytes or null when unknown."
+        },
+        "smallest_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "largest_seq": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/u64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key_bounds_complete": {
+          "type": "boolean",
+          "default": false,
+          "description": "If absent, readers default this field to false and cannot prune the file using key bounds."
+        },
+        "sublevel": {
+          "$ref": "#/$defs/u32",
+          "default": 0
+        }
+      }
+    },
+    "columnFamilyMeta": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "name": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/u64"
+        },
+        "deleted_at": {
+          "$ref": "#/$defs/u64"
+        },
+        "drop_sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "dropped_sst_names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sstName"
+          }
+        },
+        "reclaimed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "deleted_at"
+            ]
+          },
+          "then": {
+            "required": [
+              "drop_sequence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "drop_sequence"
+            ]
+          },
+          "then": {
+            "required": [
+              "deleted_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reclaimed": {
+                "const": true
+              }
+            },
+            "required": [
+              "reclaimed"
+            ]
+          },
+          "then": {
+            "required": [
+              "deleted_at"
+            ]
+          }
+        }
+      ]
+    },
+    "flushFrontier": {
+      "type": "object",
+      "required": [
+        "cf_id",
+        "through_sequence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "cf_id": {
+          "$ref": "#/$defs/u32"
+        },
+        "through_sequence": {
+          "$ref": "#/$defs/u64"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "cf_id": {
+                "const": 0
+              }
+            },
+            "required": [
+              "cf_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "through_sequence": {
+                "type": "integer",
+                "maximum": 18446744073709551614
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "required": [
+    "flushed_through"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "flushed_through": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/flushFrontier"
+      },
+      "description": "Canonical output is sorted by cf_id and begins with live default family id 0.",
+      "$comment": "JSON Schema cannot enforce strict ordering, uniqueness by cf_id, or exact correspondence to column_families. Readers reject missing, duplicate, out-of-order, orphaned, and lifecycle-inconsistent rows."
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fileMeta"
+      }
+    },
+    "column_families": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/columnFamilyMeta"
+      }
+    },
+    "next_sst_seqs": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(0|[1-9][0-9]*)$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/u64"
+      },
+      "description": "Keyed by canonical unpadded decimal family id."
+    },
+    "edit_checkpoint_id": {
+      "$ref": "#/$defs/u64"
+    }
+  },
+  "$comment": "FORMAT 8 readers apply serde defaults to omitted fields; canonical writer output includes defaulted manifest and file fields. Cross-field lifecycle and frontier rules are checked by the reader and conformance harness."
+}
