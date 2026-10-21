@@ -669,7 +669,7 @@ static class StreamingCompactionMerger
         eligible && (horizon is null || sequence <= horizon.Value);
 
     static bool Covers(RangeTombstone range, SstEntry entry) =>
-        entry.Sequence < range.Sequence &&
+        entry.Sequence <= range.Sequence &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.Start) >= 0 &&
         ByteArrayComparer.Instance.Compare(entry.Key, range.End) < 0;
 

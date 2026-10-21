@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "midgeCommit": "d582fd1127741fd69067914423ec76ad6adf0657",
   "lsmSpecCommit": "c3b6bfbe29c91557cf1b7ed8ca5cf70dd561549c",
-  "pantsCommitAtCapture": "071057a6ba3494113625e47622c17c51b2aba585",
+  "pantsCommitAtCapture": "b9f4053796550fb9100bf0b3735c8f40432e346f",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
     "cargo test --locked --offline --features failpoints --test fault_injection -- --list",
@@ -17,15 +17,15 @@
       "integration": 652,
       "lib": 3377
     },
-    "pantsCasesAtHead": 2866,
-    "pantsWorkingTreeTestAdditionsAtCapture": 7,
-    "pantsCasesAtCapture": 2873,
-    "pantsTestListRowsAtCapture": 2874,
+    "pantsCasesAtHead": 2873,
+    "pantsWorkingTreeTestAdditionsAtCapture": 19,
+    "pantsCasesAtCapture": 2892,
+    "pantsTestListRowsAtCapture": 2893,
     "mappingStatus": {
       "verified": 276,
-      "verified-adapted": 101,
+      "verified-adapted": 118,
       "candidate": 339,
-      "unmapped": 3525
+      "unmapped": 3508
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
@@ -1212,9 +1212,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_drop_point_tombstone_when_it_is_at_or_below_the_horizon",
       "translatedPantsMethodName": "ShouldDropPointTombstoneWhenItIsAtOrBelowTheHorizon",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldDropPointTombstoneWhenItIsAtOrBelowTheHorizon",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths discard a sequence-5 point tombstone at horizon 5 when point tombstone GC is eligible."
     },
     {
       "source": "src/lib.rs",
@@ -1222,9 +1230,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_drop_value_when_an_obsolete_active_cover_is_at_least_as_new",
       "translatedPantsMethodName": "ShouldDropValueWhenAnObsoleteActiveCoverIsAtLeastAsNew",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldDropValueWhenAnObsoleteActiveCoverIsAtLeastAsNew",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge uses range sequence greater than or equal to point sequence for an obsolete active cover; both Pants merge paths now drop a covered sequence-5 value under a GC-eligible sequence-5 range tombstone."
     },
     {
       "source": "src/lib.rs",
@@ -1232,9 +1248,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_drop_value_when_an_obsolete_range_start_in_the_group_covers_it",
       "translatedPantsMethodName": "ShouldDropValueWhenAnObsoleteRangeStartInTheGroupCoversIt",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldDropValueWhenAnObsoleteRangeStartInTheGroupCoversIt",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths drop a sequence-5 value covered by an obsolete sequence-8 range tombstone."
     },
     {
       "source": "src/lib.rs",
@@ -1242,9 +1266,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_newest_version_when_shadowed_equal_sequence_copies_are_identical",
       "translatedPantsMethodName": "ShouldKeepNewestVersionWhenShadowedEqualSequenceCopiesAreIdentical",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepNewestVersionWhenShadowedEqualSequenceCopiesAreIdentical",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths accept identical shadowed sequence-5 copies and retain only sequence 10 when no snapshot horizon is active."
     },
     {
       "source": "src/lib.rs",
@@ -1252,9 +1284,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_one_version_when_equal_sequence_versions_are_identical",
       "translatedPantsMethodName": "ShouldKeepOneVersionWhenEqualSequenceVersionsAreIdentical",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepOneVersionWhenEqualSequenceVersionsAreIdentical",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths coalesce identical sequence-4 copies into one exact point version."
     },
     {
       "source": "src/lib.rs",
@@ -1262,9 +1302,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_point_tombstone_when_a_snapshot_can_still_see_it",
       "translatedPantsMethodName": "ShouldKeepPointTombstoneWhenASnapshotCanStillSeeIt",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepPointTombstoneWhenASnapshotCanStillSeeIt",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain a sequence-6 point tombstone above the oldest snapshot horizon 5."
     },
     {
       "source": "src/lib.rs",
@@ -1272,9 +1320,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_point_tombstone_when_point_gc_is_not_eligible",
       "translatedPantsMethodName": "ShouldKeepPointTombstoneWhenPointGcIsNotEligible",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepPointTombstoneWhenPointGcIsNotEligible",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain a sequence-1 point tombstone when point tombstone GC is disabled."
     },
     {
       "source": "src/lib.rs",
@@ -1282,9 +1338,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_value_when_no_tombstone_covers_it",
       "translatedPantsMethodName": "ShouldKeepValueWhenNoTombstoneCoversIt",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepValueWhenNoTombstoneCoversIt",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain the sequence-5 point value when no tombstone covers its key."
     },
     {
       "source": "src/lib.rs",
@@ -1292,9 +1356,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_value_when_the_active_cover_does_not_contain_the_key",
       "translatedPantsMethodName": "ShouldKeepValueWhenTheActiveCoverDoesNotContainTheKey",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepValueWhenTheActiveCoverDoesNotContainTheKey",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain key k outside the range [m,z), even when the tombstone sequence is newer."
     },
     {
       "source": "src/lib.rs",
@@ -1302,9 +1374,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_value_when_the_active_cover_is_older_than_the_value",
       "translatedPantsMethodName": "ShouldKeepValueWhenTheActiveCoverIsOlderThanTheValue",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepValueWhenTheActiveCoverIsOlderThanTheValue",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain a sequence-6 value under an obsolete sequence-5 range tombstone."
     },
     {
       "source": "src/lib.rs",
@@ -1312,9 +1392,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_keep_value_when_the_covering_range_start_is_not_yet_obsolete",
       "translatedPantsMethodName": "ShouldKeepValueWhenTheCoveringRangeStartIsNotYetObsolete",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldKeepValueWhenTheCoveringRangeStartIsNotYetObsolete",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths retain a sequence-5 value and sequence-11 range tombstone above horizon 10."
     },
     {
       "source": "src/lib.rs",
@@ -1322,9 +1410,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_reject_key_group_when_equal_sequence_versions_disagree",
       "translatedPantsMethodName": "ShouldRejectKeyGroupWhenEqualSequenceVersionsDisagree",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldRejectKeyGroupWhenEqualSequenceVersionsDisagree",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths reject differing same-key, same-sequence contents with PantsCorruptionException."
     },
     {
       "source": "src/lib.rs",
@@ -1332,9 +1428,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_reject_shadowed_equal_sequence_conflict_during_compaction",
       "translatedPantsMethodName": "ShouldRejectShadowedEqualSequenceConflictDuringCompaction",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldRejectShadowedEqualSequenceConflictDuringCompaction",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths validate shadowed same-sequence versions before visibility or tombstone filtering and reject conflicting contents."
     },
     {
       "source": "src/lib.rs",
@@ -1342,9 +1446,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_reject_shadowed_equal_sequence_conflict_when_versions_arrive_unordered",
       "translatedPantsMethodName": "ShouldRejectShadowedEqualSequenceConflictWhenVersionsArriveUnordered",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldRejectShadowedEqualSequenceConflictWhenVersionsArriveUnordered",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths reject conflicting sequence-5 copies even when the input files enumerate versions in 5, 10, 5 order."
     },
     {
       "source": "src/lib.rs",
@@ -1352,9 +1464,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_select_highest_sequence_when_key_group_has_several_versions",
       "translatedPantsMethodName": "ShouldSelectHighestSequenceWhenKeyGroupHasSeveralVersions",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldSelectHighestSequenceWhenKeyGroupHasSeveralVersions",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths select sequence 9 from exact same-key versions 3, 9, and 5."
     },
     {
       "source": "src/lib.rs",
@@ -1362,9 +1482,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_select_newest_version_when_chained_files_yield_older_version_first",
       "translatedPantsMethodName": "ShouldSelectNewestVersionWhenChainedFilesYieldOlderVersionFirst",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldSelectNewestVersionWhenChainedFilesYieldOlderVersionFirst",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths select sequence 5 across three input files enumerated with sequences 3, 1, and 5."
     },
     {
       "source": "src/lib.rs",
@@ -1372,9 +1500,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::key_group_reduction::should_select_nothing_when_key_group_holds_only_range_events",
       "translatedPantsMethodName": "ShouldSelectNothingWhenKeyGroupHoldsOnlyRangeEvents",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsCompactionKeyGroupParityTests.ShouldSelectNothingWhenKeyGroupHoldsOnlyRangeEvents",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both Pants merge paths emit no point entries for range-only input while retaining a range tombstone newer than the snapshot horizon."
     },
     {
       "source": "src/lib.rs",
