@@ -3,9 +3,10 @@
 This inventory records every test case discovered in Midge at
 `445a901d8c34ec6a1fca91038da6bb187caaa7b6` and the Pants test assembly at
 `0f8d18a8938e29ed8d6c86bd93a5df21e9d7dc4e` plus the working-tree additions in this
-task. The shared contract target is lsm-spec FORMAT 8 at commit
-`111bccdd5fa6c9ea2d13d1131b17807016c770c`. The complete per-case list, including
-each mechanical Pants method translation, is
+task. The inventory's `lsmSpecCommit` field records the capture-time snapshot
+`111bccdd5fa6c9ea2d13d1131b17807016c770c`. Pants currently targets lsm-spec
+FORMAT 8 at commit `bbf7c718d449011def985a6157e58325939ac731`. The complete per-case
+list, including each mechanical Pants method translation, is
 [`MidgeTestParityInventory.json`](MidgeTestParityInventory.json).
 
 ## Captured inventories
