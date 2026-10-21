@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "midgeCommit": "d582fd1127741fd69067914423ec76ad6adf0657",
   "lsmSpecCommit": "c3b6bfbe29c91557cf1b7ed8ca5cf70dd561549c",
-  "pantsCommitAtCapture": "b9f4053796550fb9100bf0b3735c8f40432e346f",
+  "pantsCommitAtCapture": "af672235b3bc013e7665c440f88b382985659f8f",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
     "cargo test --locked --offline --features failpoints --test fault_injection -- --list",
@@ -17,15 +17,15 @@
       "integration": 652,
       "lib": 3377
     },
-    "pantsCasesAtHead": 2873,
-    "pantsWorkingTreeTestAdditionsAtCapture": 19,
-    "pantsCasesAtCapture": 2892,
-    "pantsTestListRowsAtCapture": 2893,
+    "pantsCasesAtHead": 2892,
+    "pantsWorkingTreeTestAdditionsAtCapture": 10,
+    "pantsCasesAtCapture": 2902,
+    "pantsTestListRowsAtCapture": 2903,
     "mappingStatus": {
       "verified": 276,
-      "verified-adapted": 118,
+      "verified-adapted": 127,
       "candidate": 339,
-      "unmapped": 3508
+      "unmapped": 3499
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
@@ -1668,9 +1668,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_not_roll_a_range_only_partition_below_the_target",
       "translatedPantsMethodName": "ShouldNotRollARangeOnlyPartitionBelowTheTarget",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldNotRollARangeOnlyPartitionBelowTheTarget",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Two retained range tombstones total 36 estimated bytes and remain in one streaming output below a 37-byte target."
     },
     {
       "source": "src/lib.rs",
@@ -1678,9 +1686,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_not_roll_a_range_only_partition_without_tombstones",
       "translatedPantsMethodName": "ShouldNotRollARangeOnlyPartitionWithoutTombstones",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldNotRollARangeOnlyPartitionWithoutTombstones",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "An input with no entries or range tombstones emits no output partition under a one-byte target."
     },
     {
       "source": "src/lib.rs",
@@ -1688,9 +1704,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_not_roll_an_empty_partition_on_writer_overhead_alone",
       "translatedPantsMethodName": "ShouldNotRollAnEmptyPartitionOnWriterOverheadAlone",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldNotRollAnEmptyPartitionOnWriterOverheadAlone",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "An empty streamed SST emits no output at a large target, so an empty writer has no synthetic output bytes."
     },
     {
       "source": "src/lib.rs",
@@ -1698,9 +1722,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_not_roll_at_a_group_that_drops_its_only_version",
       "translatedPantsMethodName": "ShouldNotRollAtAGroupThatDropsItsOnlyVersion",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldNotRollAtAGroupThatDropsItsOnlyVersion",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "A point tombstone eligible at the snapshot horizon is removed before streaming partition decisions; the surviving key remains one output."
     },
     {
       "source": "src/lib.rs",
@@ -1708,9 +1740,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_not_roll_when_the_partition_is_below_the_target_size",
       "translatedPantsMethodName": "ShouldNotRollWhenThePartitionIsBelowTheTargetSize",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldNotRollWhenThePartitionIsBelowTheTargetSize",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Two surviving 34-byte entries remain together at a 69-byte target."
     },
     {
       "source": "src/lib.rs",
@@ -1718,9 +1758,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_roll_a_range_only_partition_when_tombstones_reach_the_target",
       "translatedPantsMethodName": "ShouldRollARangeOnlyPartitionWhenTombstonesReachTheTarget",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRollARangeOnlyPartitionWhenTombstonesReachTheTarget",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Two retained range tombstones fill the 36-byte output target; the third starts the next range-only output."
     },
     {
       "source": "src/lib.rs",
@@ -1728,9 +1776,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_roll_when_the_partition_reaches_the_target_size",
       "translatedPantsMethodName": "ShouldRollWhenThePartitionReachesTheTargetSize",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRollWhenThePartitionReachesTheTargetSize",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Two 34-byte keys fill the 68-byte target; the following key starts the next streaming output."
     },
     {
       "source": "src/lib.rs",
@@ -1738,9 +1794,17 @@
       "kind": "lib",
       "name": "compaction::executor::partition::tests::soft_roll::should_treat_a_zero_target_as_one_byte",
       "translatedPantsMethodName": "ShouldTreatAZeroTargetAsOneByte",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldTreatAZeroTargetAsOneByte",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both streaming and materialized Pants partitioners treat an internal zero target as one byte; public Pants options still reject nonpositive targets."
     },
     {
       "source": "src/lib.rs",
@@ -1784,9 +1848,17 @@
       "kind": "lib",
       "name": "compaction::fragment_tests::should_cleanup_unpublished_fragments_when_staging_fails",
       "translatedPantsMethodName": "ShouldCleanupUnpublishedFragmentsWhenStagingFails",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldCleanupUnpublishedFragmentsWhenStagingFails",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The test injects failure after the first or second fragment output is durable, verifies the source and target inputs remain byte-identical, and confirms unpublished SSTs, staging files, and compaction intents are absent."
     },
     {
       "source": "src/lib.rs",

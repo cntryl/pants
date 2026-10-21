@@ -49,6 +49,11 @@ static class StreamingCompactionMerger
         ResourceBudget? resourceBudget = null,
         CancellationToken cancellationToken = default)
     {
+        if (targetSizeBytes == 0)
+        {
+            targetSizeBytes = 1;
+        }
+
         if (plan.Purpose == CompactionPurpose.Fragment)
         {
             foreach (var partition in FragmentAndPartition(

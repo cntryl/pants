@@ -227,6 +227,33 @@ public sealed class PantsFragmentationParityTests
         Assert.Equal("right", TestBytes.ToText((await reader.GetAsync("f9"u8.ToArray()))!.Value));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ShouldCleanupUnpublishedFragmentsWhenStagingFails(int failedOutput)
+    {
+        using var directory = new TemporaryDirectory();
+        var fixture = await CreateFixtureAsync(directory.Path, FragmentSourceShape.Valid);
+        var failpoint = new ThrowOnNthCompactionOutputFailpointHandler(failedOutput);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            fixture.Options,
+            new RuntimeDependencies(failpoint));
+
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
+
+        Assert.Equal(failedOutput, failpoint.HitCount);
+        AssertAuthoritativeInputsRemain(fixture);
+        AssertNoCompactionIntent(fixture.RootPath);
+        var stagingDirectory = Path.Combine(fixture.RootPath, "sst", ".flush-staging");
+        if (Directory.Exists(stagingDirectory))
+        {
+            Assert.Empty(Directory.EnumerateFiles(
+                stagingDirectory,
+                "*.compaction.*.tmp",
+                SearchOption.AllDirectories));
+        }
+    }
+
     static async Task<FragmentFixture> CreateFixtureAsync(string rootPath, FragmentSourceShape shape)
     {
         var sstDirectory = Directory.CreateDirectory(Path.Combine(rootPath, "sst"));
@@ -500,6 +527,22 @@ public sealed class PantsFragmentationParityTests
         Valid,
         BoundsTooNarrow,
         OnlyBeforeCut
+    }
+
+    sealed class ThrowOnNthCompactionOutputFailpointHandler(int failAtHit) : IFailpointHandler
+    {
+        int _hitCount;
+
+        public int HitCount => Volatile.Read(ref _hitCount);
+
+        public void Hit(Failpoint failpoint)
+        {
+            if (failpoint == Failpoint.AfterCompactionOutputDurable &&
+                Interlocked.Increment(ref _hitCount) == failAtHit)
+            {
+                throw new IOException($"Injected compaction output failure at hit {failAtHit}.");
+            }
+        }
     }
 
     sealed record FragmentFixture(
