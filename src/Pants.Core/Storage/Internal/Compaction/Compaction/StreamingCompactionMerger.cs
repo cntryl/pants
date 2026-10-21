@@ -49,6 +49,22 @@ static class StreamingCompactionMerger
         ResourceBudget? resourceBudget = null,
         CancellationToken cancellationToken = default)
     {
+        if (plan.Purpose == CompactionPurpose.Fragment)
+        {
+            foreach (var partition in FragmentAndPartition(
+                         streams,
+                         rangeTombstones,
+                         plan,
+                         targetSizeBytes,
+                         resourceBudget,
+                         cancellationToken))
+            {
+                yield return partition;
+            }
+
+            yield break;
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         var horizon = plan.SnapshotHorizon is { } value ? checked((ulong)value) : (ulong?)null;
@@ -182,6 +198,229 @@ static class StreamingCompactionMerger
         finally
         {
             DisposeReservations(reservations);
+        }
+    }
+
+    /// <summary>
+    ///     Rewrites one source at its current level without merge retention or tombstone collection.
+    ///     The planned interior cut is mandatory; ordinary size cuts may further partition either
+    ///     side while range tombstones are clipped to each half-open output region.
+    /// </summary>
+    static IEnumerable<CompactionMergeResult> FragmentAndPartition(
+        IReadOnlyList<ICompactionEntryStream> streams,
+        IReadOnlyList<RangeTombstone> rangeTombstones,
+        CompactionPlan plan,
+        long targetSizeBytes,
+        ResourceBudget? resourceBudget,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            DisposeStreams(streams);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        if (targetSizeBytes <= 0)
+        {
+            DisposeStreams(streams);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
+        }
+
+        if (plan.SourceLevel == 0 || plan.TargetLevel != plan.SourceLevel ||
+            plan.PointTombstoneGcEligible || plan.RangeTombstoneGcEligible ||
+            plan.Inputs.Count != 1 || plan.Inputs[0].Level != plan.SourceLevel ||
+            plan.FragmentSplitKey is not { Length: > 0 } splitKey ||
+            !plan.Inputs[0].HasTrustedKeyBounds() ||
+            ByteArrayComparer.Instance.Compare(plan.Inputs[0].SmallestKey, splitKey) >= 0 ||
+            ByteArrayComparer.Instance.Compare(splitKey, plan.Inputs[0].LargestKey) >= 0 ||
+            streams.Count != 1)
+        {
+            DisposeStreams(streams);
+            throw PantsException.Create(
+                PantsErrorCode.Corruption,
+                "A source-fragment plan must contain one trusted, strictly split inner-level input.");
+        }
+
+        using var rangeWorkspace = ReserveRangeTombstoneWorkspaceOrDisposeStreams(
+            streams,
+            resourceBudget,
+            rangeTombstones.Count);
+        IDisposable? splitKeyReservation;
+        try
+        {
+            splitKeyReservation = resourceBudget?.Reserve(splitKey.Length);
+        }
+        catch
+        {
+            DisposeStreams(streams);
+            throw;
+        }
+
+        using var splitKeyBudgetReservation = splitKeyReservation;
+        var entryLimitBytes = resourceBudget is null
+            ? long.MaxValue
+            : Math.Max(1, resourceBudget.Limit / 2);
+        long? effectiveTargetBytes = null;
+        var entries = new List<SstEntry>();
+        var reservations = new List<IDisposable>();
+        long reservedBytes = 0;
+        long currentBytes = 0;
+        byte[]? regionStart = null;
+        var cutReached = false;
+        var sawEntry = false;
+        SstEntry? previousEntry = null;
+        try
+        {
+            while (streams[0].MoveNext())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = streams[0].Current;
+                sawEntry = true;
+                if (previousEntry is { } previous &&
+                    ByteArrayComparer.Instance.Equals(previous.Key, entry.Key) &&
+                    previous.Sequence == entry.Sequence)
+                {
+                    // Fragmentation retains every version, but it must still reject conflicting
+                    // copies of one logical version before a newer version can hide the conflict.
+                    CompactionVersionIdentity.RequireMatchingContent(previous, entry);
+                }
+
+                previousEntry = entry;
+                var target = effectiveTargetBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
+                var entryBytes = EstimateEntryBytes(entry);
+                if (entryBytes > entryLimitBytes)
+                {
+                    throw PantsException.ResourceLimit(
+                        $"A {entryBytes}-byte compaction entry exceeds the " +
+                        $"{entryLimitBytes}-byte compaction buffer budget.");
+                }
+
+                if (!cutReached &&
+                    ByteArrayComparer.Instance.Compare(entry.Key, splitKey) >= 0)
+                {
+                    var left = CreatePartition(entries, rangeTombstones, regionStart, splitKey);
+                    ReservePartition(left, resourceBudget, reservations, ref reservedBytes);
+                    if (HasContents(left))
+                    {
+                        yield return left;
+                        DisposeReservations(reservations);
+                        reservedBytes = 0;
+                    }
+
+                    entries = [];
+                    currentBytes = 0;
+                    regionStart = splitKey;
+                    cutReached = true;
+                }
+                else if (entries.Count > 0 &&
+                         currentBytes + entryBytes > target &&
+                         ByteArrayComparer.Instance.Compare(entries[^1].Key, entry.Key) != 0 &&
+                         !IsFinalRangeEnd(entry.Key, plan.Inputs[0], rangeTombstones))
+                {
+                    var partition = CreatePartition(entries, rangeTombstones, regionStart, entry.Key);
+                    ReservePartition(partition, resourceBudget, reservations, ref reservedBytes);
+                    yield return partition;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                    entries = [];
+                    currentBytes = 0;
+                    regionStart = entry.Key;
+                }
+
+                ReserveThrough(
+                    resourceBudget,
+                    reservations,
+                    ref reservedBytes,
+                    checked(currentBytes + entryBytes));
+                entries.Add(entry);
+                currentBytes = checked(currentBytes + entryBytes);
+            }
+
+            if (!sawEntry)
+            {
+                var leftRanges = CreatePartition([], rangeTombstones, null, splitKey);
+                var rightRanges = CreatePartition([], rangeTombstones, splitKey, null);
+                foreach (var partition in new[] { leftRanges, rightRanges })
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!HasContents(partition))
+                    {
+                        continue;
+                    }
+
+                    ReservePartition(partition, resourceBudget, reservations, ref reservedBytes);
+                    yield return partition;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                }
+
+                yield break;
+            }
+
+            var finalEnd = cutReached ? null : splitKey;
+            var finalPartition = CreatePartition(entries, rangeTombstones, regionStart, finalEnd);
+            if (HasContents(finalPartition))
+            {
+                ReservePartition(finalPartition, resourceBudget, reservations, ref reservedBytes);
+                yield return finalPartition;
+                DisposeReservations(reservations);
+                reservedBytes = 0;
+            }
+
+            if (!cutReached)
+            {
+                var rightRanges = CreatePartition([], rangeTombstones, splitKey, null);
+                if (HasContents(rightRanges))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ReservePartition(rightRanges, resourceBudget, reservations, ref reservedBytes);
+                    yield return rightRanges;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                }
+            }
+            else if (entries.Count == 0)
+            {
+                var rightRanges = CreatePartition([], rangeTombstones, regionStart, null);
+                if (HasContents(rightRanges))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ReservePartition(rightRanges, resourceBudget, reservations, ref reservedBytes);
+                    yield return rightRanges;
+                    DisposeReservations(reservations);
+                    reservedBytes = 0;
+                }
+            }
+        }
+        finally
+        {
+            DisposeReservations(reservations);
+            DisposeStreams(streams);
+        }
+    }
+
+    static void ReservePartition(
+        CompactionMergeResult partition,
+        ResourceBudget? budget,
+        List<IDisposable> reservations,
+        ref long reservedBytes) =>
+        ReserveThrough(budget, reservations, ref reservedBytes, EstimatePartitionBytes(partition));
+
+    static bool IsFinalRangeEnd(
+        byte[] key,
+        FileMeta source,
+        IReadOnlyList<RangeTombstone> rangeTombstones) =>
+        ByteArrayComparer.Instance.Compare(key, source.LargestKey) == 0 &&
+        rangeTombstones.Any(range => ByteArrayComparer.Instance.Compare(range.End, key) == 0);
+
+    static bool HasContents(CompactionMergeResult partition) =>
+        partition.Entries.Count > 0 || partition.RangeTombstones.Count > 0;
+
+    static void DisposeStreams(IReadOnlyList<ICompactionEntryStream> streams)
+    {
+        foreach (var stream in streams)
+        {
+            stream.Dispose();
         }
     }
 

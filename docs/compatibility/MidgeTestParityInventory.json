@@ -1,29 +1,31 @@
 {
   "schemaVersion": 1,
-  "midgeCommit": "445a901d8c34ec6a1fca91038da6bb187caaa7b6",
-  "lsmSpecCommit": "111bccdd5fa6c9ea2d13d1131b17807016c770c1",
-  "pantsCommitAtCapture": "0f8d18a8938e29ed8d6c86bd93a5df21e9d7dc4e",
+  "midgeCommit": "d582fd1127741fd69067914423ec76ad6adf0657",
+  "lsmSpecCommit": "bbf7c718d449011def985a6157e58325939ac731",
+  "pantsCommitAtCapture": "82961e3f7bcc4fef183c273e866455a231e0754e",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
     "cargo test --locked --offline --features failpoints --test fault_injection -- --list",
     "dotnet test test/Pants.Tests/Pants.Tests.csproj --configuration Release --no-build --no-restore --list-tests"
   ],
   "counts": {
-    "midgeCases": 4198,
+    "midgeCases": 4241,
     "midgeByKind": {
       "bin": 7,
       "doctest": 12,
       "fault-injection": 193,
       "integration": 652,
-      "lib": 3334
+      "lib": 3377
     },
-    "pantsCasesAtCapture": 2818,
-    "pantsTestListRowsAtCapture": 2819,
+    "pantsCasesAtHead": 2847,
+    "pantsWorkingTreeTestAdditionsAtCapture": 19,
+    "pantsCasesAtCapture": 2866,
+    "pantsTestListRowsAtCapture": 2867,
     "mappingStatus": {
-      "verified-adapted": 82,
-      "unmapped": 3506,
-      "candidate": 334,
-      "verified": 276
+      "verified": 276,
+      "verified-adapted": 97,
+      "candidate": 339,
+      "unmapped": 3529
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
@@ -1608,6 +1610,196 @@
       "source": "src/lib.rs",
       "target": "cntryl_midge",
       "kind": "lib",
+      "name": "compaction::fragment_tests::should_assign_endpoint_events_to_the_right_fragment_when_cutting_at_a_range_boundary",
+      "translatedPantsMethodName": "ShouldAssignEndpointEventsToTheRightFragmentWhenCuttingAtARangeBoundary",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldAssignEntriesAtRangeBoundaryToTheRightFragment",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Entries exactly at the forced range boundary are placed in the right partition, and range tombstones are clipped to opposite half-open intervals."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_cleanup_fragments_when_a_raw_key_group_exceeds_the_staging_limit",
+      "translatedPantsMethodName": "ShouldCleanupFragmentsWhenARawKeyGroupExceedsTheStagingLimit",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldDisposeFragmentStreamWhenRawKeyGroupExceedsMemoryBudget",
+          "evidence": [
+            "behavioral-parity-candidate"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "candidate",
+      "verificationNote": "The merger rejects an over-budget same-key raw history and releases reservations, but the test does not exercise staged-file cleanup."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_cleanup_unpublished_fragments_when_staging_fails",
+      "translatedPantsMethodName": "ShouldCleanupUnpublishedFragmentsWhenStagingFails",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_cut_a_range_only_source_when_the_boundary_has_no_input_event",
+      "translatedPantsMethodName": "ShouldCutARangeOnlySourceWhenTheBoundaryHasNoInputEvent",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldFragmentRangeOnlySourceWhenInteriorBoundaryHasNoPointEntry",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "A range-only source is emitted on both sides of the forced cut, with each half-open tombstone interval clipped to its output region."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_keep_fragment_ordinals_contiguous_when_a_soft_roll_precedes_an_empty_cut",
+      "translatedPantsMethodName": "ShouldKeepFragmentOrdinalsContiguousWhenASoftRollPrecedesAnEmptyCut",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldKeepFragmentOrdinalsContiguousWhenSoftRollPrecedesTheForcedCut",
+          "evidence": [
+            "behavioral-parity-candidate"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "candidate",
+      "verificationNote": "The merger emits the expected two ordered partitions after a range-only soft roll; persisted output-name ordinals are not asserted."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_keep_the_final_key_with_its_ending_range_when_fragmenting",
+      "translatedPantsMethodName": "ShouldKeepTheFinalKeyWithItsEndingRangeWhenFragmenting",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldKeepFinalKeyWithItsEndingRangeWithinOneFragmentOutput",
+          "evidence": [
+            "behavioral-parity-candidate"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "candidate",
+      "verificationNote": "The merger keeps the final key with its ending range; the source-level neighbor repair assertion from Midge is not exercised."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_preserve_source_history_when_fragmenting_across_a_range",
+      "translatedPantsMethodName": "ShouldPreserveSourceHistoryWhenFragmentingAcrossARange",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldPreserveRawSourceHistoryAndSplitRangeTombstoneAtFragmentBoundary",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The streaming fragment output preserves every point version, ignores the merge snapshot horizon, and clips the half-open range tombstone at the requested boundary."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_reject_fragmentation_when_the_plan_shape_is_invalid",
+      "translatedPantsMethodName": "ShouldRejectFragmentationWhenThePlanShapeIsInvalid",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRejectFragmentPlansWithInvalidShape",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Invalid level, input-count, split-key, and tombstone-GC plan shapes all fail as corruption before the stream can produce output."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_reject_shadowed_conflicts_when_fragmenting_raw_history",
+      "translatedPantsMethodName": "ShouldRejectShadowedConflictsWhenFragmentingRawHistory",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRejectShadowedConflictingVersionsWhileFragmentingRawHistory",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The fragment stream rejects conflicting copies of an older key sequence even when a newer version exists, while retaining all non-conflicting raw history."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_retain_source_when_the_fragment_boundary_exceeds_its_memory_budget",
+      "translatedPantsMethodName": "ShouldRetainSourceWhenTheFragmentBoundaryExceedsItsMemoryBudget",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldDisposeFragmentStreamWhenSplitBoundaryExceedsMemoryBudget",
+          "evidence": [
+            "behavioral-parity-candidate"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "candidate",
+      "verificationNote": "The internal stream test verifies resource-limit rejection and reservation cleanup, but does not exercise store publication and source-file retention."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::fragment_tests::should_retain_source_when_the_fragment_boundary_is_not_strictly_interior",
+      "translatedPantsMethodName": "ShouldRetainSourceWhenTheFragmentBoundaryIsNotStrictlyInterior",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRejectFragmentBoundariesThatAreNotStrictlyInterior",
+          "evidence": [
+            "behavioral-parity-candidate"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "candidate",
+      "verificationNote": "The merger rejects all non-interior split keys and disposes its stream; the test does not exercise persisted source-file retention."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
       "name": "compaction::layout::tests::should_match_reference_repair_components_for_small_layouts",
       "translatedPantsMethodName": "ShouldMatchReferenceRepairComponentsForSmallLayouts",
       "pantsTestCandidates": [],
@@ -2000,6 +2192,168 @@
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_advance_fragmentation_when_prior_cut_remains_an_inclusive_bound",
+      "translatedPantsMethodName": "ShouldAdvanceFragmentationWhenPriorCutRemainsAnInclusiveBound",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldAdvanceFragmentationWhenPriorCutRemainsAnInclusiveBound",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "An inclusive prior boundary is advanced to the next strict interior cut; after the source shrinks, ordinary complete-overlap merge planning resumes."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_fragment_source_when_single_file_overlaps_excessive_target_bytes",
+      "translatedPantsMethodName": "ShouldFragmentSourceWhenSingleFileOverlapsExcessiveTargetBytes",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldFragmentSourceWhenSingleSourceOverlapExceedsPreferredWorkTarget",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The complete source overlap exceeds the preferred work target; Pants keeps the closure intact and selects the same median interior target boundary."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_keep_complete_overlap_when_source_has_no_interior_target_boundary",
+      "translatedPantsMethodName": "ShouldKeepCompleteOverlapWhenSourceHasNoInteriorTargetBoundary",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldKeepCompleteOverlapWhenNoInteriorTargetBoundaryCanFragmentTheSource",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "With no interior target boundary, Pants keeps the complete source and target overlap as a merge."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_keep_equality_chain_when_no_further_interior_split_exists",
+      "translatedPantsMethodName": "ShouldKeepEqualityChainWhenNoFurtherInteriorSplitExists",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldKeepEqualityChainWhenNoFurtherInteriorSplitExists",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "An equality-connected target closure with no strictly interior target start remains a complete merge."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_keep_existing_plan_when_work_target_is_disabled",
+      "translatedPantsMethodName": "ShouldKeepExistingPlanWhenWorkTargetIsDisabled",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldKeepExistingPlanWhenPreferredWorkTargetIsDisabled",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "With no preferred work target, source and target selection follows the existing bounded-plan behavior."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_keep_source_batch_when_work_exactly_matches_target",
+      "translatedPantsMethodName": "ShouldKeepSourceBatchWhenWorkExactlyMatchesTarget",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldKeepSourceBatchWhenWorkExactlyMatchesPreferredTarget",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "A source batch whose complete work equals the target remains a merge batch; only work above the target shrinks."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_preserve_complete_closure_when_fragmentation_bounds_are_unproven",
+      "translatedPantsMethodName": "ShouldPreserveCompleteClosureWhenFragmentationBoundsAreUnproven",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldKeepCompleteOverlapWhenFragmentationBoundsAreUntrustedOrOverlapping",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Four independent cases cover untrusted source bounds, untrusted target bounds, overlapping source files, and overlapping target files; each keeps the complete merge closure."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_reject_overflowing_work_estimate_when_input_sizes_exceed_counter",
+      "translatedPantsMethodName": "ShouldRejectOverflowingWorkEstimateWhenInputSizesExceedCounter",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldTreatOverflowingLevelWorkEstimateAsOverfull",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Saturating level-size accounting treats an overflowing aggregate as overfull, and the planner returns a bounded singleton plan instead of overflowing."
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "compaction::strategy::work_partition_tests::should_shrink_source_batch_when_single_source_work_fits",
+      "translatedPantsMethodName": "ShouldShrinkSourceBatchWhenSingleSourceWorkFits",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldShrinkSourceBatchWhenSingletonWorkFits",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The multi-source closure exceeds the work target; Pants reduces the source set to the earliest singleton whose complete overlap fits."
     },
     {
       "source": "src/lib.rs",
@@ -11633,6 +11987,26 @@
       "source": "src/lib.rs",
       "target": "cntryl_midge",
       "kind": "lib",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::automatic_flush_tests::should_publish_accepted_immutable_without_manual_waiter_while_cloud_compaction_waits",
+      "translatedPantsMethodName": "ShouldPublishAcceptedImmutableWithoutManualWaiterWhileCloudCompactionWaits",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::automatic_retry_tests::should_publish_automatic_retry_without_releasing_cloud_compaction_ownership",
+      "translatedPantsMethodName": "ShouldPublishAutomaticRetryWithoutReleasingCloudCompactionOwnership",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
       "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::compaction_budget_tests::authority_timeout_tests::should_retain_both_generations_when_committed_metadata_cas_response_exceeds_manual_deadline",
       "translatedPantsMethodName": "ShouldRetainBothGenerationsWhenCommittedMetadataCasResponseExceedsManualDeadline",
       "pantsTestCandidates": [],
@@ -11763,8 +12137,38 @@
       "source": "src/lib.rs",
       "target": "cntryl_midge",
       "kind": "lib",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::publication_orders::cloud_fragmentation_tests::should_recover_raw_source_history_when_cloud_fragment_publication_commits",
+      "translatedPantsMethodName": "ShouldRecoverRawSourceHistoryWhenCloudFragmentPublicationCommits",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::publication_orders::should_defer_compaction_completion_when_automatic_flush_publishes_first",
+      "translatedPantsMethodName": "ShouldDeferCompactionCompletionWhenAutomaticFlushPublishesFirst",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
       "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::publication_orders::should_defer_compaction_completion_when_manual_flush_publishes_first",
       "translatedPantsMethodName": "ShouldDeferCompactionCompletionWhenManualFlushPublishesFirst",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::publication_orders::should_reuse_automatic_flush_name_when_compaction_publication_wins_build_race",
+      "translatedPantsMethodName": "ShouldReuseAutomaticFlushNameWhenCompactionPublicationWinsBuildRace",
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
@@ -11823,8 +12227,8 @@
       "source": "src/lib.rs",
       "target": "cntryl_midge",
       "kind": "lib",
-      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::should_keep_optional_maintenance_blocked_while_compaction_computes",
-      "translatedPantsMethodName": "ShouldKeepOptionalMaintenanceBlockedWhileCompactionComputes",
+      "name": "runtime::event_loop::cloud_integration::tests::maintenance_tests::manual_flush_tests::should_keep_optional_maintenance_blocked_when_compaction_has_no_due_immutable",
+      "translatedPantsMethodName": "ShouldKeepOptionalMaintenanceBlockedWhenCompactionHasNoDueImmutable",
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
@@ -13233,6 +13637,46 @@
       "source": "src/lib.rs",
       "target": "cntryl_midge",
       "kind": "lib",
+      "name": "runtime::event_loop::cloud_work_target_tests::should_fragment_observed_broad_source_when_cloud_singleton_overlap_exceeds_work_target",
+      "translatedPantsMethodName": "ShouldFragmentObservedBroadSourceWhenCloudSingletonOverlapExceedsWorkTarget",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_work_target_tests::should_honor_configured_sst_target_when_cloud_publication_work_is_larger",
+      "translatedPantsMethodName": "ShouldHonorConfiguredSstTargetWhenCloudPublicationWorkIsLarger",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_work_target_tests::should_honor_local_staging_window_when_cloud_publication_work_is_larger",
+      "translatedPantsMethodName": "ShouldHonorLocalStagingWindowWhenCloudPublicationWorkIsLarger",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::cloud_work_target_tests::should_shrink_cloud_source_batch_when_observed_overlap_exceeds_publication_work_target",
+      "translatedPantsMethodName": "ShouldShrinkCloudSourceBatchWhenObservedOverlapExceedsPublicationWorkTarget",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
       "name": "runtime::event_loop::compaction::deadline_tests::should_expire_manual_waiter_when_maintenance_remains_blocked",
       "translatedPantsMethodName": "ShouldExpireManualWaiterWhenMaintenanceRemainsBlocked",
       "pantsTestCandidates": [],
@@ -13285,6 +13729,46 @@
       "kind": "lib",
       "name": "runtime::event_loop::compaction::fence::tests::should_stay_degraded_when_degraded_again",
       "translatedPantsMethodName": "ShouldStayDegradedWhenDegradedAgain",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::compaction::fragmentation_tests::should_recover_fragment_when_publication_stops_after_durable_manifest_batch",
+      "translatedPantsMethodName": "ShouldRecoverFragmentWhenPublicationStopsAfterDurableManifestBatch",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::compaction::fragmentation_tests::should_recover_fragmented_source_when_critical_l0_work_interrupts_promotion",
+      "translatedPantsMethodName": "ShouldRecoverFragmentedSourceWhenCriticalL0WorkInterruptsPromotion",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::compaction::fragmentation_tests::should_reject_fragment_publication_when_cut_or_source_neighbors_change",
+      "translatedPantsMethodName": "ShouldRejectFragmentPublicationWhenCutOrSourceNeighborsChange",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::compaction::fragmentation_tests::should_reject_fragment_publication_when_source_or_replacement_changes",
+      "translatedPantsMethodName": "ShouldRejectFragmentPublicationWhenSourceOrReplacementChanges",
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
@@ -14295,6 +14779,16 @@
       "kind": "lib",
       "name": "runtime::event_loop::tests::should_capture_runtime_health_at_verification_barrier_acquisition",
       "translatedPantsMethodName": "ShouldCaptureRuntimeHealthAtVerificationBarrierAcquisition",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "runtime::event_loop::tests::should_continue_pressure_compaction_when_one_publication_leaves_l0_at_hard_ceiling",
+      "translatedPantsMethodName": "ShouldContinuePressureCompactionWhenOnePublicationLeavesL0AtHardCeiling",
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
@@ -22142,6 +22636,86 @@
       "kind": "lib",
       "name": "sst::encoding::tests::should_roundtrip_encode_decode_with_value",
       "translatedPantsMethodName": "ShouldRoundtripEncodeDecodeWithValue",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::pipeline::size_total_tests::should_saturate_index_size_totals_when_retained_keys_exceed_usize",
+      "translatedPantsMethodName": "ShouldSaturateIndexSizeTotalsWhenRetainedKeysExceedUsize",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_charge_size_totals_only_when_index_and_range_metadata_are_retained",
+      "translatedPantsMethodName": "ShouldChargeSizeTotalsOnlyWhenIndexAndRangeMetadataAreRetained",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_keep_size_query_work_constant_when_streaming_partitions_accumulate_blocks",
+      "translatedPantsMethodName": "ShouldKeepSizeQueryWorkConstantWhenStreamingPartitionsAccumulateBlocks",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_preserve_empty_size_totals_when_first_range_reservation_is_rejected",
+      "translatedPantsMethodName": "ShouldPreserveEmptySizeTotalsWhenFirstRangeReservationIsRejected",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_preserve_size_totals_when_first_block_reservation_is_rejected",
+      "translatedPantsMethodName": "ShouldPreserveSizeTotalsWhenFirstBlockReservationIsRejected",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_preserve_streaming_output_contract_when_metadata_grows",
+      "translatedPantsMethodName": "ShouldPreserveStreamingOutputContractWhenMetadataGrows",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_preserve_streaming_state_when_sorted_append_is_rejected",
+      "translatedPantsMethodName": "ShouldPreserveStreamingStateWhenSortedAppendIsRejected",
+      "pantsTestCandidates": [],
+      "legacyManifest": [],
+      "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "sst::fs::factory_io::size_preflight_tests::should_saturate_range_size_bound_when_retained_total_exceeds_usize",
+      "translatedPantsMethodName": "ShouldSaturateRangeSizeBoundWhenRetainedTotalExceedsUsize",
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
@@ -30893,6 +31467,30 @@
       "pantsTestCandidates": [],
       "legacyManifest": [],
       "mappingStatus": "unmapped"
+    },
+    {
+      "source": "src/lib.rs",
+      "target": "cntryl_midge",
+      "kind": "lib",
+      "name": "wal::encoding::tests::should_reject_compression_tag_without_value_when_decoding",
+      "translatedPantsMethodName": "ShouldRejectCompressionTagWithoutValueWhenDecoding",
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.Wal.WalCodecTests.ShouldRejectWalCompressionTagWithoutValueGivenOperationHasNoValue(operationCode: 2)",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.Wal.WalCodecTests.ShouldRejectWalCompressionTagWithoutValueGivenOperationHasNoValue(operationCode: 4)",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
+      "legacyManifest": [],
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Pants rejects an orphan compression tag for transaction markers and deletes; its single owned-record decoder reports the missing VALUE contract that Midge checks in both borrowed and owned decoders."
     },
     {
       "source": "src/lib.rs",
@@ -53776,8 +54374,6 @@
       "mappingStatus": "verified"
     }
   ],
-  "pantsCasesAtCapture": 2810,
-  "pantsWorkingTreeTestAdditionsAtCapture": 247,
   "verifiedMappings": [
     {
       "midgeTarget": "fault_injection",
