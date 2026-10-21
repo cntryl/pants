@@ -1,6 +1,12 @@
 # Midge test parity inventory
 
-This inventory records every test case discovered in Midge at `445a901d8c34ec6a1fca91038da6bb187caaa7b6` and the Pants test assembly at `0f8d18a8938e29ed8d6c86bd93a5df21e9d7dc4e` plus the working-tree additions in this task. The complete per-case list, including each mechanical Pants method translation, is [`MidgeTestParityInventory.json`](MidgeTestParityInventory.json).
+This inventory records every test case discovered in Midge at
+`445a901d8c34ec6a1fca91038da6bb187caaa7b6` and the Pants test assembly at
+`0f8d18a8938e29ed8d6c86bd93a5df21e9d7dc4e` plus the working-tree additions in this
+task. The shared contract target is lsm-spec FORMAT 8 at commit
+`111bccdd5fa6c9ea2d13d1131b17807016c770c`. The complete per-case list, including
+each mechanical Pants method translation, is
+[`MidgeTestParityInventory.json`](MidgeTestParityInventory.json).
 
 ## Captured inventories
 
@@ -21,10 +27,10 @@ Each entry preserves the exact Midge source target and test case name, a mechani
 
 | Status | Cases | Meaning |
 | --- | ---: | --- |
-| `verified` | 275 | Midge behavior compared with executable Pants behavior tests. |
+| `verified` | 276 | Midge behavior compared with executable Pants behavior tests. |
 | `verified-adapted` | 82 | Shared behavior covered with documented Pants-specific storage, error, memory-accounting, retry, or format-version semantics. |
 | `candidate` | 334 | Exact name or legacy-manifest retrieval candidate; behavior not yet checked. |
-| `unmapped` | 3507 | No executable test covers the source behavior; needs domain triage. |
+| `unmapped` | 3506 | No executable test covers the source behavior; needs domain triage. |
 
 The backup and restore product gap has been implemented in Pants. Its reviewed parity set now covers valid local and simulated-cloud restore, consistent capture frontiers, post-capture writes, artifact corruption, path isolation, no-replace publication, interrupted copies, and pinned-file behavior. The JSON also maps four backup fault-injection cases and the in-memory-root rejection case to executable Pants tests.
 
@@ -134,3 +140,6 @@ The pinned cloud_admission.rs cases for flushable ordinary commits, pre-WAL atom
 Four physical WAL sync-count cases now map to Pants behavior tests. Midge records its counter after a successful durable file sync; Pants increments per-database `WalFsyncCount` after `LocalDiskStore.SyncWal` completes `FileStream.Flush(true)`. Both implementations assert exactly one physical sync for non-empty, empty, assertion-only, and spilled Sync commits. The spill case is `verified-adapted`: Pants uses a narrower transaction pool and confirms a `.run` file exists before commit, while preserving the one-sync invariant. The focused Release run passed 7/7 across the physical-count cases and the related buffered-generation regressions. Jev ranked this bounded group first (Choice probability 0.98, confidence 0.98); source inspection and executable tests independently confirmed the mapping. Current inventory: 3,512 unmapped cases and 334 candidates awaiting behavioral review.
 
 Five `verification_cli` cases now map to process-level Pants tests for the Midge v1 JSON schema, exit codes, and empty-stderr behavior. Two additional process tests cover analogous Pants-format boundaries, but their source rows remain unmapped: Midge's current healthy release fixture uses FORMAT v8, which Pants rejects with exit 4, while Midge now rejects FORMAT v3 that Pants accepts as healthy. The adapted v3/v2 tests therefore do not close those version-specific cases; FORMAT v8 compatibility remains explicit work. Jev first selected testing on Pants's supported format and preserving the cross-version gap (probability 0.95, confidence 0.93). In diff review it selected the JSON projection as the first concern (probability 0.60, confidence 0.47); its missing-field risk was 0.21. Exact healthy and degraded golden comparisons confirm the projected fields. The focused Release CLI tests passed 7/7, the combined CLI/outcome filter passed 49/49, the Release solution build completed with zero warnings or errors, and format verification passed. Current inventory: 3,507 unmapped cases and 334 candidates awaiting behavioral review.
+The Midge compressed `TxnBatch` outer-value test now maps to the existing Pants codec test. Both exercise writer-produced compression through the production encoders and decoders; Pants also checks that the nested value survives decode. The focused Release `WalCodecTests` passed 12/12.
+
+Five `verification_cli` cases now map to process-level Pants tests for the Midge v1 JSON schema, exit codes, and empty-stderr behavior. Two additional process tests cover analogous Pants-format boundaries, but their source rows remain unmapped: Midge's current healthy release fixture uses FORMAT v8, which Pants rejects with exit 4, while Midge now rejects FORMAT v3 that Pants accepts as healthy. The adapted v3/v2 tests therefore do not close those version-specific cases; FORMAT v8 compatibility remains explicit work. Jev first selected testing on Pants's supported format and preserving the cross-version gap (probability 0.95, confidence 0.93). In diff review it selected the JSON projection as the first concern (probability 0.60, confidence 0.47); its missing-field risk was 0.21. Exact healthy and degraded golden comparisons confirm the projected fields. The focused Release CLI tests passed 7/7, the combined CLI/outcome filter passed 49/49, the Release solution build completed with zero warnings or errors, and format verification passed. Current inventory: 3,506 unmapped cases and 334 candidates awaiting behavioral review.

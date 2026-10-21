@@ -280,6 +280,11 @@ static class WalCodec
             throw new StorageException("WAL operation is missing or invalid.");
         }
 
+        if (compression is not null && value is null)
+        {
+            throw new PantsCorruptionException("A WAL COMPRESSION tag requires a VALUE tag.");
+        }
+
         byte[]? decodedValue;
         try
         {

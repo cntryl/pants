@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "midgeCommit": "445a901d8c34ec6a1fca91038da6bb187caaa7b6",
+  "lsmSpecCommit": "111bccdd5fa6c9ea2d13d1131b17807016c770c1",
   "pantsCommitAtCapture": "0f8d18a8938e29ed8d6c86bd93a5df21e9d7dc4e",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
@@ -20,9 +21,9 @@
     "pantsTestListRowsAtCapture": 2819,
     "mappingStatus": {
       "verified-adapted": 82,
-      "unmapped": 3507,
+      "unmapped": 3506,
       "candidate": 334,
-      "verified": 275
+      "verified": 276
     }
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
@@ -31069,9 +31070,17 @@
       "kind": "lib",
       "name": "wal::encoding::tests::should_roundtrip_txn_batch_outer_record_carrying_compression_tag",
       "translatedPantsMethodName": "ShouldRoundtripTxnBatchOuterRecordCarryingCompressionTag",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.Wal.WalCodecTests.ShouldRoundTripCurrentMidgeCompressedTransactionBatchOuterRecord",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified",
+      "verificationNote": "Midge v0.4.1 encodes a large compressible inner value, verifies encode() emits outer TxnBatch compression, decodes the record, and preserves its TxnBatch operation. Pants exercises the same codecs with a compressible inner value, asserts the outer COMPRESSION tag is present, decodes the batch, and compares the original value. The focused Release WalCodecTests passed 12/12. Contract target: lsm-spec FORMAT 8 at the commit recorded in this inventory."
     },
     {
       "source": "src/lib.rs",
