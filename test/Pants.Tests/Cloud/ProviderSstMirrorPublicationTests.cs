@@ -118,7 +118,7 @@ public sealed class ProviderSstMirrorPublicationTests
         await using var database = await OpenAsync(cache.Path, new RuntimeDependencies(cloudHttpClient: client));
         for (var flush = 0; flush < 4; flush++)
         {
-            await CommitAndFlushAsync(database, $"compaction-{flush}", 100_000);
+            await CommitAndFlushAsync(database, $"compaction-{flush}", 100_000, forceRewrite: true);
         }
 
         recorder.Clear();
@@ -128,9 +128,32 @@ public sealed class ProviderSstMirrorPublicationTests
         var requests = recorder.Requests;
         Assert.Contains(requests, static request => request.Method == "PUT");
         Assert.DoesNotContain(requests, static request => request.IsWholeGet);
-        Assert.All(
-            requests.Where(static request => request.IsRangedGet),
-            request => Assert.True(request.RangeBytes <= ProviderSstPublisher.VerificationRangeBytes));
+        for (var index = 0; index < requests.Count; index++)
+        {
+            var upload = requests[index];
+            if (upload.Method != "PUT")
+            {
+                continue;
+            }
+            var remaining = Assert.IsType<long>(upload.PayloadBytes);
+            Assert.True(remaining > 0);
+            // A verified output may become a later round's input. Only its first complete
+            // readback belongs to this publisher's bounded verification contract.
+            foreach (var readback in requests.Skip(index + 1).Where(request =>
+                         request.Name == upload.Name && request.Method == "GET"))
+            {
+                Assert.True(readback.IsRangedGet);
+                var bytes = Assert.IsType<long>(readback.RangeBytes);
+                Assert.InRange(bytes, 1, ProviderSstPublisher.VerificationRangeBytes);
+                remaining -= bytes;
+                Assert.True(remaining >= 0);
+                if (remaining == 0)
+                {
+                    break;
+                }
+            }
+            Assert.Equal(0, remaining);
+        }
         await AssertValueAsync(database, "compaction-2", 100_000);
     }
 
@@ -155,6 +178,8 @@ public sealed class ProviderSstMirrorPublicationTests
                     System.Security.Cryptography.RandomNumberGenerator.GetBytes(16 * 1024));
             }
 
+            // Overlap only empty keyspace so this fixture requires a physical rewrite.
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
@@ -177,8 +202,15 @@ public sealed class ProviderSstMirrorPublicationTests
             size => Assert.True(
                 ImmutablePublicationEnvelope.For(size) <= metrics.CompactionBufferCapacityBytes,
                 $"A {size}-byte output cannot be admitted by a {metrics.CompactionBufferCapacityBytes}-byte pool."));
+        await TestWait.UntilAsync(async () =>
+        {
+            metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
+            return metrics.CompactionBufferUsedBytes == 0;
+        }, "compaction and its shared-pool retirement work release their reservations");
         Assert.Equal(0, metrics.CompactionBufferUsedBytes);
-        Assert.Equal(outputs.Length, azure.GetObjectPaths("/sst/").Length);
+        var remoteObjects = azure.GetObjectPaths("/sst/");
+        Assert.All(layout, file => Assert.Contains(remoteObjects,
+            path => path.EndsWith($"/sst/{file.Name}", StringComparison.Ordinal)));
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(string root, RuntimeDependencies dependencies) =>
@@ -196,13 +228,18 @@ public sealed class ProviderSstMirrorPublicationTests
                     "database"))
             .WithBackgroundCompaction(false);
 
-    static async ValueTask CommitAndFlushAsync(IPantsDatabase database, string key, int valueBytes)
+    static async ValueTask CommitAndFlushAsync(IPantsDatabase database, string key, int valueBytes, bool forceRewrite = false)
     {
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put(TestBytes.FromString(key), CreateValue(valueBytes));
+            if (forceRewrite)
+            {
+                // Overlap only empty keyspace so this fixture requires a physical rewrite.
+                transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+            }
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         }
 

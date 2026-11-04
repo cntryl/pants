@@ -4,11 +4,15 @@ interface ICloudPersistence : ICloudDdlAuthority, IAsyncDisposable
 {
     bool HasPersistenceAnomaly { get; }
 
+    void EnsureReadAuthority();
+
     ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
         CancellationToken cancellationToken);
 
     ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken);
+
+    ValueTask<CloudMetadataPublicationReceipt> MirrorMetadataAndSstsWithReceiptAsync(ulong accountingOwnerId, CancellationToken cancellationToken);
 
     ValueTask ReconcileRecoveredMetadataAsync(CancellationToken cancellationToken);
 

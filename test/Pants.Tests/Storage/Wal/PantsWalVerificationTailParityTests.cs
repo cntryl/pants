@@ -5,8 +5,6 @@ namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class PantsWalVerificationTailParityTests
 {
-    const string SealedWalName = "00000000000000000001.wal";
-
     [Fact]
     public void ShouldRestorePositionGivenZeroTailProbeFindsNonZeroByte()
     {
@@ -26,6 +24,13 @@ public sealed class PantsWalVerificationTailParityTests
     {
         using var directory = new TemporaryDirectory();
         var walPath = await CreateWalAsync(directory.Path, 2);
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        var bytes = await File.ReadAllBytesAsync(walPath);
+        ledger.Members[^1] = ledger.Active with
+        {
+            DurableBytes = checked((ulong)(WalSegmentCodec.HeaderSize + 8 + BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(WalSegmentCodec.HeaderSize))))
+        };
+        ledger.Save();
         await TruncateFinalFrameAsync(walPath);
         var truncatedLength = new FileInfo(walPath).Length;
 
@@ -85,7 +90,7 @@ public sealed class PantsWalVerificationTailParityTests
         using var directory = new TemporaryDirectory();
         var walPath = await CreateWalAsync(directory.Path, 2);
         var bytes = await File.ReadAllBytesAsync(walPath);
-        bytes[sizeof(uint)] ^= byte.MaxValue;
+        bytes[WalSegmentCodec.HeaderSize + sizeof(uint)] ^= byte.MaxValue;
         await File.WriteAllBytesAsync(walPath, bytes[..^3]);
 
         var exception =
@@ -102,7 +107,7 @@ public sealed class PantsWalVerificationTailParityTests
         var walPath = await CreateWalAsync(directory.Path, 2);
         var bytes = await File.ReadAllBytesAsync(walPath);
         BinaryPrimitives.WriteUInt32LittleEndian(
-            bytes,
+            bytes.AsSpan(WalSegmentCodec.HeaderSize),
             DiskFormat.WalMaximumRecordBytes + 1U);
         await File.WriteAllBytesAsync(walPath, bytes[..^3]);
 
@@ -119,8 +124,8 @@ public sealed class PantsWalVerificationTailParityTests
         using var directory = new TemporaryDirectory();
         var walPath = await CreateWalAsync(directory.Path, 3);
         var bytes = await File.ReadAllBytesAsync(walPath);
-        var firstPayloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
-        var secondFrameOffset = 2 * sizeof(uint) + firstPayloadLength;
+        var firstPayloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(WalSegmentCodec.HeaderSize)));
+        var secondFrameOffset = WalSegmentCodec.HeaderSize + 2 * sizeof(uint) + firstPayloadLength;
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes.AsSpan(secondFrameOffset),
             checked((uint)bytes.Length));
@@ -150,15 +155,17 @@ public sealed class PantsWalVerificationTailParityTests
             }
         }
 
-        return Path.Combine(path, "wal", "wal.log");
+        return WalTestFiles.ActivePath(path);
     }
 
     static async Task<string> CreateSealedWalAsync(string path, int commitCount)
     {
-        var activePath = await CreateWalAsync(path, commitCount);
-        var sealedPath = Path.Combine(path, "wal", SealedWalName);
-        File.Move(activePath, sealedPath);
-        return sealedPath;
+        _ = await CreateWalAsync(path, commitCount);
+        var state = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
+        using var store = LocalDiskStore.Open(path, state);
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(path, "wal"));
+        var member = Assert.Single(ledger.Members, static member => member.Sealed is not null);
+        return Path.Combine(path, "wal", $"{member.Open.Id:00000000000000000000}.wal");
     }
 
     static async Task TruncateFinalFrameAsync(string path)

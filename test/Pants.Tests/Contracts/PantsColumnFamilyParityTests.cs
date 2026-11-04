@@ -543,10 +543,11 @@ public sealed class PantsColumnFamilyParityTests
             var family = await database.ColumnFamilies.CreateAsync("test_cf");
             await PutBufferedAsync(database, family, "key1", "value1", mode);
 
-            var error = await Assert.ThrowsAsync<PantsBusyException>(() =>
+            var error = await Assert.ThrowsAsync<PantsUnflushedDataPresentException>(() =>
                 database.ColumnFamilies.DropAsync(family).AsTask());
 
-            Assert.Equal(PantsErrorCode.Busy, error.Code);
+            Assert.Equal(PantsErrorCode.UnflushedDataPresent, error.Code);
+            Assert.True(error.LicensesUnflushedDiscard);
             Assert.Equal("value1", await ReadAsync(database, family, "key1"));
         }
     }
@@ -809,9 +810,10 @@ public sealed class PantsColumnFamilyParityTests
             await PutAsync(database, safe, "key", "safe");
             await PutAsync(database, destructive, "key", "discarded");
 
-            var busy = await Assert.ThrowsAsync<PantsBusyException>(() =>
+            var unflushed = await Assert.ThrowsAsync<PantsUnflushedDataPresentException>(() =>
                 database.ColumnFamilies.DropAsync(safe).AsTask());
-            Assert.Equal(PantsErrorCode.Busy, busy.Code);
+            Assert.Equal(PantsErrorCode.UnflushedDataPresent, unflushed.Code);
+            Assert.True(unflushed.LicensesUnflushedDiscard);
 
             await database.Maintenance.FlushAsync(safe);
             await database.ColumnFamilies.DropAsync(safe);

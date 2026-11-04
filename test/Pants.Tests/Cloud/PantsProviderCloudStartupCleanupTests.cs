@@ -9,7 +9,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ShouldApplyOneRuntimeResponseDeadlineAcrossCloudStartup(bool expireDuringServiceStartup)
+    public async Task ShouldApplyOneExplicitOpenDeadlineAcrossCloudStartup(bool expireDuringServiceStartup)
     {
         using var cache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -17,17 +17,23 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         var runtimeResponseTimeout = TimeSpan.FromSeconds(30);
         var timeProvider = new ManualTimeProvider();
         var deadlineAdvanced = 0;
+        var cleaned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var expiredPhase = expireDuringServiceStartup
             ? StartupPhase.ServiceStartup
             : StartupPhase.ManifestSnapshot;
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithStorageTimeout(TimeSpan.FromSeconds(5))
             .WithRuntimeResponseTimeout(runtimeResponseTimeout)
+            .WithOpenTimeout(runtimeResponseTimeout)
             .WithLeaseTimeToLive(TimeSpan.FromMinutes(2))
             .WithBackgroundCompaction(false);
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
             runtimeTimeProvider: timeProvider,
+            startupObserver: startupEvent =>
+            {
+                if (startupEvent == StartupEvent.CleanupFinished) { cleaned.TrySetResult(); }
+            },
             startupPhaseMeasurement: measurement =>
             {
                 if (measurement.Phase == expiredPhase &&
@@ -41,6 +47,7 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
             options,
             dependencies).AsTask());
 
+        await cleaned.Task.WaitAsync(TestTimeouts.Expected);
         await using var recovered = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         Assert.True(recovered.Cloud!.IsPrimaryLeaseHealthy);
     }
@@ -137,7 +144,9 @@ public sealed class PantsProviderCloudStartupCleanupTests(ITestOutputHelper outp
         Assert.Contains(StartupPhase.CloudControlHydration, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.WalReplay, measurements.Select(static item => item.Phase));
         Assert.Contains(StartupPhase.ServiceStartup, measurements.Select(static item => item.Phase));
-        Assert.Equal(sstCount, coldStartSstMetadataReads);
+        var activeSstCount = CloudManifestReader.ReadManifest(coldCache.Path)!.Files.Count;
+        // Hydration and publication each pin the currently active SST identities.
+        Assert.InRange(coldStartSstMetadataReads, activeSstCount, 2 * activeSstCount);
         Assert.Equal(0, coldStartSstFullReads);
         Assert.Equal(0, coldStartSstRangeReads);
         Assert.Equal(0L, coldStartSstRangeBytes);

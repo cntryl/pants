@@ -54,11 +54,11 @@ static class StorageVerifier
 
         cancellationToken.ThrowIfCancellationRequested();
         var formatPath = Path.Combine(root, "FORMAT");
-        if (!File.Exists(formatPath) || File.ReadAllText(formatPath) != "midge-format-version=3\n")
+        if (!File.Exists(formatPath) || File.ReadAllText(formatPath) != "midge-format-version=9\n")
         {
             throw PantsException.Create(
                 PantsErrorCode.CompatibilityError,
-                "The path does not contain a valid Midge FORMAT v3 marker.");
+                "The path does not contain a valid Midge FORMAT v9 marker.");
         }
 
         var manifestPath = File.Exists(Path.Combine(root, "manifest.snapshot.json"))
@@ -72,9 +72,12 @@ static class StorageVerifier
         ManifestState manifest;
         try
         {
-            manifest = JsonSerializer.Deserialize<ManifestState>(
-                PositionalFile.ReadAllBytes(manifestPath),
-                JsonOptions) ?? throw new JsonException("Manifest is empty.");
+            manifest = ManifestCodec.Decode(PositionalFile.ReadAllBytes(manifestPath));
+            var journal = Path.Combine(root, "manifest.journal");
+            if (File.Exists(journal))
+            {
+                LocalDiskStore.ReplayManifestMetadata(manifest, File.ReadAllBytes(journal));
+            }
         }
         catch (JsonException exception)
         {
@@ -171,7 +174,8 @@ static class StorageVerifier
         {
             try
             {
-                using var document = JsonDocument.Parse(File.ReadAllBytes(intentPath));
+                var decoded = IntentLogCodec.Read(File.ReadAllBytes(intentPath));
+                using var document = IntentLogCodec.ToDocument(decoded.Entries);
                 if (document.RootElement.ValueKind != JsonValueKind.Array)
                 {
                     throw new JsonException("The intent log root is not an array.");
@@ -194,14 +198,12 @@ static class StorageVerifier
         }
 
         var journalPath = Path.Combine(root, "manifest.journal");
-        if (!File.Exists(journalPath))
-        {
-            throw PantsException.Create(PantsErrorCode.Corruption, "The manifest journal is missing.");
-        }
-
         try
         {
-            LocalDiskStore.ValidateManifestJournal(File.ReadAllBytes(journalPath));
+            if (File.Exists(journalPath))
+            {
+                LocalDiskStore.ValidateManifestJournal(File.ReadAllBytes(journalPath));
+            }
         }
         catch (PantsException exception)
         {
@@ -226,7 +228,7 @@ static class StorageVerifier
             ? PantsEngineHealth.Healthy
             : PantsEngineHealth.Degraded;
         return new PantsStorageVerificationReport(
-            checked((long)manifest.EditCheckpointId),
+            manifest.EditCheckpointId,
             manifest.Files.Count,
             sstFilesVerified,
             bytesVerified,
@@ -304,8 +306,7 @@ static class StorageVerifier
             {
                 byte[]? smallestKey = null;
                 byte[]? largestKey = null;
-                byte[]? previousKey = null;
-                ulong? previousSequence = null;
+                SstEntry? previousEntry = null;
                 ulong? smallestSequence = null;
                 ulong? largestSequence = null;
 
@@ -354,21 +355,14 @@ static class StorageVerifier
 
                     foreach (var entry in entries)
                     {
-                        if (previousKey is not null)
+                        if (previousEntry is not null)
                         {
-                            var comparison = ByteArrayComparer.Instance.Compare(previousKey, entry.Key);
-                            if (comparison > 0 ||
-                                (comparison == 0 && previousSequence < entry.Sequence))
-                            {
-                                throw new PantsCorruptionException(
-                                    "SST data entries are not in canonical key and sequence order.");
-                            }
+                            SstCodec.ValidateAdjacentEntries(previousEntry, entry);
                         }
 
                         ObserveKey(entry.Key);
                         ObserveSequence(entry.Sequence);
-                        previousKey = entry.Key;
-                        previousSequence = entry.Sequence;
+                        previousEntry = entry;
                     }
                 }
 
@@ -394,7 +388,7 @@ static class StorageVerifier
         }
     }
 
-    static (long Records, long Bytes, long? Boundary) VerifyWal(
+    static (long Records, long Bytes, ulong? Boundary) VerifyWal(
         string root,
         CancellationToken cancellationToken)
     {
@@ -404,61 +398,118 @@ static class StorageVerifier
             return (0, 0, null);
         }
 
+        var ledger = WalLedgerStore.LoadExisting(walDirectory);
+        var replayPaths = ledger.Members.Select(member =>
+            Path.Combine(walDirectory, $"{member.Open.Id:00000000000000000000}.wal")).ToArray();
+        for (var index = 0; index < ledger.Members.Count; index++)
+        {
+            ValidateLedgerMember(replayPaths[index], ledger.Holder, ledger.Members[index], cancellationToken);
+        }
+
         var records = 0L;
         var decodedBytes = 0L;
-        long? boundary = null;
-        var sealedPaths = Directory
-            .EnumerateFiles(walDirectory, "*.wal", SearchOption.TopDirectoryOnly)
-            .OrderBy(static candidate => Path.GetFileName(candidate), StringComparer.Ordinal)
-            .ToArray();
-        var walPath = Path.Combine(root, "wal", "wal.log");
-        var replayPaths = File.Exists(walPath)
-            ? [.. sealedPaths, walPath]
-            : sealedPaths;
-        var writerEpochFrontiers = DiscoverWriterEpochFrontiers(
-            replayPaths,
-            cancellationToken);
+        ulong? boundary = null;
+        var activePath = replayPaths[^1];
+        var writerEpochFrontiers = DiscoverWriterEpochFrontiers(replayPaths, activePath, cancellationToken);
         var replayOrdinal = 0UL;
-        using var recovery = new WalRecoveryStateMachine(Path.Combine(root, "recovery"));
-        var recoveredVersions = new WalRecoveredVersionTracker();
-        foreach (var sealedPath in sealedPaths)
+        var scratchDirectory = Path.Combine(Path.GetTempPath(), $"pants-verification-{Guid.NewGuid():N}");
+        try
         {
-            ValidateSealedWalName(Path.GetFileName(sealedPath));
-            var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
-                sealedPath,
-                WalTailPolicy.Strict,
-                boundary,
-                recovery,
-                recoveredVersions,
-                writerEpochFrontiers,
-                ref replayOrdinal,
-                cancellationToken);
-            records = checked(records + fileRecords);
-            decodedBytes = checked(decodedBytes + fileBytes);
-            boundary = fileBoundary ?? boundary;
+            using var recovery = new WalRecoveryStateMachine(scratchDirectory);
+            var recoveredVersions = new WalRecoveredVersionTracker();
+            foreach (var replayPath in replayPaths)
+            {
+                var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
+                    replayPath,
+                    StringComparer.Ordinal.Equals(replayPath, activePath)
+                        ? WalTailPolicy.AllowIncompleteFinalTail
+                        : WalTailPolicy.Strict,
+                    boundary,
+                    recovery,
+                    recoveredVersions,
+                    writerEpochFrontiers,
+                    ref replayOrdinal,
+                    cancellationToken);
+                records = checked(records + fileRecords);
+                decodedBytes = checked(decodedBytes + fileBytes);
+                boundary = fileBoundary ?? boundary;
+            }
+
+            return (records, decodedBytes, boundary);
+        }
+        finally
+        {
+            if (Directory.Exists(scratchDirectory))
+            {
+                Directory.Delete(scratchDirectory, recursive: true);
+            }
+        }
+    }
+
+    internal static void ValidateLedgerMember(string path, Guid holder, WalLedgerMember member,
+        CancellationToken cancellationToken) => ValidateLedgerMember(path, holder, member, null, cancellationToken);
+
+    internal static void ValidateLedgerMember(string path, Guid holder, WalLedgerMember member,
+        long? maximumReplayableTransactionBytes, CancellationToken cancellationToken)
+    {
+        try
+        {
+            ValidateLedgerMemberCore(path, holder, member, maximumReplayableTransactionBytes, cancellationToken);
+        }
+        catch (StorageException exception)
+        {
+            throw new PantsCorruptionException("Ledger-owned WAL bytes are corrupt.", exception);
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new PantsCorruptionException($"WAL ledger member '{Path.GetFileName(path)}' is missing.", exception);
+        }
+    }
+
+    static void ValidateLedgerMemberCore(string path, Guid holder, WalLedgerMember member,
+        long? maximumReplayableTransactionBytes, CancellationToken cancellationToken)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        var header = new byte[WalSegmentCodec.HeaderSize];
+        if (!DiskFormat.ReadExactly(stream, header))
+        {
+            throw new PantsCorruptionException("WAL ledger member header is truncated.");
         }
 
-        if (File.Exists(walPath))
+        var (open, actualHolder) = WalSegmentCodec.DecodeHeader(header);
+        if (actualHolder != holder || open.Id != member.Open.Id || open.Epoch != member.Open.Epoch ||
+            open.FirstSeq != member.Open.FirstSeq || !open.Prev.Matches(member.Open.Prev) ||
+            member.DurableBytes > (ulong)stream.Length)
         {
-            var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
-                walPath,
-                WalTailPolicy.AllowIncompleteFinalTail,
-                boundary,
-                recovery,
-                recoveredVersions,
-                writerEpochFrontiers,
-                ref replayOrdinal,
-                cancellationToken);
-            records = checked(records + fileRecords);
-            decodedBytes = checked(decodedBytes + fileBytes);
-            boundary = fileBoundary ?? boundary;
+            throw new PantsCorruptionException("WAL segment identity or durable boundary differs from its ledger.");
         }
 
-        return (records, decodedBytes, boundary);
+        stream.Position = 0;
+        if (member.Sealed is null)
+        {
+            if (member.DurableBytes is { } durableBytes)
+            {
+                WalFrameReader.ValidateDurablePrefix(stream, checked((long)durableBytes), maximumReplayableTransactionBytes, cancellationToken);
+            }
+
+            return;
+        }
+
+        var facts = member.Sealed;
+        var decoded = WalFrameReader.ScanSegment(stream, maximumReplayableTransactionBytes, cancellationToken).Footer
+            ?? throw new PantsCorruptionException("A sealed WAL ledger member has no complete footer.");
+        if (!facts.Link.Matches(decoded.Link) || facts.RecordCount != decoded.RecordCount ||
+            facts.DataLen != decoded.DataLen || facts.MaxSeqPerCf.Length != decoded.MaxSeqPerCf.Length ||
+            facts.MaxSeqPerCf.Where((pair, index) => !pair.AsSpan().SequenceEqual(decoded.MaxSeqPerCf[index])).Any())
+        {
+            throw new PantsCorruptionException("Sealed WAL facts differ from their authoritative ledger.");
+        }
     }
 
     static WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
         IReadOnlyList<string> replayPaths,
+        string activePath,
         CancellationToken cancellationToken)
     {
         var frontiers = new WalWriterEpochFrontiers();
@@ -482,7 +533,7 @@ static class StorageVerifier
                             ordinal++;
                         }
                     },
-                    StringComparer.Ordinal.Equals(Path.GetFileName(replayPath), "wal.log")
+                    StringComparer.Ordinal.Equals(replayPath, activePath)
                         ? WalTailPolicy.AllowIncompleteFinalTail
                         : WalTailPolicy.Strict,
                     cancellationToken);
@@ -506,10 +557,10 @@ static class StorageVerifier
         return frontiers;
     }
 
-    static (long Records, long Bytes, long? Boundary) VerifyWalFile(
+    static (long Records, long Bytes, ulong? Boundary) VerifyWalFile(
         string walPath,
         WalTailPolicy tailPolicy,
-        long? precedingBoundary,
+        ulong? precedingBoundary,
         WalRecoveryStateMachine recovery,
         WalRecoveredVersionTracker recoveredVersions,
         WalWriterEpochFrontiers writerEpochFrontiers,
@@ -542,13 +593,7 @@ static class StorageVerifier
                         return;
                     }
 
-                    if (record.Sequence > long.MaxValue)
-                    {
-                        throw new StorageException(
-                            "A WAL sequence exceeds Pants' supported range.");
-                    }
-
-                    var decodedBoundary = (long)record.Sequence;
+                    var decodedBoundary = record.Sequence;
                     var applicableMutations = new List<WalMutation>();
                     recovery.Accept(
                         record,
@@ -581,17 +626,6 @@ static class StorageVerifier
         }
 
         return (records, decodedBytes, boundary);
-    }
-
-    static void ValidateSealedWalName(string name)
-    {
-        ReadOnlySpan<char> stem = Path.GetFileNameWithoutExtension(name);
-        if (stem.Length != 20 || stem.ContainsAnyExceptInRange('0', '9'))
-        {
-            throw PantsException.Create(
-                PantsErrorCode.Corruption,
-                $"Sealed WAL name '{name}' is invalid.");
-        }
     }
 
     static string ValidateFileName(string name)

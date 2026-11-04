@@ -3,7 +3,8 @@ namespace Cntryl.Pants.Storage.Internal.Compaction;
 sealed record CompactionIntentIdentity(
     uint ColumnFamilyId,
     string RemovedFiles,
-    string AddedFiles)
+    string AddedFiles,
+    uint? MoveTargetLevel = null)
 {
     public bool HasSameInputs(CompactionIntentIdentity other) =>
         ColumnFamilyId == other.ColumnFamilyId &&
@@ -15,7 +16,7 @@ sealed record CompactionIntentIdentity(
         StringComparer.Ordinal.Equals(AddedFiles, other.AddedFiles);
 
     public IEnumerable<string> GetAddedFileNames() =>
-        AddedFiles.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        MoveTargetLevel.HasValue ? [] : AddedFiles.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
     public void ValidateReplacement(CompactionIntentIdentity replacement, string phase)
     {
@@ -37,9 +38,11 @@ sealed record CompactionIntentIdentity(
     public static CompactionIntentIdentity Create(
         uint columnFamilyId,
         IEnumerable<string> removedFiles,
-        IEnumerable<string> addedFiles) =>
+        IEnumerable<string> addedFiles,
+        uint? moveTargetLevel = null) =>
         new(
             columnFamilyId,
             string.Join('\n', removedFiles.Order(StringComparer.Ordinal)),
-            string.Join('\n', addedFiles.Order(StringComparer.Ordinal)));
+            string.Join('\n', addedFiles.Order(StringComparer.Ordinal)),
+            moveTargetLevel);
 }

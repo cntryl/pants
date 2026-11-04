@@ -23,16 +23,22 @@ public sealed class PantsCloudProviderInitializationTests
             new PantsCloudStorageLocation(new DelegatingCloudProvider(_ => ValueTask.FromResult<ICloudObjectStore>(wal)), "wal"),
             new PantsCloudStorageLocation(new DelegatingCloudProvider(_ => ValueTask.FromResult<ICloudObjectStore>(sst)), "sst"),
             new PantsCloudStorageLocation(pending, "control"));
-        var opening = PantsDatabase.OpenAsync(
+        var cleaned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opening = PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.CloudMulti(directory.Path, topology)
                 .WithStorageTimeout(TimeSpan.FromMilliseconds(10))
-                .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(100)),
-            cancellation.Token).AsTask();
+                .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(100))
+                .WithOpenTimeout(TimeSpan.FromMilliseconds(100)),
+            new RuntimeDependencies(startupObserver: startupEvent =>
+            {
+                if (startupEvent == StartupEvent.CleanupFinished) { cleaned.TrySetResult(); }
+            }), cancellation.Token).AsTask();
         try
         {
             await pending.Started.Task.WaitAsync(TestTimeouts.Expected);
             await Assert.ThrowsAsync<PantsTimeoutException>(() => opening.WaitAsync(TestTimeouts.Expected));
 
+            await cleaned.Task.WaitAsync(TestTimeouts.Expected);
             Assert.True(pending.OpenToken.IsCancellationRequested);
             Assert.True(pending.Finished.Task.IsCompleted);
             Assert.Equal(1, wal.DisposeCount);

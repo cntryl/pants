@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "midgeCommit": "d582fd1127741fd69067914423ec76ad6adf0657",
   "lsmSpecCommit": "c3b6bfbe29c91557cf1b7ed8ca5cf70dd561549c",
-  "pantsCommitAtCapture": "af672235b3bc013e7665c440f88b382985659f8f",
+  "pantsCommitAtCapture": "fc3baa381dc555b60ffad96a7cc87c6320f72419",
   "inventoryCommands": [
     "cargo test --locked --offline --all-features -- --list",
     "cargo test --locked --offline --features failpoints --test fault_injection -- --list",
@@ -17,16 +17,18 @@
       "integration": 652,
       "lib": 3377
     },
-    "pantsCasesAtHead": 2892,
-    "pantsWorkingTreeTestAdditionsAtCapture": 10,
+    "pantsCasesAtHead": 2902,
+    "pantsWorkingTreeTestAdditionsAtCapture": 0,
     "pantsCasesAtCapture": 2902,
     "pantsTestListRowsAtCapture": 2903,
     "mappingStatus": {
-      "verified": 276,
-      "verified-adapted": 127,
-      "candidate": 339,
-      "unmapped": 3499
-    }
+      "verified": 279,
+      "verified-adapted": 146,
+      "candidate": 334,
+      "unmapped": 3482
+    },
+    "pantsWorkingTreeTestAdditionsNow": 11,
+    "pantsCasesInCurrentWorkingTree": 2913
   },
   "mappingPolicy": "The translated method name is a mechanical snake_case-to-PascalCase candidate. Existing exact method names and the older MidgeContractManifest are retrieval evidence only; they do not prove behavioral equivalence. Review each candidate against the source behavior and Pants test before closing parity. Unmapped entries have no executable test covering the source behavior; an adaptation candidate with a conflicting format version remains unmapped until the source assertions match.",
   "entries": [
@@ -1834,13 +1836,31 @@
         {
           "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldDisposeFragmentStreamWhenRawKeyGroupExceedsMemoryBudget",
           "evidence": [
-            "behavioral-parity-candidate"
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldCleanupUnpublishedFragmentsWhenStagingFails",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Cloud.PantsCloudCompactionStagingTests.ShouldFailTypedWithoutDeletingInputsWhenAnOutputCannotFitTheStagingWindow",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Cloud.PantsCloudCompactionStagingTests.ShouldReconcileEarlierDrainedOutputWhenLaterPartitionExceedsTheStagingWindow",
+          "evidence": [
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate",
-      "verificationNote": "The merger rejects an over-budget same-key raw history and releases reservations, but the test does not exercise staged-file cleanup."
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The Midge case combines an oversized raw key group, a completed first fragment, staging rejection of the next fragment, and cleanup. Pants covers those layers with the fragment merger resource-limit/disposal test, the persisted fragment cleanup failpoint test, and simulated-cloud staging tests. The new cloud regression confirms one output drained before a later partition exceeded the window, the original manifest inputs stayed authoritative, the intent named the remote orphan, and reopen removed it while preserving reads. This adapts Pants cloud publication to Midge remote rollback, which also retains partial remote output until recovery; local fragment cleanup remains immediate. Focused provider test passed 1/1."
     },
     {
       "source": "src/lib.rs",
@@ -1888,13 +1908,19 @@
         {
           "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldKeepFragmentOrdinalsContiguousWhenSoftRollPrecedesTheForcedCut",
           "evidence": [
-            "behavioral-parity-candidate"
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldPublishConsecutiveOutputFilesWhenSoftRollPrecedesEmptyFragmentCut",
+          "evidence": [
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate",
-      "verificationNote": "The merger emits the expected two ordered partitions after a range-only soft roll; persisted output-name ordinals are not asserted."
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge uses a one-byte target with a range-only roll before its forced cut, then expects two consecutive fragment ordinals, preserved raw point history, and the range only in the first output. Pants now asserts the same ordered partitions and full point history, plus an end-to-end publication regression that checks two consecutive SST sequence IDs and the exact range-only/point-output contents. Pants uses unique SST sequence IDs instead of Midge generation-plus-ordinal names. Both focused tests passed; the combined compaction/fragment filter passed 43/43."
     },
     {
       "source": "src/lib.rs",
@@ -1906,13 +1932,19 @@
         {
           "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldKeepFinalKeyWithItsEndingRangeWithinOneFragmentOutput",
           "evidence": [
-            "behavioral-parity-candidate"
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldKeepFinalKeyAndEndingRangeAdjacentToExistingSourceLevelNeighbor",
+          "evidence": [
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate",
-      "verificationNote": "The merger keeps the final key with its ending range; the source-level neighbor repair assertion from Midge is not exercised."
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "The merger regression now uses Midge\u2019s one-byte target and exact a/n/z source keys. The persisted compaction regression adds an unchanged source-level neighbor beginning at z, interrupts after manifest publication, then checks raw point history, both clipped ranges, that z and the ending range share the right output, and ordered non-overlapping output/neighbor bounds. The focused parity tests passed; the combined compaction/fragment filter passed 43/43."
     },
     {
       "source": "src/lib.rs",
@@ -1978,13 +2010,19 @@
         {
           "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldDisposeFragmentStreamWhenSplitBoundaryExceedsMemoryBudget",
           "evidence": [
-            "behavioral-parity-candidate"
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRetainSourceWhenFragmentSplitBoundaryExceedsCompactionBudget",
+          "evidence": [
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate",
-      "verificationNote": "The internal stream test verifies resource-limit rejection and reservation cleanup, but does not exercise store publication and source-file retention."
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge rejects a 128 KiB split key under a 64 KiB compaction budget, keeps the source, and releases the reservation. Pants tests the equivalent boundary at 2 MiB against a 1.6 MiB compaction pool: the merger test asserts ResourceLimit, stream disposal, and zero remaining budget; an end-to-end fragment compaction test asserts no output was written, all input SSTs remain byte-for-byte, no intent was published, and engine health stays Healthy. The focused end-to-end test passed 1/1."
     },
     {
       "source": "src/lib.rs",
@@ -1996,13 +2034,25 @@
         {
           "name": "Cntryl.Pants.Storage.StreamingCompactionMergerTests.ShouldRejectFragmentBoundariesThatAreNotStrictlyInterior",
           "evidence": [
-            "behavioral-parity-candidate"
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentOutputOutsideCapturedSourceBoundsBeforePublication",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.PantsFragmentationParityTests.ShouldRejectFragmentOutputThatDoesNotPreserveTheCapturedCut",
+          "evidence": [
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate",
-      "verificationNote": "The merger rejects all non-interior split keys and disposes its stream; the test does not exercise persisted source-file retention."
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both implementations reject empty, endpoint-equal, and beyond-largest split keys as corruption before emitting a partition. Pants disposes the stream on all four invalid boundaries; persisted fragmentation regressions also verify that invalid output bounds/cuts leave captured source and target SSTs byte-for-byte intact with no compaction intent. The source-level planner prevents injecting an invalid cut through the public maintenance path, so the equivalent split-validation and publication-cleanup behaviors are covered at their respective layers."
     },
     {
       "source": "src/lib.rs",
@@ -2264,12 +2314,13 @@
         {
           "name": "Cntryl.Pants.Storage.CompactionStreamsTests.ShouldPlanTenThousandTargetFilesWithOneSourceStream",
           "evidence": [
-            "exact-method-name"
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified",
+      "verificationNote": "Matches Midge's exact plan boundary: with a one-source input limit, one broad source overlaps 10,000 targets and the plan retains the complete 10,001-file set. Pants now runs this fixture with MaximumInputFiles=1. The focused planner/stream filter passed 3/3, including the separate 65-target check that holds at most one source plus one chained target reader open."
     },
     {
       "source": "src/lib.rs",
@@ -2277,9 +2328,17 @@
       "kind": "lib",
       "name": "compaction::strategy::tests::should_prioritize_deepest_overfull_level_over_ordinary_l0",
       "translatedPantsMethodName": "ShouldPrioritizeDeepestOverfullLevelOverOrdinaryL0",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldPrioritizeDeepestOverfullLevelOverOrdinaryL0",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified",
+      "verificationNote": "Midge expects an overfull L1 source to be selected while ordinary L0 is also over threshold. Pants now scans inner levels deepest first and selects L1 before ordinary L0; the focused planner Release filter passed."
     },
     {
       "source": "src/lib.rs",
@@ -2609,9 +2668,17 @@
       "kind": "lib",
       "name": "compaction::tests::should_compact_sixty_five_target_files_with_two_merge_heads",
       "translatedPantsMethodName": "ShouldCompactSixtyFiveTargetFilesWithTwoMergeHeads",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.CompactionStreamsTests.ShouldKeepAtMostSourceStreamsPlusOneReadersOpenAcrossSixtyFiveTargets",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge constructs two merge heads for one source and 65 disjoint target files, compacts them, and checks that the source version wins at the shared key. Pants executes the same 65-target merge, observes no more than one source and one chained target reader open, checks complete key ordering and the winning source version, and verifies the readers close. The stream shape and adapter differ. The focused Release CompactionStreamsTests class passed 8/8."
     },
     {
       "source": "src/lib.rs",
@@ -2739,9 +2806,17 @@
       "kind": "lib",
       "name": "compaction::tests::should_keep_compaction_work_bounded_across_ten_thousand_targets",
       "translatedPantsMethodName": "ShouldKeepCompactionWorkBoundedAcrossTenThousandTargets",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.CompactionStreamsTests.ShouldKeepCompactionStreamsAndReadersBoundedAcrossTenThousandTargets",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge constructs the real streaming inputs for one source plus 10,000 targets and requires two merge heads within its compaction pool. Pants constructs and consumes the corresponding 10,001-file plan through its chained streams, emits all entries, observes exactly two simultaneous cursors, and verifies the 1 MiB budget returns to zero after disposal. The fixture uses tracked in-memory cursors in Pants instead of Midge's mock SST factory. The focused Release CompactionStreamsTests class passed 8/8."
     },
     {
       "source": "src/lib.rs",
@@ -10072,9 +10147,17 @@
       "kind": "lib",
       "name": "runtime::actors::compaction::tests::should_force_soft_l0_work_during_manual_debt_drain",
       "translatedPantsMethodName": "ShouldForceSoftL0WorkDuringManualDebtDrain",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsLeveledCompactionTests.ShouldLeaveNoL0FileAfterCompactAllForSingleFlush",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge manual planning forces a single soft L0 file into L1. Pants exercises the public CompactAllAsync drain on one flushed file and verifies no L0 remains; the focused compaction Release filter passed."
     },
     {
       "source": "src/lib.rs",
@@ -10112,9 +10195,17 @@
       "kind": "lib",
       "name": "runtime::actors::compaction::tests::should_pick_deepest_overfull_inner_level_before_soft_l0",
       "translatedPantsMethodName": "ShouldPickDeepestOverfullInnerLevelBeforeSoftL0",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldPickDeepestOverfullInnerLevelWhenSeveralLevelsAreOverfull",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified",
+      "verificationNote": "Midge selects L3 before soft L0 and shallower inner debt. Pants selects L3 with L0, L1, and L3 debt present; the focused planner Release filter passed."
     },
     {
       "source": "src/lib.rs",
@@ -10142,9 +10233,17 @@
       "kind": "lib",
       "name": "runtime::actors::compaction::tests::should_prioritize_critical_l0_round_robin_across_column_families",
       "translatedPantsMethodName": "ShouldPrioritizeCriticalL0RoundRobinAcrossColumnFamilies",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.CompactionFamilyRoundRobinTests.ShouldRotateCriticalFamiliesAfterTheLastScheduledFamilyAndWraps",
+          "evidence": [
+            "critical-family-selector-rotation-and-wraparound"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "candidate",
+      "triageNote": "The selector test covers sorted family order, advancing after the last scheduled family, and wraparound. The end-to-end actor regression with two simultaneously critical families is still needed to verify scheduling and slot release together."
     },
     {
       "source": "src/lib.rs",
@@ -11849,9 +11948,17 @@
       "kind": "lib",
       "name": "runtime::ddl::tests::should_abort_prior_epoch_ambiguous_prepare_after_successor_fence",
       "translatedPantsMethodName": "ShouldAbortPriorEpochAmbiguousPrepareAfterSuccessorFence",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.CloudDdlTwoPhaseTests.ShouldAbortPriorEpochAmbiguousDdlWhenProviderLeaseChangesBeforeReopen",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both tests create an ambiguous local prepare under lease A without publishing its operation, then fence the DDL registry with lease B and reconcile using the shared cache. Pants stores the prepare writer epoch and confirms the operation is absent, clears the stale prepare, leaves the column family absent, and preserves DDL epoch zero. Focused simulated and provider regressions passed 3/3; the full CloudDdlTwoPhaseTests class passed 20/20."
     },
     {
       "source": "src/lib.rs",
@@ -15519,9 +15626,17 @@
       "kind": "lib",
       "name": "runtime::event_loop::tests::should_wait_for_active_compaction_before_declaring_debt_clear",
       "translatedPantsMethodName": "ShouldWaitForActiveCompactionBeforeDeclaringDebtClear",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.PantsLeveledCompactionTests.ShouldWaitForActiveCompactionBeforeDeclaringDebtClear",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "A controlled output-publication gate holds the active Pants compaction while a second CompactAllAsync is issued. The second request remains incomplete until release, then both complete with no L0 files; the focused Release filter passed."
     },
     {
       "source": "src/lib.rs",
@@ -17696,9 +17811,35 @@
       "kind": "lib",
       "name": "runtime::sst_read_view::tests::should_prove_read_work_bounds_across_synthetic_manifest_cardinalities",
       "translatedPantsMethodName": "ShouldProveReadWorkBoundsAcrossSyntheticManifestCardinalities",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.SstReadViewTests.ShouldBoundPointCandidateWorkAsLevelCardinalityGrows",
+          "evidence": [
+            "partial-read-work-bound"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.SstReadViewTests.ShouldBoundRangeCandidateWorkAsLevelCardinalityGrows",
+          "evidence": [
+            "partial-read-work-bound"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.SstReadViewTests.ShouldSelectBothAdjacentBoundaryFilesAcrossOneHundredThousandFiles",
+          "evidence": [
+            "partial-read-work-bound"
+          ]
+        },
+        {
+          "name": "Cntryl.Pants.Storage.SstReadViewCachingTests.ShouldReuseTheIndexUntilTheManifestChanges",
+          "evidence": [
+            "partial-view-cache-identity"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "candidate",
+      "triageNote": "Pants has separate one-level point/range cardinality checks, a 100,000-file shared-boundary check, and read-view identity coverage. The Midge test combines four synthetic manifest cardinalities, multiple lower levels, bounded point and range comparison counts, candidate-reader limits, range-cursor count, and zero-copy view reuse. The separate Pants cases do not yet cover that composite proof or Midge's per-level range-cursor bound."
     },
     {
       "source": "src/lib.rs",
@@ -17726,9 +17867,17 @@
       "kind": "lib",
       "name": "runtime::sst_read_view::tests::should_select_at_most_two_adjacent_files_per_lower_level_for_point_read",
       "translatedPantsMethodName": "ShouldSelectAtMostTwoAdjacentFilesPerLowerLevelForPointRead",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.SstReadViewTests.ShouldSelectBothAdjacentBoundaryFilesAcrossOneHundredThousandFiles",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both cases build 100,000 adjacent lower-level intervals, query a shared midpoint boundary, return exactly the two neighboring SSTs, and bound candidate search below 64 file probes. Pants returns the current higher-sequence file first, while Midge's candidate list is key ordered; both preserve the two-file read bound and candidate set. The focused Release SstReadViewTests filter passed 15/15."
     },
     {
       "source": "src/lib.rs",
@@ -35743,9 +35892,17 @@
       "kind": "integration",
       "name": "should_recover_partitioned_compaction_from_sqrzl_s3_after_local_cache_loss",
       "translatedPantsMethodName": "ShouldRecoverPartitionedCompactionFromSqrzlS3AfterLocalCacheLoss",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.SqrzlCloudProviderQualificationTests.ShouldRecoverPartitionedCompactionAfterLocalCacheLossGivenSqrzlS3",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both provider qualification tests force compaction to publish multiple SST partitions, discard the original local cache, reopen from Sqrzl S3, and read every seeded key/value. Pants uses different batch dimensions and a replacement cache but preserves the observable recovery invariant. This external Sqrzl test was not run in this worktree because the Docker daemon is unavailable."
     },
     {
       "source": "tests/cloud_provider_engine_qualification.rs",
@@ -35753,9 +35910,17 @@
       "kind": "integration",
       "name": "should_rollback_partition_set_after_partial_sqrzl_compaction_upload",
       "translatedPantsMethodName": "ShouldRollbackPartitionSetAfterPartialSqrzlCompactionUpload",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.ProviderCloudPartialCompactionPublicationTests.ShouldReclaimFirstRemotePartitionAndRecoverInputsWhenSecondUploadFails",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge injects failure on the second Sqrzl S3 compaction output and then removes its local cache, requiring recovery of the pre-compaction authority and all values. Pants exercises the provider publication and durable-intent recovery path with an HTTP Azure emulator, injecting the same second-output failure and confirming the old manifest plus complete input values after cache loss. The cleanup schedule and provider adapter differ. The separate Pants live-Sqrzl S3 failure qualification could not run because the local Docker daemon is unavailable; the generic provider failure regression passed 1/1."
     },
     {
       "source": "tests/cloud_provider_engine_qualification.rs",
@@ -36342,8 +36507,8 @@
         }
       ],
       "mappingStatus": "verified-adapted",
-      "triageNote": "The durable-mode fixture publishes four L0 files per family and compaction drains L0. Pants then verifies both family IDs retain L1 outputs and each family reads its own values. Pants does not pin Midge’s exact global L1 output count because that count is not part of Pants’s layout contract.",
-      "verificationNote": "Compared Midge’s exact eight-file L0 setup, post-compaction L0 drain, output count, and family reads with Pants layout diagnostics. The focused Release column-family class passed 42/42 cases. Jev favored preserving family partition over pinning the L1 file count; source and layout contract support that adaptation."
+      "triageNote": "The durable-mode fixture publishes four L0 files per family and compaction drains L0. Pants then verifies both family IDs retain L1 outputs and each family reads its own values. Pants does not pin Midge\u2019s exact global L1 output count because that count is not part of Pants\u2019s layout contract.",
+      "verificationNote": "Compared Midge\u2019s exact eight-file L0 setup, post-compaction L0 drain, output count, and family reads with Pants layout diagnostics. The focused Release column-family class passed 42/42 cases. Jev favored preserving family partition over pinning the L1 file count; source and layout contract support that adaptation."
     },
     {
       "source": "tests/column_families.rs",
@@ -37248,12 +37413,13 @@
         {
           "name": "Cntryl.Pants.Storage.PantsRetainedWalTombstoneRecoveryTests.ShouldNotResurrectManifestCoveredValueFromRetainedWalAfterTombstoneGc",
           "evidence": [
-            "exact-method-name"
+            "behavioral-parity-reviewed"
           ]
         }
       ],
       "legacyManifest": [],
-      "mappingStatus": "candidate"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge pins the seed WAL with an unflushed idle-family mutation, compacts away the durable point tombstone, then reopens with the retained segment and requires the deleted target to stay absent. Pants captures the same valid WAL image before the seed flush, confirms the target is absent from compacted SSTs, restores that image, reopens, and checks the tombstone plus two anchor values. The setup differs but the persisted recovery invariant matches. The focused Release test passed 1/1."
     },
     {
       "source": "tests/durability.rs",
@@ -41576,7 +41742,7 @@
       "legacyManifest": [],
       "mappingStatus": "verified-adapted",
       "triageNote": "Pants has no separate telemetry-initialization switch for runtime metric snapshots. The exact-name test runs two independent local databases, performs equal sync-write/flush workloads, compacts only the first, and verifies per-database CompactionsRun and WAL fsync counts.",
-      "verificationNote": "Compared Midge’s two-engine metric-isolation assertions with the Pants per-database runtime metrics API. The focused Release test passed 1/1; first CompactionsRun was positive, second was zero, and each engine recorded sync fsyncs."
+      "verificationNote": "Compared Midge\u2019s two-engine metric-isolation assertions with the Pants per-database runtime metrics API. The focused Release test passed 1/1; first CompactionsRun was positive, second was zero, and each engine recorded sync fsyncs."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -42258,9 +42424,17 @@
       "kind": "fault-injection",
       "name": "cloud_ddl_two_phase_hardening::should_abort_prior_epoch_ambiguous_ddl_when_reopening_after_crash_before_remote_cas_submission",
       "translatedPantsMethodName": "ShouldAbortPriorEpochAmbiguousDdlWhenReopeningAfterCrashBeforeRemoteCasSubmission",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.CloudDdlTwoPhaseTests.ShouldAbortPriorEpochAmbiguousDdlWhenReopeningAfterCrashBeforeCasSubmission",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge durably marks an operation ambiguous before CAS submission, then proves the operation is absent from the registry. Reopening under a successor lease fences the registry first, discards the prior-epoch prepare, keeps the family absent, and does not append the operation. Pants now persists the prepare writer_epoch and performs the same successor-fence check before redriving; the simulated-cloud and provider engine tests assert the family and registry remain unchanged. The fail-before-fix regression observed Pants incorrectly create the family."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -42488,9 +42662,17 @@
       "kind": "fault-injection",
       "name": "cloud_persistence_hardening::should_fail_closed_when_both_cloud_wal_catalog_copies_are_invalid",
       "translatedPantsMethodName": "ShouldFailClosedWhenBothCloudWalCatalogCopiesAreInvalid",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.PantsSimulatedCloudTests.ShouldFailClosedWithoutMutatingEitherCatalogCopyWhenBothAreInvalid",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Both tests remove the local cache, corrupt both persisted catalog copies, require a corruption failure that identifies both unusable copies, and prove neither copy was rewritten. Pants also has the provider hydration variant in ProviderWalCatalogMirrorTests."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -42729,9 +42911,17 @@
       "kind": "fault-injection",
       "name": "cloud_persistence_hardening::should_recover_from_valid_catalog_mirror_when_primary_catalog_has_torn_tail",
       "translatedPantsMethodName": "ShouldRecoverFromValidCatalogMirrorWhenPrimaryCatalogHasTornTail",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.PantsSimulatedCloudTests.ShouldConvergeCatalogMirrorAndRecoverFromTornPrimaryAfterLosingLocalCache",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge truncates the primary catalog and removes the local WAL cache, then reopens, reads the acknowledged value, advances the fencing epoch, and confirms quiescent primary and mirror equality. Pants exercises the same simulated-cloud reopen and value read, verifies the recovered fencing epoch advances, and checks the repaired catalog copies converge after database shutdown. The provider adapter has direct primary repair, segment recovery, CAS, and fencing tests in ProviderWalCatalogMirrorTests."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -43694,9 +43884,17 @@
       "kind": "fault-injection",
       "name": "failure_injection::should_preserve_acknowledged_state_when_no_space_tears_wal_frame",
       "translatedPantsMethodName": "ShouldPreserveAcknowledgedStateWhenNoSpaceTearsWalFrame",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Storage.Wal.PantsWalWriterFencingTests.ShouldFenceWalAndPreserveAcknowledgedRowsGivenAmbiguousWalFailure",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge seeds acknowledged rows, attempts an overwrite, delete, and insertion, then injects no-space after a partial physical WAL append. It requires the old file length and values to remain, health to degrade, a follow-up commit to be fenced, and reopen to restore acknowledged rows and permit a later durable write. Pants exercises the same partial-frame boundary and checks the file length, old/failed/follow-up row states, degraded health, both durability modes fenced, and post-reopen writes. Pants wraps the no-space cause in PantsCommitOutcomeUnknownException because the append crossed its ambiguous I/O boundary. The focused Release class passed 9/9."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -43821,9 +44019,17 @@
       "kind": "fault-injection",
       "name": "failure_injection::should_preserve_remote_inputs_after_partial_compaction_upload",
       "translatedPantsMethodName": "ShouldPreserveRemoteInputsAfterPartialCompactionUpload",
-      "pantsTestCandidates": [],
+      "pantsTestCandidates": [
+        {
+          "name": "Cntryl.Pants.Cloud.ProviderCloudPartialCompactionPublicationTests.ShouldReclaimFirstRemotePartitionAndRecoverInputsWhenSecondUploadFails",
+          "evidence": [
+            "behavioral-parity-reviewed"
+          ]
+        }
+      ],
       "legacyManifest": [],
-      "mappingStatus": "unmapped"
+      "mappingStatus": "verified-adapted",
+      "verificationNote": "Midge fails the second compaction SST upload, requires the old manifest-authoritative inputs and values to survive, and confirms the failed partition is reclaimed. Pants injects HTTP 500 on the second provider SST PUT, confirms the manifest still owns only the old inputs, then loses local SSTs and reopens; durable intent recovery removes the orphan and verifies every input key. Pants retains the first uploaded object until recovery while Midge simulated-cloud cleanup is immediate, so this is verified-adapted. The focused Pants provider partial-publication test passed 1/1."
     },
     {
       "source": "tests/fault_injection.rs",
@@ -46246,7 +46452,7 @@
       "legacyManifest": [],
       "mappingStatus": "verified",
       "triageNote": "The test uses the source default four-file L0 trigger plus Pants/Midge-equivalent limits of 10 immutable generations and one active generation. It retries only stalled writes, checks the published L0 ceiling after every attempt, accepts twice the ceiling, explicitly drains L0, and commits again.",
-      "verificationNote": "Jev selected an exact combined test over mapping to two separated existing tests (confidence 0.69). Its focused review ranked L0 bound/drain first (confidence 0.51) and judged the sequence present at 0.94. Source inspection confirmed Midge default trigger 4, the 10-immutable limit, stable retry keys, per-attempt ceiling check, explicit CompactAll drain, and post-drain write. The focused Release class passed 3/3 in 49 seconds."
+      "verificationNote": "The compatibility test checks the hard ceiling at each flush, recovers stalled writes without CompactAllAsync, then drains and writes again. Its Pants setup now also uses a one-byte L1 target, so the Release regression accumulates deeper debt and proves critical L0 work still clears the stall ahead of that debt. The focused Release filter passed 3/3."
     },
     {
       "source": "tests/lifecycle.rs",
@@ -46350,7 +46556,7 @@
       ],
       "mappingStatus": "verified-adapted",
       "triageNote": "Midge behavior is in scope for Pants parity and is covered by the referenced behavior test.",
-      "verificationNote": "Compared the active-snapshot scenario in both modes: the pre-drop snapshot reads the exact 32 KiB value after drop, a new read-only begin fails with Pants InvalidArgument, and the dropped-family files are reclaimed after snapshot release. Pants exposes a stale-handle message rather than Midge’s exact missing-family message."
+      "verificationNote": "Compared the active-snapshot scenario in both modes: the pre-drop snapshot reads the exact 32 KiB value after drop, a new read-only begin fails with Pants InvalidArgument, and the dropped-family files are reclaimed after snapshot release. Pants exposes a stale-handle message rather than Midge\u2019s exact missing-family message."
     },
     {
       "source": "tests/lifecycle.rs",
@@ -47190,7 +47396,7 @@
       "legacyManifest": [],
       "mappingStatus": "verified-adapted",
       "triageNote": "Midge simulates power loss that drops an acknowledged Buffered WAL tail. Pants kills a child after a Sync commit and a blocked Buffered sync, truncates the active WAL back to the synced prefix, then reopens. A durable manifest reservation is kept separate from LastPersistedSequence so synced unflushed WAL still replays.",
-      "verificationNote": "The new regression failed before the fix because the next sequence reused 6. After adding durable 1<<20 commit-sequence reservations, it passed: the Sync value survived, the Buffered tail was absent, and the next sequence exceeded the lost sequence. Focused Release backfill tests passed 6/6; sequence exhaustion and manifest-journal compatibility classes passed 93/93. Jev ranked refill/overflow arithmetic first (choice confidence 0.54, probability 0.63); source inspection and the passing tests confirmed the live-sequence cap and that all persistent allocation paths reserve before exposure. Jev’s unreserved-path signal was inconclusive (0.45), and its replay-frontier signal did not indicate conflation (0.30); the synced-value recovery assertion verifies the latter."
+      "verificationNote": "The new regression failed before the fix because the next sequence reused 6. After adding durable 1<<20 commit-sequence reservations, it passed: the Sync value survived, the Buffered tail was absent, and the next sequence exceeded the lost sequence. Focused Release backfill tests passed 6/6; sequence exhaustion and manifest-journal compatibility classes passed 93/93. Jev ranked refill/overflow arithmetic first (choice confidence 0.54, probability 0.63); source inspection and the passing tests confirmed the live-sequence cap and that all persistent allocation paths reserve before exposure. Jev\u2019s unreserved-path signal was inconclusive (0.45), and its replay-frontier signal did not indicate conflation (0.30); the synced-value recovery assertion verifies the latter."
     },
     {
       "source": "tests/lifecycle.rs",
@@ -47209,7 +47415,7 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified",
-      "triageNote": "The Pants test mirrors Midge’s five workers, 20 batches per worker, 50 values per batch, BestEffort commits, final flush/compaction, and full 5,000-value readback.",
+      "triageNote": "The Pants test mirrors Midge\u2019s five workers, 20 batches per worker, 50 values per batch, BestEffort commits, final flush/compaction, and full 5,000-value readback.",
       "verificationNote": "Focused Release test passed with the other lifecycle backfills. Every acknowledged key/value was checked after flush and compaction."
     },
     {
@@ -51575,7 +51781,7 @@
         }
       ],
       "mappingStatus": "verified",
-      "triageNote": "Sixteen local buffered commits to one key all complete successfully within Midge’s five-second deadline, each worker reports once, and the final value came from a worker.",
+      "triageNote": "Sixteen local buffered commits to one key all complete successfully within Midge\u2019s five-second deadline, each worker reports once, and the final value came from a worker.",
       "verificationNote": "Compared the translated Pants behavior test with the Midge source; the focused Release parity class passed all 21 tests."
     },
     {
@@ -54192,7 +54398,7 @@
       "legacyManifest": [],
       "mappingStatus": "verified-adapted",
       "triageNote": "Midge runs 16 seeded provider-cloud workloads of 12 operations each, combining mostly buffered puts, occasional strict puts, flushes, settle, fresh-cache takeover, late-effect landing, and clean restarts while WAL/SST PUT and DELETE requests can fail before or after their effect or land late. Pants maps the invariant across deterministic behavior tests: the two new parity regressions cover WAL response loss after remote persistence and a delayed WAL effect; existing tests cover before-effect upload failure, contiguous retry/takeover, recovered local WAL, transient SST upload recovery, and cloud-delete failure. The randomized campaign itself is not copied.",
-      "verificationNote": "Jev first selected a combined deterministic regression (probability 0.93, confidence 0.91); its Noul judged only a 0.20 probability that the pre-existing tests already covered the combined invariant. Focused review ranked orphan-segment reconciliation first (probability 0.75, confidence 0.67); Jev was uncertain whether retry was forced (Noul 0.53). Source verification confirms ProviderCloudPersistence uses IfAbsent, reads back and compares exact immutable WAL bytes, and only then publishes the catalog; the cloud WAL scheduler retries retained segments and clean shutdown drains the backlog. Each new test waits for its injected transport failure, checks the remote-effect timing, shuts down, then recovers the acknowledged value from an empty cache. The two new tests passed 2/2; the focused existing WAL/SST/delete failure filter passed 9/9. No production change was needed. This deterministic translation does not reproduce Midge’s 16x12 seed schedule."
+      "verificationNote": "Jev first selected a combined deterministic regression (probability 0.93, confidence 0.91); its Noul judged only a 0.20 probability that the pre-existing tests already covered the combined invariant. Focused review ranked orphan-segment reconciliation first (probability 0.75, confidence 0.67); Jev was uncertain whether retry was forced (Noul 0.53). Source verification confirms ProviderCloudPersistence uses IfAbsent, reads back and compares exact immutable WAL bytes, and only then publishes the catalog; the cloud WAL scheduler retries retained segments and clean shutdown drains the backlog. Each new test waits for its injected transport failure, checks the remote-effect timing, shuts down, then recovers the acknowledged value from an empty cache. The two new tests passed 2/2; the focused existing WAL/SST/delete failure filter passed 9/9. No production change was needed. This deterministic translation does not reproduce Midge\u2019s 16x12 seed schedule."
     },
     {
       "source": "tests/wal_campaigns.rs",
@@ -54487,7 +54693,7 @@
       ],
       "legacyManifest": [],
       "mappingStatus": "verified-adapted",
-      "triageNote": "Midge flushes a buffered point delete, loses its unsynced WAL record in a power-loss image, then compacts and crashes again; the deleted value must not return. Pants maps the external invariant with a durable pre-delete WAL prefix, a buffered delete and second-family buffered tail, a default-family flush, and a crash image retaining the SST/manifest while truncating the numbered WAL segment to the byte-checked synced prefix. The test verifies absence after power-loss recovery, compaction, and a second copied-image recovery. This adapts Midge’s failed-sync injection to Pants’ flush/segment-seal boundary by constructing the resulting power-loss image directly.",
+      "triageNote": "Midge flushes a buffered point delete, loses its unsynced WAL record in a power-loss image, then compacts and crashes again; the deleted value must not return. Pants maps the external invariant with a durable pre-delete WAL prefix, a buffered delete and second-family buffered tail, a default-family flush, and a crash image retaining the SST/manifest while truncating the numbered WAL segment to the byte-checked synced prefix. The test verifies absence after power-loss recovery, compaction, and a second copied-image recovery. This adapts Midge\u2019s failed-sync injection to Pants\u2019 flush/segment-seal boundary by constructing the resulting power-loss image directly.",
       "verificationNote": "Jev selected a dedicated regression (Choice probability 0.98) and assigned 0.20 probability that existing adjacent tests cover the combined sequence. Focused review prioritized the crash-image boundary (probability 0.80) and assigned 0.07 probability to the stated concrete false positive. Source confirms seal moves the active WAL bytes unchanged into its numbered segment; the test byte-checks and retains exactly the prefix captured after the Sync put, copies before each source shutdown, excludes lock files, and expires only the copied lease. The focused test passed 1/1; adjacent local WAL retention, replayed-delete, and buffered power-loss regressions passed 25/25 in Release. No production change was needed."
     },
     {
@@ -54743,7 +54949,7 @@
       "midgeTestSuffix": "should_not_resurrect_flushed_delete_when_power_loss_drops_its_wal_record",
       "pantsTest": "Cntryl.Pants.Compatibility.MidgeLocalWalRetentionParityTests.ShouldNotResurrectFlushedDeleteWhenPowerLossDropsItsWalRecord",
       "status": "verified-adapted",
-      "evidence": "Midge injects a WAL sync failure after a buffered delete, flushes, loses the unsynced tail, then compacts and process-crashes; its invariant is no resurrection. Pants uses a byte-checked crash image that keeps the synced pre-delete WAL prefix and the flushed SST/manifest, then checks absence after recovery, compaction, and a second recovery. Source confirms WAL sealing moves the active bytes unchanged. Jev selected a dedicated test (Choice 0.98; existing coverage Noul 0.20); focused review prioritized crash-image boundary (Choice probability 0.80; false-positive Noul 0.07). New Release test passed 1/1 and adjacent recovery tests passed 25/25. This is adapted to Pants’ local WAL seal boundary and does not inject a sync failure."
+      "evidence": "Midge injects a WAL sync failure after a buffered delete, flushes, loses the unsynced tail, then compacts and process-crashes; its invariant is no resurrection. Pants uses a byte-checked crash image that keeps the synced pre-delete WAL prefix and the flushed SST/manifest, then checks absence after recovery, compaction, and a second recovery. Source confirms WAL sealing moves the active bytes unchanged. Jev selected a dedicated test (Choice 0.98; existing coverage Noul 0.20); focused review prioritized crash-image boundary (Choice probability 0.80; false-positive Noul 0.07). New Release test passed 1/1 and adjacent recovery tests passed 25/25. This is adapted to Pants\u2019 local WAL seal boundary and does not inject a sync failure."
     },
     {
       "midgeTarget": "wal_campaigns",
@@ -54856,6 +55062,118 @@
       "pantsTest": "Cntryl.Pants.Contracts.PantsWalSyncCountContractTests.ShouldIssueOnePhysicalWalSyncGivenSpilledSyncCommit",
       "status": "verified-adapted",
       "evidence": "The shared invariant is exactly one physical WAL fsync for a spilled synchronous transaction. Midge uses an 8 KiB transaction pool and four 8 KiB values; Pants uses a 1 KiB transaction pool, constrained memory, and six 900-byte values, then asserts that a transaction .run spill file exists before commit. Both assert one WAL fsync. Pants records WalFsyncCount after FileStream.Flush(true). This is a Pants-specific spill setup adaptation. The focused Release sync-count tests passed. RuntimeTelemetry is constructed per DatabaseInstance, so unrelated engine instances do not inflate the observed delta."
+    },
+    {
+      "midgeTarget": "fault_injection",
+      "midgeTestSuffix": "cloud_persistence_hardening::should_recover_from_valid_catalog_mirror_when_primary_catalog_has_torn_tail",
+      "pantsTest": "Cntryl.Pants.Cloud.PantsSimulatedCloudTests.ShouldConvergeCatalogMirrorAndRecoverFromTornPrimaryAfterLosingLocalCache",
+      "status": "verified-adapted",
+      "evidence": "Midge truncates the primary catalog and removes the local WAL cache, then reopens, reads the acknowledged value, advances the fencing epoch, and confirms quiescent primary and mirror equality. Pants exercises the same simulated-cloud reopen and value read, verifies the recovered fencing epoch advances, and checks the repaired catalog copies converge after database shutdown. The provider adapter has direct primary repair, segment recovery, CAS, and fencing tests in ProviderWalCatalogMirrorTests."
+    },
+    {
+      "midgeTarget": "fault_injection",
+      "midgeTestSuffix": "cloud_persistence_hardening::should_fail_closed_when_both_cloud_wal_catalog_copies_are_invalid",
+      "pantsTest": "Cntryl.Pants.Cloud.PantsSimulatedCloudTests.ShouldFailClosedWithoutMutatingEitherCatalogCopyWhenBothAreInvalid",
+      "status": "verified-adapted",
+      "evidence": "Both tests remove the local cache, corrupt both persisted catalog copies, require a corruption failure that identifies both unusable copies, and prove neither copy was rewritten. Pants also has the provider hydration variant in ProviderWalCatalogMirrorTests."
+    },
+    {
+      "midgeTarget": "fault_injection",
+      "midgeTestSuffix": "failure_injection::should_preserve_remote_inputs_after_partial_compaction_upload",
+      "pantsTest": "Cntryl.Pants.Cloud.ProviderCloudPartialCompactionPublicationTests.ShouldReclaimFirstRemotePartitionAndRecoverInputsWhenSecondUploadFails",
+      "status": "verified-adapted",
+      "evidence": "Midge fails the second compaction SST upload, requires the old manifest-authoritative inputs and values to survive, and confirms the failed partition is reclaimed. Pants injects HTTP 500 on the second provider SST PUT, confirms the manifest still owns only the old inputs, then loses local SSTs and reopens; durable intent recovery removes the orphan and verifies every input key. Pants retains the first uploaded object until recovery while Midge simulated-cloud cleanup is immediate, so this is verified-adapted. The focused Pants provider partial-publication test passed 1/1."
+    },
+    {
+      "midgeTarget": "cloud_provider_engine_qualification",
+      "midgeTestSuffix": "should_rollback_partition_set_after_partial_sqrzl_compaction_upload",
+      "pantsTest": "Cntryl.Pants.Cloud.ProviderCloudPartialCompactionPublicationTests.ShouldReclaimFirstRemotePartitionAndRecoverInputsWhenSecondUploadFails",
+      "status": "verified-adapted",
+      "evidence": "Midge injects failure on the second Sqrzl S3 compaction output and then removes its local cache, requiring recovery of the pre-compaction authority and all values. Pants exercises the provider publication and durable-intent recovery path with an HTTP Azure emulator, injecting the same second-output failure and confirming the old manifest plus complete input values after cache loss. The cleanup schedule and provider adapter differ. The separate Pants live-Sqrzl S3 failure qualification could not run because the local Docker daemon is unavailable; the generic provider failure regression passed 1/1."
+    },
+    {
+      "midgeTarget": "cloud_provider_engine_qualification",
+      "midgeTestSuffix": "should_recover_partitioned_compaction_from_sqrzl_s3_after_local_cache_loss",
+      "pantsTest": "Cntryl.Pants.Cloud.SqrzlCloudProviderQualificationTests.ShouldRecoverPartitionedCompactionAfterLocalCacheLossGivenSqrzlS3",
+      "status": "verified-adapted",
+      "evidence": "Both provider qualification tests force compaction to publish multiple SST partitions, discard the original local cache, reopen from Sqrzl S3, and read every seeded key/value. Pants uses different batch dimensions and a replacement cache but preserves the observable recovery invariant. This external Sqrzl test was not run in this worktree because the Docker daemon is unavailable."
+    },
+    {
+      "midgeTarget": "fault_injection",
+      "midgeTestSuffix": "cloud_ddl_two_phase_hardening::should_abort_prior_epoch_ambiguous_ddl_when_reopening_after_crash_before_remote_cas_submission",
+      "pantsTest": "Cntryl.Pants.Cloud.CloudDdlTwoPhaseTests.ShouldAbortPriorEpochAmbiguousDdlWhenReopeningAfterCrashBeforeCasSubmission",
+      "status": "verified-adapted",
+      "evidence": "Midge durably marks an operation ambiguous before CAS submission, then proves the operation is absent from the registry. Reopening under a successor lease fences the registry first, discards the prior-epoch prepare, keeps the family absent, and does not append the operation. Pants now persists the prepare writer_epoch and performs the same successor-fence check before redriving; the simulated-cloud and provider engine tests assert the family and registry remain unchanged. The fail-before-fix regression observed Pants incorrectly create the family."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "runtime::ddl::tests::should_abort_prior_epoch_ambiguous_prepare_after_successor_fence",
+      "pantsTest": "Cntryl.Pants.Cloud.CloudDdlTwoPhaseTests.ShouldAbortPriorEpochAmbiguousDdlWhenProviderLeaseChangesBeforeReopen",
+      "status": "verified-adapted",
+      "evidence": "Both tests create an ambiguous local prepare under lease A without publishing its operation, then fence the DDL registry with lease B and reconcile using the shared cache. Pants stores the prepare writer epoch and confirms the operation is absent, clears the stale prepare, leaves the column family absent, and preserves DDL epoch zero. Focused simulated and provider regressions passed 3/3; the full CloudDdlTwoPhaseTests class passed 20/20."
+    },
+    {
+      "midgeTarget": "durability",
+      "midgeTestSuffix": "durability_atomicity::should_not_resurrect_manifest_covered_value_from_retained_wal_after_tombstone_gc",
+      "pantsTest": "Cntryl.Pants.Storage.PantsRetainedWalTombstoneRecoveryTests.ShouldNotResurrectManifestCoveredValueFromRetainedWalAfterTombstoneGc",
+      "status": "verified-adapted",
+      "evidence": "Midge pins the seed WAL with an unflushed idle-family mutation, compacts away the durable point tombstone, then reopens with the retained segment and requires the deleted target to stay absent. Pants captures the same valid WAL image before the seed flush, confirms the target is absent from compacted SSTs, restores that image, reopens, and checks the tombstone plus two anchor values. The setup differs but the persisted recovery invariant matches. The focused Release test passed 1/1."
+    },
+    {
+      "midgeTarget": "fault_injection",
+      "midgeTestSuffix": "failure_injection::should_preserve_acknowledged_state_when_no_space_tears_wal_frame",
+      "pantsTest": "Cntryl.Pants.Storage.Wal.PantsWalWriterFencingTests.ShouldFenceWalAndPreserveAcknowledgedRowsGivenAmbiguousWalFailure",
+      "status": "verified-adapted",
+      "evidence": "Midge seeds acknowledged rows, attempts an overwrite, delete, and insertion, then injects no-space after a partial physical WAL append. It requires the old file length and values to remain, health to degrade, a follow-up commit to be fenced, and reopen to restore acknowledged rows and permit a later durable write. Pants exercises the same partial-frame boundary and checks the file length, old/failed/follow-up row states, degraded health, both durability modes fenced, and post-reopen writes. Pants wraps the no-space cause in PantsCommitOutcomeUnknownException because the append crossed its ambiguous I/O boundary. The focused Release class passed 9/9."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "compaction::tests::should_compact_sixty_five_target_files_with_two_merge_heads",
+      "pantsTest": "Cntryl.Pants.Storage.CompactionStreamsTests.ShouldKeepAtMostSourceStreamsPlusOneReadersOpenAcrossSixtyFiveTargets",
+      "status": "verified-adapted",
+      "evidence": "Both tests merge one source with 65 disjoint target files, retain the source's newer value at a shared key, and bound simultaneous inputs to two streams/readers. Pants additionally checks the complete output key order and reader release; Midge executes the persisted compaction output. The focused Release CompactionStreamsTests class passed 8/8."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "compaction::tests::should_keep_compaction_work_bounded_across_ten_thousand_targets",
+      "pantsTest": "Cntryl.Pants.Storage.CompactionStreamsTests.ShouldKeepCompactionStreamsAndReadersBoundedAcrossTenThousandTargets",
+      "status": "verified-adapted",
+      "evidence": "Both construct one source stream plus one chained target stream for a 10,000-file target span and keep transient work within a configured pool. Pants also consumes all 10,001 input entries, tracks exactly two live cursors, and proves budget release. Its fixture uses tracked in-memory cursors rather than Midge's mock SST factory. The focused Release CompactionStreamsTests class passed 8/8."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "runtime::sst_read_view::tests::should_select_at_most_two_adjacent_files_per_lower_level_for_point_read",
+      "pantsTest": "Cntryl.Pants.Storage.SstReadViewTests.ShouldSelectBothAdjacentBoundaryFilesAcrossOneHundredThousandFiles",
+      "status": "verified-adapted",
+      "evidence": "Both select exactly two adjacent SST candidates when a point key lies on the shared boundary in a 100,000-file lower level, while probing fewer than 64 files. Pants orders the candidates newest first; Midge keeps key order. The focused Release SstReadViewTests filter passed 15/15."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "should_prioritize_deepest_overfull_level_over_ordinary_l0",
+      "pantsTest": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldPrioritizeDeepestOverfullLevelOverOrdinaryL0",
+      "status": "verified",
+      "evidence": "Midge selects overfull L1 ahead of ordinary L0. Pants selects the same source level through its production planner; focused Release coverage passed."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "should_force_soft_l0_work_during_manual_debt_drain",
+      "pantsTest": "Cntryl.Pants.Storage.PantsLeveledCompactionTests.ShouldLeaveNoL0FileAfterCompactAllForSingleFlush",
+      "status": "verified-adapted",
+      "evidence": "Midge forces a single soft L0 into L1 during manual planning. Pants verifies the public CompactAllAsync call drains one flushed file and leaves no L0; focused Release coverage passed."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "should_pick_deepest_overfull_inner_level_before_soft_l0",
+      "pantsTest": "Cntryl.Pants.Storage.LeveledCompactionPlannerTests.ShouldPickDeepestOverfullInnerLevelWhenSeveralLevelsAreOverfull",
+      "status": "verified",
+      "evidence": "With L0, L1, and L3 debt present, Midge and Pants select L3. Focused planner Release coverage passed."
+    },
+    {
+      "midgeTarget": "cntryl_midge",
+      "midgeTestSuffix": "should_wait_for_active_compaction_before_declaring_debt_clear",
+      "pantsTest": "Cntryl.Pants.Storage.PantsLeveledCompactionTests.ShouldWaitForActiveCompactionBeforeDeclaringDebtClear",
+      "status": "verified-adapted",
+      "evidence": "A publication gate keeps one Pants compaction active while a second CompactAllAsync waits. Releasing the gate completes both requests and leaves no L0; focused Release coverage passed."
     }
   ],
   "featureGaps": []

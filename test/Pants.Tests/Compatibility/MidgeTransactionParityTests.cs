@@ -388,6 +388,8 @@ public sealed class MidgeTransactionParityTests
         var keys = entries.Select(static entry => TestBytes.ToText(entry.Key)).ToArray();
         Assert.Equal(keys.Order(StringComparer.Ordinal), keys);
         Assert.Equal(keys.Length, keys.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(expected.OrderBy(static row => row.Key, StringComparer.Ordinal),
+            entries.Select(static entry => (TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value))));
     }
 
     static async Task ForEachModeAsync(string[] modes, Func<string, string, Task> scenario)

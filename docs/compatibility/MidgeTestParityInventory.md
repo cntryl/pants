@@ -1,8 +1,12 @@
 # Midge test parity inventory
 
+This captured inventory predates Midge 0.5.2 and the FORMAT 9 migration. Counts
+and mappings below describe that snapshot; they do not establish current parity.
+See [current evidence and remaining obligations](Midge052Parity.md).
+
 This inventory records every test case discovered in Midge at
 `d582fd1127741fd69067914423ec76ad6adf0657` and the Pants test assembly at
-`af672235b3bc013e7665c440f88b382985659f8f` plus 10 working-tree test additions. The
+`fc3baa381dc555b60ffad96a7cc87c6320f72419`. The
 inventory records the shared lsm-spec contract at
 `c3b6bfbe29c91557cf1b7ed8ca5cf70dd561549c`. The complete per-case list, including
 each mechanical Pants method translation, is
@@ -14,14 +18,16 @@ each mechanical Pants method translation, is
 | --- | ---: | --- |
 | Midge unit, binary, integration, and documentation tests | 4048 | `cargo test --locked --offline --all-features -- --list` |
 | Midge serial fault-injection tests | 193 | `cargo test --locked --offline --features failpoints --test fault_injection -- --list` |
-| Unique Pants test names in the current working tree | 2902 | `dotnet test test/Pants.Tests/Pants.Tests.csproj --configuration Release --no-build --no-restore --list-tests` |
+| Unique Pants test names at the captured HEAD | 2902 | `dotnet test test/Pants.Tests/Pants.Tests.csproj --configuration Release --no-build --no-restore --list-tests` |
 | **Midge total** | **4241** | All-feature listing plus explicit fault-injection target |
 
 Midge's fault-injection target is declared `test = false`, so ordinary `cargo test --all-features -- --list` does not discover it. The artifact lists those cases separately and includes them in the combined total. The 12 Midge documentation examples are included as executable cases.
 
-The Pants list command emitted 2,903 rows and 2,902 distinct display strings. It had 2,892 distinct names at the captured HEAD plus 10 working-tree test additions. One long Azure credential theory argument is truncated to the same display string in two rows; the JSON records both row and distinct-name counts.
+The Pants list command emitted 2,903 rows and 2,902 distinct display strings. One long Azure credential theory argument is truncated to the same display string in two rows; the JSON records both row and distinct-name counts.
 
-Compared with the previous Midge capture, the latest revision adds 44 cases and removes one, for a net increase of 43. Recent parity slices map four fragment publication/recovery cases to seven Pants tests and 17 key-group reduction cases to 17 Pants tests. The key-group cases exposed an equal-sequence range-tombstone divergence; both Pants merge paths now use Midge's inclusive sequence rule. This slice adds all eight Midge soft-roll cases and fragment cleanup on first or second output failure. The aggregate status below includes these changes and still has 3,499 unmapped Midge cases.
+The current audit worktree adds eleven executable behavior tests, for 2,913 distinct test-list entries (2,914 rows including the duplicate Azure theory display). The captured inventory fields remain pinned to `fc3baa381dc555b60ffad96a7cc87c6320f72419`.
+
+Compared with the previous Midge capture, the latest revision adds 44 cases and removes one, for a net increase of 43. Recent parity slices map four fragment publication/recovery cases to seven Pants tests and 17 key-group reduction cases to 17 Pants tests. The key-group cases exposed an equal-sequence range-tombstone divergence; both Pants merge paths now use Midge's inclusive sequence rule. This slice adds all eight Midge soft-roll cases and fragment cleanup on first or second output failure. The aggregate status below also includes reviewed cloud, WAL, DDL, tombstone, compaction-stream, read-boundary, and L0 scheduler cases; 3,482 Midge cases remain unmapped and 334 remain candidates.
 
 ## Translation and status
 
@@ -29,12 +35,14 @@ Each entry preserves the exact Midge source target and test case name, a mechani
 
 | Status | Cases | Meaning |
 | --- | ---: | --- |
-| `verified` | 276 | Midge behavior compared with executable Pants behavior tests. |
-| `verified-adapted` | 127 | Shared behavior covered with documented Pants-specific storage, error, memory-accounting, retry, or format-version semantics. |
-| `candidate` | 339 | Exact name or partial adaptation candidate; behavior not fully checked. |
-| `unmapped` | 3499 | No executable test covers the source behavior; needs domain triage. |
+| `verified` | 279 | Midge behavior compared with executable Pants behavior tests. |
+| `verified-adapted` | 146 | Shared behavior covered with documented Pants-specific storage, error, memory-accounting, retry, or format-version semantics. |
+| `candidate` | 334 | Exact name or partial adaptation candidate; behavior not fully checked. |
+| `unmapped` | 3482 | No executable test covers the source behavior; needs domain triage. |
 
 The soft-roll adaptation exercises streaming output boundaries after tombstone/version filtering and injects fragment-output failure after either of two durable outputs. Jev favored keeping Pants's public positive-target contract (Choice confidence 0.80), then prioritized verifying zero-target normalization across both internal partitioners (Choice confidence 0.87); source inspection and tests confirmed the public rejection remains, zero maps to one byte in ordinary and fragment paths, and negative internal targets still fail. Focused compaction/fragment tests passed 38/38; format verification and the Release build passed with zero warnings/errors. The full local Release filter passed 2,886 with two skips. Its first run had one 60-second crash-soak child timeout; the same seed passed alone, and the full rerun passed.
+
+The progress notes below are chronological. Their case counts describe the inventory at the time of each backfill slice; the status table above is the current count at the captured Midge and Pants commits.
 
 The backup and restore product gap has been implemented in Pants. Its reviewed parity set now covers valid local and simulated-cloud restore, consistent capture frontiers, post-capture writes, artifact corruption, path isolation, no-replace publication, interrupted copies, and pinned-file behavior. The JSON also maps four backup fault-injection cases and the in-memory-root rejection case to executable Pants tests.
 

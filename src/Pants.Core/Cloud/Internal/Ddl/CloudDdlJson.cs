@@ -8,6 +8,7 @@ static class CloudDdlJson
     internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
@@ -59,6 +60,11 @@ static class CloudDdlJson
 
     internal static void ValidateRegistry(CloudDdlRegistry registry)
     {
+        if (registry.RegistryVersion != 2 || registry.WriterEpoch == 0)
+        {
+            throw new JsonException("The cloud DDL registry requires version 2 and a positive writer epoch.");
+        }
+
         if (registry.ColumnFamilies is null || registry.Operations is null)
         {
             throw new JsonException("The cloud DDL registry collections cannot be null.");

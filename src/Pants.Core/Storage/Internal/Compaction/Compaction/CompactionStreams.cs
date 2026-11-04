@@ -67,7 +67,9 @@ sealed class CompactionStreams : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
         var sources = plan.Inputs.Where(file => file.Level == plan.SourceLevel).ToArray();
         var targets = plan.Inputs.Where(file => file.Level != plan.SourceLevel).ToArray();
-        var sourceGroups = plan.SourceLevel != 0 && TryOrderDisjoint(sources, out var orderedSources)
+        var sourceGroups = plan.Purpose != CompactionPurpose.Repair &&
+                           plan.SourceLevel != 0 &&
+                           TryOrderDisjoint(sources, out var orderedSources)
             ? [orderedSources]
             : sources.Select(static file => new[] { file }).ToArray();
         if (sourceGroups.Length > maximumSourceStreams)
@@ -82,17 +84,26 @@ sealed class CompactionStreams : IDisposable
             : TryOrderDisjoint(targets, out var orderedTargets)
                 ? [orderedTargets]
                 : targets.Select(static file => new[] { file }).ToArray();
+        return CreateFromRuns(sourceGroups.Concat(targetGroups).ToArray(), openFile, resourceBudget);
+    }
+
+    /// <summary>Each raw repair run is already ordered and costs only one open cursor.</summary>
+    public static CompactionStreams CreateFromRuns(
+        IReadOnlyList<IReadOnlyList<FileMeta>> runs,
+        Func<FileMeta, ICompactionFileCursor> openFile,
+        ResourceBudget? resourceBudget)
+    {
         var streams = new List<ICompactionEntryStream>();
         var tombstones = new List<RangeTombstone>();
         var result = new CompactionStreams(streams, tombstones);
         try
         {
-            foreach (var group in sourceGroups.Concat(targetGroups))
+            foreach (var group in runs)
             {
                 streams.Add(new ChainedFileEntryStream(group, openFile));
             }
 
-            foreach (var file in plan.Inputs)
+            foreach (var file in runs.SelectMany(static run => run))
             {
                 using var cursor = openFile(file);
                 foreach (var tombstone in cursor.RangeTombstones)

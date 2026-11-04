@@ -1,5 +1,6 @@
 using System.Globalization;
 using BenchmarkDotNet.Attributes;
+using Cntryl.Pants.Recovery;
 using Cntryl.Pants.Runtime.Internal;
 using Cntryl.Pants.Storage;
 using Cntryl.Pants.Transactions;
@@ -9,6 +10,7 @@ namespace Cntryl.Pants.Tier3;
 public class WalReplayScalingSystemBenchmarks : Tier3Benchmark
 {
     readonly List<StartupPhaseMeasurement> _startupMeasurements = [];
+    readonly RecoveryProgressTracker _recoveryProgress = new();
     IPantsDatabase? _reopened;
     string _databasePath = null!;
     string _phaseResultsPath = null!;
@@ -72,9 +74,12 @@ public class WalReplayScalingSystemBenchmarks : Tier3Benchmark
     [Benchmark]
     public async Task OpenAndReplayWalAsync()
     {
+        using var progress = _recoveryProgress.EnterRecovery();
         _reopened = await PantsDatabase.OpenForTestingAsync(
             Options(_databasePath),
-            new RuntimeDependencies(startupPhaseMeasurement: _startupMeasurements.Add));
+            new RuntimeDependencies(
+                startupPhaseMeasurement: _startupMeasurements.Add,
+                recoveryWorkCompleted: progress.Record));
     }
 
     [IterationCleanup]

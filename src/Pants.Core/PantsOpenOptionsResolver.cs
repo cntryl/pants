@@ -23,6 +23,10 @@ public static class PantsOpenOptionsResolver
             plan.RuntimeResponseTimeout,
             options.Runtime.ShutdownTimeout)
         {
+            WriteBackpressure = plan.WriteBackpressure,
+            ReadResourceBudgetBytes = plan.ReadResourceBudgetBytes,
+            ReadMetadataBudgetBytes = plan.ReadMetadataBudgetBytes,
+            OpenTimeout = plan.OpenTimeout,
             LongLivedSnapshotWarningThreshold = plan.LongLivedSnapshotWarningThreshold
         };
     }

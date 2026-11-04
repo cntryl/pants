@@ -7,9 +7,13 @@ namespace Cntryl.Pants.Storage.Internal.Sst;
 static class SstCodec
 {
     const int TargetBlockSize = 64 * 1024;
-    const int EntryHeaderSize = 26;
-
-    const int ExtendedLengthSize = 2 * sizeof(uint);
+    internal const ulong MaximumEncodedDataBlockBytes = DiskFormat.MaximumDecodedBlockBytes + 1024UL * 1024;
+    const int RestartInterval = 16;
+    // Include the entry object, array headers/alignment and its list slot before materializing.
+    internal const int DecodedEntryOverheadBytes = 160;
+    internal const long DecodedCollectionOverheadBytes = 96;
+    const long DefaultMaximumDecodedEntryBytes = 16L * DiskFormat.MaximumDecodedBlockBytes;
+    const uint ContinuedKeyFlag = 0x8000_0000;
     const int SingletonRangeBlockOverhead = sizeof(uint) + 2 * sizeof(uint) + sizeof(ulong);
 
     /// <summary>
@@ -26,7 +30,8 @@ static class SstCodec
         ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
         ArgumentOutOfRangeException.ThrowIfNegative(valueLength);
 
-        var header = EntryHeaderSize + (keyLength > ushort.MaxValue ? ExtendedLengthSize : 0);
+        var header = 1 + VarintLength((uint)keyLength) + VarintLength((uint)valueLength) +
+                     sizeof(ulong) + 1 + sizeof(ulong) + 2 * sizeof(uint);
         var encoded = (long)header + keyLength + valueLength;
         if (encoded > DiskFormat.MaximumDecodedBlockBytes)
         {
@@ -61,6 +66,14 @@ static class SstCodec
     const ulong BloomSeedOne = 0x9E37_79B1_85EB_CA87;
     const ulong BloomSeedTwo = 0xC2B2_AE3D_27D4_EB4F;
 
+    internal static void ValidateDataBlockSize(SstBlockHandle handle)
+    {
+        if (handle.Size > MaximumEncodedDataBlockBytes)
+        {
+            throw new PantsResourceLimitException("Encoded SST data block exceeds the bounded read admission limit.");
+        }
+    }
+
     public static byte[] Encode(
         IReadOnlyList<SstEntry> sourceEntries,
         IReadOnlyList<RangeTombstone> tombstones,
@@ -90,6 +103,7 @@ static class SstCodec
         foreach (var entry in sourceEntries)
         {
             ValidateEntrySize(entry.Key.Length, entry.Value?.Length ?? 0);
+            ValidateEntryType(entry);
         }
 
         foreach (var tombstone in tombstones)
@@ -105,40 +119,55 @@ static class SstCodec
         var blockKeys = new List<IReadOnlyList<byte[]>>();
         var currentBlockKeys = new List<byte[]>();
         var keyProfiler = new KeyStructureProfiler();
+        var restarts = new List<uint>();
+        var entriesInBlock = 0;
         using var block = new MemoryStream();
         byte[] previousKey = [];
         byte[]? firstKey = null;
         foreach (var entry in entries)
         {
             keyProfiler.Add(entry.Key);
-            var encoded = EncodeEntry(previousKey, entry);
-            if (block.Length > 0 && block.Length + encoded.Length > TargetBlockSize)
+            var restart = entriesInBlock % RestartInterval == 0;
+            var encoded = EncodeEntry(restart ? [] : previousKey, entry);
+            if (block.Length > 0 &&
+                block.Length + encoded.Length + (restarts.Count + (restart ? 1 : 0) + 1) * sizeof(uint) > TargetBlockSize)
             {
+                AppendRestartDirectory(block, restarts);
                 index.Add((firstKey!, AppendBlock(file, block.ToArray(), performanceGoal)));
                 blockKeys.Add(currentBlockKeys.ToArray());
                 currentBlockKeys.Clear();
                 block.SetLength(0);
+                restarts.Clear();
+                entriesInBlock = 0;
+                restart = true;
                 previousKey = [];
                 firstKey = null;
                 encoded = EncodeEntry(previousKey, entry);
             }
 
+            if (restart)
+            {
+                restarts.Add(checked((uint)block.Length) |
+                             (entriesInBlock > 0 && previousKey.AsSpan().SequenceEqual(entry.Key)
+                                 ? ContinuedKeyFlag
+                                 : 0));
+            }
+
             firstKey ??= entry.Key;
             block.Write(encoded);
+            entriesInBlock++;
             currentBlockKeys.Add(entry.Key);
             previousKey = entry.Key;
         }
 
         if (block.Length > 0)
         {
+            AppendRestartDirectory(block, restarts);
             index.Add((firstKey!, AppendBlock(file, block.ToArray(), performanceGoal)));
             blockKeys.Add(currentBlockKeys.ToArray());
         }
 
-        // Block blooms are written before the range-tombstone block so that a present
-        // range-tombstone handle can never legitimately land at file offset 0 - that
-        // offset is reserved to disambiguate an absent (offset 0, size 0) handle from a
-        // partially-present one (see ValidateFooter / DecodeMetadata's symmetric check).
+        // Bloom placement is writer policy. Readers also accept a present range block at offset zero.
         var blockBloomHandle = AppendBlock(file, EncodeBlockBlooms(blockKeys), performanceGoal);
         SstBlockHandle? rangeHandle = tombstones.Count == 0
             ? null
@@ -162,7 +191,14 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
+            if (bytes.Length >= sizeof(ulong) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(bytes.Length - sizeof(ulong))) ==
+                DiskFormat.SstFooterMagic)
+            {
+                throw new PantsCompatibilityException("SST matches a legacy footer magic.");
+            }
+
+            throw new PantsCorruptionException("SST is shorter than its V5 footer.");
         }
 
         var footerOffset = bytes.Length - DiskFormat.SstFooterSize;
@@ -197,6 +233,7 @@ static class SstCodec
         var entries = new List<SstEntry>();
         foreach (var (firstKey, handle) in index)
         {
+            ValidateDataBlockSize(handle);
             var firstEntryIndex = entries.Count;
             DecodeEntries(ReadBlock(bytes, handle), entries);
             if (entries.Count == firstEntryIndex ||
@@ -218,10 +255,18 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
+            if (bytes.Length >= sizeof(ulong) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(bytes.Length - sizeof(ulong))) ==
+                DiskFormat.SstFooterMagic)
+            {
+                throw new PantsCompatibilityException("SST matches a legacy footer magic.");
+            }
+
+            throw new PantsCorruptionException("SST is shorter than its V5 footer.");
         }
 
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
+        ValidateFooter(footer);
         var index = DecodeIndex(
             ReadBlock(bytes, ReadHandle(footer, 16)));
         var metadata = DecodeMetadata(ReadBlock(bytes, ReadHandle(footer, 0)));
@@ -231,7 +276,7 @@ static class SstCodec
             ReadOptionalHandle(footer, 32, "trie"),
             index);
         var bloomHandle = ReadOptionalHandle(footer, 48, "block bloom");
-        if (index.Count == 0 || bloomHandle is null)
+        if (index.Count == 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
@@ -244,14 +289,15 @@ static class SstCodec
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
-        var mightContain = BloomMightContain(
+        var mightContain = bloomHandle is null || BloomMightContain(
             ReadBlock(bytes, bloomHandle.Value),
             candidate,
             key);
+        var bloomChecks = bloomHandle is null ? 0 : 1;
         var candidateHandle = index[candidate].Handle;
         var blockSizeBytes = DecodeInt32(candidateHandle.Size, "block size");
         return mightContain
-            ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
+            ? new SstPointReadDecision(bloomChecks, 1, 1, false, candidate, blockSizeBytes)
             : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
     }
 
@@ -259,10 +305,18 @@ static class SstCodec
     {
         if (bytes.Length < DiskFormat.SstFooterSize)
         {
-            throw new PantsCorruptionException("SST is shorter than its V4 footer.");
+            if (bytes.Length >= sizeof(ulong) &&
+                BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(bytes.Length - sizeof(ulong))) ==
+                DiskFormat.SstFooterMagic)
+            {
+                throw new PantsCompatibilityException("SST matches a legacy footer magic.");
+            }
+
+            throw new PantsCorruptionException("SST is shorter than its V5 footer.");
         }
 
         ReadOnlySpan<byte> footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
+        ValidateFooter(footer);
         var metadata = DecodeMetadata(ReadBlock(bytes, ReadHandle(footer, 0)));
         var index = DecodeIndex(
             ReadBlock(bytes, ReadHandle(footer, 16)));
@@ -277,7 +331,7 @@ static class SstCodec
     internal static bool DataBlockContainsKey(byte[] block, ReadOnlySpan<byte> key)
     {
         var entries = new List<SstEntry>();
-        DecodeEntries(block, entries);
+        DecodeEntries(block, entries, pointKey: key.ToArray());
         foreach (var entry in entries)
         {
             if (entry.Key.AsSpan().SequenceEqual(key))
@@ -289,10 +343,20 @@ static class SstCodec
         return false;
     }
 
-    internal static IReadOnlyList<SstEntry> DecodeDataBlock(byte[] block)
+    internal static IReadOnlyList<SstEntry> DecodeDataBlock(
+        ReadOnlySpan<byte> block, long maximumDecodedEntryBytes = DefaultMaximumDecodedEntryBytes)
     {
         var entries = new List<SstEntry>();
-        DecodeEntries(block, entries);
+        DecodeEntries(block, entries, maximumDecodedEntryBytes);
+        return entries;
+    }
+
+    // Retain the block boundaries for the caller's cross-block validation and every version of
+    // the requested key. Other values remain borrowed while the shared decoder validates them.
+    internal static IReadOnlyList<SstEntry> DecodePointDataBlock(ReadOnlyMemory<byte> block, byte[] key)
+    {
+        var entries = new List<SstEntry>();
+        DecodeEntries(block.Span, entries, pointKey: key);
         return entries;
     }
 
@@ -317,6 +381,30 @@ static class SstCodec
         return new SstContents(entries, reader.RangeTombstones, reader.DataBlockCount);
     }
 
+    static void ValidateEntryType(SstEntry entry)
+    {
+        if (entry.EntryType == 3)
+        {
+            throw new PantsCompatibilityException("SST Merge entries have no supported resolution semantics.");
+        }
+
+        if (entry.EntryType > 2 || entry.IsDelete != (entry.EntryType == 2) ||
+            (entry.IsDelete && entry.Value is { Length: > 0 }))
+        {
+            throw new PantsCorruptionException("SST data entry metadata is invalid or a delete carries a value.");
+        }
+    }
+
+    static void AppendRestartDirectory(Stream block, List<uint> restarts)
+    {
+        foreach (var restart in restarts)
+        {
+            DiskFormat.WriteUInt32(block, restart);
+        }
+
+        DiskFormat.WriteUInt32(block, checked((uint)restarts.Count));
+    }
+
     static byte[] EncodeEntry(byte[] previousKey, SstEntry entry)
     {
         var shared = 0;
@@ -328,23 +416,15 @@ static class SstCodec
 
         var keyLength = entry.Key.Length - shared;
         var value = entry.Value ?? [];
-        var extendedLengths = keyLength > ushort.MaxValue;
-        using var output = new MemoryStream(checked(
-            EntryHeaderSize +
-            (extendedLengths ? 2 * sizeof(uint) : 0) +
-            keyLength +
-            value.Length));
-        WriteUInt16(output, (ushort)shared);
-        WriteUInt16(output, extendedLengths ? ushort.MaxValue : checked((ushort)keyLength));
-        DiskFormat.WriteUInt32(output, extendedLengths ? uint.MaxValue : checked((uint)value.Length));
+        using var output = new MemoryStream();
+        WriteVarint(output, (uint)shared);
+        WriteVarint(output, checked((uint)keyLength));
+        WriteVarint(output, checked((uint)value.Length));
         DiskFormat.WriteUInt64(output, entry.Sequence);
-        output.WriteByte(entry.IsDelete ? (byte)2 : (byte)0);
-        output.WriteByte(entry.Expiration.HasValue ? (byte)1 : (byte)0);
-        DiskFormat.WriteUInt64(output, entry.Expiration ?? 0);
-        if (extendedLengths)
+        output.WriteByte((byte)(entry.EntryType | (entry.Expiration.HasValue ? 0x80 : 0)));
+        if (entry.Expiration is { } expiration)
         {
-            DiskFormat.WriteUInt32(output, checked((uint)keyLength));
-            DiskFormat.WriteUInt32(output, checked((uint)value.Length));
+            DiskFormat.WriteUInt64(output, expiration);
         }
 
         output.Write(entry.Key, shared, keyLength);
@@ -352,73 +432,339 @@ static class SstCodec
         return output.ToArray();
     }
 
-    static void DecodeEntries(byte[] block, List<SstEntry> entries)
+    static int VarintLength(uint value)
     {
-        var cursor = 0;
-        byte[] previousKey = [];
-        while (cursor < block.Length)
+        var length = 1;
+        while (value >= 0x80)
         {
-            if (block.Length - cursor < EntryHeaderSize)
+            value >>= 7;
+            length++;
+        }
+
+        return length;
+    }
+
+    static void WriteVarint(Stream output, uint value)
+    {
+        while (value >= 0x80)
+        {
+            output.WriteByte((byte)((value & 0x7f) | 0x80));
+            value >>= 7;
+        }
+
+        output.WriteByte((byte)value);
+    }
+
+    static uint ReadVarint(ReadOnlySpan<byte> bytes, ref int cursor)
+    {
+        uint value = 0;
+        for (var index = 0; index < 5; index++)
+        {
+            if (cursor >= bytes.Length)
             {
-                throw new PantsCorruptionException("SST data entry header is truncated.");
+                throw new PantsCorruptionException("SST varint is truncated.");
             }
 
-            var shared = BinaryPrimitives.ReadUInt16LittleEndian(block.AsSpan(cursor, 2));
-            var encodedKeyLength = BinaryPrimitives.ReadUInt16LittleEndian(block.AsSpan(cursor + 2, 2));
-            var encodedValueLength = BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor + 4, 4));
-            var sequence = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(cursor + 8, 8));
-            var entryType = block[cursor + 16];
-            var expirationPresent = block[cursor + 17];
-            var expirationRaw = BinaryPrimitives.ReadUInt64LittleEndian(block.AsSpan(cursor + 18, 8));
-            cursor += EntryHeaderSize;
-            int keyLength;
-            int valueLength;
-            if (encodedKeyLength == ushort.MaxValue && encodedValueLength == uint.MaxValue)
+            var current = bytes[cursor++];
+            if (index == 4 && current > 0x0f)
             {
-                if (block.Length - cursor < 2 * sizeof(uint))
+                throw new PantsCorruptionException("SST varint overflows u32.");
+            }
+
+            value |= (uint)(current & 0x7f) << (index * 7);
+            if ((current & 0x80) == 0)
+            {
+                if (index > 0 && current == 0)
                 {
-                    throw new PantsCorruptionException("SST extended entry lengths are truncated.");
+                    throw new PantsCorruptionException("SST varint is noncanonical.");
                 }
 
-                keyLength = DecodeInt32(
-                    BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor)),
-                    "extended key length");
-                valueLength =
-                    DecodeInt32(
-                        BinaryPrimitives.ReadUInt32LittleEndian(block.AsSpan(cursor + sizeof(uint))),
-                        "extended value length");
-                cursor += 2 * sizeof(uint);
+                return value;
             }
-            else
+        }
+
+        throw new PantsCorruptionException("SST varint is unterminated.");
+    }
+
+    internal static long MeasureDecodedEntryBytes(IReadOnlyList<SstEntry> entries) =>
+        checked(DecodedCollectionOverheadBytes + entries.Sum(static entry =>
+            (long)entry.Key.Length + (entry.Value?.Length ?? 0) + DecodedEntryOverheadBytes));
+
+    static void DecodeEntries(ReadOnlySpan<byte> block, List<SstEntry> entries,
+        long maximumDecodedEntryBytes = DefaultMaximumDecodedEntryBytes, byte[]? pointKey = null)
+    {
+        var entryCount = PreflightDecodedEntries(block, maximumDecodedEntryBytes, out var maximumKeyLength, out _);
+        entries.EnsureCapacity(checked(entries.Count + (pointKey is null ? entryCount : Math.Min(entryCount, 3))));
+        if (block.Length < 2 * sizeof(uint) || block.Length > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsCorruptionException("SST data block has no bounded restart directory.");
+        }
+
+        var count = BinaryPrimitives.ReadUInt32LittleEndian(block[(block.Length - sizeof(uint))..]);
+        var directoryBytes = ((ulong)count + 1) * sizeof(uint);
+        if (count == 0 || directoryBytes >= (ulong)block.Length)
+        {
+            throw new PantsCorruptionException("SST restart directory exceeds its data block.");
+        }
+
+        var dataEnd = block.Length - (int)directoryBytes;
+        var cursor = 0;
+        var previousKey = pointKey is null ? [] : new byte[maximumKeyLength];
+        var previousKeyLength = 0;
+        ReadOnlySpan<byte> previousValue = default;
+        ulong previousSequence = 0;
+        ulong? previousExpiration = null;
+        byte previousEntryType = 0;
+        var hasPreviousEntry = false;
+        uint previousOffset = 0;
+        for (var restartIndex = 0; restartIndex < (int)count; restartIndex++)
+        {
+            var word = BinaryPrimitives.ReadUInt32LittleEndian(block[(dataEnd + restartIndex * sizeof(uint))..]);
+            var offset = word & ~ContinuedKeyFlag;
+            var continued = (word & ContinuedKeyFlag) != 0;
+            var intervalEnd = restartIndex + 1 == (int)count
+                ? dataEnd
+                : (int)(BinaryPrimitives.ReadUInt32LittleEndian(
+                    block[(dataEnd + (restartIndex + 1) * sizeof(uint))..]) & ~ContinuedKeyFlag);
+            if ((restartIndex == 0 && word != 0) ||
+                (restartIndex > 0 && offset <= previousOffset) ||
+                offset != cursor || intervalEnd <= cursor || intervalEnd > dataEnd)
             {
-                keyLength = encodedKeyLength;
-                valueLength = DecodeInt32(encodedValueLength, "value length");
+                throw new PantsCorruptionException("SST restart offsets are invalid or do not tile the data extent.");
             }
 
-            if (shared > previousKey.Length ||
-                keyLength > block.Length - cursor ||
-                valueLength > block.Length - cursor - keyLength)
+            var firstInInterval = true;
+            while (cursor < intervalEnd)
             {
-                throw new PantsCorruptionException("SST data entry key or value is truncated.");
+                var extent = block[..intervalEnd];
+                var shared = ReadVarint(extent, ref cursor);
+                var keyLength = DecodeInt32(ReadVarint(extent, ref cursor), "key length");
+                var valueLength = DecodeInt32(ReadVarint(extent, ref cursor), "value length");
+                if (shared > ushort.MaxValue || shared > previousKeyLength ||
+                    (firstInInterval && shared != 0) || intervalEnd - cursor < sizeof(ulong) + 1)
+                {
+                    throw new PantsCorruptionException("SST data entry prefix or header is invalid.");
+                }
+
+                var sequence = BinaryPrimitives.ReadUInt64LittleEndian(extent[cursor..]);
+                cursor += sizeof(ulong);
+                var flags = extent[cursor++];
+                if ((flags & 0x7c) != 0)
+                {
+                    throw new PantsCorruptionException("SST data entry metadata is invalid.");
+                }
+
+                var entryType = (byte)(flags & 3);
+                if (entryType == 3)
+                {
+                    throw new PantsCompatibilityException("SST Merge entries have no supported resolution semantics.");
+                }
+
+                ulong? expiration = null;
+                if ((flags & 0x80) != 0)
+                {
+                    if (intervalEnd - cursor < sizeof(ulong))
+                    {
+                        throw new PantsCorruptionException("SST data entry expiration is truncated.");
+                    }
+
+                    expiration = BinaryPrimitives.ReadUInt64LittleEndian(extent[cursor..]);
+                    cursor += sizeof(ulong);
+                }
+
+                if (keyLength > intervalEnd - cursor || valueLength > intervalEnd - cursor - keyLength ||
+                    (entryType == 2 && valueLength != 0))
+                {
+                    throw new PantsCorruptionException("SST data entry is truncated or a delete carries a value.");
+                }
+
+                var keyDelta = extent.Slice(cursor, keyLength);
+                // The shared prefix is equal by construction; compare only the old and new
+                // suffixes before overwriting the scratch key used to validate the next entry.
+                var comparison = previousKey.AsSpan((int)shared, previousKeyLength - (int)shared)
+                    .SequenceCompareTo(keyDelta);
+                var materializedKey = pointKey is null ? new byte[(int)shared + keyLength] : null;
+                var key = materializedKey is null
+                    ? previousKey.AsSpan(0, (int)shared + keyLength)
+                    : materializedKey.AsSpan();
+                if (materializedKey is not null)
+                {
+                    previousKey.AsSpan(0, (int)shared).CopyTo(key);
+                }
+
+                keyDelta.CopyTo(key[(int)shared..]);
+                cursor += keyLength;
+                var value = extent.Slice(cursor, valueLength);
+                cursor += valueLength;
+                if (firstInInterval && restartIndex > 0 && continued != (comparison == 0))
+                {
+                    throw new PantsCorruptionException("SST restart continuation does not match adjacent keys.");
+                }
+
+                if (hasPreviousEntry)
+                {
+                    if (comparison > 0 || comparison == 0 && previousSequence < sequence)
+                    {
+                        throw new PantsCorruptionException("SST data entries are not in canonical key and sequence order.");
+                    }
+
+                    if (comparison == 0 && previousSequence == sequence &&
+                        (previousEntryType != entryType || previousExpiration != expiration ||
+                         !previousValue.SequenceEqual(value)))
+                    {
+                        throw new PantsCorruptionException(
+                            $"SST entries contain conflicting content for the same key at sequence {sequence}.");
+                    }
+                }
+
+                if (pointKey is null || !hasPreviousEntry || cursor == dataEnd || key.SequenceEqual(pointKey))
+                {
+                    entries.Add(new SstEntry(materializedKey ?? key.ToArray(), entryType == 2 ? null : value.ToArray(), sequence, expiration, entryType == 2)
+                    {
+                        EntryType = entryType
+                    });
+                }
+
+                hasPreviousEntry = true;
+                previousValue = value;
+                previousSequence = sequence;
+                previousExpiration = expiration;
+                previousEntryType = entryType;
+                previousKeyLength = key.Length;
+                if (materializedKey is not null)
+                {
+                    previousKey = materializedKey;
+                }
+                firstInInterval = false;
             }
 
-            if (entryType is not (0 or 1 or 2 or 3) || expirationPresent > 1 ||
-                (expirationPresent == 0 && expirationRaw != 0))
+            previousOffset = offset;
+        }
+    }
+
+    internal static long MeasureDecodedDataBlockBytes(ReadOnlySpan<byte> block)
+    {
+        _ = PreflightDecodedEntries(block, DefaultMaximumDecodedEntryBytes, out _, out var bytes);
+        return bytes;
+    }
+
+    static int PreflightDecodedEntries(ReadOnlySpan<byte> block, long maximumDecodedEntryBytes, out int maximumKeyLength, out long decodedBytes)
+    {
+        maximumKeyLength = 0;
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedEntryBytes);
+        if (block.Length < 2 * sizeof(uint) || block.Length > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsCorruptionException("SST data block has no bounded restart directory.");
+        }
+
+        var count = BinaryPrimitives.ReadUInt32LittleEndian(block[(block.Length - sizeof(uint))..]);
+        var directoryBytes = ((ulong)count + 1) * sizeof(uint);
+        if (count == 0 || directoryBytes >= (ulong)block.Length)
+        {
+            throw new PantsCorruptionException("SST restart directory exceeds its data block.");
+        }
+
+        var dataEnd = block.Length - (int)directoryBytes;
+        var cursor = 0;
+        var previousKeyLength = 0;
+        var entryCount = 0;
+        decodedBytes = DecodedCollectionOverheadBytes;
+        uint previousOffset = 0;
+        for (var restartIndex = 0; restartIndex < (int)count; restartIndex++)
+        {
+            var word = BinaryPrimitives.ReadUInt32LittleEndian(block[(dataEnd + restartIndex * sizeof(uint))..]);
+            var offset = word & ~ContinuedKeyFlag;
+            var intervalEnd = restartIndex + 1 == (int)count ? dataEnd :
+                (int)(BinaryPrimitives.ReadUInt32LittleEndian(block[(dataEnd + (restartIndex + 1) * sizeof(uint))..]) & ~ContinuedKeyFlag);
+            if ((restartIndex == 0 && word != 0) || (restartIndex > 0 && offset <= previousOffset) ||
+                offset != cursor || intervalEnd <= cursor || intervalEnd > dataEnd)
             {
-                throw new PantsCorruptionException("SST data entry metadata is invalid.");
+                throw new PantsCorruptionException("SST restart offsets are invalid or do not tile the data extent.");
             }
 
-            var key = new byte[shared + keyLength];
-            previousKey.AsSpan(0, shared).CopyTo(key);
-            block.AsSpan(cursor, keyLength).CopyTo(key.AsSpan(shared));
-            cursor += keyLength;
-            var value = entryType == 2 && valueLength == 0
-                ? null
-                : block.AsSpan(cursor, valueLength).ToArray();
-            cursor += valueLength;
-            entries.Add(new SstEntry(key, value, sequence, expirationPresent == 1 ? expirationRaw : null,
-                entryType == 2));
-            previousKey = key;
+            var firstInInterval = true;
+            while (cursor < intervalEnd)
+            {
+                var extent = block[..intervalEnd];
+                var shared = ReadVarint(extent, ref cursor);
+                var keyLength = DecodeInt32(ReadVarint(extent, ref cursor), "key length");
+                var valueLength = DecodeInt32(ReadVarint(extent, ref cursor), "value length");
+                if (shared > ushort.MaxValue || shared > previousKeyLength || firstInInterval && shared != 0 ||
+                    intervalEnd - cursor < sizeof(ulong) + 1)
+                {
+                    throw new PantsCorruptionException("SST data entry prefix or header is invalid.");
+                }
+
+                cursor += sizeof(ulong);
+                var flags = extent[cursor++];
+                if ((flags & 0x7c) != 0)
+                {
+                    throw new PantsCorruptionException("SST data entry metadata is invalid.");
+                }
+
+                var entryType = flags & 3;
+                if (entryType == 3)
+                {
+                    throw new PantsCompatibilityException("SST Merge entries have no supported resolution semantics.");
+                }
+
+                if ((flags & 0x80) != 0)
+                {
+                    if (intervalEnd - cursor < sizeof(ulong))
+                    {
+                        throw new PantsCorruptionException("SST data entry expiration is truncated.");
+                    }
+
+                    cursor += sizeof(ulong);
+                }
+
+                if (keyLength > intervalEnd - cursor || valueLength > intervalEnd - cursor - keyLength ||
+                    entryType == 2 && valueLength != 0)
+                {
+                    throw new PantsCorruptionException("SST data entry is truncated or a delete carries a value.");
+                }
+
+                previousKeyLength = checked((int)shared + keyLength);
+                maximumKeyLength = Math.Max(maximumKeyLength, previousKeyLength);
+                decodedBytes = checked(decodedBytes + previousKeyLength + valueLength + DecodedEntryOverheadBytes);
+                if (decodedBytes > maximumDecodedEntryBytes)
+                {
+                    throw new PantsResourceLimitException("Decoded SST entries exceed the available working memory budget.");
+                }
+
+                cursor += keyLength + valueLength;
+                entryCount++;
+                firstInInterval = false;
+            }
+
+            previousOffset = offset;
+        }
+
+        return entryCount;
+    }
+
+    internal static void ValidateAdjacentEntries(SstEntry previous, SstEntry current)
+    {
+        var comparison = previous.Key.AsSpan().SequenceCompareTo(current.Key);
+        if (comparison > 0 || (comparison == 0 && previous.Sequence < current.Sequence))
+        {
+            throw new PantsCorruptionException("SST data entries are not in canonical key and sequence order.");
+        }
+
+        if (comparison == 0 && previous.Sequence == current.Sequence)
+        {
+            RequireMatchingContent(previous, current);
+        }
+    }
+
+    internal static void RequireMatchingContent(SstEntry first, SstEntry duplicate)
+    {
+        if (first.EntryType != duplicate.EntryType || first.Expiration != duplicate.Expiration ||
+            (first.Value is null) != (duplicate.Value is null) ||
+            !first.Value.AsSpan().SequenceEqual(duplicate.Value))
+        {
+            throw new PantsCorruptionException(
+                $"SST entries contain conflicting content for the same key at sequence {first.Sequence}.");
         }
     }
 
@@ -532,6 +878,11 @@ static class SstCodec
 
     internal static SstMetadata DecodeMetadata(byte[] metadata)
     {
+        if (metadata.Length == 20)
+        {
+            throw new PantsCompatibilityException("Legacy SST metadata is incompatible with V5.");
+        }
+
         if (metadata.Length < 24)
         {
             throw new PantsCorruptionException("SST metadata block is truncated.");
@@ -710,12 +1061,7 @@ static class SstCodec
     {
         for (var index = 1; index < entries.Count; index++)
         {
-            var comparison = ByteArrayComparer.Instance.Compare(entries[index - 1].Key, entries[index].Key);
-            if (comparison > 0 ||
-                (comparison == 0 && entries[index - 1].Sequence < entries[index].Sequence))
-            {
-                throw new PantsCorruptionException("SST data entries are not in canonical key and sequence order.");
-            }
+            ValidateAdjacentEntries(entries[index - 1], entries[index]);
         }
     }
 
@@ -807,13 +1153,19 @@ static class SstCodec
     internal static TrieIndex? DecodeTrieIndex(
         SstIndexKind indexKind,
         byte[]? trie,
-        IReadOnlyList<(byte[] FirstKey, SstBlockHandle Handle)> blockIndex)
+        IReadOnlyList<(byte[] FirstKey, SstBlockHandle Handle)> blockIndex,
+        SstMetadataAllocation? allocation = null)
     {
+        if (trie is not null)
+        {
+            allocation?.Reserve(checked(trie.Length * 32L));
+        }
         return (indexKind, trie) switch
         {
             (SstIndexKind.Trie, { } bytes) => TrieIndex.Decode(
                 bytes,
-                blockIndex.Select(static entry => entry.FirstKey).ToArray()),
+                blockIndex.Select(static entry => entry.FirstKey).ToArray(),
+                allocation),
             (SstIndexKind.Trie, null) => throw new PantsCorruptionException(
                 "Trie-selected SST metadata is missing its trie footer handle."),
             (SstIndexKind.Sparse, not null) => throw new PantsCorruptionException(
@@ -1005,6 +1357,10 @@ static class SstCodec
 
         var count = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
         var cursor = 4;
+        if (count > (bytes.Length - cursor) / 16)
+        {
+            throw new PantsCorruptionException("SST range tombstone count exceeds its block.");
+        }
         var output = new List<RangeTombstone>(DecodeInt32(count, "range-tombstone count"));
         for (var index = 0; index < count; index++)
         {
@@ -1054,37 +1410,37 @@ static class SstCodec
     {
         if (footer.Length != DiskFormat.SstFooterSize)
         {
-            throw new PantsCorruptionException("SST V4 footer size is invalid.");
+            throw new PantsCorruptionException("SST V5 footer size is invalid.");
         }
 
         var magic = BinaryPrimitives.ReadUInt64LittleEndian(footer[72..80]);
         var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(footer[80..84]);
-        if (DiskFormat.Crc32C(footer[..80]) != storedCrc)
+        if (magic != DiskFormat.SstFooterMagic || DiskFormat.Crc32C(footer[..80]) != storedCrc)
         {
             // sst.md section 7.1 step 3b: only the file's own last eight bytes can be a legacy
-            // footer magic. The V4 magic field sits before the checksum, so an intact magic with a
+            // footer magic. The V5 magic field sits before the checksum, so an intact magic with a
             // damaged handle is corruption, not an older format.
             if (BinaryPrimitives.ReadUInt64LittleEndian(footer[^sizeof(ulong)..]) ==
                 DiskFormat.SstFooterMagic)
             {
                 throw new PantsCompatibilityException(
-                    "SST V4 footer checksum mismatch, but the file ends with a legacy magic value.");
+                    "SST V5 footer checksum mismatch, but the file ends with a legacy magic value.");
             }
 
-            throw new PantsCorruptionException("SST V4 footer checksum mismatch.");
+            throw new PantsCorruptionException("SST V5 footer checksum mismatch.");
         }
 
         if (BinaryPrimitives.ReadUInt32LittleEndian(footer[68..72]) != DiskFormat.SstFooterSize ||
             magic != DiskFormat.SstFooterMagic)
         {
-            throw new PantsCorruptionException("SST V4 footer format or magic is invalid.");
+            throw new PantsCorruptionException("SST V5 footer format or magic is invalid.");
         }
 
         var formatVersion = BinaryPrimitives.ReadUInt32LittleEndian(footer[64..68]);
         if (formatVersion != DiskFormat.SstFormatVersion)
         {
             throw new PantsCompatibilityException(
-                $"Unsupported SST V4 footer format version '{formatVersion}'.");
+                $"Unsupported SST V5 footer format version '{formatVersion}'.");
         }
     }
 

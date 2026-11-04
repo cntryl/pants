@@ -59,7 +59,23 @@ static class BackupArtifactStore
                 try
                 {
                     var length = input.Length;
-                    if (IsMutableWal(relative) || IsMutableManifestJournal(relative))
+                    if (IsCloudLease(relative))
+                    {
+                        if (length > CloudObjectLeaseStore.MaximumBackupLeaseBytes)
+                        {
+                            throw new PantsLeaseIndeterminateException("The cloud primary lease exceeds its backup size limit.");
+                        }
+
+                        var bytes = new byte[checked((int)length)];
+                        await input.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+                        var expired = CloudObjectLeaseStore.CreateExpiredBackupLease(bytes);
+                        var outputPath = GetObjectPath(objectsPath, relative);
+                        AtomicStagedFile.Write(outputPath, expired);
+                        input.Dispose();
+                        input = null;
+                        files.Add(new PinnedBackupFile(relative, expired.Length, null, DiskFormat.Crc32C(expired)));
+                    }
+                    else if (IsMutableWal(relative) || IsMutableManifestJournal(relative))
                     {
                         var outputPath = GetObjectPath(objectsPath, relative);
                         AtomicStagedFile.CreateDirectoryDurably(Path.GetDirectoryName(outputPath)!);
@@ -266,6 +282,18 @@ static class BackupArtifactStore
         foreach (var item in manifest.Objects)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // ValidateObjectsAsync checked every artifact object, including old native lock files.
+            // Restore only database state into the new namespace, never process coordination.
+            if (IsCoordinatorScratch(item.Path))
+            {
+                continue;
+            }
+
+            if (IsCloudLease(item.Path) && item.SizeBytes > CloudObjectLeaseStore.MaximumBackupLeaseBytes)
+            {
+                throw new PantsLeaseIndeterminateException("The cloud primary lease exceeds its backup size limit.");
+            }
+
             if (first)
             {
                 failpoints.Hit(Failpoint.BeforeRestoreObjectCopy);
@@ -277,6 +305,12 @@ static class BackupArtifactStore
             AtomicStagedFile.CreateDirectoryDurably(Path.GetDirectoryName(destinationPath)!);
             await CopyVerifiedObjectAsync(sourcePath, destinationPath, item, cancellationToken)
                 .ConfigureAwait(false);
+            if (IsCloudLease(item.Path))
+            {
+                var expired = CloudObjectLeaseStore.CreateExpiredBackupLease(File.ReadAllBytes(destinationPath));
+                AtomicStagedFile.Write(destinationPath, expired);
+            }
+
             AtomicStagedFile.FlushDirectory(Path.GetDirectoryName(destinationPath)!);
             failpoints.Hit(Failpoint.AfterRestoreObjectCopy);
         }
@@ -591,6 +625,12 @@ static class BackupArtifactStore
 
     static bool IsMutableManifestJournal(string relativePath) =>
         relativePath.Equals("manifest.journal", StringComparison.Ordinal);
+
+    internal static bool IsCoordinatorScratch(string relativePath) =>
+        relativePath.StartsWith("cloud_store/.midge-locks/", StringComparison.Ordinal);
+
+    static bool IsCloudLease(string relativePath) =>
+        relativePath.Equals("cloud_store/" + PantsCloudObjectLayout.LeaseObjectKey, StringComparison.Ordinal);
 
     static string GetObjectPath(string objectsRoot, string inventoryPath) =>
         Path.Combine(objectsRoot, inventoryPath.Replace('/', Path.DirectorySeparatorChar));

@@ -6,55 +6,57 @@ namespace Cntryl.Pants.Cloud;
 public sealed class ProviderTornMetadataHydrationTests
 {
     [Fact]
-    public async Task ShouldFailStrictHydrationGivenMismatchedManifestSequencesAndNoJournal()
+    public async Task ShouldRejectMutableLegacyMetadataDuringStrictHydration()
     {
         using var cache = new TemporaryDirectory();
         var control = await SeedAsync(3, 5);
+        var original = await control.GetAsync("metadata/manifest.snapshot.json", CancellationToken.None);
+        await Assert.ThrowsAsync<PantsCompatibilityException>(async () => await HydrateAsync(cache.Path, control, PantsRecoveryPolicy.Strict));
+        Assert.False(File.Exists(Path.Combine(cache.Path, "manifest.snapshot.json")));
+        Assert.Equal(original!.Data.ToArray(), (await control.GetAsync("metadata/manifest.snapshot.json", CancellationToken.None))!.Data.ToArray());
+    }
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(async () =>
-            await HydrateAsync(cache.Path, control, PantsRecoveryPolicy.Strict));
-
+    [Fact]
+    public async Task ShouldRejectMutableLegacyMetadataDuringSalvageHydration()
+    {
+        using var cache = new TemporaryDirectory();
+        var control = await SeedAsync(3, 5);
+        await Assert.ThrowsAsync<PantsCompatibilityException>(async () => await HydrateAsync(cache.Path, control, PantsRecoveryPolicy.Salvage));
+        Assert.False(File.Exists(Path.Combine(cache.Path, "manifest.snapshot.json")));
         Assert.False(File.Exists(Path.Combine(cache.Path, "manifest.json")));
     }
 
     [Fact]
-    public async Task ShouldIgnoreOlderManifestAndReportSalvageGivenMismatchedSequences()
+    public async Task ShouldHydratePointerSelectedSnapshotGivenConflictingMutableLegacyCopy()
     {
         using var cache = new TemporaryDirectory();
-        var control = await SeedAsync(3, 5);
-
-        var result = await HydrateAsync(cache.Path, control, PantsRecoveryPolicy.Salvage);
-
-        Assert.True(result.RequiresSalvage);
-        Assert.False(File.Exists(Path.Combine(cache.Path, "manifest.snapshot.json")));
-        Assert.True(File.Exists(Path.Combine(cache.Path, "manifest.json")));
-    }
-
-    [Fact]
-    public async Task ShouldAcceptMatchingManifestSequences()
-    {
-        using var cache = new TemporaryDirectory();
-        var control = await SeedAsync(4, 4);
-
+        var control = new CountingCloudObjectStore();
+        var manifest = ManifestState.CreateInitial();
+        manifest.EditCheckpointId = 4;
+        await CloudTestMetadata.SeedAsync(control, manifest);
+        await PutAsync(control, "manifest.json", ManifestJson(99));
         var result = await HydrateAsync(cache.Path, control, PantsRecoveryPolicy.Strict);
-
         Assert.False(result.RequiresSalvage);
+        Assert.Equal(4UL, ManifestCodec.Decode(await File.ReadAllBytesAsync(Path.Combine(cache.Path, "manifest.snapshot.json"))).EditCheckpointId);
+        Assert.False(File.Exists(Path.Combine(cache.Path, "manifest.json")));
     }
 
     [Fact]
-    public async Task ShouldToleratePerObjectReadFailureOnlyUnderSalvage()
+    public async Task ShouldPropagateSelectedObjectReadFailureUnderBothRecoveryPolicies()
     {
         using var strictCache = new TemporaryDirectory();
         using var salvageCache = new TemporaryDirectory();
-        var failing = new FailingReadStore(
-            await SeedAsync(4, 4),
-            PantsCloudObjectLayout.MetadataPrefix + "intent_log.json");
-
-        await Assert.ThrowsAsync<PantsIOException>(async () =>
-            await HydrateAsync(strictCache.Path, failing, PantsRecoveryPolicy.Strict));
-        var result = await HydrateAsync(salvageCache.Path, failing, PantsRecoveryPolicy.Salvage);
-
-        Assert.True(result.RequiresSalvage);
+        var control = new CountingCloudObjectStore();
+        await CloudTestMetadata.SeedAsync(control, ManifestState.CreateInitial());
+        var pointer = await control.GetAsync(CloudMetadataAuthority.PointerKey, CancellationToken.None);
+        using var descriptor = MetadataFrameCodec.Decode(pointer!.Data.Span, 4);
+        var key = descriptor.RootElement.GetProperty("committed").GetProperty("objects").EnumerateArray()
+            .Single(item => item.GetProperty("file_name").GetString() == "manifest.snapshot.json").GetProperty("object_key").GetString()!;
+        var failing = new FailingReadStore(control, key);
+        await Assert.ThrowsAsync<PantsIOException>(async () => await HydrateAsync(strictCache.Path, failing, PantsRecoveryPolicy.Strict));
+        await Assert.ThrowsAsync<PantsIOException>(async () => await HydrateAsync(salvageCache.Path, failing, PantsRecoveryPolicy.Salvage));
+        Assert.False(File.Exists(Path.Combine(strictCache.Path, "manifest.snapshot.json")));
+        Assert.False(File.Exists(Path.Combine(salvageCache.Path, "manifest.snapshot.json")));
     }
 
     static async Task<CountingCloudObjectStore> SeedAsync(ulong snapshotSequence, ulong manifestSequence)

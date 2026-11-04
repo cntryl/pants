@@ -1,3 +1,5 @@
+using Cntryl.Pants.Runtime.Internal;
+using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -5,7 +7,7 @@ namespace Cntryl.Pants.Storage;
 public sealed class PantsLeveledCompactionTests
 {
     [Fact]
-    public async Task ShouldRunBackgroundCompactionAtL0Trigger()
+    public async Task ShouldPromoteDisjointFilesAtTheBackgroundL0Trigger()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
@@ -20,10 +22,10 @@ public sealed class PantsLeveledCompactionTests
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         var level = Assert.Single(layout.Levels);
         Assert.Equal(1, level.Level);
-        Assert.Equal(1, level.FileCount);
+        Assert.Equal(3, level.FileCount);
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.Equal(1, metrics.CompactionsRun);
-        Assert.True(metrics.CompactionBytesRewritten > 0);
+        Assert.Equal(0, metrics.CompactionsRun);
+        Assert.Equal(0, metrics.CompactionBytesRewritten);
     }
 
     [Fact]
@@ -64,6 +66,42 @@ public sealed class PantsLeveledCompactionTests
     }
 
     [Fact]
+    public async Task ShouldWaitForActiveCompactionBeforeDeclaringDebtClear()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoint = new BlockingCompactionOutputFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
+                .WithCompaction(new PantsCompactionConfiguration(
+                    L0FileCountTrigger: 2,
+                    TargetSstSizeBytes: 80,
+                    BackgroundEnabled: false)),
+            new RuntimeDependencies(failpoint));
+        await PutAndFlushAsync(database, 0);
+        await PutAndFlushAsync(database, 1);
+
+        var activeCompaction = database.Maintenance.CompactAllAsync().AsTask();
+        try
+        {
+            await failpoint.WaitUntilBlockedAsync(TestTimeouts.Expected);
+
+            var waitingDrain = database.Maintenance.CompactAllAsync().AsTask();
+            Assert.False(waitingDrain.IsCompleted);
+
+            failpoint.Release();
+            await Task.WhenAll(activeCompaction, waitingDrain).WaitAsync(TestTimeouts.Expected);
+        }
+        finally
+        {
+            failpoint.Release();
+        }
+
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        Assert.DoesNotContain(layout.Levels, static level => level.Level == 0);
+    }
+
+    [Fact]
     public async Task ShouldNotRewriteUnderTargetInnerLevelsWhenCompactAllFindsNoL0Debt()
     {
         using var directory = new TemporaryDirectory();
@@ -78,13 +116,15 @@ public sealed class PantsLeveledCompactionTests
         await PutAndFlushAsync(database, 3);
         await database.Maintenance.CompactAllAsync();
         var before = await database.Diagnostics.GetStorageLayoutAsync();
-        Assert.Equal(2, before.Levels.Single(static level => level.Level == 1).FileCount);
+        Assert.Equal(4, before.Levels.Single(static level => level.Level == 1).FileCount);
+        var names = before.Levels.SelectMany(static level => level.Files).Select(static file => file.Name).ToArray();
 
         await database.Maintenance.CompactAllAsync();
 
         var layout = await database.Diagnostics.GetStorageLayoutAsync();
         Assert.Equal([1], layout.Levels.Select(static level => level.Level));
-        Assert.Equal(2, layout.Levels.Single(static level => level.Level == 1).FileCount);
+        Assert.Equal(4, layout.Levels.Single(static level => level.Level == 1).FileCount);
+        Assert.Equal(names, layout.Levels.SelectMany(static level => level.Files).Select(static file => file.Name));
     }
 
     [Fact]

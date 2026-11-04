@@ -24,5 +24,6 @@ public enum PantsErrorCode
     Busy,
     Timeout,
     ResourceLimit,
-    CommitOutcomeUnknown
+    CommitOutcomeUnknown,
+    UnflushedDataPresent
 }

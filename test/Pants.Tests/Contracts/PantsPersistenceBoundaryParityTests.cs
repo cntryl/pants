@@ -18,7 +18,14 @@ public sealed class PantsPersistenceBoundaryParityTests
         {
             for (var index = 0; index < 3; index++)
             {
-                await PutAsync(database, $"key-{index}", $"value-{index}");
+                await using (var transaction = await database.Transactions.BeginAsync(
+                                 database.ColumnFamilies.DefaultFamily,
+                                 PantsTransactionMode.ReadWrite))
+                {
+                    transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString($"value-{index}"));
+                    transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+                    await transaction.CommitAsync(PantsWriteOptions.Sync);
+                }
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
 

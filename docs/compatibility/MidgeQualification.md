@@ -1,7 +1,20 @@
 # Midge compatibility qualification
 
-Pants is qualified against Midge commit
-`7d39f86217fdb07191a83bd885a514dd5ea9723f`. Normal builds do not clone or
+Current writers target [LSM spec FORMAT 9](LsmSpecFormat9.md), with Midge
+0.5.2 (`c684310d9d8ce8ecd1151c47151d4bea98b348cf`) as the behavioral target.
+Complete correctness, behavior and performance parity is not yet established;
+see the [current parity evidence](Midge052Parity.md).
+
+The subsequent [correctness-first audit](MidgeCorrectness.md) follows Midge's
+ownership and authority decisions before behavior and performance work. Its
+bounded FORMAT 9 writer matrix includes real WAL handoffs in both producer orders.
+The subsequent [behavior checkpoint](MidgeBehaviorAlignment.md) passes the
+integrated full suite, extended crash campaign and fresh native readback.
+Comparative performance qualification follows those supported local gates.
+
+The fixture regeneration procedure below records the historical Midge commit
+`7d39f86217fdb07191a83bd885a514dd5ea9723f` qualification. Its old driver needs
+porting before it can qualify FORMAT 9. Normal builds do not clone or
 compile Midge. Tests exercise Pants against the committed fixtures under
 `test/Pants.Tests/Fixtures/Compatibility`; the contract manifest is a review inventory.
 

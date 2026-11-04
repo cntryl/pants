@@ -108,10 +108,22 @@ sealed class ImmutableFlushPipeline
         }
 
         flush.BeginAttempt();
-        var workerTask = await _scheduleWorkerAsync(
-                flush.Frozen,
-                flush.PublicationPlan)
-            .ConfigureAwait(false);
+        Task<FrozenFlushRuntimeResult> workerTask;
+        try
+        {
+            workerTask = await _scheduleWorkerAsync(
+                    flush.Frozen,
+                    flush.PublicationPlan)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Admission can fail before any worker exists. Settle it through the same owned
+            // completion path, without awaiting an actor command from inside its current turn.
+            _ = ObserveAttemptAsync(flush, Task.FromException<FrozenFlushRuntimeResult>(exception));
+            return;
+        }
+
         flush.AttachRunningTask(workerTask);
         _ = ObserveAttemptAsync(flush, workerTask);
     }

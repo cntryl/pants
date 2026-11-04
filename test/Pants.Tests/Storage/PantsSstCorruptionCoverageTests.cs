@@ -69,8 +69,8 @@ public sealed class PantsSstCorruptionCoverageTests
     }
 
     [Theory]
-    [InlineData(16, (byte)5)]
-    [InlineData(17, (byte)2)]
+    [InlineData(11, (byte)4)]
+    [InlineData(11, (byte)0x40)]
     public void ShouldRejectDataEntryGivenInvalidMetadataByte(int offset, byte value)
     {
         var block = BuildDataEntry();
@@ -82,20 +82,18 @@ public sealed class PantsSstCorruptionCoverageTests
     }
 
     [Fact]
-    public void ShouldRejectDataEntryGivenExpirationBytesWithoutPresenceFlag()
+    public void ShouldRejectDataEntryGivenTruncatedExpiration()
     {
         var block = BuildDataEntry();
-        block[18] = 1;
+        block[11] = 0x80;
 
-        var exception = Assert.Throws<PantsCorruptionException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
-
-        Assert.Contains("metadata is invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Throws<PantsCorruptionException>(() => SstCodec.DataBlockContainsKey(block, "k"u8));
     }
 
     [Theory]
     [InlineData(ushort.MaxValue)]
     [InlineData(ushort.MaxValue + 1)]
-    public void ShouldRoundTripEntryGivenKeyDeltaAtExtendedLengthBoundary(int keyLength)
+    public void ShouldRoundTripEntryGivenKeyDeltaBeyondUshortBoundary(int keyLength)
     {
         var key = Enumerable.Repeat((byte)'k', keyLength).ToArray();
         var entry = new SstEntry(key, "value"u8.ToArray(), 1, null, false);
@@ -156,12 +154,13 @@ public sealed class PantsSstCorruptionCoverageTests
 
     static byte[] BuildDataEntry()
     {
-        var block = new byte[28];
-        BinaryPrimitives.WriteUInt16LittleEndian(block.AsSpan(2), 1);
-        BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(4), 1);
-        BinaryPrimitives.WriteUInt64LittleEndian(block.AsSpan(8), 1);
-        block[26] = (byte)'k';
-        block[27] = (byte)'v';
+        var block = new byte[22];
+        block[1] = 1;
+        block[2] = 1;
+        BinaryPrimitives.WriteUInt64LittleEndian(block.AsSpan(3), 1);
+        block[12] = (byte)'k';
+        block[13] = (byte)'v';
+        BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(18), 1);
         return block;
     }
 

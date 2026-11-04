@@ -15,6 +15,7 @@ sealed class RuntimePlan
         BlockCachePolicy = options.Memory.BlockCachePolicy;
         CloudWritePolicy = options.CloudWritePolicy;
         StorageTimeout = options.Runtime.StorageTimeout;
+        OpenTimeout = options.Runtime.OpenTimeout;
         RuntimeResponseTimeout = options.Runtime.RuntimeResponseTimeout ??
                                  DeriveRuntimeResponseTimeout(StorageTimeout);
         LongLivedSnapshotWarningThreshold = options.Runtime.LongLivedSnapshotWarningThreshold;
@@ -26,6 +27,14 @@ sealed class RuntimePlan
         FlushAfterWalRecords = options.FlushAfterWalRecords;
 
         MemoryBudgetBytes = ResolveMemoryBudget(options.Memory.Budget);
+        MaximumReplayableTransactionBytes = Storage switch
+        {
+            PantsStorageConfiguration.Cloud cloud => Math.Min(MemoryBudgetBytes / 16,
+                (cloud.LocalStorageBudgetBytes ?? HybridStorageBudgetPolicy.DefaultMaximumLocalBytes) / 2),
+            PantsStorageConfiguration.SimulatedCloud simulated => Math.Min(MemoryBudgetBytes / 16,
+                (simulated.LocalStorageBudgetBytes ?? HybridStorageBudgetPolicy.DefaultMaximumLocalBytes) / 2),
+            _ => null
+        };
         var pools = MemoryPools.Derive(
             MemoryBudgetBytes,
             options.Memory,
@@ -37,7 +46,9 @@ sealed class RuntimePlan
         ScanMemoryPoolBytes = pools.ScanMemoryPoolBytes;
         MemtableSizeLimitBytes = pools.MemtableSizeLimitBytes;
         MemtableFlushThresholdBytes = pools.MemtableFlushThresholdBytes;
-        BlockCacheBytes = pools.BlockCacheBytes;
+        ReadResourceBudgetBytes = pools.BlockCacheBytes;
+        ReadMetadataBudgetBytes = ReadResourceBudgetBytes / 4;
+        BlockCacheBytes = ReadResourceBudgetBytes - ReadMetadataBudgetBytes;
 
         BlockSizeBytes = (PerformanceGoal, WorkloadProfile) switch
         {
@@ -75,6 +86,8 @@ sealed class RuntimePlan
             BackgroundEnabled = options.BackgroundCompaction
         };
         TargetSstSizeBytes = Compaction.TargetSstSizeBytes ?? TargetSstSizeBytes;
+        WriteBackpressure = options.WriteBackpressure;
+        ValidateWriteBackpressure();
         ValidateWalBuffer();
     }
 
@@ -92,11 +105,15 @@ sealed class RuntimePlan
 
     public TimeSpan StorageTimeout { get; }
 
+    public TimeSpan? OpenTimeout { get; }
+
     public TimeSpan RuntimeResponseTimeout { get; }
 
     public TimeSpan LongLivedSnapshotWarningThreshold { get; }
 
     public long MemoryBudgetBytes { get; }
+
+    public long? MaximumReplayableTransactionBytes { get; }
 
     public long TransactionMemoryPoolBytes { get; }
 
@@ -113,6 +130,10 @@ sealed class RuntimePlan
 
     public long BlockCacheBytes { get; }
 
+    public long ReadResourceBudgetBytes { get; }
+
+    public long ReadMetadataBudgetBytes { get; }
+
     public int BlockSizeBytes { get; }
 
     public long TargetSstSizeBytes { get; }
@@ -122,6 +143,8 @@ sealed class RuntimePlan
     public int L0CompactionTrigger { get; }
 
     public PantsCompactionConfiguration Compaction { get; }
+
+    public PantsWriteBackpressureConfiguration WriteBackpressure { get; }
 
     public bool BackgroundCompaction => Compaction.BackgroundEnabled;
 
@@ -137,10 +160,7 @@ sealed class RuntimePlan
 
     public int FlushAfterWalRecords { get; }
 
-    public TimeSpan LeaseHeartbeatInterval => TimeSpan.FromTicks(Math.Clamp(
-        LeaseTimeToLive.Ticks / 3,
-        TimeSpan.TicksPerMillisecond,
-        TimeSpan.FromSeconds(10).Ticks));
+    public TimeSpan LeaseHeartbeatInterval => TimeSpan.FromTicks(Math.Max(1, LeaseTimeToLive.Ticks / 3));
 
     public static RuntimePlan Resolve(PantsOpenOptions options) => new(options);
 
@@ -149,6 +169,30 @@ sealed class RuntimePlan
         if (WalBufferSizeBytes <= 0)
         {
             throw PantsException.InvalidArgument("WAL buffer size must be greater than zero.");
+        }
+    }
+
+    void ValidateWriteBackpressure()
+    {
+        var policy = WriteBackpressure;
+        var hasSoft = policy.L0SoftLimit is not null || policy.MemorySoftLimitBytes is not null ||
+                      policy.PendingCompactionSoftLimitBytes is not null;
+        var memoryHard = MemtableFlushThresholdBytes > long.MaxValue / 2
+            ? long.MaxValue
+            : MemtableFlushThresholdBytes * 2;
+        if (policy.L0SoftLimit is { } l0 && (l0 <= 0 || l0 >= (long)Compaction.L0FileCountTrigger + 11) ||
+            policy.MemorySoftLimitBytes is { } memory && (memory <= 0 || memory >= memoryHard) ||
+            policy.PendingCompactionSoftLimitBytes is { } pending &&
+            (pending == 0 || policy.PendingCompactionHardLimitBytes is not { } hard || pending >= hard) ||
+            policy.PendingCompactionHardLimitBytes is 0 || policy.BackgroundWriteBytesPerSecond is 0 ||
+            policy.MaximumAdmissionDelay < TimeSpan.Zero ||
+            hasSoft && policy.MaximumAdmissionDelay == TimeSpan.Zero ||
+            policy.MaximumAdmissionDelay.TotalSeconds * TimeProvider.System.TimestampFrequency >
+            long.MaxValue - (double)TimeProvider.System.GetTimestamp())
+        {
+            throw PantsException.InvalidArgument(
+                "Write soft limits must be positive and below resolved hard limits; enabled slowdown " +
+                "and maintenance rates must be positive and representable by the monotonic clock.");
         }
     }
 

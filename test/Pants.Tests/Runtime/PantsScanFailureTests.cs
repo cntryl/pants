@@ -4,6 +4,40 @@ namespace Cntryl.Pants.Runtime;
 
 public sealed class PantsScanFailureTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ShouldReplaceAnInFlightScanResultErrorOrExhaustionWithStickyReadFencing(int outcome)
+    {
+        var authorized = true;
+        var releases = 0;
+        var expected = new PantsFencedException("The read lease expired during the source operation.");
+        await using var scan = new ScanInstance(
+            _ => ValueTask.FromResult<IAsyncEnumerator<PantsEntry>>(new ReadAuthorityChangingEnumerator(
+                () => authorized = false, outcome)),
+            new PantsScanQuery(),
+            () =>
+            {
+                releases++;
+                return ValueTask.CompletedTask;
+            },
+            () =>
+            {
+                if (!authorized)
+                {
+                    throw expected;
+                }
+            });
+        await using var entries = scan.GetAsyncEnumerator();
+
+        Assert.Same(expected, await Assert.ThrowsAsync<PantsFencedException>(() => entries.MoveNextAsync().AsTask()));
+        Assert.Same(expected, await Assert.ThrowsAsync<PantsFencedException>(() => entries.MoveNextAsync().AsTask()));
+        Assert.True(scan.IsFailed);
+        Assert.False(scan.IsExhausted);
+        Assert.Equal(1, releases);
+    }
+
     [Fact]
     public async Task ShouldRemainExhaustedAndReleaseSnapshotOnceWhenMovedAfterDisposal()
     {
@@ -135,5 +169,20 @@ public sealed class PantsScanFailureTests
     {
         yield return new PantsEntry("first"u8.ToArray(), "value"u8.ToArray());
         throw exception;
+    }
+
+    sealed class ReadAuthorityChangingEnumerator(Action expire, int outcome) : IAsyncEnumerator<PantsEntry>
+    {
+        public PantsEntry Current => new("key"u8.ToArray(), "value"u8.ToArray());
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public ValueTask<bool> MoveNextAsync()
+        {
+            expire();
+            return outcome == 2
+                ? ValueTask.FromException<bool>(new PantsCorruptionException("Stale source read error."))
+                : ValueTask.FromResult(outcome == 0);
+        }
     }
 }

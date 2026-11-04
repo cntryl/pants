@@ -28,6 +28,15 @@ An admitted `CommitAsync` whose response deadline expires reports
 The transaction wrapper does not enqueue a rollback after either response, because the accepted
 commit remains runtime-owned.
 
+`CommitWithSequenceAsync` uses that same response registry and returns the
+transaction's assigned cut, rather than reading a later global metric. Pure
+empty and read-only completion return their start cut; assertion-only completion
+returns the validated server cut. An accepted unknown outcome has severity
+`OutcomeUnknown` and requires reconciliation. Cloud callers can confirm an
+explicit cut through `WaitForDurableAsync`: one caller/runtime budget covers
+queueing and observation, while the existing publication worker and retry owner
+continue independently. Pure empty `CloudStrict` completion is not a barrier.
+
 Open/recovery is not an admitted runtime-response wait: provider/storage calls made while opening
 share one startup `RuntimeResponseTimeout` budget while each request remains capped by
 `StorageTimeout`. Callerless durability retries have an explicit unbounded aggregate owner, bounded
@@ -91,11 +100,15 @@ level, cache, bloom, data-block, and cloud-hydration decisions for that read.
 Flush and compaction publication uses durable intent records followed by
 manifest edits. Immutable snapshots pin obsolete SSTs conservatively. GC only
 removes those files after the final transaction or scan snapshot is released.
-For provider-cloud databases, a successor may take the writer lease, compact,
-and collect the old remote SST object while a fenced predecessor still has an
-open transaction. The predecessor's snapshot continues to read its pinned local
-cache view; losing write authority does not invalidate reads from that snapshot.
-Disposing the transaction releases its local snapshot pin.
+Retained local reads remain available after a writer-only fence. Cloud
+transaction and scan reads require current lease authority and return `Fenced`
+after lease loss, including reads whose bytes happen to be cached locally. A
+snapshot pin belongs to its runtime and cannot retain remote SSTs against a
+successor. Authority is checked around asynchronous read completion so a result
+or provider error arriving after lease loss cannot escape that fence. Runtime
+diagnostics remain available while the runtime is running; transient provider
+uncertainty remains distinct from proved lease loss. Disposing the transaction
+releases its local snapshot pin.
 
 Transactions and scans must be disposed to release their snapshot pins and any
 transaction spill files. Pants does not evict a live snapshot or use garbage

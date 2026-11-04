@@ -25,6 +25,13 @@ one generation. Missing metadata identities fail at construction or when a modif
 `Version` is consumed. These failures are `PantsIOException`; providers must supply a valid
 conditional identity. There is no persisted-format or provider-interface signature change.
 
+Database transaction reads additionally require current cloud lease authority.
+After lease loss, retained point reads and scans return `Fenced` even when a
+local cache could supply their bytes; a successor can reclaim their remote
+sources. Preflight remains a separate read-only provider probe and does not
+acquire a database lease. Deterministic read-fencing and cold-recovery evidence
+is described in [MidgeCorrectnessCloud.md](compatibility/MidgeCorrectnessCloud.md).
+
 Built-in adapters inspect raw GET Content-Length declarations before buffering can normalize
 them, then check the buffered body's length. Malformed, conflicting, or mismatched declarations
 fail closed; an absent declaration, including on chunked responses, is allowed. Response disposal

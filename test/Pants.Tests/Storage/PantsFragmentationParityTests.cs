@@ -50,6 +50,124 @@ public sealed class PantsFragmentationParityTests
     }
 
     [Fact]
+    public async Task ShouldKeepFinalKeyAndEndingRangeAdjacentToExistingSourceLevelNeighbor()
+    {
+        using var directory = new TemporaryDirectory();
+        var fixture = await CreateFixtureAsync(
+            directory.Path,
+            FragmentSourceShape.FinalKeyWithEndingRangeNeighbor);
+        using var failpoint = new FlushPipelineFailpointHandler(
+            Failpoint.AfterCompactionManifestPublish,
+            throwOnHit: true);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            fixture.Options,
+            new RuntimeDependencies(failpoint));
+
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
+
+        var levelFiles = (await database.Diagnostics.GetStorageLayoutAsync()).Levels
+            .Single(static level => level.Level == 1)
+            .Files
+            .OrderBy(static file => TestBytes.ToText(file.SmallestKey!.Value), StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(3, levelFiles.Length);
+        Assert.DoesNotContain(levelFiles, file => file.Name == fixture.SourceName);
+        Assert.Contains(levelFiles, file => file.Name == fixture.NeighborName);
+
+        var outputs = levelFiles
+            .Where(file => file.Name != fixture.NeighborName)
+            .Select(file => SstCodec.Decode(File.ReadAllBytes(Path.Combine(
+                fixture.RootPath,
+                "sst",
+                file.Name))))
+            .ToArray();
+        Assert.Equal(2, outputs.Length);
+        Assert.Equal(
+            fixture.SourceEntries.Select(Describe),
+            outputs.SelectMany(static output => output.Entries).Select(Describe));
+        Assert.Equal(
+            [(Start: "a", End: "d1", Sequence: 4UL), (Start: "d1", End: "z", Sequence: 4UL)],
+            outputs.SelectMany(static output => output.RangeTombstones)
+                .OrderBy(static range => range.Start, ByteArrayComparer.Instance)
+                .Select(static range => (
+                    Start: TestBytes.ToText(range.Start),
+                    End: TestBytes.ToText(range.End),
+                    range.Sequence)));
+        Assert.Contains(outputs[1].Entries, static entry => TestBytes.ToText(entry.Key) == "z");
+        Assert.Contains(outputs[1].RangeTombstones, static range => TestBytes.ToText(range.End) == "z");
+
+        Assert.True(ByteArrayComparer.Instance.Compare(
+            levelFiles[0].LargestKey!.Value.ToArray(),
+            levelFiles[1].SmallestKey!.Value.ToArray()) <= 0);
+        Assert.True(ByteArrayComparer.Instance.Compare(
+            levelFiles[1].LargestKey!.Value.ToArray(),
+            levelFiles[2].SmallestKey!.Value.ToArray()) <= 0);
+    }
+
+    [Fact]
+    public async Task ShouldPublishConsecutiveOutputFilesWhenSoftRollPrecedesEmptyFragmentCut()
+    {
+        using var directory = new TemporaryDirectory();
+        var fixture = await CreateFixtureAsync(directory.Path, FragmentSourceShape.SoftRollBeforeEmptyCut);
+        using var failpoint = new FlushPipelineFailpointHandler(
+            Failpoint.AfterCompactionManifestPublish,
+            throwOnHit: true);
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            fixture.Options,
+            new RuntimeDependencies(failpoint));
+
+        await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
+
+        using var intent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+            await File.ReadAllBytesAsync(Path.Combine(fixture.RootPath, "intent_log.json"))).Entries);
+        var publication = Assert.Single(intent.RootElement.EnumerateArray())
+            .GetProperty("CompactionPublish");
+        var outputNames = publication.GetProperty("added").EnumerateArray()
+            .Select(static output => output.GetProperty("name").GetString()!)
+            .ToArray();
+        Assert.Equal([8UL, 9UL], outputNames.Select(ParseSstSequence));
+
+        var outputs = outputNames
+            .Select(name => SstCodec.Decode(File.ReadAllBytes(Path.Combine(
+                fixture.RootPath,
+                "sst",
+                name))))
+            .ToArray();
+        Assert.Equal(2, outputs.Length);
+        Assert.Empty(outputs[0].Entries);
+        Assert.Equal([("a", "b", 4UL)], outputs[0].RangeTombstones.Select(static range => (
+            TestBytes.ToText(range.Start),
+            TestBytes.ToText(range.End),
+            range.Sequence)));
+        Assert.Equal(["z"], outputs[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Empty(outputs[1].RangeTombstones);
+        Assert.Equal(
+            fixture.SourceEntries.Select(Describe),
+            outputs.SelectMany(static output => output.Entries).Select(Describe));
+    }
+
+    [Fact]
+    public async Task ShouldRetainSourceWhenFragmentSplitBoundaryExceedsCompactionBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var fixture = await CreateFixtureAsync(
+            directory.Path,
+            FragmentSourceShape.OversizedSplitBoundary);
+        var outputFailpoint = new CountingCompactionOutputDurableFailpointHandler();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            fixture.Options,
+            new RuntimeDependencies(outputFailpoint));
+
+        await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
+            database.Maintenance.CompactAllAsync().AsTask());
+
+        Assert.Equal(0, outputFailpoint.HitCount);
+        AssertAuthoritativeInputsRemain(fixture);
+        AssertNoCompactionIntent(fixture.RootPath);
+        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+    }
+
+    [Fact]
     public async Task ShouldPublishValidFragmentWhenCriticalL0WorkArrivesDuringItsBuild()
     {
         using var directory = new TemporaryDirectory();
@@ -161,8 +279,8 @@ public sealed class PantsFragmentationParityTests
             await Assert.ThrowsAnyAsync<PantsException>(() =>
                 database.Maintenance.CompactAllAsync().AsTask());
 
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(fixture.RootPath, "intent_log.json")));
+            using var intent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+                await File.ReadAllBytesAsync(Path.Combine(fixture.RootPath, "intent_log.json"))).Entries);
             var publication = Assert.Single(intent.RootElement.EnumerateArray())
                 .GetProperty("CompactionPublish");
             Assert.Equal("OutputDurable", publication.GetProperty("phase").GetString());
@@ -189,8 +307,8 @@ public sealed class PantsFragmentationParityTests
             CreateOptions(recoveryDirectory.Path));
         var recoveredMetrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(PantsEngineHealth.Healthy, recoveredMetrics.Health);
-        using var recoveredIntent = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "intent_log.json")));
+        using var recoveredIntent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+            await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "intent_log.json"))).Entries);
         Assert.Empty(recoveredIntent.RootElement.EnumerateArray());
 
         var recoveredRows = outputNames
@@ -265,6 +383,21 @@ public sealed class PantsFragmentationParityTests
                 Entry("a0", "left", 7),
                 Entry("b0", "left", 6)
             ],
+            FragmentSourceShape.FinalKeyWithEndingRangeNeighbor =>
+            [
+                Entry("a", "left", 7),
+                Entry("n", "middle", 8),
+                Entry("z", "last", 9)
+            ],
+            FragmentSourceShape.SoftRollBeforeEmptyCut =>
+            [
+                Entry("z", "right", 9)
+            ],
+            FragmentSourceShape.OversizedSplitBoundary =>
+            [
+                Entry("a", "left", 7),
+                Entry("z", "right", 9)
+            ],
             _ =>
             [
                 Entry("a0", "left", 7),
@@ -277,14 +410,34 @@ public sealed class PantsFragmentationParityTests
                 Entry("f9", "right", 9)
             ]
         };
-        RangeTombstone[] sourceRanges = shape == FragmentSourceShape.Valid
-            ? [new RangeTombstone("b0"u8.ToArray(), "e0"u8.ToArray(), 4)]
-            : [];
+        RangeTombstone[] sourceRanges = shape switch
+        {
+            FragmentSourceShape.Valid => [new RangeTombstone("b0"u8.ToArray(), "e0"u8.ToArray(), 4)],
+            FragmentSourceShape.FinalKeyWithEndingRangeNeighbor =>
+                [new RangeTombstone("a"u8.ToArray(), "z"u8.ToArray(), 4)],
+            FragmentSourceShape.SoftRollBeforeEmptyCut =>
+                [new RangeTombstone("a"u8.ToArray(), "b"u8.ToArray(), 4)],
+            _ => []
+        };
         var sourceBytes = SstCodec.Encode(sourceEntries, sourceRanges, PantsPerformanceGoal.Latency);
         await File.WriteAllBytesAsync(Path.Combine(sstDirectory.FullName, sourceName), sourceBytes);
 
-        var sourceSmallest = shape == FragmentSourceShape.BoundsTooNarrow ? "b0" : "a0";
-        var sourceLargest = shape == FragmentSourceShape.BoundsTooNarrow ? "e0" : "f9";
+        var sourceSmallest = shape switch
+        {
+            FragmentSourceShape.BoundsTooNarrow => "b0",
+            FragmentSourceShape.FinalKeyWithEndingRangeNeighbor or
+                FragmentSourceShape.SoftRollBeforeEmptyCut or
+                FragmentSourceShape.OversizedSplitBoundary => "a",
+            _ => "a0"
+        };
+        var sourceLargest = shape switch
+        {
+            FragmentSourceShape.BoundsTooNarrow => "e0",
+            FragmentSourceShape.FinalKeyWithEndingRangeNeighbor or
+                FragmentSourceShape.SoftRollBeforeEmptyCut or
+                FragmentSourceShape.OversizedSplitBoundary => "z",
+            _ => "f9"
+        };
         var files = new List<FileMeta>
         {
             new()
@@ -302,9 +455,38 @@ public sealed class PantsFragmentationParityTests
                 LargestSequence = sourceEntries.Max(static entry => entry.Sequence)
             }
         };
+        string? neighborName = null;
+        byte[]? neighborBytes = null;
+        if (shape == FragmentSourceShape.FinalKeyWithEndingRangeNeighbor)
+        {
+            neighborName = SstName(1, 20);
+            var neighborEntries = new[]
+            {
+                Entry("z", "neighbor", 20),
+                Entry("zz", "neighbor", 21)
+            };
+            neighborBytes = SstCodec.Encode(neighborEntries, [], PantsPerformanceGoal.Latency);
+            await File.WriteAllBytesAsync(Path.Combine(sstDirectory.FullName, neighborName), neighborBytes);
+            files.Add(new FileMeta
+            {
+                Name = neighborName,
+                ColumnFamilyId = 0,
+                Level = 1,
+                SstSequence = 20,
+                SizeBytes = checked((ulong)neighborBytes.Length),
+                ContentCrc32C = DiskFormat.Crc32C(neighborBytes),
+                SmallestKey = TestBytes.FromString("z"),
+                LargestKey = TestBytes.FromString("zz"),
+                KeyBoundsComplete = true,
+                SmallestSequence = 20,
+                LargestSequence = 21
+            });
+        }
         var targetNames = new List<string>();
         var targetBytesByName = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        var targetKeys = new[] { "a1", "b1", "c1", "d1", "e1", "f1" };
+        var targetKeys = shape == FragmentSourceShape.OversizedSplitBoundary
+            ? [new string('b', 2 * 1024 * 1024)]
+            : PlanTargetKeys;
         for (var index = 0; index < targetKeys.Length; index++)
         {
             var sequence = (ulong)index + 2;
@@ -338,19 +520,27 @@ public sealed class PantsFragmentationParityTests
         var manifest = new ManifestState
         {
             LastPersistedSequence = 200,
-            NextSstSeqs = new Dictionary<uint, ulong> { [0] = 8 },
-            ColumnFamilies = [new ColumnFamilyMeta { Id = 0, Name = "default" }],
+            NextSstSeqs = new Dictionary<uint, ulong>
+            {
+                [0] = shape == FragmentSourceShape.FinalKeyWithEndingRangeNeighbor ? 21UL : 8UL
+            },
+            FlushedThrough = new Dictionary<uint, ulong> { [0] = 200 },
             Files = files
         };
-        await File.WriteAllTextAsync(Path.Combine(rootPath, "FORMAT"), "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(rootPath, "manifest.json"),
-            JsonSerializer.Serialize(manifest, JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(rootPath, "FORMAT"), "midge-format-version=9\n");
+        await File.WriteAllBytesAsync(
+            Path.Combine(rootPath, "manifest.snapshot.json"),
+            ManifestCodec.Encode(manifest, JsonOptions));
 
         return new FragmentFixture(
             rootPath,
-            CreateOptions(rootPath),
+            CreateOptions(
+                rootPath,
+                shape == FragmentSourceShape.FinalKeyWithEndingRangeNeighbor ? 1 : 2,
+                shape == FragmentSourceShape.OversizedSplitBoundary),
             sourceName,
+            neighborName,
+            neighborBytes,
             targetNames.ToArray(),
             sourceBytes,
             sourceEntries,
@@ -358,15 +548,24 @@ public sealed class PantsFragmentationParityTests
             targetBytesByName);
     }
 
-    static PantsOpenOptions CreateOptions(string path) =>
-        PantsOpenOptions.Local(path)
+    static PantsOpenOptions CreateOptions(
+        string path,
+        int l0FileCountTrigger = 2,
+        bool constrainedCompactionBudget = false)
+    {
+        var options = PantsOpenOptions.Local(path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(
-                L0FileCountTrigger: 2,
+                L0FileCountTrigger: l0FileCountTrigger,
                 L1TargetSizeBytes: 1,
                 MaximumLevels: 3,
                 TargetSstSizeBytes: 4096,
                 BackgroundEnabled: false));
+        return constrainedCompactionBudget
+            ? options.WithMemoryBudget(PantsMemoryBudget.FromBytes(8L * 1024 * 1024))
+                .WithTransactionMemoryPool(2L * 1024 * 1024)
+            : options;
+    }
 
     static (ManifestState Manifest, CompactionPlan Plan) CreateFragmentPlan()
     {
@@ -436,6 +635,10 @@ public sealed class PantsFragmentationParityTests
     static string SstName(uint level, ulong sequence) =>
         $"000000_{level:00}_{sequence:00000000000000000000}.sst";
 
+    static ulong ParseSstSequence(string name) => ulong.Parse(
+        name[(name.LastIndexOf('_') + 1)..^4],
+        System.Globalization.CultureInfo.InvariantCulture);
+
     static (string Key, string? Value, ulong Sequence, ulong? Expiration, bool IsDelete) Describe(
         SstEntry entry) =>
         (
@@ -459,8 +662,18 @@ public sealed class PantsFragmentationParityTests
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
-            new[] { fixture.SourceName }.Concat(fixture.TargetNames).Order(StringComparer.Ordinal),
+            new[] { fixture.SourceName }
+                .Concat(fixture.NeighborName is null ? [] : [fixture.NeighborName])
+                .Concat(fixture.TargetNames)
+                .Order(StringComparer.Ordinal),
             names);
+        if (fixture.NeighborName is not null)
+        {
+            Assert.Equal(
+                fixture.NeighborBytes,
+                File.ReadAllBytes(Path.Combine(fixture.RootPath, "sst", fixture.NeighborName)));
+        }
+
         foreach (var (name, expectedBytes) in fixture.TargetBytesByName)
         {
             Assert.Equal(
@@ -477,7 +690,7 @@ public sealed class PantsFragmentationParityTests
             return;
         }
 
-        using var intent = JsonDocument.Parse(File.ReadAllBytes(path));
+        using var intent = IntentLogCodec.ToDocument(IntentLogCodec.Read(File.ReadAllBytes(path)).Entries);
         Assert.Empty(intent.RootElement.EnumerateArray());
     }
 
@@ -526,7 +739,25 @@ public sealed class PantsFragmentationParityTests
     {
         Valid,
         BoundsTooNarrow,
-        OnlyBeforeCut
+        OnlyBeforeCut,
+        FinalKeyWithEndingRangeNeighbor,
+        SoftRollBeforeEmptyCut,
+        OversizedSplitBoundary
+    }
+
+    sealed class CountingCompactionOutputDurableFailpointHandler : IFailpointHandler
+    {
+        int _hitCount;
+
+        public int HitCount => Volatile.Read(ref _hitCount);
+
+        public void Hit(Failpoint failpoint)
+        {
+            if (failpoint == Failpoint.AfterCompactionOutputDurable)
+            {
+                Interlocked.Increment(ref _hitCount);
+            }
+        }
     }
 
     sealed class ThrowOnNthCompactionOutputFailpointHandler(int failAtHit) : IFailpointHandler
@@ -549,6 +780,8 @@ public sealed class PantsFragmentationParityTests
         string RootPath,
         PantsOpenOptions Options,
         string SourceName,
+        string? NeighborName,
+        byte[]? NeighborBytes,
         string[] TargetNames,
         byte[] SourceBytes,
         SstEntry[] SourceEntries,

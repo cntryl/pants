@@ -18,111 +18,64 @@ public sealed class MidgeStorageGoldenTests
     [Theory]
     [InlineData("wal/active/wal.log")]
     [InlineData("wal/sealed/00000000000000000001.wal")]
-    public void ShouldDecodeEveryFrameGivenPinnedMidgeWalSegmentGolden(string relativePath)
+    public void ShouldRejectPinnedLegacyWalSegmentAsIncompatible(string relativePath)
     {
-        var records = new List<WalRecord>();
-
-        WalFrameReader.Visit(
-            ReadStorageFixture(relativePath),
-            (record, _) => records.Add(record));
-
-        Assert.NotEmpty(records);
-        Assert.All(records, static record =>
-        {
-            Assert.True(record.Sequence > 0);
-            Assert.True(record.WriterEpoch > 0);
-        });
+        Assert.Throws<PantsCompatibilityException>(() =>
+            WalFrameReader.Visit(ReadStorageFixture(relativePath), static (_, _) => { }));
     }
 
     [Fact]
-    public void ShouldDecodeEveryV4StructureGivenPinnedMidgeStructuredSstGolden()
+    public void ShouldRejectPinnedMidgeV4SstAsIncompatible()
     {
         var path = StorageFixturePath("sst/structured-v4.sst");
         var bytes = File.ReadAllBytes(path);
 
-        var contents = SstCodec.Decode(bytes);
-        using var reader = SstReader.Open(path);
-
-        Assert.True(contents.Entries.Count >= 192);
-        Assert.Single(contents.RangeTombstones);
-        Assert.True(contents.DataBlockCount > 0);
-        Assert.Equal(contents.DataBlockCount, reader.DataBlockCount);
-        Assert.Equal(SstIndexKind.Trie, SstCodec.GetIndexKind(bytes));
-        var decision = reader.GetPointReadDecision(
-            "tenant/shared/static-segment/0000"u8);
-        Assert.Equal(1, decision.CandidateBlocks);
-        Assert.Equal(1, decision.BloomChecks);
+        Assert.Throws<PantsCompatibilityException>(() => SstCodec.Decode(bytes));
+        Assert.Throws<PantsCompatibilityException>(() => SstReader.Open(path));
     }
 
     [Fact]
-    public void ShouldValidatePinnedMidgeManifestJournal()
+    public void ShouldRejectLegacyMidgeManifestJournal()
     {
         var journal = ReadStorageFixture("metadata/manifest.journal");
 
-        LocalDiskStore.ValidateManifestJournal(journal);
+        Assert.Throws<PantsCorruptionException>(() => LocalDiskStore.ValidateManifestJournal(journal));
     }
 
     [Fact]
-    public async Task ShouldReadPinnedMidgeCloudLease()
+    public async Task ShouldRejectPinnedLegacyMidgeCloudLease()
     {
         var cloudBytes = ReadStorageFixture("leases/cloud.midge_primary_lease");
-
         var objects = new TestCloudObjectStore();
-        _ = await objects.PutAsync(
-            PantsCloudObjectLayout.LeaseObjectKey,
-            cloudBytes,
-            new PantsCloudObjectWriteCondition.Unconditional(),
-            CancellationToken.None);
+        objects.Seed(PantsCloudObjectLayout.LeaseObjectKey, cloudBytes);
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
-        var snapshot = await store.ReadAsync(CancellationToken.None);
-        Assert.Equal(1UL, Assert.IsType<CloudLeaseSnapshot>(snapshot).Lease.Epoch);
+
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(async () => await store.ReadAsync(CancellationToken.None));
+        Assert.Equal(cloudBytes, objects.Data.ToArray());
     }
 
     [Fact]
-    public void ShouldMatchDdlOperationGivenPinnedMidgeRegistryAndPrepareGoldens()
+    public void ShouldRejectPinnedLegacyMidgeDdlRegistry()
     {
-        var registry = CloudDdlJson.DeserializeRegistry(
-            ReadStorageFixture("ddl/ddl.registry.json"));
-        var prepare = CloudDdlJson.DeserializePrepare(
-            ReadStorageFixture("ddl/ddl.prepare.json"));
-
-        var operation = Assert.Single(registry.Operations);
-        Assert.Equal(operation.OperationId, prepare.OperationId);
-        Assert.Equal(operation.Edit.GetRawText(), prepare.Edit.GetRawText());
-        Assert.Equal("fixture", CloudDdlEdit.GetColumnFamilyName(operation.Edit));
+        Assert.Throws<PantsCorruptionException>(() => CloudDdlJson.DeserializeRegistry(ReadStorageFixture("ddl/ddl.registry.json")));
     }
 
     [Fact]
-    public void ShouldDecodePinnedMidgeCloudWalCatalogAndReferencedSegment()
+    public void ShouldRejectPinnedLegacyMidgeCloudWalCatalog()
     {
-        var catalog = JsonSerializer.Deserialize<ProviderWalCatalog>(
-            ReadStorageFixture("cloud/publication-catalog.v1.json"),
-            CatalogJsonOptions);
-
-        var decoded = Assert.IsType<ProviderWalCatalog>(catalog);
-        Assert.Equal(1U, decoded.FormatVersion);
-        Assert.Equal(1UL, decoded.FencingEpoch);
-        var segment = Assert.Single(decoded.Segments).Value;
-        Assert.Equal(1UL, segment.SegmentId);
-        Assert.Equal(1UL, segment.WriterEpoch);
-        Assert.Equal(
-            "wal/epochs/00000000000000000001/00000000000000000001.wal",
-            segment.ObjectKey);
-        Assert.True(segment.MaximumSequence > 0);
-        Assert.NotEmpty(ReadStorageFixture("wal/sealed/00000000000000000001.wal"));
+        Assert.Throws<PantsCompatibilityException>(() => JsonSerializer.Deserialize<ProviderWalCatalog>(
+            ReadStorageFixture("cloud/publication-catalog.v1.json"), CatalogJsonOptions));
     }
 
     [Fact]
-    public async Task ShouldVerifyGeneratedMidgeDatabaseOfflineWithoutMutation()
+    public async Task ShouldRejectLegacyMidgeDatabaseOfflineWithoutMutation()
     {
         var path = StorageFixturePath("databases/midge-structured-v4-db");
         var before = ComputeDirectoryHash(path);
 
-        var report = await PantsDatabase.VerifyPathAsync(path);
+        await Assert.ThrowsAsync<PantsCompatibilityException>(() => PantsDatabase.VerifyPathAsync(path).AsTask());
 
-        Assert.Equal(PantsEngineHealth.Healthy, report.Health);
-        Assert.True(report.Authoritative);
-        Assert.True(report.SstFilesVerified > 0);
+
         Assert.Equal(before, ComputeDirectoryHash(path));
     }
 

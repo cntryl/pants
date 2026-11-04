@@ -23,7 +23,7 @@ public sealed class PantsRetainedWalTombstoneRecoveryTests
             }
 
             await using (var wal = new FileStream(
-                             Path.Combine(directory.Path, "wal", "wal.log"),
+                             WalTestFiles.ActivePath(directory.Path),
                              FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
                 retainedWal = new byte[checked((int)wal.Length)];

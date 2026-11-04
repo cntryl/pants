@@ -28,13 +28,13 @@ public sealed class PantsRuntimeMeterTests
             .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
-            await CommitAsync(database, "first", PantsWriteOptions.Sync);
+            await CommitAsync(database, "first", PantsWriteOptions.Sync, forceRewrite: true);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
         Assert.True((await reopened.Diagnostics.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed > 0);
         await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
-        await CommitAsync(reopened, "second", PantsWriteOptions.Buffered);
+        await CommitAsync(reopened, "second", PantsWriteOptions.Buffered, forceRewrite: true);
         await reopened.Maintenance.FlushAsync(reopened.ColumnFamilies.DefaultFamily);
         await using (var read = await reopened.Transactions.BeginAsync(
                          reopened.ColumnFamilies.DefaultFamily,
@@ -43,7 +43,19 @@ public sealed class PantsRuntimeMeterTests
             Assert.NotNull(await read.GetAsync("first"u8.ToArray()));
         }
 
+        var inputNames = (await reopened.Diagnostics.GetStorageLayoutAsync()).Levels
+            .SelectMany(static level => level.Files).Select(static file => file.Name).ToArray();
+        Assert.Equal(2, inputNames.Length);
         await reopened.Maintenance.CompactAllAsync();
+        Assert.True((await reopened.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun > 0);
+        Assert.DoesNotContain((await reopened.Diagnostics.GetStorageLayoutAsync()).Levels
+            .SelectMany(static level => level.Files), file => inputNames.Contains(file.Name, StringComparer.Ordinal));
+        await using (var read = await reopened.Transactions.BeginAsync(
+                         reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal("value"u8.ToArray(), (await read.GetAsync("first"u8.ToArray()))?.ToArray());
+            Assert.Equal("value"u8.ToArray(), (await read.GetAsync("second"u8.ToArray()))?.ToArray());
+        }
 
         await measurements.WaitForAsync(names, TestTimeouts.Expected);
         Assert.All(names, name => Assert.True(measurements[name] > 0, name));
@@ -149,12 +161,18 @@ public sealed class PantsRuntimeMeterTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         string key,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions,
+        bool forceRewrite = false)
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+        if (forceRewrite)
+        {
+            // Keep the rows intact while requiring physical compaction rather than promotion.
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+        }
         await transaction.CommitAsync(writeOptions);
     }
 }

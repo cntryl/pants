@@ -13,12 +13,14 @@ public sealed class PantsCloudWalRetirementTests
         using var competingCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
-        var leaseTimeToLive = TimeSpan.FromMilliseconds(500);
+        var leaseTimeToLive = TimeSpan.FromSeconds(30);
+        var time = new ManualSchedulingTimeProvider();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         var database = await OpenAsync(
             cache.Path,
             client,
             workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
-            leaseTimeToLive: leaseTimeToLive);
+            leaseTimeToLive: leaseTimeToLive, leaseTimeProvider: time, leaseClock: clock);
         try
         {
             await CommitAsync(database, "lease-held-through-worker");
@@ -36,14 +38,14 @@ public sealed class PantsCloudWalRetirementTests
 
             // The cleanup deadline has elapsed, but the retirement worker is still inside the
             // provider. The heartbeat and remote lease must remain live for its full lifetime.
-            await Task.Delay(TimeSpan.FromMilliseconds(900));
+            await RenewBeyondOriginalValidityAsync(handler, time, clock);
             IPantsDatabase? competingDatabase = null;
             try
             {
                 competingDatabase = await OpenAsync(
                     competingCache.Path,
                     client,
-                    leaseTimeToLive: leaseTimeToLive);
+                    leaseTimeToLive: leaseTimeToLive, leaseTimeProvider: time, leaseClock: clock);
             }
             catch (PantsLeaseHeldException)
             {
@@ -72,7 +74,7 @@ public sealed class PantsCloudWalRetirementTests
         await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
             competingCache.Path,
             client,
-            leaseTimeToLive);
+            leaseTimeToLive, time, clock);
         await AssertValueAsync(recovered, "lease-held-through-worker");
     }
 
@@ -83,11 +85,13 @@ public sealed class PantsCloudWalRetirementTests
         using var successorCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
+        var time = new ManualSchedulingTimeProvider();
+        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         var database = await OpenAsync(
             cache.Path,
             client,
             workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
-            leaseTimeToLive: TimeSpan.FromMilliseconds(500));
+            leaseTimeToLive: TimeSpan.FromSeconds(30), leaseTimeProvider: time, leaseClock: clock);
         try
         {
             await CommitAsync(database, "lease-held-through-retry");
@@ -105,13 +109,14 @@ public sealed class PantsCloudWalRetirementTests
 
             // The retry must keep waiting for the worker that owns the cloud lease. A completed
             // shutdown result here would claim disposal succeeded while deferred cleanup is live.
+            await RenewBeyondOriginalValidityAsync(handler, time, clock);
             IPantsDatabase? competingDatabase = null;
             try
             {
                 competingDatabase = await OpenAsync(
                     successorCache.Path,
                     client,
-                    leaseTimeToLive: TimeSpan.FromMilliseconds(500));
+                    leaseTimeToLive: TimeSpan.FromSeconds(30), leaseTimeProvider: time, leaseClock: clock);
             }
             catch (PantsLeaseHeldException)
             {
@@ -140,7 +145,7 @@ public sealed class PantsCloudWalRetirementTests
         await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
             successorCache.Path,
             client,
-            TimeSpan.FromMilliseconds(500));
+            TimeSpan.FromSeconds(30), time, clock);
         await AssertValueAsync(recovered, "lease-held-through-retry");
     }
 
@@ -151,6 +156,7 @@ public sealed class PantsCloudWalRetirementTests
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
         await using var database = await OpenAsync(cache.Path, client);
+        var firstSegmentId = checked((ulong)(await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId);
         await CommitAsync(database, "flushed");
         handler.BlockWalRangeReads();
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -164,12 +170,12 @@ public sealed class PantsCloudWalRetirementTests
                    handler.GetObjectText("/wal/publication-catalog.v1.json")))
         {
             var root = catalog.RootElement;
-            Assert.Equal(3UL, root.GetProperty("wal_history_start_segment_id").GetUInt64());
-            Assert.Equal(4UL, root.GetProperty("next_segment_id").GetUInt64());
+            Assert.Equal(0UL, root.GetProperty("anchor").GetProperty("id").GetUInt64());
+            Assert.Equal(firstSegmentId + 2, root.GetProperty("next_segment_id").GetUInt64());
             Assert.Equal(
-                ["1", "3"],
-                root.GetProperty("segments").EnumerateObject()
-                    .Select(static segment => segment.Name)
+                [firstSegmentId, firstSegmentId + 1],
+                root.GetProperty("segments").EnumerateArray()
+                    .Select(static segment => segment.GetProperty("facts").GetProperty("link").GetProperty("id").GetUInt64())
                     .ToArray());
         }
 
@@ -238,17 +244,23 @@ public sealed class PantsCloudWalRetirementTests
         string root,
         HttpClient client,
         TimeSpan? workerDisposalTimeout = null,
-        TimeSpan? leaseTimeToLive = null) =>
+        TimeSpan? leaseTimeToLive = null,
+        TimeProvider? leaseTimeProvider = null,
+        IPantsClock? leaseClock = null) =>
         PantsDatabase.OpenForTestingAsync(
             CreateOptions(root, leaseTimeToLive),
             new RuntimeDependencies(
                 cloudHttpClient: client,
-                workerDisposalTimeout: workerDisposalTimeout));
+                workerDisposalTimeout: workerDisposalTimeout,
+                runtimeTimeProvider: leaseTimeProvider,
+                leaseClock: leaseClock));
 
     static async ValueTask<IPantsDatabase> OpenUntilCloudLeaseReleasedAsync(
         string root,
         HttpClient client,
-        TimeSpan leaseTimeToLive)
+        TimeSpan leaseTimeToLive,
+        TimeProvider? leaseTimeProvider = null,
+        IPantsClock? leaseClock = null)
     {
         using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
         while (true)
@@ -256,12 +268,28 @@ public sealed class PantsCloudWalRetirementTests
             deadline.Token.ThrowIfCancellationRequested();
             try
             {
-                return await OpenAsync(root, client, leaseTimeToLive: leaseTimeToLive);
+                return await OpenAsync(root, client, leaseTimeToLive: leaseTimeToLive,
+                    leaseTimeProvider: leaseTimeProvider, leaseClock: leaseClock);
             }
             catch (PantsLeaseHeldException)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(10), deadline.Token);
             }
+        }
+    }
+
+    static async Task RenewBeyondOriginalValidityAsync(InMemoryAzureBlobHandler handler,
+        ManualSchedulingTimeProvider time, ManualClock clock)
+    {
+        for (var renewal = 0; renewal < 4; renewal++)
+        {
+            var previous = handler.GetObjectText("midge_primary_lease.json");
+            clock.UtcNow += TimeSpan.FromSeconds(10);
+            time.Advance(TimeSpan.FromSeconds(10));
+            await TestWait.UntilAsync(() => !StringComparer.Ordinal.Equals(previous,
+                handler.GetObjectText("midge_primary_lease.json")), "the owned heartbeat conditionally renews its shared lease");
+            await TestWait.UntilAsync(() => time.HasTimerDueIn(TimeSpan.FromSeconds(10)),
+                "the next renewal is scheduled from advanced validity");
         }
     }
 
@@ -306,6 +334,6 @@ public sealed class PantsCloudWalRetirementTests
     {
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
-        return catalog.RootElement.GetProperty("segments").EnumerateObject().Count();
+        return catalog.RootElement.GetProperty("segments").GetArrayLength();
     }
 }

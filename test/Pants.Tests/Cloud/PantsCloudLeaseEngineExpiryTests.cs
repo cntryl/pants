@@ -24,7 +24,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
                 1))
             .WithCoordinatorQueueCapacityForTesting(1)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(
@@ -48,7 +48,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
             handler.BlockLeaseWrites();
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
             await handler.WaitForBlockedLeaseWriteAsync();
-            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            monotonic.Advance(TimeSpan.FromSeconds(30) + TimeSpan.FromMilliseconds(1));
             Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
 
             var failure = await Assert.ThrowsAsync<PantsFencedException>(() =>
@@ -77,7 +77,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(
@@ -102,7 +102,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
             handler.BlockLeaseWrites();
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
             await handler.WaitForBlockedLeaseWriteAsync();
-            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            monotonic.Advance(TimeSpan.FromSeconds(30) + TimeSpan.FromMilliseconds(1));
             Assert.False(database.PersistentStorage!.IsPrimaryLeaseHealthy);
 
             failpoints.ReleaseCommitPreparation();
@@ -115,11 +115,9 @@ public sealed class PantsCloudLeaseEngineExpiryTests
             Assert.Equal(PantsErrorCode.Fenced, secondFailure.Code);
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(before.WalAppendCount, after.WalAppendCount);
-            await using var reader = await database.Transactions.BeginAsync(
+            await Assert.ThrowsAsync<PantsFencedException>(() => database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadOnly);
-            Assert.Null(await reader.GetAsync("coalesced-first"u8.ToArray()));
-            Assert.Null(await reader.GetAsync("coalesced-second"u8.ToArray()));
+                PantsTransactionMode.ReadOnly).AsTask());
         }
         finally
         {
@@ -139,7 +137,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
             leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
@@ -163,19 +161,16 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         Assert.False(database.PersistentStorage.IsPrimaryLeaseHealthy);
         var after = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.WalAppendCount, after.WalAppendCount);
-        await using (var reader = await database.Transactions.BeginAsync(
-                         database.ColumnFamilies.DefaultFamily,
-                         PantsTransactionMode.ReadOnly))
-        {
-            Assert.Null(await reader.GetAsync("remote-takeover"u8.ToArray()));
-        }
+        await Assert.ThrowsAsync<PantsFencedException>(() => database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly).AsTask());
 
         await database.DisposeAsync();
         var leaseLines = handler.GetObjectText("midge_primary_lease.json").Split('\n');
         var expiredLease = string.Join(
             '\n',
-            leaseLines.Select(static line => line.StartsWith("expires_at: ", StringComparison.Ordinal)
-                ? $"expires_at: {DateTimeOffset.UnixEpoch:O}"
+            leaseLines.Select(static line => line.StartsWith("expires: ", StringComparison.Ordinal)
+                ? $"expires: {DateTimeOffset.UnixEpoch:O}"
                 : line));
         handler.ReplaceObjectText("midge_primary_lease.json", expiredLease);
 
@@ -198,7 +193,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(
@@ -237,11 +232,9 @@ public sealed class PantsCloudLeaseEngineExpiryTests
             Assert.Equal(PantsErrorCode.Fenced, secondFailure.Code);
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(before.WalAppendCount, after.WalAppendCount);
-            await using var reader = await database.Transactions.BeginAsync(
+            await Assert.ThrowsAsync<PantsFencedException>(() => database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadOnly);
-            Assert.Null(await reader.GetAsync("takeover-first"u8.ToArray()));
-            Assert.Null(await reader.GetAsync("takeover-second"u8.ToArray()));
+                PantsTransactionMode.ReadOnly).AsTask());
         }
         finally
         {
@@ -261,7 +254,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30))
             .WithLeaseLossCallback(() => Interlocked.Increment(ref losses));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -279,7 +272,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         await handler.WaitForBlockedLeaseWriteAsync();
 
         // The hung renewal never lands, so the monotonic deadline passes with no caller involved.
-        monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+        monotonic.Advance(TimeSpan.FromSeconds(30) + TimeSpan.FromMilliseconds(1));
         Assert.Equal(1, Volatile.Read(ref losses));
         Assert.False(database.PersistentStorage.IsPrimaryLeaseHealthy);
         await Assert.ThrowsAsync<PantsFencedException>(() =>
@@ -315,7 +308,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         var options = PantsOpenOptions.Cloud(cache.Path, CreateLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2))
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30))
             .WithLeaseLossCallback(() => Interlocked.Increment(ref losses));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
@@ -337,7 +330,7 @@ public sealed class PantsCloudLeaseEngineExpiryTests
 
         monotonic.Advance(TimeSpan.FromMilliseconds(100));
         await handler.WaitForBlockedLeaseWriteAsync();
-        monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+        monotonic.Advance(TimeSpan.FromSeconds(30) + TimeSpan.FromMilliseconds(1));
 
         Assert.Equal(1, Volatile.Read(ref losses));
         Assert.False(database.PersistentStorage.IsPrimaryLeaseHealthy);
@@ -380,25 +373,25 @@ public sealed class PantsCloudLeaseEngineExpiryTests
     static string CreateSuccessorLeaseDocument(string currentLease)
     {
         var lines = currentLease.Split('\n');
-        var epochLine = lines.Single(static line => line.StartsWith("epoch: ", StringComparison.Ordinal));
-        var currentEpoch = ulong.Parse(epochLine.AsSpan("epoch: ".Length), CultureInfo.InvariantCulture);
+        var epochLine = lines.Single(static line => line.StartsWith("fencing_epoch: ", StringComparison.Ordinal));
+        var currentEpoch = ulong.Parse(epochLine.AsSpan("fencing_epoch: ".Length), CultureInfo.InvariantCulture);
         var successorEpoch = checked(currentEpoch + 1);
         return string.Join(
             '\n',
             lines.Select(line =>
             {
-                if (line.StartsWith("epoch: ", StringComparison.Ordinal))
+                if (line.StartsWith("fencing_epoch: ", StringComparison.Ordinal))
                 {
-                    return $"epoch: {successorEpoch}";
+                    return $"fencing_epoch: {successorEpoch}";
                 }
 
-                if (line.StartsWith("holder_id: ", StringComparison.Ordinal))
+                if (line.StartsWith("holder: ", StringComparison.Ordinal))
                 {
-                    return "holder_id: successor";
+                    return "holder: successor";
                 }
 
-                return line.StartsWith("owner_token: ", StringComparison.Ordinal)
-                    ? "owner_token: successor-token"
+                return line.StartsWith("owner: ", StringComparison.Ordinal)
+                    ? "owner: successor-token"
                     : line;
             }));
     }

@@ -53,6 +53,8 @@ readonly struct OperationDeadline
 
     public bool IsBounded { get; }
 
+    public TimeSpan Budget => _budget;
+
     public bool IsExpired => IsBounded && Remaining == TimeSpan.Zero;
 
     public TimeSpan Remaining

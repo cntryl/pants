@@ -70,7 +70,7 @@ public sealed class MidgeDurabilitySyncCountParityTests
         await AssertValueAsync(database, "after-assertion-sync", "durable-value");
     }
 
-    static async Task<long> CommitAsync(
+    static async Task<ulong> CommitAsync(
         IPantsDatabase database,
         string key,
         string value,
@@ -95,7 +95,7 @@ public sealed class MidgeDurabilitySyncCountParityTests
                 await reader.GetAsync(TestBytes.FromString(key)))));
     }
 
-    static async Task WaitForLocalDurabilityAsync(IPantsDatabase database, long sequence)
+    static async Task WaitForLocalDurabilityAsync(IPantsDatabase database, ulong sequence)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while ((await database.Diagnostics.GetRuntimeMetricsAsync()).WalLocalDurableSequence < sequence)

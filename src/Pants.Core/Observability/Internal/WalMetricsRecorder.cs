@@ -6,6 +6,6 @@ sealed class WalMetricsRecorder(RuntimeTelemetry telemetry)
 
     public void RecordFlush() => telemetry.RecordWalFlush();
 
-    public void RecordFsync(TimeSpan elapsed, long sequence) =>
+    public void RecordFsync(TimeSpan elapsed, ulong sequence) =>
         telemetry.RecordWalFsyncBoundary(elapsed, sequence);
 }

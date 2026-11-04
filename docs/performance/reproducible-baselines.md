@@ -2,6 +2,11 @@
 
 Performance changes require evidence from the same idle machine, using exact source revisions and equivalent workload mechanics. A cross-engine number is context, not a ratio, unless the logical unit, storage mode, client count, operation count, and measurement class all match.
 
+The v0.1.1 aggregate workflow below is historical. Current Midge 0.5.2 engine-read
+workload alignment, diagnostic measurements and remaining qualification work are
+documented in [current-midge-engine-reads.md](current-midge-engine-reads.md).
+The historical aggregate pin must not be used to claim current performance parity.
+
 ## Practical inventory run
 
 From the Pants repository, build and execute every parameterized row once:

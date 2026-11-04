@@ -38,7 +38,7 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldPreserveOrderedWritesDeletesAndSequenceAcrossRepeatedReopens()
     {
         using var directory = new TemporaryDirectory();
-        long previousSequence = 0;
+        ulong previousSequence = 0;
         for (var cycle = 0; cycle < 5; cycle++)
         {
             await using var database = await PantsDatabase.OpenAsync(
@@ -85,9 +85,9 @@ public sealed class PantsDurabilityParityTests
                     new string((char)('a' + index), 256));
             }
 
-            Assert.Equal(
-                3,
-                Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal").Length);
+            var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+            Assert.Equal(3, ledger.Members.Count(static member => member.Sealed is not null));
+            Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(ledger.ActivePath).Length);
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);

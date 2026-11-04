@@ -28,6 +28,22 @@ These tests fail when Sqrzl is unavailable. They never skip. The suite covers ea
 contract, strict cloud commits, forced SST publication, complete local-cache loss, provider-backed
 recovery, and mixed two- and three-location topologies.
 
+Cloud read authority follows Midge AUTH-2/TX-1: a retained transaction or scan
+returns `Fenced` after lease loss, even when its bytes are locally cached. A
+snapshot pin does not retain remote sources against a successor. In-memory HTTP
+provider regressions in `CloudReadAuthorityTests` cover memory/SST reads, begun
+scans, and successful or failed range completions after monotonic lease expiry.
+`CloudSstGarbageCollectionTests` also covers warm/cold predecessor reads after
+successor takeover. These deterministic schedules run in the ordinary suite;
+they do not replace Sqrzl object-contract or provider recovery qualification.
+
+Cold recovery must select a committed metadata generation at least as new as
+the WAL catalog's retirement generation. `CloudRecoveryRetirementAuthorityTests`
+checks this before local control-file replacement under Strict and Salvage
+policies. WAL object presence and unreferenced metadata uploads grant no recovery
+authority. See [the cloud correctness audit](../compatibility/MidgeCorrectnessCloud.md)
+for the source review and remaining qualification boundaries.
+
 Stop the emulator and remove its test data:
 
 ```console

@@ -53,9 +53,9 @@ public sealed class CommitCoalescerTests
             {
                 appendCalls++;
                 appended = commits;
-                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
+                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count, commits[^1].ExpectedSequence));
             },
-            static (_, _, _) => { });
+            static () => { });
         var prepared = CommitCoalescer.CreatePreparedCommits(
             state,
             [CreateCommand(1), CreateCommand(2)]);
@@ -67,13 +67,13 @@ public sealed class CommitCoalescerTests
             Failpoint.BeforeCoalescedWalDurabilityBoundary);
 
         Assert.Equal(1, appendCalls);
-        Assert.Equal([3L, 6L], Assert.IsAssignableFrom<IReadOnlyList<WalCommitGroupEntry>>(appended)
+        Assert.Equal([3UL, 6UL], Assert.IsAssignableFrom<IReadOnlyList<WalCommitGroupEntry>>(appended)
             .Select(static commit => commit.ExpectedSequence));
         Assert.Equal(0, telemetry.WalAppendCount);
         Assert.Equal(0, telemetry.WalFlushCount);
         Assert.Equal(0, telemetry.WalFsyncCount);
         Assert.Equal(2, telemetry.DurabilityWaitersFannedOut);
-        Assert.Equal(0, telemetry.WalLastSyncedSequence);
+        Assert.Equal(0UL, telemetry.WalLastSyncedSequence);
     }
 
     [Fact]
@@ -115,9 +115,9 @@ public sealed class CommitCoalescerTests
             (commits, _, durability, _, _) =>
             {
                 appendedDurability = durability;
-                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
+                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count, commits[^1].ExpectedSequence));
             },
-            static (_, _, _) => { });
+            static () => { });
         var prepared = CommitCoalescer.CreatePreparedCommits(
             state,
             [
@@ -151,9 +151,9 @@ public sealed class CommitCoalescerTests
             (commits, _, durability, _, _) =>
             {
                 appendedDurability = durability;
-                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count));
+                return ValueTask.FromResult(new WalCommitGroupResult(commits.Count, commits[^1].ExpectedSequence));
             },
-            static (_, _, _) => { });
+            static () => { });
         var commands = new[] { CreateCommand(1, requested), CreateCommand(2, requested) };
         var stagedBytes = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
@@ -180,7 +180,7 @@ public sealed class CommitCoalescerTests
             memtableSizeLimitBytes,
             new RuntimeTelemetry(),
             static (_, _, _, _, _) => throw new InvalidOperationException("Append was not expected."),
-            static (_, _, _) => { });
+            static () => { });
 
     static RuntimeState CreateState() =>
         new(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
@@ -224,7 +224,7 @@ public sealed class CommitCoalescerTests
         return new CommitRuntimeCommand(
             writeOptions,
             payload,
-            static _ => ValueTask.FromResult(false),
+            static _ => ValueTask.FromResult(new CommitCompletion(0, false)),
             new RuntimeResponseRegistry(new RuntimeTelemetry(), TimeProvider.System),
             transactionId,
             "Commit");

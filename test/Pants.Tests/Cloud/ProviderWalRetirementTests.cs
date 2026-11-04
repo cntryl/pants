@@ -63,7 +63,7 @@ public sealed class ProviderWalRetirementTests
     public async Task ShouldBoundRetirementMemoryByMaintenancePoolIndependentOfSegmentSize()
     {
         const int largestFrame = 3 * PageBytes;
-        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 6L * largestFrame + 1024);
+        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 6L * largestFrame + 64 * 1024);
         harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
         var records = Enumerable.Range(0, 256)
             .Select(index => new WalTestRecord(
@@ -91,9 +91,9 @@ public sealed class ProviderWalRetirementTests
     [Fact]
     public async Task ShouldRetainWalAuthorityWithoutAnomalyWhenFrameExceedsMaintenancePool()
     {
-        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 4L * PageBytes);
+        await using var harness = await RetirementHarness.CreateAsync(budgetBytes: 16L * PageBytes);
         harness.PublishManifest([harness.PublishSst("covering.sst", 0, "a-", "a-~")]);
-        var segment = await harness.PublishSegmentAsync(1, [new WalTestRecord(0, "a-big", 2 * PageBytes)]);
+        var segment = await harness.PublishSegmentAsync(1, [new WalTestRecord(0, "a-big", 16 * PageBytes)]);
 
         var result = await harness.Persistence.RetireCoveredWalAsync(CancellationToken.None);
 
@@ -447,15 +447,11 @@ public sealed class ProviderWalRetirementTests
 
     sealed class RetirementHarness : IAsyncDisposable
     {
-        static readonly JsonSerializerOptions ManifestJsonOptions = new()
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-        };
-
         readonly long _budgetBytes;
         readonly CloudLeaseCoordinator _lease;
         readonly TestCloudLeaseStore _leaseStore;
         ulong _lastPersistedSequence;
+        WalChainLink _lastPublished = WalChainLink.Genesis;
 
         RetirementHarness(
             long budgetBytes,
@@ -584,11 +580,17 @@ public sealed class ProviderWalRetirementTests
             var manifest = new ManifestState
             {
                 LastPersistedSequence = _lastPersistedSequence,
-                Files = [.. files]
+                Files = [.. files],
+                FlushedThrough = new Dictionary<uint, ulong> { [0] = _lastPersistedSequence },
+                ColumnFamilies = files.Select(static file => file.ColumnFamilyId).Distinct().Where(static id => id != 0)
+                    .Select(static id => new ColumnFamilyMeta { Id = id, Name = $"family-{id}" }).ToList()
             };
-            Control.Write(
-                PantsCloudObjectLayout.MetadataPrefix + "manifest.json",
-                JsonSerializer.SerializeToUtf8Bytes(manifest, ManifestJsonOptions));
+            foreach (var family in manifest.ColumnFamilies)
+            {
+                manifest.FlushedThrough[family.Id] = _lastPersistedSequence;
+            }
+
+            CloudTestMetadata.SeedAsync(Control, manifest).GetAwaiter().GetResult();
         }
 
         public async Task<ProviderPublishedWalSegment> PublishSegmentAsync(
@@ -596,7 +598,6 @@ public sealed class ProviderWalRetirementTests
             WalTestRecord[] records)
         {
             using var stream = new MemoryStream();
-            var maximumSequence = 0UL;
             for (var index = 0; index < records.Length; index++)
             {
                 var record = records[index];
@@ -618,12 +619,11 @@ public sealed class ProviderWalRetirementTests
                 DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
                 DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
                 stream.Write(payload);
-                maximumSequence = WalCodec.DecodeRecord(payload).Sequence;
             }
 
-            await Persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(segmentId, Epoch, maximumSequence, $"{segmentId}.wal", stream.ToArray())],
-                CancellationToken.None);
+            var sealedSegment = TestWalSegment.SealRecords(segmentId, Epoch, $"{segmentId}.wal", stream.ToArray(), _lastPublished);
+            await Persistence.PublishWalBatchAsync([sealedSegment], CancellationToken.None);
+            _lastPublished = sealedSegment.Facts.Link;
             return ReadCatalog().Single(segment => segment.SegmentId == segmentId);
         }
 

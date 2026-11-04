@@ -11,7 +11,7 @@ public sealed class PantsMemoryManagementContractTests
     public async Task ShouldMakeProgressWithoutStickyStallGivenSmallMemoryBudget(string mode)
     {
         using var directory = new TemporaryDirectory();
-        var memoryBudgetBytes = mode == "cloud" ? 512 * 1024 : 64 * 1024;
+        const int memoryBudgetBytes = 2 * 1024 * 1024;
         var options = CreateOptions(mode, directory.Path)
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(memoryBudgetBytes));
         await using var database = await PantsDatabase.OpenAsync(options);

@@ -73,11 +73,14 @@ public sealed class SqrzlCloudProviderQualificationTests
         {
             for (var flush = 0; flush < flushCount; flush++)
             {
-                await using (var writer = await database.Transactions.BeginAsync(
-                                 database.ColumnFamilies.DefaultFamily,
-                                 PantsTransactionMode.ReadWrite))
+                // FORMAT 9 flush admission includes construction scratch. Keep each atomic
+                // batch inside the 64 KiB window while the full data set exceeds local storage.
+                for (var batchStart = 0; batchStart < entriesPerFlush; batchStart += 2)
                 {
-                    for (var entry = 0; entry < entriesPerFlush; entry++)
+                    await using var writer = await database.Transactions.BeginAsync(
+                                 database.ColumnFamilies.DefaultFamily,
+                                 PantsTransactionMode.ReadWrite);
+                    for (var entry = batchStart; entry < batchStart + 2; entry++)
                     {
                         var index = (flush * entriesPerFlush) + entry;
                         var value = new byte[valueBytes];

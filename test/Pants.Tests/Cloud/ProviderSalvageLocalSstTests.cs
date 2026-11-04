@@ -1,15 +1,9 @@
-using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
 
 public sealed class ProviderSalvageLocalSstTests
 {
-    static readonly JsonSerializerOptions ManifestOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
-
     static readonly byte[] SstBytes = [.. Enumerable.Range(0, 200).Select(static value => (byte)value)];
 
     [Fact]
@@ -117,13 +111,8 @@ public sealed class ProviderSalvageLocalSstTests
                 }
             ]
         };
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, ManifestOptions);
         var control = new CountingCloudObjectStore();
-        Assert.True(await control.PutAsync(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.json",
-            bytes,
-            new PantsCloudObjectWriteCondition.Unconditional(),
-            CancellationToken.None));
+        await CloudTestMetadata.SeedAsync(control, manifest);
         return control;
     }
 

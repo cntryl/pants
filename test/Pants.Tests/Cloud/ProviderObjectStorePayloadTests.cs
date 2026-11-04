@@ -51,7 +51,8 @@ public sealed class ProviderObjectStorePayloadTests
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var payload = new byte[4096];
-        var budget = new ResourceBudget(2 * ImmutablePublicationEnvelope.For(payload.Length));
+        var segment = TestWalSegment.Create(1, epoch, 1, "1.wal", payload);
+        var budget = new ResourceBudget(2 * ImmutablePublicationEnvelope.For(segment.Bytes.Length));
         var handler = new StalledUploadHandler();
         using var client = new HttpClient(handler);
         await using var persistence = new ProviderCloudPersistence(
@@ -63,14 +64,14 @@ public sealed class ProviderObjectStorePayloadTests
             walPublicationAdmission: new WalPublicationAdmission(budget));
         using var cancellation = new CancellationTokenSource();
         var upload = persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
+            [segment],
             cancellation.Token).AsTask();
 
         await handler.UploadStarted.Task.WaitAsync(TestTimeouts.Expected);
         cancellation.Cancel();
         await handler.CancellationObserved.Task.WaitAsync(TestTimeouts.Expected);
 
-        Assert.Equal(ImmutablePublicationEnvelope.For(payload.Length), budget.Current);
+        Assert.Equal(ImmutablePublicationEnvelope.For(segment.Bytes.Length), budget.Current);
 
         handler.CompleteTransport.TrySetResult();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => upload);

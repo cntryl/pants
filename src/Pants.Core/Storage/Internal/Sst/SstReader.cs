@@ -12,6 +12,7 @@ sealed class SstReader : IDisposable
     readonly (byte[] FirstKey, SstBlockHandle Handle)[] _index;
     readonly TrieIndex? _trieIndex;
     IDisposable? _handleReservation;
+    SstMetadataAllocation? _metadataAllocation;
     int _disposed;
 
     SstReader(
@@ -52,12 +53,12 @@ sealed class SstReader : IDisposable
 
             if (_trieIndex is not null)
             {
-                bytes += (long)_index.Length * 32;
+                bytes += _trieIndex.EstimatedMetadataBytes;
             }
 
             foreach (var tombstone in RangeTombstones)
             {
-                bytes += tombstone.Start.Length + tombstone.End.Length + 48;
+                bytes += tombstone.Start.Length + tombstone.End.Length + 128;
             }
 
             return bytes;
@@ -83,6 +84,7 @@ sealed class SstReader : IDisposable
             finally
             {
                 Interlocked.Exchange(ref _handleReservation, null)?.Dispose();
+                Interlocked.Exchange(ref _metadataAllocation, null)?.Dispose();
             }
         }
     }
@@ -114,7 +116,10 @@ sealed class SstReader : IDisposable
     internal static SstReader Open(string path, IDisposable handleReservation) =>
         OpenCore(path, handleReservation);
 
-    static SstReader OpenCore(string path, IDisposable? handleReservation)
+    internal static SstReader Open(string path, IDisposable? handleReservation, ResourceBudget metadataBudget) =>
+        OpenCore(path, handleReservation, metadataBudget);
+
+    static SstReader OpenCore(string path, IDisposable? handleReservation, ResourceBudget? metadataBudget = null)
     {
         try
         {
@@ -128,8 +133,10 @@ sealed class SstReader : IDisposable
         }
 
         SafeFileHandle? file = null;
+        SstMetadataAllocation? allocation = null;
         try
         {
+            allocation = metadataBudget is null ? null : new SstMetadataAllocation(metadataBudget, path);
             file = File.OpenHandle(
                 path,
                 FileMode.Open,
@@ -148,11 +155,11 @@ sealed class SstReader : IDisposable
                     if (BinaryPrimitives.ReadUInt64LittleEndian(trailingMagic) == DiskFormat.SstFooterMagic)
                     {
                         throw new PantsCompatibilityException(
-                            "SST is shorter than its V4 footer, but matches a legacy footer magic.");
+                            "SST is shorter than its V5 footer, but matches a legacy footer magic.");
                     }
                 }
 
-                throw new PantsCorruptionException("SST is shorter than its V4 footer.");
+                throw new PantsCorruptionException("SST is shorter than its V5 footer.");
             }
 
             var footerOffset = fileLength - DiskFormat.SstFooterSize;
@@ -169,24 +176,33 @@ sealed class SstReader : IDisposable
                 48,
                 "block bloom");
             var metadata = SstCodec.DecodeMetadata(
-                SstCodec.ReadBlock(file, fileLength, metadataHandle));
+                ReadMetadataBlock(file, fileLength, metadataHandle, allocation));
+            long retainedMetadataBytes = 512 + (metadata.SmallestKey?.Length ?? 0) + (metadata.LargestKey?.Length ?? 0);
+            allocation?.Retain(retainedMetadataBytes);
             var index = SstCodec.DecodeIndex(
-                SstCodec.ReadBlock(file, fileLength, indexHandle)).ToArray();
+                ReadMetadataBlock(file, fileLength, indexHandle, allocation)).ToArray();
+            retainedMetadataBytes = checked(retainedMetadataBytes + index.Sum(static item => item.FirstKey.Length + 56L));
+            allocation?.Retain(retainedMetadataBytes);
             var blockBlooms = bloomHandle is { } bloom
-                ? SstCodec.ReadBlock(file, fileLength, bloom)
+                ? ReadMetadataBlock(file, fileLength, bloom, allocation)
                 : null;
             if (blockBlooms is not null)
             {
                 SstCodec.ValidateBlockBlooms(blockBlooms, index.Length);
+                retainedMetadataBytes = checked(retainedMetadataBytes + blockBlooms.Length);
+                allocation?.Retain(retainedMetadataBytes);
             }
 
             var trie = trieHandle is { } trieBlock
-                ? SstCodec.ReadBlock(file, fileLength, trieBlock)
+                ? ReadMetadataBlock(file, fileLength, trieBlock, allocation)
                 : null;
             var trieIndex = SstCodec.DecodeTrieIndex(
                 metadata.IndexKind,
                 trie,
-                index);
+                index,
+                allocation);
+            retainedMetadataBytes = checked(retainedMetadataBytes + (trieIndex?.EstimatedMetadataBytes ?? 0));
+            allocation?.Retain(retainedMetadataBytes);
             SstCodec.ValidateBlockCoverage(
                 footerOffset,
                 metadataHandle,
@@ -196,7 +212,7 @@ sealed class SstReader : IDisposable
                 metadata.RangeHandle,
                 index.ToList());
             var rangeTombstones = metadata.RangeHandle is { } rangeHandle
-                ? SstCodec.DecodeRangeTombstones(SstCodec.ReadBlock(file, fileLength, rangeHandle))
+                ? SstCodec.DecodeRangeTombstones(ReadMetadataBlock(file, fileLength, rangeHandle, allocation))
                 : [];
             var reader = new SstReader(
                 file,
@@ -206,6 +222,9 @@ sealed class SstReader : IDisposable
                 trieIndex,
                 rangeTombstones,
                 handleReservation);
+            allocation?.Retain(reader.EstimatedMetadataBytes);
+            reader._metadataAllocation = allocation;
+            allocation = null;
             file = null;
             handleReservation = null;
             return reader;
@@ -222,13 +241,26 @@ sealed class SstReader : IDisposable
         {
             file?.Dispose();
             handleReservation?.Dispose();
+            allocation?.Dispose();
         }
+    }
+
+    static byte[] ReadMetadataBlock(
+        SafeFileHandle file, long length, SstBlockHandle handle, SstMetadataAllocation? allocation) =>
+        allocation is null ? SstCodec.ReadBlock(file, length, handle) : allocation.ReadBlock(file, length, handle);
+
+    public SstReadBlock ReadDataBlockOwned(int blockIndex, ResourceBudget? resourceBudget)
+    {
+        ThrowIfDisposed();
+        var handle = GetDataBlockHandle(blockIndex);
+        SstCodec.ValidateDataBlockSize(handle);
+        return SstReadBlock.Read(_file, _fileLength, handle, resourceBudget);
     }
 
     public SstPointReadDecision GetPointReadDecision(ReadOnlySpan<byte> key)
     {
         ThrowIfDisposed();
-        if (_index.Length == 0 || _blockBlooms is null)
+        if (_index.Length == 0)
         {
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
@@ -242,11 +274,12 @@ sealed class SstReader : IDisposable
             return new SstPointReadDecision(0, 0, 0, false, -1, 0);
         }
 
-        var mightContain = SstCodec.BloomMightContain(_blockBlooms, candidate, key);
+        var mightContain = _blockBlooms is null || SstCodec.BloomMightContain(_blockBlooms, candidate, key);
+        var bloomChecks = _blockBlooms is null ? 0 : 1;
         var candidateHandle = _index[candidate].Handle;
         var blockSizeBytes = checked((int)candidateHandle.Size);
         return mightContain
-            ? new SstPointReadDecision(1, 1, 1, false, candidate, blockSizeBytes)
+            ? new SstPointReadDecision(bloomChecks, 1, 1, false, candidate, blockSizeBytes)
             : new SstPointReadDecision(1, 1, 0, true, candidate, blockSizeBytes);
     }
 
@@ -258,6 +291,7 @@ sealed class SstReader : IDisposable
             throw new PantsCorruptionException("SST point-read block index is invalid.");
         }
 
+        SstCodec.ValidateDataBlockSize(_index[blockIndex].Handle);
         return SstCodec.ReadBlock(_file, _fileLength, _index[blockIndex].Handle);
     }
 

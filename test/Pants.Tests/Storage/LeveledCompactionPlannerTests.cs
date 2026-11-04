@@ -26,12 +26,51 @@ public sealed class LeveledCompactionPlannerTests
 
         Assert.NotNull(plan);
         Assert.Equal(1u, plan.TargetLevel);
-        Assert.Equal(42, plan.SnapshotHorizon);
+        Assert.Equal(42UL, plan.SnapshotHorizon);
         Assert.True(plan.PointTombstoneGcEligible);
         Assert.False(plan.RangeTombstoneGcEligible);
         Assert.Equal(
             ["l0-1.sst", "l0-2.sst", "l0-3.sst", "l1-1.sst", "l1-2.sst"],
             plan.Inputs.Select(static file => file.Name));
+    }
+
+    [Fact]
+    public void ShouldPrioritizeDeepestOverfullLevelOverOrdinaryL0()
+    {
+        var plan = LeveledCompactionPlanner.Pick(
+            [
+                File("l0-a.sst", 0, 1, "a", "b"),
+                File("l0-b.sst", 0, 2, "c", "d"),
+                File("l1-overfull.sst", 1, 3, "e", "f", 101, keyBoundsComplete: true)
+            ],
+            0,
+            Configuration(l0FileCountTrigger: 2, l1TargetSizeBytes: 100),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(1u, plan.SourceLevel);
+        Assert.Equal(2u, plan.TargetLevel);
+    }
+
+    [Fact]
+    public void ShouldPickDeepestOverfullInnerLevelWhenSeveralLevelsAreOverfull()
+    {
+        var plan = LeveledCompactionPlanner.Pick(
+            [
+                File("l0-a.sst", 0, 1, "a", "b"),
+                File("l0-b.sst", 0, 2, "c", "d"),
+                File("l1-overfull.sst", 1, 3, "e", "f", 2, keyBoundsComplete: true),
+                File("l3-overfull.sst", 3, 4, "g", "h", 5, keyBoundsComplete: true)
+            ],
+            0,
+            Configuration(l0FileCountTrigger: 2, levelMultiplier: 2, l1TargetSizeBytes: 1),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(3u, plan.SourceLevel);
+        Assert.Equal(4u, plan.TargetLevel);
     }
 
     [Fact]
@@ -149,14 +188,17 @@ public sealed class LeveledCompactionPlannerTests
             File("target-2.sst", 2, 3, "f", "g", 256, keyBoundsComplete: true),
             File("target-3.sst", 2, 4, "j", "k", 256, keyBoundsComplete: true)
         ];
-        var configuration = Configuration(l0FileCountTrigger: 2, l1TargetSizeBytes: 1);
+        var configuration = Configuration(
+            l0FileCountTrigger: 2,
+            l1TargetSizeBytes: 1,
+            levelMultiplier: 1_000);
         var fragment = LeveledCompactionPlanner.PickDebtDrain(
             files,
             0,
             configuration,
             null,
             preferredWorkBytes: 512);
-        var l0Debt = LeveledCompactionPlanner.PickDebtDrain(
+        var l0Debt = LeveledCompactionPlanner.PickCriticalL0(
             [
                 .. files,
                 File("l0-1.sst", 0, 5, "l", "m"),
@@ -169,6 +211,7 @@ public sealed class LeveledCompactionPlannerTests
 
         Assert.NotNull(fragment);
         Assert.Equal(CompactionPurpose.Fragment, fragment.Purpose);
+        Assert.Equal(1u, fragment.SourceLevel);
         Assert.NotNull(l0Debt);
         Assert.Equal(0u, l0Debt.SourceLevel);
     }
@@ -186,7 +229,7 @@ public sealed class LeveledCompactionPlannerTests
         var plan = LeveledCompactionPlanner.Pick(
             files,
             0,
-            Configuration(l1TargetSizeBytes: 1),
+            Configuration(l1TargetSizeBytes: 1, levelMultiplier: 100_000),
             null,
             false,
             512L * 1024 * 1024);
@@ -399,7 +442,7 @@ public sealed class LeveledCompactionPlannerTests
     }
 
     [Fact]
-    public void ShouldKeepCompleteOverlapWhenFragmentationBoundsAreUntrustedOrOverlapping()
+    public void ShouldRepairUntrustedOrOverlappingSourceBeforeFragmentation()
     {
         const ulong mib = 1024 * 1024;
         FileMeta[] baseline =
@@ -444,11 +487,23 @@ public sealed class LeveledCompactionPlannerTests
                 512L * 1024 * 1024);
 
             Assert.NotNull(plan);
-            Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+            if (scenario == 0)
+            {
+                Assert.Equal(CompactionPurpose.Merge, plan.Purpose);
+                Assert.Equal(2u, plan.SourceLevel);
+                Assert.Equal(3u, plan.TargetLevel);
+                Assert.Equal(1, plan.Inputs.Count(file => file.Level == 2));
+                Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
+                continue;
+            }
+
+            Assert.Equal(CompactionPurpose.Repair, plan.Purpose);
             Assert.Equal(2u, plan.SourceLevel);
-            Assert.Equal(3u, plan.TargetLevel);
-            Assert.Equal(1, plan.Inputs.Count(file => file.Level == 2));
-            Assert.Equal(6, plan.Inputs.Count(file => file.Level == 3));
+            Assert.Equal(2u, plan.TargetLevel);
+            Assert.Equal(2, plan.Inputs.Count);
+            Assert.Contains(plan.Inputs, static file => file.Name == "source-0.sst");
+            Assert.Contains(plan.Inputs, static file => file.Name == "source-1.sst");
+            Assert.All(plan.Inputs, static file => Assert.Equal(2u, file.Level));
         }
     }
 
@@ -685,6 +740,72 @@ public sealed class LeveledCompactionPlannerTests
             [File("l1-1.sst", 1, 1, "a", "b", 1024), File("l1-2.sst", 1, 2, "c", "d", 2048)],
             0,
             configuration));
+        Assert.False(CompactionDebt.IsClear(
+            [
+                File("repair-1.sst", 2, 3, "a", "d", keyBoundsComplete: true),
+                File("repair-2.sst", 2, 4, "c", "f", keyBoundsComplete: true)
+            ],
+            0,
+            Configuration(maximumLevels: 3, l1TargetSizeBytes: 1024)));
+    }
+
+    [Fact]
+    public void ShouldRepairUnderfullTransitiveInnerOverlapBeforeSizeWork()
+    {
+        FileMeta[] files =
+        [
+            File("repair-1.sst", 2, 1, "a", "d", keyBoundsComplete: true),
+            File("repair-2.sst", 2, 2, "c", "f", keyBoundsComplete: true),
+            File("repair-3.sst", 2, 3, "e", "h", keyBoundsComplete: true),
+            File("unrelated.sst", 2, 4, "x", "z", keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(maximumLevels: 4, l1TargetSizeBytes: 1024 * 1024),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(2u, plan.SourceLevel);
+        Assert.Equal(plan.SourceLevel, plan.TargetLevel);
+        Assert.Equal(CompactionPurpose.Repair, plan.Purpose);
+        Assert.False(plan.PointTombstoneGcEligible);
+        Assert.False(plan.RangeTombstoneGcEligible);
+        Assert.Equal(["repair-1.sst", "repair-2.sst", "repair-3.sst"],
+            plan.Inputs.Select(static file => file.Name));
+        Assert.True(LeveledCompactionPlanner.HasSameTargetSpan(plan, files));
+        Assert.False(LeveledCompactionPlanner.HasSameTargetSpan(
+            plan,
+            [.. files, File("new-overlap.sst", 2, 5, "b", "c", keyBoundsComplete: true)]));
+    }
+
+    [Fact]
+    public void ShouldRepairThreeFileEqualityWithoutRepairingTwoFileBoundary()
+    {
+        FileMeta[] files =
+        [
+            File("legal-left.sst", 1, 1, "a", "d", keyBoundsComplete: true),
+            File("legal-right.sst", 1, 2, "d", "g", keyBoundsComplete: true),
+            File("repair-left.sst", 1, 3, "j", "m", keyBoundsComplete: true),
+            File("repair-middle.sst", 1, 4, "m", "p", keyBoundsComplete: true),
+            File("repair-right.sst", 1, 5, "m", "s", keyBoundsComplete: true)
+        ];
+
+        var plan = LeveledCompactionPlanner.Pick(
+            files,
+            0,
+            Configuration(maximumLevels: 3, l1TargetSizeBytes: 1024 * 1024),
+            null,
+            false);
+
+        Assert.NotNull(plan);
+        Assert.Equal(CompactionPurpose.Repair, plan.Purpose);
+        Assert.Equal(
+            ["repair-left.sst", "repair-middle.sst", "repair-right.sst"],
+            plan.Inputs.Select(static file => file.Name));
+        Assert.DoesNotContain(plan.Inputs, static file => file.Name.StartsWith("legal-", StringComparison.Ordinal));
     }
 
     static PantsCompactionConfiguration Configuration(
@@ -692,12 +813,14 @@ public sealed class LeveledCompactionPlannerTests
         int l0FileCountTrigger = 4,
         int maximumInputFiles = 64,
         int levelMultiplier = 10,
-        long l1TargetSizeBytes = 40L * 1024 * 1024) => new(
+        long l1TargetSizeBytes = 40L * 1024 * 1024,
+        int maximumLevels = 6) => new(
         l0SizeTriggerBytes,
         l0FileCountTrigger,
         maximumInputFiles,
         levelMultiplier,
-        l1TargetSizeBytes);
+        l1TargetSizeBytes,
+        maximumLevels);
 
     static FileMeta File(
         string name,

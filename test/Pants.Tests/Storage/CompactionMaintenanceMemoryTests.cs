@@ -162,6 +162,7 @@ public sealed class CompactionMaintenanceMemoryTests
                     transaction.Put(TestBytes.FromString($"gate-{flush}-{key:00}"), new byte[1024]);
                 }
 
+                transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
                 await transaction.CommitAsync(PantsWriteOptions.Sync);
             }
 

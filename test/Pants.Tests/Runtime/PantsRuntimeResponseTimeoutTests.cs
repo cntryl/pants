@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -53,21 +52,27 @@ public sealed class PantsRuntimeResponseTimeoutTests
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new RuntimeMetricsResponseFailpointHandler();
+        var time = new ManualSchedulingTimeProvider();
         await using var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Local(directory.Path)
+                .WithBackgroundCompaction(false)
                 .WithStorageTimeout(TimeSpan.FromMilliseconds(5))
                 .WithRuntimeResponseTimeout(TimeSpan.FromMilliseconds(100)),
-            new RuntimeDependencies(failpoint));
-        var started = Stopwatch.GetTimestamp();
+            new RuntimeDependencies(failpoint, runtimeTimeProvider: time));
+        // Startup queues its own recovered-flush/L0 commands before reading the mailbox.
+        // Crossing this owner barrier orders them ahead of the deliberately held request.
+        _ = await database.Diagnostics.GetStorageLayoutAsync().AsTask().WaitAsync(TestTimeouts.Expected);
         var request = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
 
         try
         {
             await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
+            time.Advance(TimeSpan.FromMilliseconds(99));
+            Assert.False(request.IsCompleted);
+            time.Advance(TimeSpan.FromMilliseconds(1));
             var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() =>
                 request.WaitAsync(TestTimeouts.Expected));
 
-            Assert.InRange(Stopwatch.GetElapsedTime(started), TimeSpan.Zero, TimeSpan.FromSeconds(2));
             Assert.Contains("GetRuntimeMetricsAsync", exception.Message, StringComparison.Ordinal);
             Assert.Contains("request ID", exception.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("00:00:00.100", exception.Message, StringComparison.Ordinal);
@@ -78,7 +83,10 @@ public sealed class PantsRuntimeResponseTimeoutTests
             failpoint.Release();
         }
 
-        var metrics = await WaitForLateResponseAsync(database);
+        // The owner completes the held response before executing this next command. Its
+        // confirmation budget uses the same stopped clock, so observation cannot add timeouts.
+        var metrics = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask()
+            .WaitAsync(TestTimeouts.Expected);
         Assert.Equal(0, metrics.RuntimeResponseWaiters);
         Assert.Equal(1, metrics.RuntimeAbandonedRequestsTotal);
         Assert.Equal(1, metrics.RuntimeLateResponsesTotal);
@@ -119,7 +127,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
                 var exception = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                     commit.WaitAsync(TestTimeouts.Expected));
                 Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, exception.Code);
-                Assert.Equal(PantsErrorSeverity.Fatal, exception.Severity);
+                Assert.Equal(PantsErrorSeverity.OutcomeUnknown, exception.Severity);
                 Assert.Contains("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -167,7 +175,7 @@ public sealed class PantsRuntimeResponseTimeoutTests
             var exception = await Record.ExceptionAsync(() => commit.WaitAsync(TestTimeouts.Expected));
             var unknown = Assert.IsType<PantsCommitOutcomeUnknownException>(exception);
             Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
-            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.Equal(PantsErrorSeverity.OutcomeUnknown, unknown.Severity);
             Assert.IsAssignableFrom<OperationCanceledException>(unknown.InnerException);
         }
 
@@ -180,20 +188,4 @@ public sealed class PantsRuntimeResponseTimeoutTests
             TestBytes.ToText((await reader.GetAsync("cancelled-accepted"u8.ToArray()))!.Value));
     }
 
-    static async Task<PantsRuntimeMetrics> WaitForLateResponseAsync(IPantsDatabase database)
-    {
-        var deadline = Stopwatch.GetTimestamp() + (long)(TestTimeouts.Expected.TotalSeconds * Stopwatch.Frequency);
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-            if (metrics.RuntimeLateResponsesTotal == 1)
-            {
-                return metrics;
-            }
-
-            await Task.Yield();
-        }
-
-        throw new TimeoutException("The abandoned runtime response did not complete.");
-    }
 }

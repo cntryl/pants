@@ -19,9 +19,7 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        controlStore.Write(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json",
-            EncodeManifest(nextSstSequence: 2));
+        await SeedRetentionMetadataAsync(controlStore, EncodeManifest(nextSstSequence: 2));
         var sstStore = new ScriptedCloudObjectStore();
         var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
         sstStore.Write(objectKey, "orphan"u8.ToArray());
@@ -55,8 +53,8 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-        controlStore.Write(manifestKey, new byte[1024]);
+        var seeded = await SeedRetentionMetadataAsync(controlStore, new byte[1024]);
+        var manifestKey = CloudMetadataAuthority.PointerKey;
         var sstStore = new ScriptedCloudObjectStore();
         var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
         sstStore.Write(objectKey, "orphan"u8.ToArray());
@@ -88,18 +86,15 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
         var manifestBytes = EncodeManifest(nextSstSequence: 2);
-        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
-        byte[] intentBytes = "[]"u8.ToArray();
-        controlStore.Write(manifestKey, manifestBytes);
-        controlStore.Write(intentKey, intentBytes);
+        var intentBytes = IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), []);
+        var seeded = await SeedRetentionMetadataAsync(controlStore, manifestBytes, intentBytes);
+        var manifestKey = seeded.ManifestKey;
+        var intentKey = seeded.IntentKey!;
         var sstStore = new ScriptedCloudObjectStore();
         var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
         sstStore.Write(objectKey, "orphan"u8.ToArray());
-        var manifestWorkspaceBytes = checked(manifestBytes.Length * 16L + 256);
-        var intentWorkspaceBytes = checked(intentBytes.Length * 16L + 256);
-        var budget = new ResourceBudget(manifestWorkspaceBytes + intentWorkspaceBytes);
+        var budget = new ResourceBudget(seeded.WorkspaceBytes);
         await using var persistence = CreatePersistence(
             cache.Path,
             new ScriptedCloudObjectStore(),
@@ -141,12 +136,11 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
         var manifestBytes = EncodeManifest(nextSstSequence: 2);
-        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
-        var intentBytes = "[]"u8.ToArray();
-        controlStore.Write(manifestKey, manifestBytes);
-        controlStore.Write(intentKey, intentBytes);
+        var intentBytes = IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), []);
+        var seeded = await SeedRetentionMetadataAsync(controlStore, manifestBytes, intentBytes);
+        var manifestKey = seeded.ManifestKey;
+        var intentKey = seeded.IntentKey!;
         var budget = new ResourceBudget(1024 * 1024);
         var intentReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var budgetAtIntentRead = 0L;
@@ -180,7 +174,7 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => collection);
 
         Assert.Equal(
-            checked((manifestBytes.Length * 16L + 256) + (intentBytes.Length * 16L + 256)),
+            seeded.WorkspaceBytes,
             budgetAtIntentRead);
         Assert.Equal(0, budget.Current);
         Assert.DoesNotContain(sstStore.Requests,
@@ -194,12 +188,11 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
         var manifestBytes = EncodeManifest(nextSstSequence: 2);
-        var intentKey = PantsCloudObjectLayout.MetadataPrefix + "intent_log.json";
-        var intentBytes = "[]"u8.ToArray();
-        controlStore.Write(manifestKey, manifestBytes);
-        controlStore.Write(intentKey, intentBytes);
+        var intentBytes = IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), []);
+        var seeded = await SeedRetentionMetadataAsync(controlStore, manifestBytes, intentBytes);
+        var manifestKey = seeded.ManifestKey;
+        var intentKey = seeded.IntentKey!;
         var budget = new ResourceBudget(1024 * 1024);
         var budgetAtIntentRead = 0L;
         controlStore.BeforeRangeRead = (objectKey, _) =>
@@ -227,7 +220,7 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
 
         Assert.True(persistence.HasPersistenceAnomaly);
         Assert.Equal(
-            checked((manifestBytes.Length * 16L + 256) + (intentBytes.Length * 16L + 256)),
+            seeded.WorkspaceBytes,
             budgetAtIntentRead);
         Assert.Equal(0, budget.Current);
         Assert.DoesNotContain(sstStore.Requests,
@@ -241,9 +234,8 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
         var manifestBytes = EncodeManifest(nextSstSequence: 2);
-        controlStore.Write(manifestKey, manifestBytes);
+        await SeedRetentionMetadataAsync(controlStore, manifestBytes);
         controlStore.BeforeRangeRead = static (_, _) =>
             ValueTask.FromException(new PantsIOException("synthetic retention proof read failure"));
         var sstStore = new ScriptedCloudObjectStore();
@@ -273,8 +265,7 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore { ShortenRangeByBytes = 1 };
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-        controlStore.Write(manifestKey, EncodeManifest(nextSstSequence: 2));
+        await SeedRetentionMetadataAsync(controlStore, EncodeManifest(nextSstSequence: 2));
         var sstStore = new ScriptedCloudObjectStore();
         var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
         sstStore.Write(objectKey, "orphan"u8.ToArray());
@@ -302,8 +293,7 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         using var cache = new TemporaryDirectory();
         using var lease = await AcquireLeaseAsync();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-        controlStore.Write(manifestKey, "{ torn"u8.ToArray());
+        await SeedRetentionMetadataAsync(controlStore, "{ torn"u8.ToArray());
         var sstStore = new ScriptedCloudObjectStore();
         var objectKey = PantsCloudObjectLayout.SstPrefix + ObsoleteSstName;
         sstStore.Write(objectKey, "orphan"u8.ToArray());
@@ -326,12 +316,30 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
     }
 
     static byte[] EncodeManifest(ulong nextSstSequence) =>
-        JsonSerializer.SerializeToUtf8Bytes(
+        ManifestCodec.Encode(
             new ManifestState
             {
                 NextSstSeqs = new Dictionary<uint, ulong> { [0] = nextSstSequence }
             },
             ManifestJsonOptions);
+
+    static async Task<(string ManifestKey, string? IntentKey, long WorkspaceBytes)> SeedRetentionMetadataAsync(
+        ScriptedCloudObjectStore store, byte[] manifestBytes, byte[]? intentBytes = null)
+    {
+        await CloudTestMetadata.SeedAsync(store, ManifestState.CreateInitial(), manifestBytes, intentBytes);
+        using var pointer = MetadataFrameCodec.Decode(store.Read(CloudMetadataAuthority.PointerKey), 4);
+        var objects = pointer.RootElement.GetProperty("committed").GetProperty("objects").EnumerateArray().ToArray();
+        var manifestKey = objects.Single(static value => value.GetProperty("file_name").GetString() == "manifest.snapshot.json").GetProperty("object_key").GetString()!;
+        var intentKey = objects.Where(static value => value.GetProperty("file_name").GetString() == "intent_log.json").Select(static value => value.GetProperty("object_key").GetString()).SingleOrDefault();
+        var workspace = checked((store.Read(CloudMetadataAuthority.PointerKey).Length + store.Read(CloudMetadataAuthority.SentinelKey).Length) * 16L + 512);
+        foreach (var item in objects)
+        {
+            workspace = checked(workspace + item.GetProperty("len").GetInt64() * 16 + 256);
+        }
+
+        store.ResetRequests();
+        return (manifestKey, intentKey, workspace);
+    }
 
     static async ValueTask<CloudLeaseCoordinator> AcquireLeaseAsync()
     {

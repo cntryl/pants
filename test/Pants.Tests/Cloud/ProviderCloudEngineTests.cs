@@ -106,13 +106,13 @@ public sealed class ProviderCloudEngineTests
             context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         sync.Put("sync"u8.ToArray(), "value"u8.ToArray());
-        await Assert.ThrowsAsync<PantsNotSupportedException>(() => sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
         await using var buffered = await context.Database.Transactions.BeginAsync(
             context.Database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         buffered.Put("buffered"u8.ToArray(), "value"u8.ToArray());
 
-        await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
             buffered.CommitAsync(PantsWriteOptions.Buffered).AsTask());
     }
 

@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
+using Cntryl.Pants.Storage.Internal.Lease;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
@@ -15,6 +17,7 @@ public sealed class PantsCloudCrashRecoveryTests
     const string LocalWalScenario = "local-wal";
     const string SealedWalScenario = "sealed-wal";
     const string CloudStrictScenario = "cloud-strict";
+    const string FailedCloudStrictScenario = "failed-cloud-strict";
     const string CorruptWalScenario = "corrupt-wal";
     const string PublishedSstScenario = "published-sst";
     const string ReadyFileName = "cloud-crash-child.ready";
@@ -40,8 +43,12 @@ public sealed class PantsCloudCrashRecoveryTests
             StringComparer.Ordinal.Equals(scenario, PublishedSstScenario) ||
             StringComparer.Ordinal.Equals(scenario, LocalWalScenario) ||
             StringComparer.Ordinal.Equals(scenario, SealedWalScenario));
+        var uploadFailure = StringComparer.Ordinal.Equals(scenario, FailedCloudStrictScenario)
+            ? new RetryingCloudWalUploadFailpointHandler()
+            : null;
         var dependencies = scenario switch
         {
+            FailedCloudStrictScenario => new RuntimeDependencies(uploadFailure),
             LocalWalScenario => new RuntimeDependencies(
                 new CrashChildFailpointHandler(Failpoint.BeforeCloudWalUpload)),
             SealedWalScenario => new RuntimeDependencies(
@@ -72,6 +79,22 @@ public sealed class PantsCloudCrashRecoveryTests
                     candidate.CurrentSequence >= 2 &&
                     candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
             Assert.NotEmpty(Directory.EnumerateFiles(
+                Path.Combine(path, "cloud_store", "wal"),
+                "*.wal",
+                SearchOption.AllDirectories));
+        }
+        else if (StringComparer.Ordinal.Equals(scenario, FailedCloudStrictScenario))
+        {
+            await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
+                database,
+                "strict-upload-failure",
+                "value",
+                PantsWriteOptions.CloudStrict));
+            using var failureTimeout = new CancellationTokenSource(TestTimeouts.Expected);
+            await Assert.IsType<RetryingCloudWalUploadFailpointHandler>(uploadFailure)
+                .WaitForFailureAsync(failureTimeout.Token);
+            await AssertValueAsync(database, "strict-upload-failure", "value");
+            Assert.Empty(Directory.EnumerateFiles(
                 Path.Combine(path, "cloud_store", "wal"),
                 "*.wal",
                 SearchOption.AllDirectories));
@@ -117,7 +140,13 @@ public sealed class PantsCloudCrashRecoveryTests
                 SearchOption.AllDirectories));
         }
 
-        await PublishSignalAsync(Path.Combine(path, ReadyFileName), "ready");
+        var leaseStore = CreateSharedLeaseStore(path);
+        var sharedLease = Assert.IsType<CloudLeaseSnapshot>(await leaseStore.ReadAsync(CancellationToken.None));
+        var localLease = LeaderRecordCodec.Decode(
+            await File.ReadAllBytesAsync(Path.Combine(path, ".midge_leader")));
+        await PublishSignalAsync(
+            Path.Combine(path, ReadyFileName),
+            JsonSerializer.Serialize(new { SharedLease = sharedLease, LocalLease = localLease }));
 
         using var process = Process.GetCurrentProcess();
         try
@@ -139,17 +168,14 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
-
-        var activeWal = Path.Combine(directory.Path, "wal", "wal.log");
+        var activeWal = WalTestFiles.ActivePath(directory.Path);
         Assert.True(new FileInfo(activeWal).Length > 0);
 
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        var appliedCut = await CaptureAppliedCutAsync(reopened);
         var metrics = await WaitForMetricsAsync(
             reopened,
-            static candidate =>
-                candidate.CurrentSequence >= 1 &&
-                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+            candidate => candidate.WalCloudDurableSequence >= appliedCut);
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -158,7 +184,7 @@ public sealed class PantsCloudCrashRecoveryTests
             "crash-value",
             TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                 await reader.GetAsync(TestBytes.FromString(GetScenarioKey(ActiveWalScenario))))));
-        Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
+        Assert.True(metrics.WalCloudDurableSequence >= appliedCut);
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "cloud_store", "wal"),
             "*.wal",
@@ -174,9 +200,7 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
-
-        var activeWal = Path.Combine(directory.Path, "wal", "wal.log");
+        var activeWal = WalTestFiles.ActivePath(directory.Path);
         Assert.True(new FileInfo(activeWal).Length > 0);
         var crashedWriterEpoch = AssertSingleWriterEpoch(activeWal);
 
@@ -223,7 +247,6 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "wal"),
             "*.wal",
@@ -243,7 +266,6 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "wal"),
             "*.wal",
@@ -255,11 +277,10 @@ public sealed class PantsCloudCrashRecoveryTests
 
         await using (var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path)))
         {
+            var appliedCut = await CaptureAppliedCutAsync(reopened);
             var metrics = await WaitForMetricsAsync(
                 reopened,
-                static candidate =>
-                    candidate.CurrentSequence >= 1 &&
-                    candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
+                candidate => candidate.WalCloudDurableSequence >= appliedCut);
             Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
             await AssertValueAsync(reopened, GetScenarioKey(SealedWalScenario), "crash-value");
             Assert.NotEmpty(Directory.EnumerateFiles(
@@ -298,7 +319,9 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(PantsEngineHealth.Healthy, metrics.Health);
-            Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
+            var appliedCut = await CaptureAppliedCutAsync(reopened);
+            Assert.Equal((ulong)(SealedWalBacklogBatch.DefaultMaximumSegments + 1) * 3, appliedCut);
+            Assert.True(metrics.WalCloudDurableSequence >= appliedCut);
             for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
             {
                 await AssertValueAsync(reopened, GetBacklogKey(index), "backlog-value");
@@ -344,7 +367,6 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
         ResetDirectory(Path.Combine(directory.Path, "wal"));
         ResetDirectory(Path.Combine(directory.Path, "sst"));
 
@@ -375,7 +397,6 @@ public sealed class PantsCloudCrashRecoveryTests
             await TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        await ExpireCrashedProcessLeaseAsync(directory.Path);
         var remoteWal = Directory.EnumerateFiles(
                 Path.Combine(directory.Path, "cloud_store", "wal"),
                 "*.wal",
@@ -383,7 +404,21 @@ public sealed class PantsCloudCrashRecoveryTests
             .Max(StringComparer.Ordinal);
         Assert.NotNull(remoteWal);
         var corruptBytes = await File.ReadAllBytesAsync(remoteWal);
-        await File.WriteAllBytesAsync(remoteWal, corruptBytes[..^1]);
+        var cursor = WalSegmentCodec.HeaderSize;
+        var lastRecordEnd = cursor;
+        while (cursor < corruptBytes.Length)
+        {
+            var length = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(corruptBytes.AsSpan(cursor)));
+            if (WalSegmentCodec.IsFooter(corruptBytes.AsSpan(cursor + 8, length)))
+            {
+                break;
+            }
+
+            lastRecordEnd = cursor + 8 + length;
+            cursor = lastRecordEnd;
+        }
+
+        await File.WriteAllBytesAsync(remoteWal, corruptBytes[..(lastRecordEnd - 1)]);
         var retainedBytes = await File.ReadAllBytesAsync(remoteWal);
         RemoveLocalCache(directory.Path);
 
@@ -413,10 +448,14 @@ public sealed class PantsCloudCrashRecoveryTests
             Path.Combine(databasePath, ReadyFileName));
     }
 
-    static async Task TerminateCrashChildAsync(Process child, string databasePath)
+    internal static Task<CrashChildProcess> StartFailedStrictCrashChildAsync(string databasePath) =>
+        StartReadyCrashChildAsync(databasePath, FailedCloudStrictScenario);
+
+    internal static async Task TerminateCrashChildAsync(Process child, string databasePath)
     {
         await WaitForCrashChildExitAsync(child);
         await WaitForCrashChildLockReleaseAsync(databasePath);
+        await ExpireCrashedProcessLeaseAsync(databasePath);
     }
 
     static async Task WaitForCrashChildExitAsync(Process child)
@@ -500,22 +539,39 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task ExpireCrashedProcessLeaseAsync(string databasePath)
     {
-        var leasePath = Path.Combine(databasePath, ".midge_leader");
-        var lines = await File.ReadAllLinesAsync(leasePath);
-        for (var index = 0; index < lines.Length; index++)
-        {
-            if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
-            {
-                lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
-            }
-        }
+        using var readiness = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(databasePath, ReadyFileName)));
+        var capturedShared = Assert.IsType<CloudLeaseSnapshot>(
+            readiness.RootElement.GetProperty("SharedLease").Deserialize<CloudLeaseSnapshot>());
+        var capturedLocal = Assert.IsType<LeaderRecord>(
+            readiness.RootElement.GetProperty("LocalLease").Deserialize<LeaderRecord>());
+        var leaseStore = CreateSharedLeaseStore(databasePath);
+        var currentShared = Assert.IsType<CloudLeaseSnapshot>(await leaseStore.ReadAsync(CancellationToken.None));
 
-        // The edit invalidates the record checksum, so the expired copy carries none.
-        await File.WriteAllLinesAsync(
+        // Heartbeats may change expiry/version after readiness, but only this stopped owner may
+        // be expired. A successor, unexpected owner, or concurrent update makes the fixture fail.
+        Assert.Equal(capturedShared.Lease.Epoch, currentShared.Lease.Epoch);
+        Assert.Equal(capturedShared.Lease.HolderId, currentShared.Lease.HolderId);
+        Assert.Equal(capturedShared.Lease.OwnerToken, currentShared.Lease.OwnerToken);
+        Assert.Equal(capturedShared.Lease.AcquiredAtUtc, currentShared.Lease.AcquiredAtUtc);
+        Assert.True(await leaseStore.TryReplaceAsync(
+            currentShared.Version,
+            currentShared.Lease with { ExpiresAtUtc = DateTimeOffset.UnixEpoch },
+            CancellationToken.None));
+
+        var leasePath = Path.Combine(databasePath, ".midge_leader");
+        var currentLocal = LeaderRecordCodec.Decode(await File.ReadAllBytesAsync(leasePath));
+        Assert.Equal(capturedLocal.Epoch, currentLocal.Epoch);
+        Assert.Equal(capturedLocal.HolderId, currentLocal.HolderId);
+        await File.WriteAllBytesAsync(
             leasePath,
-            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
-        File.Delete(Path.Combine(databasePath, ".midge_leader.lock"));
+            LeaderRecordCodec.Encode(currentLocal with { AcquiredAt = "1970-01-01T00:00:00Z" }));
+        await PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath);
     }
+
+    static CloudObjectLeaseStore CreateSharedLeaseStore(string databasePath) =>
+        new(new SimulatedCloudObjectStore(Path.Combine(databasePath, "cloud_store")),
+            PantsCloudObjectLayout.LeaseObjectKey);
 
     static void RemoveLocalCache(string root)
     {
@@ -608,6 +664,15 @@ public sealed class PantsCloudCrashRecoveryTests
                 candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
     }
 
+    static async Task<ulong> CaptureAppliedCutAsync(IPantsDatabase database)
+    {
+        await using var snapshot = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+        var appliedCut = Assert.Single((await database.Diagnostics.GetStorageLayoutAsync()).ActiveSnapshots).Sequence;
+        Assert.True(appliedCut > 0);
+        return appliedCut;
+    }
+
     static async Task CommitAsync(
         IPantsDatabase database,
         string key,
@@ -679,10 +744,15 @@ public sealed class PantsCloudCrashRecoveryTests
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
+        var header = new byte[WalSegmentCodec.HeaderSize];
+        stream.ReadExactly(header);
+        var epoch = WalSegmentCodec.DecodeHeader(header).Open.Epoch;
+        stream.Position = 0;
         WalFrameReader.Visit(
             stream,
             (record, _) => writerEpochs.Add(record.WriterEpoch));
-        return Assert.Single(writerEpochs);
+        Assert.All(writerEpochs, actual => Assert.Equal(epoch, actual));
+        return epoch;
     }
 
     static bool IsKnownScenario(string? scenario) =>
@@ -690,6 +760,7 @@ public sealed class PantsCloudCrashRecoveryTests
         StringComparer.Ordinal.Equals(scenario, LocalWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, SealedWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, CloudStrictScenario) ||
+        StringComparer.Ordinal.Equals(scenario, FailedCloudStrictScenario) ||
         StringComparer.Ordinal.Equals(scenario, CorruptWalScenario) ||
         StringComparer.Ordinal.Equals(scenario, PublishedSstScenario);
 

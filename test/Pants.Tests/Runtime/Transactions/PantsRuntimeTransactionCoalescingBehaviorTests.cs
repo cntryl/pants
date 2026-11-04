@@ -226,7 +226,7 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
             var unknown = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
                 () => commit.WaitAsync(TestTimeouts.Expected));
             Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
-            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.Equal(PantsErrorSeverity.OutcomeUnknown, unknown.Severity);
             Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
         }
 
@@ -393,7 +393,7 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
                 var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
                     () => commit.WaitAsync(TestTimeouts.Expected));
                 Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
-                Assert.Equal(PantsErrorSeverity.Fatal, failure.Severity);
+                Assert.Equal(PantsErrorSeverity.OutcomeUnknown, failure.Severity);
                 Assert.IsType<PantsNoSpaceException>(failure.InnerException);
             }
 
@@ -437,9 +437,10 @@ public sealed class PantsRuntimeTransactionCoalescingBehaviorTests
             Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
             Assert.Equal(1, metrics.WalAppendCount);
             Assert.Equal(1, metrics.WalFsyncCount);
-            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily)
+            await Assert.ThrowsAsync<PantsFencedException>(() => database.Maintenance
+                .FlushAsync(database.ColumnFamilies.DefaultFamily)
                 .AsTask()
-                .WaitAsync(TestTimeouts.Expected);
+                .WaitAsync(TestTimeouts.Expected));
             await using (var reader = await database.Transactions.BeginAsync(
                              database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadOnly))

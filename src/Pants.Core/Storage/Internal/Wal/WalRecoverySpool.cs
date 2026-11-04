@@ -35,14 +35,17 @@ sealed class WalRecoverySpool : IDisposable
     ///     <see langword="null" /> where no local budget applies. The spool sits outside the
     ///     resident figure the budget measures, so the charge is held until the spool is disposed.
     /// </summary>
-    public WalRecoverySpool(string scratchDirectory, StorageBudgetLedger? ledger = null)
+    public WalRecoverySpool(string scratchDirectory, StorageBudgetLedger? ledger = null, uint columnFamilyId = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
         _path = Path.Combine(
             scratchDirectory,
             $"pants-wal-recovery-{Guid.NewGuid():N}.tmp");
         _ledger = ledger;
+        ColumnFamilyId = columnFamilyId;
     }
+
+    public uint ColumnFamilyId { get; }
 
     /// <summary>
     ///     Removes spools left behind by a process that died mid-recovery. <c>DeleteOnClose</c>

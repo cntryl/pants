@@ -52,7 +52,8 @@ public sealed class PantsL0AdmissionTests
     public async Task ShouldBoundPublishedL0WithoutCompactAllWhenBackgroundCompactionIsDisabled()
     {
         using var directory = new TemporaryDirectory();
-        await using var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        await using var database = await PantsDatabase.OpenAsync(
+            CreateOptions(directory.Path, l1TargetSizeBytes: 1));
         var family = database.ColumnFamilies.DefaultFamily;
         var ceiling = L0FileCountTrigger +
             MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily + 1;
@@ -74,8 +75,10 @@ public sealed class PantsL0AdmissionTests
         await CommitAsync(database, family, "after");
     }
 
-    [Fact]
-    public async Task ShouldRecoverOverCeilingL0OnOpenWhenBackgroundCompactionIsDisabled()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldRecoverOverCeilingL0OnOpenWhenBackgroundCompactionIsDisabled(bool timedOpen)
     {
         using var directory = new TemporaryDirectory();
         var ceiling = L0FileCountTrigger +
@@ -93,7 +96,13 @@ public sealed class PantsL0AdmissionTests
             Assert.True(await CountL0FilesAsync(database) >= ceiling);
         }
 
-        await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+        var reopenOptions = CreateOptions(directory.Path);
+        if (timedOpen)
+        {
+            reopenOptions = reopenOptions.WithOpenTimeout(TestTimeouts.Expected);
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(reopenOptions);
         Assert.True(
             await reopened.Maintenance.WaitForWriteStallClearAsync(
                 reopened.ColumnFamilies.DefaultFamily,
@@ -102,11 +111,15 @@ public sealed class PantsL0AdmissionTests
         await CommitAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "after-open");
     }
 
-    static PantsOpenOptions CreateOptions(string path, int l0FileCountTrigger = L0FileCountTrigger) =>
+    static PantsOpenOptions CreateOptions(
+        string path,
+        int l0FileCountTrigger = L0FileCountTrigger,
+        long l1TargetSizeBytes = 40L * 1024 * 1024) =>
         PantsOpenOptions.Local(path)
             .WithBackgroundCompaction(false)
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: l0FileCountTrigger,
+                L1TargetSizeBytes: l1TargetSizeBytes,
                 BackgroundEnabled: false));
 
     static async Task CommitAsync(IPantsDatabase database, IPantsColumnFamily family, string key)

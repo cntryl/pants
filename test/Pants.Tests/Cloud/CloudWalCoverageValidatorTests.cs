@@ -1,3 +1,5 @@
+using Cntryl.Pants.Support.TestDoubles;
+
 namespace Cntryl.Pants.Cloud;
 
 public sealed class CloudWalCoverageValidatorTests
@@ -184,10 +186,10 @@ public sealed class CloudWalCoverageValidatorTests
                     null,
                     rangeEnd)
             ]);
-        return Frame(payload);
+        return SealFrames(Frame(payload));
     }
 
-    static byte[] CreateSplitWalBytes(byte[] key) => Frame(
+    static byte[] CreateSplitWalBytes(byte[] key) => SealFrames(Frame(
         WalCodec.EncodeTransactionMarker(
             WalOperation.TransactionBegin,
             1,
@@ -208,7 +210,7 @@ public sealed class CloudWalCoverageValidatorTests
             WalOperation.TransactionCommit,
             1,
             3,
-            7));
+            7)));
 
     static byte[] CreateMalformedMutationPayload(
         WalOperation operation,
@@ -223,6 +225,9 @@ public sealed class CloudWalCoverageValidatorTests
             null,
             transactionId,
             7));
+
+    static byte[] SealFrames(byte[] frames) =>
+        TestWalSegment.SealRecords(1, 7, "1.wal", frames, WalChainLink.Genesis).Bytes;
 
     static byte[] Frame(params byte[][] payloads)
     {

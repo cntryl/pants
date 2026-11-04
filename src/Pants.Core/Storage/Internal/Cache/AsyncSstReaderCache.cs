@@ -39,6 +39,32 @@ sealed class AsyncSstReaderCache : IDisposable
         _openReaderHandleBudget = openReaderHandleBudget;
     }
 
+    public bool TryEvictIdle()
+    {
+        AsyncSstReader? reader = null;
+        lock (_gate)
+        {
+            var node = _recency.First;
+            while (node is not null)
+            {
+                var slot = node.Value;
+                if (slot.Reader is { HasExclusiveReference: true })
+                {
+                    _slots.Remove(slot.Identity);
+                    reader = Detach(slot);
+                    break;
+                }
+                node = node.Next;
+            }
+        }
+        if (reader is null)
+        {
+            return false;
+        }
+        DisposeAll([reader]);
+        return true;
+    }
+
     public int CachedReaderCount
     {
         get
@@ -65,10 +91,17 @@ sealed class AsyncSstReaderCache : IDisposable
     public async ValueTask<AsyncSstReader> GetOrOpenAsync(
         FileMeta file,
         Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
+        CancellationToken cancellationToken) =>
+        (await GetOrOpenWithOutcomeAsync(file, openReader, cancellationToken).ConfigureAwait(false)).Reader;
+
+    public async ValueTask<(AsyncSstReader Reader, bool CacheHit)> GetOrOpenWithOutcomeAsync(
+        FileMeta file,
+        Func<CancellationToken, ValueTask<AsyncSstReader>> openReader,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(openReader);
+        var observedMiss = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -85,9 +118,12 @@ sealed class AsyncSstReaderCache : IDisposable
                 if (slot.Reader is { } cached)
                 {
                     Touch(slot);
-                    return cached.Share();
+                    return (cached.Share(), !observedMiss);
                 }
 
+                // A caller that opens or joins a pending open missed the cache, even
+                // though the next loop acquires its handle from the published slot.
+                observedMiss = true;
                 if (slot.Opening is { } opening)
                 {
                     pending = opening.Task;

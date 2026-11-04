@@ -348,9 +348,21 @@ public sealed class StreamingCompactionMergerTests
         Assert.Equal(2, partitions.Length);
         Assert.Empty(partitions[0].Entries);
         Assert.Equal(["z"], partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(
+            source.Entries.Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)),
+            partitions.SelectMany(static partition => partition.Entries).Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)));
         Assert.Equal(("a", "b"), (
             TestBytes.ToText(Assert.Single(partitions[0].RangeTombstones).Start),
             TestBytes.ToText(partitions[0].RangeTombstones[0].End)));
+        Assert.Empty(partitions[1].RangeTombstones);
     }
 
     [Fact]
@@ -448,7 +460,7 @@ public sealed class StreamingCompactionMergerTests
     public void ShouldKeepFinalKeyWithItsEndingRangeWithinOneFragmentOutput()
     {
         var source = Build(
-            [("a", 1, "value"), ("m", 2, "value"), ("n", 3, "value"), ("z", 4, "value")],
+            [("a", 1, "value"), ("n", 3, "value"), ("z", 4, "value")],
             [("a", "z", 5)]);
         using var directory = new TemporaryDirectory();
         using var reader = OpenReader(directory.Path, "source.sst", source);
@@ -457,12 +469,12 @@ public sealed class StreamingCompactionMergerTests
         var partitions = StreamingCompactionMerger.MergeAndPartition(
                 [reader],
                 plan,
-                100)
+                1)
             .ToArray();
 
         Assert.Equal(2, partitions.Length);
         Assert.Equal(
-            ["m", "n", "z"],
+            ["n", "z"],
             partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
         Assert.Equal(("m", "z"), (
             TestBytes.ToText(Assert.Single(partitions[1].RangeTombstones).Start),
@@ -645,7 +657,7 @@ public sealed class StreamingCompactionMergerTests
     }
 
     static CompactionPlan Plan(
-        long? snapshotHorizon = null,
+        ulong? snapshotHorizon = null,
         bool pointTombstoneGcEligible = true,
         bool rangeTombstoneGcEligible = true) => new(
         0,

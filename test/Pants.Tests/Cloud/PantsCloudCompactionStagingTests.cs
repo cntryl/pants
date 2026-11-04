@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -82,7 +83,10 @@ public sealed class PantsCloudCompactionStagingTests
         }
 
         RemoveLocalSsts(directory.Path);
-        var inputs = CloudSsts(directory.Path).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray();
+        var inputs = CloudSsts(directory.Path)
+            .Select(static path => Path.GetFileName(path)!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
         await using var database = await OpenAsync(directory.Path, NullPantsFailpointHandler.Instance);
         var before = await LayoutNamesAsync(database);
@@ -101,6 +105,68 @@ public sealed class PantsCloudCompactionStagingTests
             PantsTransactionMode.ReadOnly);
         Assert.Equal(big, (await reader.GetAsync(TestBytes.FromString("big")))?.ToArray());
         Assert.Equal([1, 2, 3], (await reader.GetAsync(TestBytes.FromString("small")))?.ToArray());
+    }
+
+    [Fact]
+    public async Task ShouldReconcileEarlierDrainedOutputWhenLaterPartitionExceedsTheStagingWindow()
+    {
+        using var directory = new TemporaryDirectory();
+        var big = new byte[LocalBudgetBytes * 3 / 4];
+        new Random(7).NextBytes(big);
+        await using (var seed = await PantsDatabase.OpenAsync(SeedOptions(directory.Path)))
+        {
+            await PutAndFlushAsync(seed, "a-small", [1, 2, 3]);
+            await PutAndFlushAsync(seed, "z-big", big);
+        }
+
+        RemoveLocalSsts(directory.Path);
+        var inputs = CloudSsts(directory.Path)
+            .Select(static path => Path.GetFileName(path)!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var sampler = new StagingFailpointHandler(directory.Path);
+        string[] before;
+        string orphanName;
+        await using (var database = await OpenAsync(directory.Path, sampler))
+        {
+            before = await LayoutNamesAsync(database);
+            await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                database.Maintenance.CompactAllAsync().AsTask());
+
+            Assert.Single(sampler.Samples, static sample =>
+                sample.Failpoint == Failpoint.AfterCompactionPartitionDrained);
+            Assert.Equal(before, await LayoutNamesAsync(database));
+            var remoteNames = CloudSsts(directory.Path)
+                .Select(static path => Path.GetFileName(path)!)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(inputs.Length + 1, remoteNames.Length);
+            orphanName = Assert.Single(remoteNames.Except(inputs, StringComparer.Ordinal));
+
+            using var intent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json"))).Entries);
+            var publication = Assert.Single(intent.RootElement.EnumerateArray())
+                .GetProperty("CompactionPublish");
+            Assert.Equal("OutputDurable", publication.GetProperty("phase").GetString());
+            Assert.Equal(
+                orphanName,
+                Assert.Single(publication.GetProperty("added").EnumerateArray())
+                    .GetProperty("name")
+                    .GetString());
+        }
+
+        await using var reopened = await OpenAsync(directory.Path, NullPantsFailpointHandler.Instance);
+        Assert.Equal(before, await LayoutNamesAsync(reopened));
+        Assert.Equal(
+            inputs,
+            CloudSsts(directory.Path)
+                .Select(static path => Path.GetFileName(path)!)
+                .Order(StringComparer.Ordinal));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal(big, (await reader.GetAsync(TestBytes.FromString("z-big")))?.ToArray());
+        Assert.Equal([1, 2, 3], (await reader.GetAsync(TestBytes.FromString("a-small")))?.ToArray());
     }
 
     [Fact]

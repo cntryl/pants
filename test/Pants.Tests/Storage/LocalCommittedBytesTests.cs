@@ -91,7 +91,7 @@ public sealed class LocalCommittedBytesTests
             failpoints: failpoints,
             hybridCache: hybridCache);
 
-        var expectedBytes = residuePaths.Sum(path => new FileInfo(path).Length);
+        var expectedBytes = residuePaths.Sum(path => new FileInfo(path).Length) + WalSegmentCodec.HeaderSize;
         Assert.All(residuePaths, path => Assert.True(File.Exists(path)));
         Assert.Equal(expectedBytes, store.LocalCommittedBytes);
         Assert.Equal(expectedBytes, hybridCache.Ledger.ChargedBytes);
@@ -105,11 +105,11 @@ public sealed class LocalCommittedBytesTests
             File.Delete(path);
         }
 
-        Assert.Equal(0, store.LocalCommittedBytes);
-        Assert.Equal(0, hybridCache.Ledger.ChargedBytes);
+        Assert.Equal(WalSegmentCodec.HeaderSize, store.LocalCommittedBytes);
+        Assert.Equal(WalSegmentCodec.HeaderSize, hybridCache.Ledger.ChargedBytes);
         using var reservation = hybridCache.Ledger.Reserve(
             StorageAdmissionKind.Wal,
-            hybridCache.Ledger.GetAdmissionCeilingBytes(StorageAdmissionKind.Wal));
+            hybridCache.Ledger.GetAvailableBytes(StorageAdmissionKind.Wal));
     }
 
     static long MeasureOnDisk(string root)

@@ -522,7 +522,7 @@ public sealed class PantsHybridStorageTests
             state,
             PantsDurability.Sync));
 
-        Assert.Equal(0, WalBytes(directory.Path));
+        Assert.Equal(WalSegmentCodec.HeaderSize, WalBytes(directory.Path));
         Assert.Equal(0, hybridCache.Ledger.ReservedBytes);
         Assert.True(store.IsWalFenced);
     }
@@ -833,11 +833,14 @@ public sealed class PantsHybridStorageTests
     public async Task ShouldRejectCloudWalAppendBeforeAnyFrameWhenFlushOutputExceedsMemtableWindow()
     {
         using var directory = new TemporaryDirectory();
-        var value = CreateValue(256 * 1024, 151);
+        // Fit the configured replay envelope while exceeding the promised flush-staging window.
+        var value = CreateValue(31 * 1024, 151);
         await using (var database = await OpenAsync(directory.Path, WalAdmissionBudgetBytes))
         {
+            var walBytesBefore = WalBytes(directory.Path);
             await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
                 PutAsync(database, "large-cloud-transaction", value).AsTask());
+            Assert.Equal(walBytesBefore, WalBytes(directory.Path));
             var rejected = await database.Diagnostics.GetRuntimeMetricsAsync();
             var blocked = Assert.IsType<PantsStorageAdmissionBlock>(
                 rejected.HybridStorageBudget?.BlockedAdmission);
@@ -882,7 +885,8 @@ public sealed class PantsHybridStorageTests
                 transaction.Put(TestBytes.FromString("oversized-spilled"), value);
                 Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
 
-                await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
+                // The pending replay unit exceeds half the local-storage budget before WAL admission.
+                await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
                     transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
             }
 
@@ -1088,7 +1092,7 @@ public sealed class PantsHybridStorageTests
         Directory.GetFiles(Path.Combine(root, "cloud_store", "sst"), "*.sst");
 
     static long WalBytes(string root) =>
-        new FileInfo(Path.Combine(root, "wal", "wal.log")).Length;
+        new FileInfo(WalTestFiles.ActivePath(root)).Length;
 
     static RuntimeState NewState() => new(
         new ManualClock(DateTimeOffset.UnixEpoch),

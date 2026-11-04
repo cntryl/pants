@@ -150,6 +150,33 @@ public sealed class SstReadViewTests
     }
 
     [Fact]
+    public void ShouldSelectBothAdjacentBoundaryFilesAcrossOneHundredThousandFiles()
+    {
+        const int fileCount = 100_000;
+        const int boundary = fileCount / 2;
+        var files = Enumerable.Range(0, fileCount)
+            .Select(index => new FileMeta
+            {
+                Name = $"l1-{index}.sst",
+                Level = 1,
+                SstSequence = checked((ulong)index + 1),
+                SizeBytes = 1024,
+                SmallestKey = Key(index),
+                LargestKey = Key(index + 1),
+                KeyBoundsComplete = true
+            })
+            .ToArray();
+        var view = SstReadView.Create(files);
+
+        var candidates = view.SelectPointCandidates(0, Key(boundary), out var filesExamined);
+
+        Assert.Equal(
+            [$"l1-{boundary}.sst", $"l1-{boundary - 1}.sst"],
+            candidates.Select(static file => file.Name));
+        Assert.True(filesExamined < 64, $"A boundary read inspected {filesExamined} files.");
+    }
+
+    [Fact]
     public void ShouldReportLevelThatFallsBackToLinearScanGivenRealOverlap()
     {
         var measured = 0L;

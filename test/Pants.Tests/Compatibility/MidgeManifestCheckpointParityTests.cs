@@ -51,8 +51,9 @@ public sealed class MidgeManifestCheckpointParityTests
                     Assert.True(
                         compactedCheckpoint > flushedCheckpoint,
                         $"Compaction did not advance the manifest checkpoint in simulatedCloud={simulatedCloud}.");
-                    Assert.True(
-                        (await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun > compactionsBefore);
+                    Assert.Equal(
+                        compactionsBefore,
+                        (await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun);
                     previousCheckpoint = compactedCheckpoint;
                     await AssertRowsAsync(database, round + 1, family);
                 }
@@ -76,8 +77,8 @@ public sealed class MidgeManifestCheckpointParityTests
 
     static async Task<ulong> ReadCheckpointIdAsync(string root)
     {
-        using var manifest = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(root, "manifest.snapshot.json")));
+        using var manifest = MetadataFrameCodec.Decode(
+            await File.ReadAllBytesAsync(Path.Combine(root, "manifest.snapshot.json")), 1);
         return manifest.RootElement.GetProperty("edit_checkpoint_id").GetUInt64();
     }
 

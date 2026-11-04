@@ -1,5 +1,9 @@
 # Pants and Midge v0.1.1 scenario mapping
 
+This is the historical v0.1.1 inventory. The current engine-read benchmark now
+follows Midge 0.5.2; see [current-midge-engine-reads.md](current-midge-engine-reads.md)
+for its fixture, validation and evidence boundaries.
+
 This table maps each Pants BenchmarkDotNet class to the closest Midge v0.1.1 stress benchmark family. A family match identifies related work; it does not prove that two rows use the same logical operation, inputs, storage mode, clients, operation count, or measurement window. No pair is approved for a direct ratio by this map alone.
 
 | Tier | Pants BDN row family | Midge `benchmark_id` family | Mechanics assessment |

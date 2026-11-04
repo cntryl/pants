@@ -3,7 +3,8 @@ namespace Cntryl.Pants.Cloud.Internal;
 sealed class ProviderRemoteWalSegment(
     ICloudObjectStore walStore,
     ProviderPublishedWalSegment segment,
-    int pageBytes) : IRemoteWalSegment
+    int pageBytes,
+    RecoveryWorkSink? recoveryWork = null) : IRemoteWalSegment
 {
     public ulong SegmentId => segment.SegmentId;
 
@@ -17,5 +18,6 @@ sealed class ProviderRemoteWalSegment(
             segment.ObjectKey,
             checked((long)segment.SizeBytes),
             pageBytes,
-            cancellationToken);
+            cancellationToken,
+            recoveryWork);
 }

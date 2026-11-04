@@ -9,13 +9,13 @@ interface ILocalWalStore
 
     WalCommitResult AppendCommit(
         CommitPayload payload,
-        RuntimeState state,
+        ulong publishedSequence,
         PantsDurability durability,
         WalMetricsRecorder? metrics = null);
 
     WalCommitGroupResult AppendCommitGroup(
         IReadOnlyList<WalCommitGroupEntry> commits,
-        RuntimeState state,
+        ulong publishedSequence,
         PantsDurability durability,
         Action beforeSync,
         WalMetricsRecorder? metrics = null);

@@ -208,7 +208,7 @@ public sealed class PantsOptionsPatternTests
         var storage = Assert.IsType<PantsStorageConfiguration.Cloud>(databaseFactory.Options!.Storage);
         Assert.Same(storage.Topology.Wal, storage.Topology.Sst);
         Assert.Same(storage.Topology.Wal, storage.Topology.Control);
-        Assert.Equal("catalog/", storage.Topology.Wal.Prefix);
+        Assert.Equal("catalog", storage.Topology.Wal.Prefix);
         var provider = Assert.IsType<PantsAwsS3Provider>(
             storage.Topology.Wal.Provider);
         Assert.Equal("catalog-production", provider.Bucket);

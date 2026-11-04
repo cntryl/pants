@@ -5,21 +5,29 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Flush;
 sealed class FlushRuntimeService(
     int capacity,
     ILocalFlushStore? flushStore,
-    RuntimeTelemetry telemetry)
+    RuntimeTelemetry telemetry,
+    TimeProvider? timeProvider = null)
     : ChannelRuntimeService<FlushRuntimeRequest, FlushRuntimeResult>(capacity)
 {
-    public async ValueTask FlushAsync(
-        RuntimeState state,
-        CancellationToken cancellationToken = default) =>
-        _ = await ExecuteAsync(new FlushAllRuntimeRequest(state), cancellationToken)
-            .ConfigureAwait(false);
+    public ValueTask FlushAsync(RuntimeState state, CancellationToken cancellationToken = default) =>
+        FlushAsync(state.OrdinaryFlushOrigin, cancellationToken);
 
     public async ValueTask FlushAsync(
-        RuntimeState state,
+        MetadataOrigin origin,
+        CancellationToken cancellationToken = default) =>
+        _ = await ExecuteAsync(new FlushAllRuntimeRequest(origin), cancellationToken)
+            .ConfigureAwait(false);
+
+    public ValueTask FlushAsync(RuntimeState state, ColumnFamilyIdentity columnFamily,
+        CancellationToken cancellationToken = default) =>
+        FlushAsync(columnFamily, state.OrdinaryFlushOrigin, cancellationToken);
+
+    public async ValueTask FlushAsync(
         ColumnFamilyIdentity columnFamily,
+        MetadataOrigin origin,
         CancellationToken cancellationToken = default) =>
         _ = await ExecuteAsync(
-                new FlushColumnFamilyRuntimeRequest(state, columnFamily),
+                new FlushColumnFamilyRuntimeRequest(columnFamily, origin),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -57,7 +65,7 @@ sealed class FlushRuntimeService(
         ILocalFlushStore store,
         FlushAllRuntimeRequest request)
     {
-        store.Flush(request.State);
+        store.Flush(request.Origin);
         return ValueTask.FromResult(default(FlushRuntimeResult));
     }
 
@@ -65,7 +73,7 @@ sealed class FlushRuntimeService(
         ILocalFlushStore store,
         FlushColumnFamilyRuntimeRequest request)
     {
-        store.Flush(request.State, request.ColumnFamily);
+        store.Flush(request.ColumnFamily, request.Origin);
         return ValueTask.FromResult(default(FlushRuntimeResult));
     }
 
@@ -74,6 +82,8 @@ sealed class FlushRuntimeService(
         PublishFrozenMemtableRuntimeRequest request)
     {
         var publicationPlan = request.PublicationPlan;
+        var clock = timeProvider ?? TimeProvider.System;
+        long? publicationStarted = null;
         try
         {
             if (publicationPlan is null)
@@ -89,25 +99,17 @@ sealed class FlushRuntimeService(
                 }
             }
 
-            var publicationStarted = Stopwatch.GetTimestamp();
-            try
-            {
-                var result = store.PublishFrozenFlushPlan(request.Frozen, publicationPlan);
-                return new FlushRuntimeResult(new FrozenFlushRuntimeResult(
-                    publicationPlan,
-                    result.PersistenceAnomaly));
-            }
-            finally
-            {
-                telemetry.RecordFlushPublication(
-                    Stopwatch.GetElapsedTime(publicationStarted));
-            }
+            publicationStarted = clock.GetTimestamp();
+            var result = store.PublishFrozenFlushPlan(request.Frozen, publicationPlan);
+            return new FlushRuntimeResult(new FrozenFlushRuntimeResult(
+                publicationPlan,
+                result.PersistenceAnomaly, publicationStarted, clock.GetTimestamp(), request.Frozen.Id));
         }
         catch (Exception exception)
         {
             var result = new FrozenFlushRuntimeResult(
                 publicationPlan,
-                false);
+                false, publicationStarted, clock.GetTimestamp(), request.Frozen.Id);
             throw new FrozenFlushRuntimeException(result, exception);
         }
     }

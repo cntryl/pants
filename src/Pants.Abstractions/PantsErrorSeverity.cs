@@ -25,5 +25,8 @@ public enum PantsErrorSeverity
     Defect,
 
     /// <summary>Durable state cannot be trusted. The engine must stop, not retry.</summary>
-    Fatal
+    Fatal,
+
+    /// <summary>An accepted operation may have applied; reconcile its outcome before retrying.</summary>
+    OutcomeUnknown
 }

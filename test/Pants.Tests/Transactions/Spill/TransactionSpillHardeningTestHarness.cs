@@ -83,40 +83,58 @@ static class TransactionSpillHardeningTestHarness
     internal static IReadOnlyList<WalTestRecord> ReadWalFrames(
         string databasePath)
     {
-        var path = Path.Combine(databasePath, "wal", "wal.log");
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
+        var walDirectory = Path.Combine(databasePath, "wal");
+        var ledger = WalLedgerStore.LoadExisting(walDirectory);
         var frames = new List<WalTestRecord>();
-        Span<byte> header = stackalloc byte[8];
-        while (stream.Position < stream.Length)
+        foreach (var member in ledger.Members)
         {
-            Assert.True(
-                stream.Length - stream.Position >= header.Length,
-                "The WAL frame header is truncated.");
-            stream.ReadExactly(header);
-            var encodedPayloadLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
-            Assert.True(
-                encodedPayloadLength <= DiskFormat.WalMaximumRecordBytes,
-                "The WAL frame exceeds Midge's 64 MiB limit.");
-            var payloadLength = checked((int)encodedPayloadLength);
-            var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
-            var payload = GC.AllocateUninitializedArray<byte>(payloadLength);
-            stream.ReadExactly(payload);
-            Assert.Equal(expectedChecksum, DiskFormat.Crc32C(payload));
-            frames.Add(DecodeWalRecord(payload, payloadLength));
+            var path = Path.Combine(walDirectory, $"{member.Open.Id:00000000000000000000}.wal");
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            var segmentHeader = new byte[WalSegmentCodec.HeaderSize];
+            stream.ReadExactly(segmentHeader);
+            var decoded = WalSegmentCodec.DecodeHeader(segmentHeader);
+            Assert.Equal(ledger.Holder, decoded.Holder);
+            Assert.Equal(member.Open.Id, decoded.Open.Id);
+            Assert.Equal(member.Open.Epoch, decoded.Open.Epoch);
+            if (member.Sealed is not null)
+            {
+                stream.Position = 0;
+                WalFrameReader.Visit(stream, static (_, _) => { });
+                stream.Position = WalSegmentCodec.HeaderSize;
+            }
+
+            var header = new byte[8];
+            while (stream.Position < stream.Length)
+            {
+                Assert.True(stream.Length - stream.Position >= header.Length, "The WAL frame header is truncated.");
+                stream.ReadExactly(header);
+                var encodedPayloadLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
+                Assert.True(encodedPayloadLength <= DiskFormat.WalMaximumRecordBytes,
+                    "The WAL frame exceeds Midge's 64 MiB limit.");
+                var payloadLength = checked((int)encodedPayloadLength);
+                var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(4));
+                var payload = GC.AllocateUninitializedArray<byte>(payloadLength);
+                stream.ReadExactly(payload);
+                Assert.Equal(expectedChecksum, DiskFormat.Crc32C(payload));
+                if (WalSegmentCodec.IsFooter(payload))
+                {
+                    Assert.Equal(stream.Length, stream.Position);
+                    break;
+                }
+
+                frames.Add(DecodeWalRecord(payload, payloadLength, decoded.Open.Epoch));
+            }
         }
 
         return frames;
     }
 
-    static WalTestRecord DecodeWalRecord(ReadOnlySpan<byte> payload, int payloadLength)
+    static WalTestRecord DecodeWalRecord(ReadOnlySpan<byte> payload, int payloadLength, ulong writerEpoch)
     {
         Assert.True(
-            payload.Length >= 3 && payload[..2].SequenceEqual("MW"u8) && payload[2] == 1,
-            "The WAL payload must use Midge's version-one record envelope.");
+            payload.Length >= 3 && payload[..2].SequenceEqual("MW"u8) && payload[2] == 2,
+            "The WAL payload must use Midge's version-two record envelope.");
         byte? operation = null;
         uint? columnFamilyId = null;
         ulong? sequence = null;
@@ -125,7 +143,6 @@ static class TransactionSpillHardeningTestHarness
         ulong? expiration = null;
         byte[]? rangeEnd = null;
         ulong? transactionId = null;
-        ulong? writerEpoch = null;
         byte? compression = null;
         var cursor = 3;
         while (cursor < payload.Length)
@@ -174,10 +191,6 @@ static class TransactionSpillHardeningTestHarness
                     Assert.Equal(1, length);
                     compression = field[0];
                     break;
-                case 10:
-                    Assert.Equal(sizeof(ulong), length);
-                    writerEpoch = BinaryPrimitives.ReadUInt64LittleEndian(field);
-                    break;
             }
         }
 
@@ -187,7 +200,6 @@ static class TransactionSpillHardeningTestHarness
         Assert.True(columnFamilyId.HasValue, "The WAL record does not contain a column-family tag.");
         Assert.True(sequence.HasValue, "The WAL record does not contain a sequence tag.");
         Assert.NotNull(key);
-        Assert.True(writerEpoch.HasValue, "The WAL record does not contain a writer-epoch tag.");
         if (value is not null)
         {
             value = DiskFormat.Decompress(value, compression ?? 0);
@@ -221,7 +233,7 @@ static class TransactionSpillHardeningTestHarness
             expiration,
             rangeEnd,
             transactionId,
-            writerEpoch.Value,
+            writerEpoch,
             compression,
             payloadLength);
     }

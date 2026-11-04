@@ -177,7 +177,9 @@ public sealed class MidgeCloudAdmissionParityTests
                              families[0],
                              PantsTransactionMode.ReadWrite))
             {
-                oversized.Put("too-large"u8.ToArray(), new byte[64 * 1024]);
+                // Stay inside the 128 KiB replay envelope so this probe reaches the
+                // intended SST staging refusal under the unchanged local storage budget.
+                oversized.Put("too-large"u8.ToArray(), new byte[63 * 1024]);
                 await Assert.ThrowsAsync<PantsNoSpaceException>(() =>
                     oversized.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
             }

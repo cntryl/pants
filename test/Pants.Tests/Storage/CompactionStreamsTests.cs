@@ -66,16 +66,57 @@ public sealed class CompactionStreamsTests
         files.AddRange(Enumerable.Range(0, 10_000).Select(index =>
             Meta($"target-{index:D5}.sst", 1, (ulong)(index + 10), $"b{index:D5}", $"b{index:D5}")));
 
-        var plan = LeveledCompactionPlanner.Pick(
+        var plan = LeveledCompactionPlanner.PickCriticalL0(
             files,
             0,
-            new PantsCompactionConfiguration(L0FileCountTrigger: 1, MaximumInputFiles: 64),
-            null,
-            true);
+            new PantsCompactionConfiguration(L0FileCountTrigger: 1, MaximumInputFiles: 1),
+            null);
 
         Assert.NotNull(plan);
         Assert.Equal(1, plan.Inputs.Count(static file => file.Level == 0));
         Assert.Equal(10_000, plan.Inputs.Count(static file => file.Level == 1));
+    }
+
+    [Fact]
+    public void ShouldKeepCompactionStreamsAndReadersBoundedAcrossTenThousandTargets()
+    {
+        const int targetCount = 10_000;
+        var source = Meta("source.sst", 1, 20_000, "a-source", "a-source");
+        var targets = Enumerable.Range(0, targetCount)
+            .Select(index => Meta(
+                $"target-{index:D5}.sst",
+                2,
+                (ulong)(index + 1),
+                $"b{index:D5}",
+                $"b{index:D5}"))
+            .ToArray();
+        var plan = Plan(1, 2, [source, .. targets]);
+        var tracker = new CursorTracker();
+        var budget = new ResourceBudget(1024 * 1024);
+
+        using (var streams = CompactionStreams.Create(plan, tracker.Open, 4, budget))
+        {
+            Assert.Equal(2, streams.Streams.Count);
+
+            var entries = StreamingCompactionMerger.MergeAndPartition(
+                    streams.Streams,
+                    streams.RangeTombstones,
+                    plan,
+                    2 * 1024 * 1024,
+                    budget)
+                .SelectMany(static partition => partition.Entries)
+                .ToArray();
+
+            Assert.Equal(targetCount + 1, entries.Length);
+            Assert.Equal(
+                entries.OrderBy(static entry => entry.Key, ByteArrayComparer.Instance),
+                entries);
+            Assert.Equal(2, tracker.PeakOpenCount);
+        }
+
+        Assert.Equal(0, tracker.OpenCount);
+        Assert.Equal(0, budget.Current);
+        Assert.InRange(budget.Peak, 1, budget.Limit);
     }
 
     [Fact]
@@ -320,6 +361,61 @@ public sealed class CompactionStreamsTests
             }
 
             return reader;
+        }
+    }
+
+    sealed class CursorTracker
+    {
+        int _openCount;
+        int _peakOpenCount;
+
+        public int OpenCount => Volatile.Read(ref _openCount);
+
+        public int PeakOpenCount => Volatile.Read(ref _peakOpenCount);
+
+        public ICompactionFileCursor Open(FileMeta file)
+        {
+            var openCount = Interlocked.Increment(ref _openCount);
+            while (true)
+            {
+                var peak = Volatile.Read(ref _peakOpenCount);
+                if (openCount <= peak || Interlocked.CompareExchange(ref _peakOpenCount, openCount, peak) == peak)
+                {
+                    break;
+                }
+            }
+
+            var entry = new SstEntry(
+                file.SmallestKey!,
+                [],
+                file.SstSequence,
+                null,
+                false);
+            return new TrackingCursor(this, entry);
+        }
+
+        public void Close() => Interlocked.Decrement(ref _openCount);
+
+        sealed class TrackingCursor(CursorTracker tracker, SstEntry entry) : ICompactionFileCursor
+        {
+            int _index = -1;
+            int _disposed;
+
+            public IReadOnlyList<RangeTombstone> RangeTombstones { get; } = [];
+
+            public SstEntry Current => _index == 0
+                ? entry
+                : throw new InvalidOperationException("The cursor has no current entry.");
+
+            public bool MoveNext() => ++_index == 0;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    tracker.Close();
+                }
+            }
         }
     }
 }

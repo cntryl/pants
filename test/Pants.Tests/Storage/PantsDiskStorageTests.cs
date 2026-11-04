@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text.Json;
+using Cntryl.Pants.Storage.Internal.Recovery;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -74,7 +75,7 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
-    public async Task ShouldWriteFormatV3WalTlvAndSstV4()
+    public async Task ShouldWriteFormat9LinkedWalV2AndSstV5()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
@@ -86,18 +87,18 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        var wal = await ReadSharedFileAsync(Path.Combine(directory.Path, "wal", "wal.log"));
-        Assert.Equal((byte)'M', wal[8]);
-        Assert.Equal((byte)'W', wal[9]);
-        Assert.Equal(1, wal[10]);
+        var wal = await ReadSharedFileAsync(WalLedgerStore.LoadOrCreate(Path.Combine(directory.Path, "wal"), 1).ActivePath);
+        Assert.Equal((byte)'M', wal[136]);
+        Assert.Equal((byte)'W', wal[137]);
+        Assert.Equal(2, wal[138]);
         Assert.Equal(
-            "midge-format-version=3\n",
+            "midge-format-version=9\n",
             await File.ReadAllTextAsync(Path.Combine(directory.Path, "FORMAT")));
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         var sst = await File.ReadAllBytesAsync(sstPath);
-        Assert.Equal(4u, BitConverter.ToUInt32(sst, sst.Length - 20));
+        Assert.Equal(5u, BitConverter.ToUInt32(sst, sst.Length - 20));
         Assert.Equal(0xdb4775248b80fb57ul, BitConverter.ToUInt64(sst, sst.Length - 12));
     }
 
@@ -241,9 +242,18 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        var busy = await Assert.ThrowsAnyAsync<PantsException>(() =>
+        var before = await database.Diagnostics.GetRuntimeMetricsAsync();
+        var unflushed = await Assert.ThrowsAsync<PantsUnflushedDataPresentException>(() =>
             database.ColumnFamilies.DropAsync(family).AsTask());
-        Assert.Equal(PantsErrorCode.Busy, busy.Code);
+        Assert.Equal(PantsErrorCode.UnflushedDataPresent, unflushed.Code);
+        Assert.Equal(family.Id, unflushed.ColumnFamilyId);
+        Assert.Equal(before.ActiveMemtableBytes, unflushed.UnflushedBytes);
+        Assert.True(unflushed.LicensesUnflushedDiscard);
+        await using (var reader = await database.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly))
+        {
+            Assert.Equal("value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
+                await reader.GetAsync(TestBytes.FromString("key")))));
+        }
 
         await database.Maintenance.FlushAsync(family);
         await database.ColumnFamilies.DropAsync(family);
@@ -261,7 +271,7 @@ public sealed class PantsDiskStorageTests
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString("ephemeral"), TestBytes.FromString("value"));
             await transaction.CommitAsync(PantsWriteOptions.BestEffort);
-            Assert.Equal(0, new FileInfo(Path.Combine(directory.Path, "wal", "wal.log")).Length);
+            Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(WalTestFiles.ActivePath(directory.Path)).Length);
         }
 
         await using var reopened = await OpenAsync(directory.Path);
@@ -447,6 +457,7 @@ public sealed class PantsDiskStorageTests
                     Enumerable.Repeat((byte)index, 256).ToArray());
             }
 
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
@@ -458,6 +469,7 @@ public sealed class PantsDiskStorageTests
             // Larger than half the 1.6 MiB compaction pool this budget derives, so the merge cannot
             // buffer it.
             transaction.Put("z-oversized"u8.ToArray(), new byte[1024 * 1024]);
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
 
@@ -517,8 +529,10 @@ public sealed class PantsDiskStorageTests
 
         await snapshot.DisposeAsync();
 
+        _ = await database.Diagnostics.GetReadAmplificationMetricsAsync();
+        var releasedMetrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.False(File.Exists(pinnedInput));
-        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts);
+        Assert.Equal(0, releasedMetrics.PinnedSsts);
     }
 
     [Fact]
@@ -562,6 +576,7 @@ public sealed class PantsDiskStorageTests
 
             await pinned.DisposeAsync();
 
+            _ = await database.Diagnostics.GetReadAmplificationMetricsAsync();
             Assert.All(inputPaths, static path => Assert.False(File.Exists(path)));
         }
         finally
@@ -586,20 +601,17 @@ public sealed class PantsDiskStorageTests
             }
         }
 
-        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var walPath = WalTestFiles.ActivePath(directory.Path);
         var wal = await File.ReadAllBytesAsync(walPath);
-        var firstPayloadLength = checked((int)BitConverter.ToUInt32(wal, 0));
-        var secondFrameOffset = 8 + firstPayloadLength;
+        var firstPayloadLength = checked((int)BitConverter.ToUInt32(wal, WalSegmentCodec.HeaderSize));
+        var secondFrameOffset = WalSegmentCodec.HeaderSize + 8 + firstPayloadLength;
         wal[secondFrameOffset + 4] ^= 0xff;
         await File.WriteAllBytesAsync(walPath, wal);
 
         var strict = await Assert.ThrowsAnyAsync<PantsException>(() =>
             OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
         Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
-
-        await using var salvaged = await OpenWithRecoveryAsync(
-            directory.Path,
-            PantsRecoveryPolicy.Salvage);
+        await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
         var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
         await using var reader = await salvaged.Transactions.BeginAsync(
             salvaged.ColumnFamilies.DefaultFamily,
@@ -625,7 +637,7 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var walPath = WalTestFiles.ActivePath(directory.Path);
         var validLength = new FileInfo(walPath).Length;
         await using (var wal = new FileStream(walPath, FileMode.Append, FileAccess.Write, FileShare.None))
         {
@@ -637,7 +649,8 @@ public sealed class PantsDiskStorageTests
             recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
-        Assert.Equal(validLength, new FileInfo(walPath).Length);
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Equal((ulong)validLength, ledger.Members.First(member => member.Open.Id == 1).Sealed!.DataLen);
         Assert.Equal(
             "recovered",
             TestBytes.ToText((await reader.GetAsync("preallocated"u8.ToArray()))!.Value));
@@ -659,6 +672,13 @@ public sealed class PantsDiskStorageTests
         await File.WriteAllTextAsync(path, corruptContents);
         var strict = await Assert.ThrowsAnyAsync<PantsException>(() =>
             OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        if (relativePath == "intent_log.json")
+        {
+            await Assert.ThrowsAnyAsync<PantsException>(() => OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
+            Assert.Equal(corruptContents, await File.ReadAllTextAsync(path));
+            return;
+        }
+
         Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
 
         await using var salvaged = await OpenWithRecoveryAsync(
@@ -760,8 +780,8 @@ public sealed class PantsDiskStorageTests
         Assert.Equal(1, recovery.IntentLogEntriesReplayed);
         Assert.Equal(recovery.IntentLogReplayRuns, runtime.IntentLogReplayRuns);
         Assert.Equal(recovery.IntentLogEntriesReplayed, runtime.IntentLogEntriesReplayed);
-        using var intentLog = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        var intentState = IntentLogCodec.Read(await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        using var intentLog = IntentLogCodec.ToDocument(intentState.Entries);
         Assert.Empty(intentLog.RootElement.EnumerateArray());
     }
 
@@ -825,8 +845,8 @@ public sealed class PantsDiskStorageTests
         await using var salvaged = await OpenWithRecoveryAsync(
             directory.Path,
             PantsRecoveryPolicy.Salvage);
-        using var intentLog = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        var intentState = IntentLogCodec.Read(await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        using var intentLog = IntentLogCodec.ToDocument(intentState.Entries);
 
         Assert.True(File.Exists(orphanPath));
         Assert.NotEmpty(intentLog.RootElement.EnumerateArray());
@@ -853,14 +873,12 @@ public sealed class PantsDiskStorageTests
 
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "intent_log.json"), "{corrupt");
 
-        await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
-
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
         Assert.True(File.Exists(orphanPath));
-        Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
-    public async Task ShouldUseStaleManifestMirrorOnlyDuringSalvageAndRetainUnreferencedSsts()
+    public async Task ShouldRejectCorruptAuthoritativeSnapshotGivenStaleLegacyBaseUnderEitherRecoveryPolicy()
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
@@ -877,7 +895,7 @@ public sealed class PantsDiskStorageTests
             }
 
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-            staleManifest = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json"));
+            staleManifest = await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json"));
             var firstSstPath = Assert.Single(Directory.GetFiles(
                 Path.Combine(directory.Path, "sst"),
                 "*.sst"));
@@ -900,28 +918,15 @@ public sealed class PantsDiskStorageTests
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), []);
 
-        await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
-            PantsDatabase.OpenAsync(options).AsTask());
-
-        await using var salvaged = await PantsDatabase.OpenAsync(
-            options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage));
-        Assert.Equal(
-            PantsEngineHealth.SalvageMode,
-            (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenAsync(options).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenAsync(options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage)).AsTask());
         Assert.True(File.Exists(retainedSstPath));
-        Assert.Contains(
-            Path.GetFileName(retainedSstPath),
-            (await salvaged.Diagnostics.GetStorageLayoutAsync()).ObsoleteFiles,
-            StringComparer.Ordinal);
+        Assert.Equal(staleManifest, await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
 
-        await using var reader = await salvaged.Transactions.BeginAsync(
-            salvaged.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-        Assert.Equal("first", TestBytes.ToText((await reader.GetAsync("before"u8.ToArray()))!.Value));
     }
 
     [Fact]
-    public async Task ShouldReconstructValidSstsGivenTotalManifestLossDuringSalvage()
+    public async Task ShouldRetainSstsAndRejectInvalidMetadataMagicDuringSalvage()
     {
         using var directory = new TemporaryDirectory();
         string sstPath;
@@ -939,18 +944,9 @@ public sealed class PantsDiskStorageTests
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.json"), "{corrupt");
 
-        await using var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage);
-        await using var reader = await salvaged.Transactions.BeginAsync(
-            salvaged.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
         Assert.True(File.Exists(sstPath));
-        Assert.Equal(
-            "durable-value",
-            TestBytes.ToText((await reader.GetAsync("durable-key"u8.ToArray()))!.Value));
-        var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
-        Assert.Equal(1, metrics.SstCount);
+
     }
 
     [Fact]
@@ -966,7 +962,7 @@ public sealed class PantsDiskStorageTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
-        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var walPath = WalTestFiles.ActivePath(directory.Path);
         var wal = await File.ReadAllBytesAsync(walPath);
         wal[^1] ^= 0xFF;
         await File.WriteAllBytesAsync(walPath, wal);
@@ -1026,8 +1022,8 @@ public sealed class PantsDiskStorageTests
 
     static JsonElement ReadSingleManifestFile(string path)
     {
-        using var manifest = JsonDocument.Parse(
-            File.ReadAllBytes(Path.Combine(path, "manifest.snapshot.json")));
+        using var manifest = MetadataFrameCodec.Decode(
+            File.ReadAllBytes(Path.Combine(path, "manifest.snapshot.json")), 1);
         return Assert.Single(manifest.RootElement.GetProperty("files").EnumerateArray()).Clone();
     }
 
@@ -1064,18 +1060,22 @@ public sealed class PantsDiskStorageTests
                 }
             }
         });
-        return File.WriteAllBytesAsync(Path.Combine(path, "intent_log.json"), bytes);
+        using var intents = JsonDocument.Parse(bytes);
+        var entries = intents.RootElement.EnumerateArray().Select(entry => IntentEntry.FromJson(JsonSerializer.SerializeToUtf8Bytes(entry))).ToList();
+        var frame = IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), entries);
+        return File.WriteAllBytesAsync(Path.Combine(path, "intent_log.json"), frame);
     }
 
     static byte[] EncodeJournalRecord(byte recordType, byte[] payload)
     {
+        payload = MetadataFrameCodec.Encode(2, payload);
         var record = new byte[checked(1 + sizeof(uint) + payload.Length + sizeof(uint))];
         record[0] = recordType;
         BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), checked((uint)payload.Length));
         payload.CopyTo(record.AsSpan(5));
-        BinaryPrimitives.WriteUInt32LittleEndian(
+        BinaryPrimitives.WriteUInt32BigEndian(
             record.AsSpan(5 + payload.Length),
-            Crc32(payload));
+            DiskFormat.Crc32C(payload));
         return record;
     }
 
@@ -1086,18 +1086,5 @@ public sealed class PantsDiskStorageTests
         return sst[sizeof(uint) + encodedLength - 5];
     }
 
-    static uint Crc32(ReadOnlySpan<byte> bytes)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in bytes)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
-            }
-        }
 
-        return ~crc;
-    }
 }

@@ -55,7 +55,23 @@ sealed class DatabaseInstance :
 
     internal RuntimeTelemetry Telemetry { get; }
 
+    internal MetadataAccountingHandle MetadataAccounting => _runtime.Coordinator.MetadataAccounting;
+
     internal long CoordinatorCommandsEnqueued => _runtime.Coordinator.CommandsEnqueued;
+
+    public ValueTask<ulong> GetDurableSequenceAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_runtime.Coordinator.GetCloudDurableSequence());
+    }
+
+    public ValueTask<bool> WaitForDurableAsync(ulong sequence, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureOpen();
+        return _runtime.Coordinator.WaitForCloudDurableAsync(sequence, timeout, cancellationToken);
+    }
 
     public IPantsColumnFamily DefaultFamily { get; }
 
@@ -148,7 +164,7 @@ sealed class DatabaseInstance :
         Task shutdown;
         lock (_shutdownGate)
         {
-            if (Volatile.Read(ref _lifecycleState) == 2)
+            if (Volatile.Read(ref _lifecycleState) == 2 && _shutdownTask is null)
             {
                 return;
             }
@@ -344,9 +360,17 @@ sealed class DatabaseInstance :
         try
         {
             await _runtime.Coordinator.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            var encodingFailure = _runtime.Coordinator.WalEncodingFailure;
             await _runtime.DisposeAsync().ConfigureAwait(false);
             Volatile.Write(ref _lifecycleState, 2);
-            completion.TrySetResult();
+            if (encodingFailure is not null)
+            {
+                completion.TrySetException(encodingFailure);
+            }
+            else
+            {
+                completion.TrySetResult();
+            }
         }
         catch (Exception exception)
         {
@@ -390,7 +414,18 @@ sealed class DatabaseInstance :
         }
     }
 
-    internal ValueTask CommitTransactionAsync(
+    internal void EnsureReadAuthority()
+    {
+        if (Volatile.Read(ref _lifecycleState) == 2)
+        {
+            throw new PantsFencedException("The transaction outlived its runtime.");
+        }
+
+        // Closing rejects new work while retained transactions finish reading their pinned cut.
+        _runtime.Coordinator.EnsureReadAuthority();
+    }
+
+    internal ValueTask<ulong> CommitTransactionAsync(
         TransactionInstance transaction,
         PantsWriteOptions options,
         CancellationToken cancellationToken)
@@ -444,16 +479,15 @@ sealed class DatabaseInstance :
         PantsScanDirection direction,
         byte[]? startInclusive,
         byte[]? endExclusive,
+        PantsCacheFill cacheFill,
         CancellationToken cancellationToken) =>
         _runtime.Coordinator.CreateScanSourcesAsync(
             candidates,
             direction,
             startInclusive,
             endExclusive,
+            cacheFill,
             cancellationToken);
-
-    internal IDisposable ReserveScanMemory(long bytes) =>
-        _runtime.Coordinator.ReserveScanMemory(bytes);
 
     internal IScanReadValidator? CreateScanReadValidator(
         IReadOnlyList<AsyncSstScanSource> sources) =>

@@ -22,7 +22,7 @@ static class WalCodec
     ///     Derived from the largest batch the write path can legitimately produce, so replay never
     ///     rejects a transaction this engine itself accepted — that would render a validly committed
     ///     database unopenable. At this default the check is a fail-fast guard that converts a
-    ///     would-be out-of-memory kill during recovery into a typed, salvageable error. Callers that
+    ///     would-be out-of-memory kill during recovery into a typed resource failure. Callers that
     ///     know their memory budget should pass a tighter limit.
     /// </remarks>
     const long DefaultTransactionBatchReplayBudgetBytes =
@@ -40,6 +40,7 @@ static class WalCodec
     const int RecordPrefixBytes = 3;
     const int TlvHeaderBytes = sizeof(byte) + sizeof(uint);
     const int TransactionBatchHeaderBytes = 3 + 3 * sizeof(ulong) + sizeof(uint);
+    public const long TransactionBatchPayloadOverhead = TransactionBatchHeaderBytes;
     const int WalFrameHeaderBytes = 2 * sizeof(uint);
 
     /// <summary>
@@ -74,11 +75,17 @@ static class WalCodec
     public static long MeasureTransactionBatchOperation(
         int keyLength,
         int? valueLength,
-        int? rangeEndLength)
+        int? rangeEndLength) => MeasureTransactionBatchOperation(keyLength, valueLength, rangeEndLength, true);
+
+    public static long MeasureTransactionBatchOperation(
+        int keyLength,
+        int? valueLength,
+        int? rangeEndLength,
+        bool hasExpiration)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
         return (long)sizeof(byte) + sizeof(uint) + sizeof(ulong) +
-               sizeof(byte) + sizeof(ulong) +
+               sizeof(byte) + (hasExpiration ? sizeof(ulong) : 0) +
                sizeof(uint) + keyLength +
                sizeof(byte) + (valueLength is { } value ? sizeof(uint) + value : 0) +
                sizeof(byte) + (rangeEndLength is { } rangeEnd ? sizeof(uint) + rangeEnd : 0);
@@ -133,17 +140,40 @@ static class WalCodec
         return checked(recordBytes + WalFrameHeaderBytes);
     }
 
+    /// <summary>Raw record payload plus the possible compression TLV and physical frame header.</summary>
+    public static long MeasureRecordFrameBound(long payloadBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(payloadBytes);
+        return checked(payloadBytes + TlvHeaderBytes + sizeof(byte) + WalFrameHeaderBytes);
+    }
+
+    /// <summary>Bounds a streamed transactional record using its actual field presence.</summary>
+    public static long MeasureSpilledMutationFrameBound(WalMutation mutation)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        // Epoch belongs to the segment header. The record carries OP, CF_ID, SEQ, KEY and TXN_ID.
+        var payloadBytes = (long)RecordPrefixBytes +
+                           TlvHeaderBytes + sizeof(byte) +
+                           TlvHeaderBytes + sizeof(uint) +
+                           TlvHeaderBytes + sizeof(ulong) +
+                           TlvHeaderBytes + sizeof(ulong) +
+                           TlvHeaderBytes + mutation.Key.LongLength +
+                           (mutation.Value is { } value ? TlvHeaderBytes + value.LongLength : 0) +
+                           (mutation.Expiration.HasValue ? TlvHeaderBytes + sizeof(ulong) : 0) +
+                           (mutation.RangeEnd is { } rangeEnd ? TlvHeaderBytes + rangeEnd.LongLength : 0);
+        return MeasureRecordFrameBound(payloadBytes);
+    }
+
     public static byte[] EncodeRecord(WalRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
         using var payload = new MemoryStream();
         payload.Write(RecordMagic);
-        payload.WriteByte(1);
+        payload.WriteByte(2);
         WriteTlv(payload, 1, [(byte)record.Operation]);
         WriteTlvUInt32(payload, 2, record.ColumnFamilyId);
         WriteTlvUInt64(payload, 3, record.Sequence);
         WriteTlv(payload, 4, record.Key);
-        WriteTlvUInt64(payload, 10, record.WriterEpoch);
         if (record.Value is not null)
         {
             if (record.Value.Length > DiskFormat.MaximumDecodedBlockBytes)
@@ -189,7 +219,7 @@ static class WalCodec
 
         if (payload.Length > DiskFormat.WalMaximumRecordBytes)
         {
-            throw new PantsResourceLimitException(
+            throw new PantsInvalidArgumentException(
                 $"A {payload.Length}-byte WAL record exceeds the " +
                 $"{DiskFormat.WalMaximumRecordBytes}-byte frame limit.");
         }
@@ -197,8 +227,13 @@ static class WalCodec
         return payload.ToArray();
     }
 
-    public static WalRecord DecodeRecord(ReadOnlySpan<byte> payload)
+    public static WalRecord DecodeRecord(ReadOnlySpan<byte> payload, ulong segmentEpoch = 0, long? maximumDecodedBytes = null)
     {
+        if (payload.Length >= 3 && payload[..2].SequenceEqual(RecordMagic) && payload[2] != 2)
+        {
+            throw new PantsCompatibilityException("Unsupported Midge WAL record version.");
+        }
+
         if (!HasCurrentRecordPrefix(payload))
         {
             throw new StorageException("WAL payload has an invalid Midge record prefix.");
@@ -207,12 +242,15 @@ static class WalCodec
         byte? operation = null;
         uint? columnFamilyId = null;
         ulong? sequence = null;
-        byte[]? key = null;
-        byte[]? value = null;
+        ReadOnlySpan<byte> key = default;
+        var hasKey = false;
+        ReadOnlySpan<byte> value = default;
+        var hasValue = false;
         ulong? expiration = null;
-        byte[]? rangeEnd = null;
+        ReadOnlySpan<byte> rangeEnd = default;
+        var hasRangeEnd = false;
         ulong? transactionId = null;
-        ulong? writerEpoch = null;
+
         byte? compression = null;
         var cursor = 3;
         while (cursor < payload.Length)
@@ -250,16 +288,19 @@ static class WalCodec
                     sequence = BinaryPrimitives.ReadUInt64LittleEndian(field);
                     break;
                 case 4:
-                    key = field.ToArray();
+                    key = field;
+                    hasKey = true;
                     break;
                 case 5:
-                    value = field.ToArray();
+                    value = field;
+                    hasValue = true;
                     break;
                 case 6 when length == sizeof(ulong):
                     expiration = BinaryPrimitives.ReadUInt64LittleEndian(field);
                     break;
                 case 7:
-                    rangeEnd = field.ToArray();
+                    rangeEnd = field;
+                    hasRangeEnd = true;
                     break;
                 case 8 when length == sizeof(ulong):
                     transactionId = BinaryPrimitives.ReadUInt64LittleEndian(field);
@@ -267,10 +308,7 @@ static class WalCodec
                 case 9 when length == 1:
                     compression = field[0];
                     break;
-                case 10 when length == sizeof(ulong):
-                    writerEpoch = BinaryPrimitives.ReadUInt64LittleEndian(field);
-                    break;
-                case 1 or 2 or 3 or 6 or 8 or 9 or 10:
+                case 1 or 2 or 3 or 6 or 8 or 9:
                     throw new StorageException($"WAL TLV tag '{tag}' has an invalid length.");
             }
         }
@@ -280,24 +318,66 @@ static class WalCodec
             throw new StorageException("WAL operation is missing or invalid.");
         }
 
-        if (compression is not null && value is null)
+        if (compression is not null && !hasValue)
         {
             throw new PantsCorruptionException("A WAL COMPRESSION tag requires a VALUE tag.");
         }
 
+        var kind = (WalOperation)operation.Value;
+        if (kind is WalOperation.Put or WalOperation.Insert or WalOperation.TransactionBatch && !hasValue)
+        {
+            throw new PantsCorruptionException("A WAL value write or transaction batch is missing its VALUE field.");
+        }
+
+        if (kind == WalOperation.Delete && hasValue)
+        {
+            throw new PantsCorruptionException("A WAL Delete record must not carry a VALUE field.");
+        }
+
+        if (kind == WalOperation.DeleteRange && !hasRangeEnd)
+        {
+            throw new PantsCorruptionException("A WAL range delete is missing its RANGE_END field.");
+        }
+
+        if (kind is WalOperation.TransactionBegin or WalOperation.TransactionCommit or WalOperation.TransactionBatch &&
+            transactionId is null)
+        {
+            throw new PantsCorruptionException("A WAL transaction marker is missing its TXN_ID field.");
+        }
+
+        if (compression is not null && kind is not (WalOperation.Put or WalOperation.Insert or WalOperation.TransactionBatch))
+        {
+            throw new PantsCorruptionException("This WAL operation does not permit a COMPRESSION field.");
+        }
+
+        int? valueLimit = null;
+        if (maximumDecodedBytes is { } limit)
+        {
+            if (!hasKey || columnFamilyId is null || sequence is null)
+            {
+                throw new StorageException("WAL record is missing its key, column family, or sequence.");
+            }
+            valueLimit = hasValue ? GetReplayValueLength(value, compression ?? 0) : 0;
+            var decodedBytes = 144L + key.Length + rangeEnd.Length + valueLimit.Value;
+            if (decodedBytes > limit)
+            {
+                throw new PantsResourceLimitException(
+                    $"Decoded WAL record needs {decodedBytes} bytes, exceeding the {limit}-byte replay transaction limit.");
+            }
+        }
         byte[]? decodedValue;
         try
         {
-            decodedValue = value is null
+            decodedValue = !hasValue
                 ? null
-                : DiskFormat.Decompress(value, compression ?? 0);
+                : DiskFormat.Decompress(value, compression ?? 0, valueLimit);
         }
         catch (PantsException)
         {
             throw;
         }
         catch (Exception exception) when (
-            exception is ArgumentException or InvalidOperationException or OverflowException)
+            exception is ArgumentException or InvalidOperationException or OverflowException or ZstdSharp.ZstdException)
         {
             throw new StorageException("WAL value decompression failed.", exception);
         }
@@ -305,17 +385,102 @@ static class WalCodec
         return new WalRecord(
             columnFamilyId ?? throw new StorageException("WAL column family is missing."),
             (WalOperation)operation.Value,
-            key ?? throw new StorageException("WAL key is missing."),
+            hasKey ? key.ToArray() : throw new StorageException("WAL key is missing."),
             decodedValue,
             sequence ?? throw new StorageException("WAL sequence is missing."),
             expiration,
-            rangeEnd,
+            hasRangeEnd ? rangeEnd.ToArray() : null,
             transactionId,
-            writerEpoch ?? throw new StorageException("WAL writer epoch is missing."));
+            segmentEpoch);
+    }
+
+    internal static void RequireReplayFrame(long bytes, long? maximumBytes)
+    {
+        if (maximumBytes is { } limit && bytes > limit)
+        {
+            throw new PantsResourceLimitException($"WAL frame needs {bytes} bytes, exceeding the {limit}-byte replay limit.");
+        }
+    }
+
+    static int GetReplayValueLength(ReadOnlySpan<byte> value, byte compression)
+    {
+        if (compression == 0)
+        {
+            return value.Length;
+        }
+        ulong length;
+        if (compression == 1)
+        {
+            if (value.Length < sizeof(uint))
+            {
+                throw new StorageException("Midge LZ4 payload has no size prefix.");
+            }
+            length = BinaryPrimitives.ReadUInt32LittleEndian(value);
+        }
+        else if (compression is 2 or 3)
+        {
+            // Zstd's frame content size is optional. Midge decodes an unknown-size
+            // frame into its fixed 64 KiB block window rather than trusting its body.
+            if (value.Length < 5 || BinaryPrimitives.ReadUInt32LittleEndian(value) != 0xFD2FB528 ||
+                (value[4] & 0x08) != 0)
+            {
+                throw new StorageException("Midge Zstd frame header is invalid.");
+            }
+            var descriptor = value[4];
+            var singleSegment = (descriptor & 0x20) != 0;
+            var cursor = 5 + (singleSegment ? 0 : 1) + ((descriptor & 3) switch { 0 => 0, 1 => 1, 2 => 2, _ => 4 });
+            var sizeBytes = (descriptor >> 6) switch { 0 => singleSegment ? 1 : 0, 1 => 2, 2 => 4, _ => 8 };
+            if (cursor > value.Length || sizeBytes > value.Length - cursor)
+            {
+                throw new StorageException("Midge Zstd frame content size is truncated.");
+            }
+            length = sizeBytes switch
+            {
+                0 => 64 * 1024,
+                1 => value[cursor],
+                2 => (ulong)BinaryPrimitives.ReadUInt16LittleEndian(value[cursor..]) + 256,
+                4 => BinaryPrimitives.ReadUInt32LittleEndian(value[cursor..]),
+                _ => BinaryPrimitives.ReadUInt64LittleEndian(value[cursor..])
+            };
+        }
+        else
+        {
+            throw new PantsCorruptionException($"Midge compression algorithm '{compression}' is unsupported.");
+        }
+        if (length > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new StorageException("Midge compressed WAL value exceeds the decompression limit.");
+        }
+        return (int)length;
     }
 
     public static bool HasCurrentRecordPrefix(ReadOnlySpan<byte> payload) =>
-        payload.Length >= 3 && payload[..2].SequenceEqual(RecordMagic) && payload[2] == 1;
+        payload.Length >= 3 && payload[..2].SequenceEqual(RecordMagic) && payload[2] == 2;
+
+    internal static ulong GetSequenceStart(WalRecord record)
+    {
+        if (record.Operation != WalOperation.TransactionBatch)
+        {
+            return record.Sequence;
+        }
+
+        var batch = record.Value.AsSpan();
+        if (batch.Length < TransactionBatchHeaderBytes || !batch[..2].SequenceEqual(BatchMagic) || batch[2] != 1)
+        {
+            throw new PantsCorruptionException("WAL transaction batch prefix is invalid.");
+        }
+
+        return BinaryPrimitives.ReadUInt64LittleEndian(batch[11..]);
+    }
+
+    internal static void ValidateSequenceSpan(WalRecord record, ulong firstSequence, ulong? previousSequence)
+    {
+        var start = GetSequenceStart(record);
+        if (start < firstSequence || record.Sequence < start || previousSequence is { } previous && start <= previous)
+        {
+            throw new PantsCorruptionException("WAL record or transaction reservation overlaps earlier sequence authority.");
+        }
+    }
 
     public static byte[] EncodeTransactionBatch(
         ulong transactionId,
@@ -327,6 +492,14 @@ static class WalCodec
         {
             throw new StorageException("A Midge WAL transaction batch cannot be empty.");
         }
+
+        var familyId = mutations[0].ColumnFamilyId;
+        if (mutations.Any(mutation => mutation.ColumnFamilyId != familyId))
+        {
+            throw new PantsInvalidArgumentException("A WAL transaction must belong to one column family.");
+        }
+
+        RequireTransactionBatchFitsDecodedLimit(mutations);
 
         var commitSequence = AddTransactionSequence(beginSequence, checked((ulong)mutations.Count));
         using var batch = new MemoryStream();
@@ -352,7 +525,7 @@ static class WalCodec
         }
 
         return EncodeRecord(new WalRecord(
-            0,
+            familyId,
             WalOperation.TransactionBatch,
             "txn"u8.ToArray(),
             batch.ToArray(),
@@ -363,11 +536,49 @@ static class WalCodec
             writerEpoch));
     }
 
+    public static void RequireTransactionBatchFitsDecodedLimit(IReadOnlyList<WalMutation> mutations)
+        => RequireTransactionBatchPayloadFitsDecodedLimit(MeasureTransactionBatchPayloadBytes(mutations));
+
+    public static long MeasureTransactionBatchPayloadBytes(IReadOnlyList<WalMutation> mutations)
+    {
+        var bytes = (long)TransactionBatchHeaderBytes;
+        foreach (var mutation in mutations)
+        {
+            bytes = checked(bytes + MeasureTransactionBatchOperation(mutation.Key.Length,
+                mutation.Value?.Length, mutation.RangeEnd?.Length, mutation.Expiration.HasValue));
+        }
+        return bytes;
+    }
+
+    public static void RequireTransactionBatchPayloadFitsDecodedLimit(long bytes)
+    {
+        if (bytes > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsResourceLimitException(
+                $"The transaction batch encodes to {bytes} bytes; WAL replay accepts at most " +
+                $"{DiskFormat.MaximumDecodedBlockBytes} bytes.");
+        }
+    }
+
+    public static long MeasureTransactionBatchFrameBound(long nestedBytes)
+    {
+        // OP, CF_ID, SEQ, KEY("txn"), VALUE and TXN_ID; epoch is in the segment header.
+        var payloadBytes = checked((long)RecordPrefixBytes +
+                                   TlvHeaderBytes + sizeof(byte) +
+                                   TlvHeaderBytes + sizeof(uint) +
+                                   TlvHeaderBytes + sizeof(ulong) +
+                                   TlvHeaderBytes + 3 +
+                                   TlvHeaderBytes + nestedBytes +
+                                   TlvHeaderBytes + sizeof(ulong));
+        return MeasureRecordFrameBound(payloadBytes);
+    }
+
     public static byte[] EncodeTransactionMarker(
         WalOperation operation,
         ulong transactionId,
         ulong sequence,
-        ulong writerEpoch)
+        ulong writerEpoch,
+        uint columnFamilyId = 0)
     {
         if (operation is not (
             WalOperation.TransactionBegin or
@@ -378,7 +589,7 @@ static class WalCodec
         }
 
         return EncodeRecord(new WalRecord(
-            0,
+            columnFamilyId,
             operation,
             "txn"u8.ToArray(),
             null,
@@ -439,7 +650,8 @@ static class WalCodec
         WalRecord record,
         long maximumDecodedBytes,
         out ulong commitSequence,
-        out ulong writerEpoch)
+        out ulong writerEpoch,
+        bool configuredReplayLimit = false)
     {
         if (record.Operation != WalOperation.TransactionBatch || record.Value is null)
         {
@@ -484,10 +696,10 @@ static class WalCodec
         }
 
         var decodedBound =
-            (long)batch.Length * 2 + (long)operationCount * DecodedOperationBytes;
+            (long)batch.Length * 2 + (long)operationCount * (configuredReplayLimit ? 416 : DecodedOperationBytes);
         if (decodedBound > maximumDecodedBytes)
         {
-            throw new StorageException(
+            throw new PantsResourceLimitException(
                 $"WAL transaction batch decoded allocation bound {decodedBound} exceeds the " +
                 $"{maximumDecodedBytes}-byte replay limit.");
         }
@@ -503,6 +715,11 @@ static class WalCodec
             }
 
             var familyId = ReadUInt32(batch, ref cursor, "column family id");
+            if (familyId != record.ColumnFamilyId)
+            {
+                throw new PantsCorruptionException("WAL transaction batch member belongs to another column family.");
+            }
+
             var sequence = ReadUInt64(batch, ref cursor, "sequence");
             if (sequence != AddOperationSequence(beginSequence, index))
             {
@@ -514,6 +731,13 @@ static class WalCodec
             var key = ReadBytes(batch, ref cursor, "key");
             var value = ReadOptionalBytes(batch, ref cursor, "value");
             var rangeEnd = ReadOptionalBytes(batch, ref cursor, "range end");
+            if ((operation is WalOperation.Put or WalOperation.Insert && value is null) ||
+                (operation == WalOperation.Delete && value is not null) ||
+                (operation == WalOperation.DeleteRange && rangeEnd is null))
+            {
+                throw new StorageException("WAL transaction batch operation fields are invalid.");
+            }
+
             mutations.Add(new WalMutation(
                 familyId,
                 operation,

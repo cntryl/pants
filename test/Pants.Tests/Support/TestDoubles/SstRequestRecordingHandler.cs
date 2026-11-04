@@ -41,14 +41,15 @@ sealed class SstRequestRecordingHandler(HttpMessageHandler inner) : DelegatingHa
                 _requests.Add(new SstRequest(
                     request.Method.Method,
                     path[(marker + "/sst/".Length)..],
-                    rangeBytes));
+                    rangeBytes,
+                    request.Content?.Headers.ContentLength));
             }
         }
 
         return base.SendAsync(request, cancellationToken);
     }
 
-    public sealed record SstRequest(string Method, string Name, long? RangeBytes)
+    public sealed record SstRequest(string Method, string Name, long? RangeBytes, long? PayloadBytes = null)
     {
         public bool IsWholeGet => Method == "GET" && RangeBytes is null;
 

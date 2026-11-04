@@ -30,6 +30,63 @@ public sealed class PantsStorageVerificationHardeningTests
     }
 
     [Fact]
+    public async Task ShouldIgnoreUnlistedWalFilesDuringOfflineVerificationWithoutMutation()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await database.ShutdownAsync(TimeSpan.FromSeconds(30));
+        }
+
+        var orphan = Path.Combine(directory.Path, "wal", "00000000000000000999.wal");
+        byte[] bytes = [1, 2, 3, 4];
+        await File.WriteAllBytesAsync(orphan, bytes);
+        var ledgerPath = Path.Combine(directory.Path, "wal", "LEDGER");
+        var ledgerBefore = await File.ReadAllBytesAsync(ledgerPath);
+
+        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
+
+        Assert.Equal(PantsEngineHealth.Healthy, report.Health);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(orphan));
+        Assert.Equal(ledgerBefore, await File.ReadAllBytesAsync(ledgerPath));
+    }
+
+    [Fact]
+    public async Task ShouldRejectMissingLedgerWithoutRecreatingHistoryDuringOfflineVerification()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await database.ShutdownAsync(TimeSpan.FromSeconds(30));
+        }
+
+        var ledgerPath = Path.Combine(directory.Path, "wal", "LEDGER");
+        File.Delete(ledgerPath);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+
+        Assert.False(File.Exists(ledgerPath));
+    }
+
+    [Fact]
+    public async Task ShouldRejectMissingLedgerMemberWithoutRecreatingItDuringOfflineVerification()
+    {
+        using var directory = new TemporaryDirectory();
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
+        {
+            await database.ShutdownAsync(TimeSpan.FromSeconds(30));
+        }
+
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        var missing = ledger.ActivePath;
+        File.Delete(missing);
+
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+
+        Assert.False(File.Exists(missing));
+    }
+
+    [Fact]
     public Task ShouldRejectParentSstNameGivenPersistedIntent() =>
         AssertUnsafeIntentSstNameRejectedAsync(
             "../escape.sst",
@@ -37,7 +94,14 @@ public sealed class PantsStorageVerificationHardeningTests
             {
               "SstAdded": {
                 "file_meta": {
-                  "name": "../escape.sst"
+                  "name": "../escape.sst",
+                  "level": 0,
+                  "size_bytes": 0,
+                  "cf_id": 0,
+                  "smallest_key": null,
+                  "largest_key": null,
+                  "smallest_seq": null,
+                  "largest_seq": null
                 }
               }
             }
@@ -63,7 +127,7 @@ public sealed class PantsStorageVerificationHardeningTests
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
         var intent = $"[{intentEntry}]";
-        await File.WriteAllTextAsync(Path.Combine(directory.Path, "intent_log.json"), intent);
+        await WriteIntentFixtureAsync(directory.Path, intent);
 
         var exception =
             await Assert.ThrowsAsync<PantsCorruptionException>(() =>
@@ -143,8 +207,8 @@ public sealed class PantsStorageVerificationHardeningTests
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "intent_log.json"),
+        await WriteIntentFixtureAsync(
+            directory.Path,
             """
             [
               {
@@ -594,23 +658,26 @@ public sealed class PantsStorageVerificationHardeningTests
         PantsEngineHealth.Healthy,
         []);
 
+    static Task WriteIntentFixtureAsync(string path, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var entries = document.RootElement.EnumerateArray()
+            .Select(entry => IntentEntry.FromJson(JsonSerializer.SerializeToUtf8Bytes(entry))).ToList();
+        return File.WriteAllBytesAsync(Path.Combine(path, "intent_log.json"),
+            IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), entries));
+    }
+
     static async Task WriteEmptyFixtureAsync(string path)
     {
         await File.WriteAllTextAsync(
             Path.Combine(path, "FORMAT"),
-            "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(path, "manifest.json"),
-            """
+            "midge-format-version=9\n");
+        await File.WriteAllBytesAsync(
+            Path.Combine(path, "manifest.snapshot.json"),
+            ManifestCodec.Encode(ManifestState.CreateInitial(), new JsonSerializerOptions
             {
-              "last_persisted_sequence": 0,
-              "files": [],
-              "column_families": [],
-              "next_wal_seq": 1,
-              "next_sst_seqs": {},
-              "edit_checkpoint_id": 0
-            }
-            """);
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+            }));
         await File.WriteAllBytesAsync(Path.Combine(path, "manifest.journal"), []);
     }
 
@@ -647,10 +714,10 @@ public sealed class PantsStorageVerificationHardeningTests
             EditCheckpointId = 1
         };
 
-        await File.WriteAllTextAsync(Path.Combine(path, "FORMAT"), "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(path, "manifest.json"),
-            JsonSerializer.Serialize(manifest, JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(path, "FORMAT"), "midge-format-version=9\n");
+        await File.WriteAllBytesAsync(
+            Path.Combine(path, "manifest.snapshot.json"),
+            ManifestCodec.Encode(manifest, JsonOptions));
         await File.WriteAllBytesAsync(Path.Combine(path, "manifest.journal"), []);
         Directory.CreateDirectory(Path.Combine(path, "sst"));
         await File.WriteAllBytesAsync(Path.Combine(path, "sst", name), bytes);

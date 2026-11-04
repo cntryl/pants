@@ -14,6 +14,7 @@ sealed class ResourceBudget(long limit)
 {
     long _current;
     long _peak;
+    Func<bool>? _reclaim;
 
     public long Limit { get; } = limit;
 
@@ -21,12 +22,27 @@ sealed class ResourceBudget(long limit)
 
     public long Peak => Interlocked.Read(ref _peak);
 
-    public IDisposable Reserve(long bytes) =>
-        TryReserve(bytes, out var reservation, out var before)
-            ? reservation
-            : throw PantsException.ResourceLimit(
-                $"Reserving {bytes} bytes would exceed the {Limit}-byte resource budget " +
-                $"({before} bytes already reserved).");
+    public void SetReclaimer(Func<bool>? reclaim) => _reclaim = reclaim;
+
+    public IDisposable Reserve(long bytes)
+    {
+        while (true)
+        {
+            if (TryReserve(bytes, out var reservation, out var before))
+            {
+                return reservation;
+            }
+
+            if (bytes > Limit || _reclaim?.Invoke() != true)
+            {
+                throw PantsException.ResourceLimit(
+                    $"Reserving {bytes} bytes would exceed the {Limit}-byte resource budget " +
+                    $"({before} bytes already reserved).");
+            }
+        }
+    }
+
+    public Reservation ReserveOwned(long bytes) => (Reservation)Reserve(bytes);
 
     /// <summary>Reserves <paramref name="bytes" /> only when they fit right now.</summary>
     public bool TryReserve(long bytes, [NotNullWhen(true)] out IDisposable? reservation) =>
@@ -72,15 +88,35 @@ sealed class ResourceBudget(long limit)
         }
     }
 
-    sealed class Reservation(ResourceBudget budget, long bytes) : IDisposable
+    public sealed class Reservation(ResourceBudget budget, long bytes) : IDisposable
     {
+        long _bytes = bytes;
         int _released;
+
+        public void ShrinkTo(long bytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+            while (true)
+            {
+                var before = Volatile.Read(ref _bytes);
+                if (bytes > before)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(bytes), "A retained claim cannot grow without admission.");
+                }
+
+                if (Interlocked.CompareExchange(ref _bytes, bytes, before) == before)
+                {
+                    budget.Release(before - bytes);
+                    return;
+                }
+            }
+        }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
             {
-                budget.Release(bytes);
+                budget.Release(Interlocked.Exchange(ref _bytes, 0));
             }
         }
     }

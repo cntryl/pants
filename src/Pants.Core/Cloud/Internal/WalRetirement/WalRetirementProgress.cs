@@ -29,7 +29,7 @@ sealed class WalRetirementProgress
         WalCoverageIndex coverage)
     {
         if (_proofs.TryGetValue(segment.SegmentId, out var proof) &&
-            proof.Segment == segment &&
+            ProviderCloudPersistence.SameWalPublication(proof.Segment, segment) &&
             StringComparer.Ordinal.Equals(proof.Version, version) &&
             coverage.StillContains(proof.CoveringFiles, proof.CoveringDroppedFamilies))
         {

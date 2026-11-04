@@ -195,8 +195,9 @@ public sealed class ProviderCloudDdlRegistryAdmissionTests
         Assert.DoesNotContain(store.RequestsFor(RegistryKey),
             static request => request.Operation == StoreOperation.Get);
         Assert.Equal(0, budget.Current);
-        var baseline = CloudDdlJson.SerializeRegistry(new CloudDdlRegistry());
-        Assert.Equal(baseline.Length + (sizeof(ulong) * 8) + 2, store.Read(RegistryKey).Length);
+        var baseline = CloudDdlJson.SerializeRegistry(new CloudDdlRegistry { WriterEpoch = lease.Epoch });
+        Assert.Equal(baseline, store.Read(RegistryKey));
+        Assert.Equal(lease.Epoch, CloudDdlJson.DeserializeRegistry(store.Read(RegistryKey)).WriterEpoch);
         Assert.Equal(0UL, CloudDdlJson.DeserializeRegistry(store.Read(RegistryKey)).Epoch);
     }
 

@@ -2,13 +2,13 @@ namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class CommitRuntimeCommand : IRuntimeCommand
 {
-    readonly Func<RuntimeState, ValueTask<bool>> _operation;
-    readonly RuntimeResponseSlot<bool> _response;
+    readonly Func<RuntimeState, ValueTask<CommitCompletion>> _operation;
+    readonly RuntimeResponseSlot<CommitCompletion> _response;
 
     public CommitRuntimeCommand(
         PantsWriteOptions writeOptions,
         CommitPayload payload,
-        Func<RuntimeState, ValueTask<bool>> operation,
+        Func<RuntimeState, ValueTask<CommitCompletion>> operation,
         RuntimeResponseRegistry registry,
         long requestId,
         string requestKind,
@@ -17,7 +17,7 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
         WriteOptions = writeOptions;
         Payload = payload;
         _operation = operation;
-        _response = new RuntimeResponseSlot<bool>(registry, requestId, requestKind);
+        _response = new RuntimeResponseSlot<CommitCompletion>(registry, requestId, requestKind);
         Deadline = deadline;
     }
 
@@ -27,7 +27,7 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
 
     public OperationDeadline Deadline { get; }
 
-    public Task<bool> Task => _response.Response;
+    public Task<CommitCompletion> Task => _response.Response;
 
     public async ValueTask ExecuteAsync(RuntimeState state)
     {
@@ -44,7 +44,7 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
         }
     }
 
-    public void Complete(bool result) => _response.Complete(result);
+    public void Complete(CommitCompletion result) => _response.Complete(result);
 
     public void Fail(
         RuntimeState state,

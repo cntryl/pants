@@ -21,7 +21,7 @@ public sealed class PantsWalWriterFencingTests
     {
         using var directory = new TemporaryDirectory();
         var failpoints = new ArmableFailpointHandler();
-        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var walPath = WalTestFiles.ActivePath(directory.Path);
         await using (var database = await OpenAsync(directory.Path, failpoints))
         {
             await CommitAsync(database, PantsWriteOptions.Sync, static transaction =>
@@ -43,7 +43,7 @@ public sealed class PantsWalWriterFencingTests
                     transaction.Insert(Key("inserted"), Value("ghost"));
                 }));
             Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, unknown.Code);
-            Assert.Equal(PantsErrorSeverity.Fatal, unknown.Severity);
+            Assert.Equal(PantsErrorSeverity.OutcomeUnknown, unknown.Severity);
             Assert.IsType<PantsNoSpaceException>(unknown.InnerException);
 
             Assert.Equal(walLength, new FileInfo(walPath).Length);

@@ -5,7 +5,11 @@ sealed record CloudSstRetentionProof(
     IReadOnlyDictionary<string, string> PartialCompactionOutputVersions,
     IReadOnlyDictionary<uint, ulong> RemoteNextSstSequences,
     IReadOnlyList<CloudObjectIdentityGuard> AuthorityGuards,
-    IDisposable? reservation = null) : IDisposable
+    IDisposable? reservation = null,
+    IReadOnlyDictionary<string, FileMeta>? RetiredSsts = null,
+    Action<FileMeta>? AcknowledgeRetiredSst = null,
+    Func<FileMeta, bool>? ValidateRetiredSst = null,
+    ResourceBudget? ValidationBudget = null) : IDisposable
 {
     IDisposable? _reservation = reservation;
 

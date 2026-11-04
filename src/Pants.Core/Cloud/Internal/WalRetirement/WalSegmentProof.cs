@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.IO.Hashing;
+
 namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 
 /// <summary>
@@ -8,6 +11,12 @@ namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 /// </summary>
 sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version)
 {
+    readonly XxHash128 _digest = new();
+    readonly SortedDictionary<uint, ulong> _familyMaxima = [];
+    ulong _recordCount;
+    ulong _firstSequence;
+    WalOpenFacts? _header;
+    bool _footerSeen;
     readonly Dictionary<string, FileMeta> _coveringFiles = new(StringComparer.Ordinal);
     readonly Dictionary<uint, ulong> _coveringDroppedFamilies = [];
 
@@ -47,6 +56,59 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
     /// </summary>
     /// <param name="frame">The whole frame, header and payload.</param>
     /// <returns>Whether the frame was covered and acknowledged.</returns>
+    public void AcknowledgeHeader(ReadOnlySpan<byte> bytes)
+    {
+        var (header, _) = WalSegmentCodec.DecodeHeader(bytes);
+        if (Offset != 0 || header.Id != Segment.SegmentId || header.Epoch != Segment.WriterEpoch ||
+            Segment.Previous is null || !header.Prev.Matches(Segment.Previous))
+        {
+            throw new PantsCorruptionException("Published WAL header differs from its catalog.");
+        }
+
+        _header = header;
+        Checksum = DiskFormat.Crc32CAppend(Checksum, bytes);
+        _digest.Append(bytes);
+        Offset = bytes.Length;
+    }
+
+    public void AcknowledgeFooter(ReadOnlySpan<byte> frame)
+    {
+        var payload = frame[8..];
+        var facts = Segment.Facts ?? throw new PantsCorruptionException("WAL catalog has no sealed facts.");
+        var digest = new byte[16];
+        BinaryPrimitives.WriteUInt128LittleEndian(digest, _digest.GetCurrentHashAsUInt128());
+        if (_header is null || _footerSeen || Offset != (long)facts.DataLen || frame.Length != Remaining ||
+            payload.Length != 63 + _familyMaxima.Count * 12 || !WalSegmentCodec.IsFooter(payload) || payload[2] != 1 ||
+            BinaryPrimitives.ReadUInt64LittleEndian(payload[3..]) != Segment.SegmentId ||
+            BinaryPrimitives.ReadUInt64LittleEndian(payload[11..]) != _recordCount ||
+            BinaryPrimitives.ReadUInt64LittleEndian(payload[19..]) != _firstSequence ||
+            BinaryPrimitives.ReadUInt64LittleEndian(payload[27..]) != ObservedMaximumSequence ||
+            BinaryPrimitives.ReadUInt64LittleEndian(payload[35..]) != (ulong)Offset ||
+            BinaryPrimitives.ReadUInt32LittleEndian(payload[43..]) != _familyMaxima.Count ||
+            !payload[^16..].SequenceEqual(digest) || !facts.Link.Digest.AsSpan().SequenceEqual(digest) ||
+            facts.RecordCount != _recordCount || facts.MaxSeqPerCf.Length != _familyMaxima.Count)
+        {
+            throw new PantsCorruptionException("Published WAL footer disagrees with its records or catalog.");
+        }
+
+        var index = 0;
+        foreach (var (family, maximum) in _familyMaxima)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(payload[(47 + index * 12)..]) != family ||
+                BinaryPrimitives.ReadUInt64LittleEndian(payload[(51 + index * 12)..]) != maximum ||
+                facts.MaxSeqPerCf[index].Length != 2 || facts.MaxSeqPerCf[index][0] != family || facts.MaxSeqPerCf[index][1] != maximum)
+            {
+                throw new PantsCorruptionException("WAL footer family coverage differs from its records.");
+            }
+
+            index++;
+        }
+
+        Checksum = DiskFormat.Crc32CAppend(Checksum, frame);
+        Offset += frame.Length;
+        _footerSeen = true;
+    }
+
     public bool TryAcknowledge(ReadOnlySpan<byte> frame, WalRecord record, WalCoverageIndex coverage)
     {
         if (ObservedWriterEpoch is { } epoch && epoch != record.WriterEpoch)
@@ -96,6 +158,20 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
             }
         }
 
+        if (_header is null || record.Sequence < _header.FirstSeq ||
+            _recordCount != 0 && record.Sequence <= ObservedMaximumSequence)
+        {
+            throw new PantsCorruptionException("WAL record sequences do not follow the segment header.");
+        }
+
+        if (_recordCount == 0)
+        {
+            _firstSequence = record.Sequence;
+        }
+
+        _recordCount++;
+        _familyMaxima[record.ColumnFamilyId] = record.Sequence;
+        _digest.Append(frame);
         ObservedWriterEpoch = record.WriterEpoch;
         ObservedMaximumSequence = Math.Max(ObservedMaximumSequence, record.Sequence);
         Checksum = DiskFormat.Crc32CAppend(Checksum, frame);
@@ -117,7 +193,7 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
     /// <summary>Checks a fully read segment against its catalog entry.</summary>
     public void EnsureMatchesCatalog()
     {
-        if (Length == 0)
+        if (Length == 0 || !_footerSeen)
         {
             throw new PantsCorruptionException("A published cloud WAL segment is empty.");
         }

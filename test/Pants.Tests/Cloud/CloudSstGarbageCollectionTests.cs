@@ -104,6 +104,7 @@ public sealed class CloudSstGarbageCollectionTests
         using var client = new HttpClient(handler);
         var failpoints = new CloudCompactionFailpointHandler();
         var initialNames = new HashSet<string>(StringComparer.Ordinal);
+        var initialMetadata = new Dictionary<string, FileMeta>(StringComparer.Ordinal);
         string orphanPath;
         await using (var database = await OpenProviderAsync(
                          firstCache.Path,
@@ -112,6 +113,10 @@ public sealed class CloudSstGarbageCollectionTests
         {
             await PrepareTwoSstsAsync(database, "successor-adoption");
             initialNames.UnionWith(handler.GetObjectPaths("/sst/"));
+            foreach (var file in CloudManifestReader.ReadManifest(firstCache.Path)!.Files)
+            {
+                initialMetadata.Add(file.Name, file.Clone());
+            }
             failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
 
             await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
@@ -132,7 +137,14 @@ public sealed class CloudSstGarbageCollectionTests
 
             await successor.Maintenance.CompactAllAsync();
 
-            Assert.Equal(orphanPath, Assert.Single(handler.GetObjectPaths("/sst/")));
+            Assert.Contains(orphanPath, handler.GetObjectPaths("/sst/"), StringComparer.Ordinal);
+            var authoritative = Assert.Single((await successor.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files));
+            Assert.Equal(Path.GetFileName(orphanPath), authoritative.Name);
+            var retired = CloudManifestReader.ReadManifest(secondCache.Path)!.RetiredSsts;
+            foreach (var file in initialMetadata.Values)
+            {
+                Assert.True(ManifestTransitions.SameIdentity(file, retired[file.Name]));
+            }
             await AssertReadableAsync(successor, "successor-adoption");
         }
 
@@ -140,10 +152,13 @@ public sealed class CloudSstGarbageCollectionTests
         await AssertReadableAsync(reopened, "successor-adoption");
     }
 
-    [Fact]
-    public async Task ShouldKeepOpenSnapshotReadableAfterSuccessorCompactsAndCollectsCloudSsts()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldFenceOpenSnapshotAfterSuccessorCompactsAndCollectsCloudSsts(bool coldReader)
     {
         using var firstCache = new TemporaryDirectory();
+        using var coldReaderCache = new TemporaryDirectory();
         using var successorCache = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
         using var client = new HttpClient(handler);
@@ -153,37 +168,68 @@ public sealed class CloudSstGarbageCollectionTests
         var options = PantsOpenOptions.Cloud(firstCache.Path, CreateAzureLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         var dependencies = new RuntimeDependencies(
             cloudHttpClient: client,
             leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
             runtimeTimeProvider: monotonic,
             leaseClock: wallClock);
+        if (coldReader)
+        {
+            await using (var seed = await PantsDatabase.OpenForTestingAsync(options, dependencies))
+            {
+                await CommitAndFlushAsync(seed, "snapshot-takeover/key");
+            }
+
+            wallClock.UtcNow += TimeSpan.FromSeconds(31);
+            options = PantsOpenOptions.Cloud(coldReaderCache.Path, CreateAzureLocation())
+                .WithBackgroundCompaction(false)
+                .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
+                .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
+        }
+
         await using var original = await PantsDatabase.OpenForTestingAsync(options, dependencies);
-        await CommitAndFlushAsync(original, "snapshot-takeover/key");
+        if (!coldReader)
+        {
+            await CommitAndFlushAsync(original, "snapshot-takeover/key");
+        }
+        else
+        {
+            Assert.Empty(Directory.GetFiles(Path.Combine(coldReaderCache.Path, "sst"), "*.sst"));
+        }
+
         var originalSst = Assert.Single(handler.GetObjectPaths("/sst/"));
         await using var snapshot = await original.Transactions.BeginAsync(
             original.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
-        handler.BlockLeaseWrites();
+        handler.BlockLeaseWrites(ignoreCancellation: true);
         try
         {
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
             await handler.WaitForBlockedLeaseWriteAsync();
-            monotonic.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromMilliseconds(1));
+            // Exceed the old-validity-minus-margin renewal window while its proposed
+            // lease is still live, so exact late-candidate expiry must run before takeover.
+            monotonic.Advance(TimeSpan.FromSeconds(20));
             Assert.False(original.PersistentStorage!.IsPrimaryLeaseHealthy);
-            wallClock.UtcNow += TimeSpan.FromSeconds(3);
+            wallClock.UtcNow += TimeSpan.FromSeconds(20);
         }
         finally
         {
             handler.ReleaseLeaseWrites();
         }
 
+        // The released predecessor renewal must be expired. Wait for its exact late-release
+        // write before acquiring the successor so the test does not create an unrelated CAS race.
+        var expiredAt = wallClock.UtcNow - TimeSpan.FromMilliseconds(100) - TimeSpan.FromTicks(1);
+        var expiredField = $"expires: {expiredAt.UtcDateTime:O}\n";
+        await TestWait.UntilAsync(() => handler.GetObjectText("midge_primary_lease.json")
+            .Contains(expiredField, StringComparison.Ordinal), "the predecessor's late renewal is expired");
+
         var successorOptions = PantsOpenOptions.Cloud(successorCache.Path, CreateAzureLocation())
             .WithBackgroundCompaction(false)
             .WithLeaseClockSkewTolerance(TimeSpan.FromMilliseconds(100))
-            .WithLeaseTimeToLive(TimeSpan.FromSeconds(2));
+            .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         await using var successor = await PantsDatabase.OpenForTestingAsync(
             successorOptions,
             new RuntimeDependencies(
@@ -203,10 +249,13 @@ public sealed class CloudSstGarbageCollectionTests
         await successor.Maintenance.FlushAsync(successor.ColumnFamilies.DefaultFamily);
         await successor.Maintenance.CompactAllAsync();
 
-        Assert.DoesNotContain(originalSst, handler.GetObjectPaths("/sst/"), StringComparer.Ordinal);
-        Assert.Equal(
-            "value",
-            TestBytes.ToText((await snapshot.GetAsync("snapshot-takeover/key"u8.ToArray()))!.Value));
+        var readsBeforeSnapshotLookup = handler.SstRangeReads;
+        await Assert.ThrowsAsync<PantsFencedException>(() =>
+            snapshot.GetAsync("snapshot-takeover/key"u8.ToArray()).AsTask());
+        Assert.Equal(readsBeforeSnapshotLookup, handler.SstRangeReads);
+
+        // The successor cannot prove that predecessor readers have a local copy.
+        Assert.Contains(originalSst, handler.GetObjectPaths("/sst/"), StringComparer.Ordinal);
         await using var current = await successor.Transactions.BeginAsync(
             successor.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -370,7 +419,7 @@ public sealed class CloudSstGarbageCollectionTests
     }
 
     [Fact]
-    public void ShouldRecoverQuarantineLeftByCrashedSimulatedCollection()
+    public async Task ShouldRecoverQuarantineLeftByCrashedSimulatedCollection()
     {
         using var directory = new TemporaryDirectory();
         var localRoot = Path.Combine(directory.Path, "local");
@@ -378,6 +427,7 @@ public sealed class CloudSstGarbageCollectionTests
         var sstDirectory = Path.Combine(cloudRoot, "sst");
         Directory.CreateDirectory(localRoot);
         Directory.CreateDirectory(sstDirectory);
+        await CloudTestMetadata.SeedAsync(new SimulatedCloudObjectStore(cloudRoot), ManifestState.CreateInitial());
         var quarantined = Path.Combine(
             sstDirectory,
             "000000_01_00000000000000000001.sst.gc-crashed");
@@ -393,6 +443,35 @@ public sealed class CloudSstGarbageCollectionTests
 
         Assert.True(complete);
         Assert.Empty(Directory.EnumerateFiles(sstDirectory));
+    }
+
+    [Fact]
+    public async Task ShouldRetainSimulatedDeletionObligationsUntilRetryConfirmsRemoval()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoints = new PersistentSstDeletionFailure();
+        await using var database = await PantsDatabase.OpenForTestingAsync(
+            PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "deletion-retry/").WithBackgroundCompaction(false),
+            new RuntimeDependencies(failpoints));
+        await PrepareTwoSstsAsync(database, "simulated-deletion-retry");
+        var original = CloudManifestReader.ReadManifest(directory.Path)!.Files.Select(static file => file.Clone()).ToArray();
+        failpoints.Enabled = true;
+        await database.Maintenance.CompactAllAsync();
+        var pending = CloudManifestReader.ReadManifest(directory.Path)!.RetiredSsts;
+        Assert.Equal(2, pending.Count);
+        foreach (var file in original)
+        {
+            Assert.True(ManifestTransitions.SameIdentity(file, pending[file.Name]));
+            Assert.True(File.Exists(Path.Combine(directory.Path, "cloud_store", "sst", file.Name)));
+        }
+
+        failpoints.Enabled = false;
+        await database.Maintenance.CompactAllAsync();
+        Assert.Single(GetSimulatedCloudSstPaths(directory.Path));
+        Assert.Empty(CloudManifestReader.ReadManifest(directory.Path)!.RetiredSsts);
+        var selected = await CloudMetadataAuthority.ReadCommittedFilesAsync(new SimulatedCloudObjectStore(Path.Combine(directory.Path, "cloud_store")), CancellationToken.None);
+        Assert.Empty(CloudManifestReader.DecodeMetadata(selected!).RetiredSsts);
+        await AssertReadableAsync(database, "simulated-deletion-retry");
     }
 
     static CloudSstGarbageCollector CreateCollector(
@@ -436,6 +515,9 @@ public sealed class CloudSstGarbageCollectionTests
         await database.Maintenance.CompactAllAsync();
 
         Assert.Single(GetSimulatedCloudSstPaths(directory.Path));
+        Assert.Empty(CloudManifestReader.ReadManifest(directory.Path)!.RetiredSsts);
+        var selected = await CloudMetadataAuthority.ReadCommittedFilesAsync(new SimulatedCloudObjectStore(Path.Combine(directory.Path, "cloud_store")), CancellationToken.None);
+        Assert.Empty(CloudManifestReader.DecodeMetadata(selected!).RetiredSsts);
         await AssertReadableAsync(database, "simulated-collection");
     }
 
@@ -494,17 +576,22 @@ public sealed class CloudSstGarbageCollectionTests
 
     static async Task PrepareTwoSstsAsync(IPantsDatabase database, string prefix)
     {
-        await CommitAndFlushAsync(database, $"{prefix}/first");
-        await CommitAndFlushAsync(database, $"{prefix}/second");
+        await CommitAndFlushAsync(database, $"{prefix}/first", forceRewrite: true);
+        await CommitAndFlushAsync(database, $"{prefix}/second", forceRewrite: true);
         Assert.Equal(2, (await database.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
     }
 
-    static async Task CommitAndFlushAsync(IPantsDatabase database, string key)
+    static async Task CommitAndFlushAsync(IPantsDatabase database, string key, bool forceRewrite = false)
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
+        if (forceRewrite)
+        {
+            // Overlap only empty keyspace so this fixture requires a physical rewrite.
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+        }
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
@@ -529,6 +616,19 @@ public sealed class CloudSstGarbageCollectionTests
             Path.Combine(root, "cloud_store", "sst"),
             "*.sst",
             SearchOption.TopDirectoryOnly);
+
+    sealed class PersistentSstDeletionFailure : IFailpointHandler
+    {
+        public bool Enabled { get; set; }
+
+        public void Hit(Failpoint failpoint)
+        {
+            if (Enabled && failpoint == Failpoint.BeforeCloudSstGarbageCollectionDelete)
+            {
+                throw new IOException("Injected simulated SST deletion failure.");
+            }
+        }
+    }
 
     sealed class AnomalousCloudObjectStore(
         string? versionlessKey,

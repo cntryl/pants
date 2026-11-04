@@ -5,11 +5,9 @@ namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 ///     retirement must prove coverage against what is published. The decoded manifest is cached by
 ///     object identity, so an unchanged manifest costs two HEADs per turn rather than a download.
 /// </summary>
-sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensureLeaseValid)
+sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensureLeaseValid, ResourceBudget? budget = null)
 {
-    const string SnapshotObjectKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-    const string ManifestObjectKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.json";
-
+    readonly ResourceBudget _budget = budget ?? new ResourceBudget(64L * 1024 * 1024);
     PublishedManifest? _cached;
 
     /// <returns>The published manifest, or null when none is published yet.</returns>
@@ -27,20 +25,20 @@ sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensu
         }
 
         ensureLeaseValid();
-        var snapshot = await controlStore.GetAsync(SnapshotObjectKey, cancellationToken)
-            .ConfigureAwait(false);
-        var manifest = await controlStore.GetAsync(ManifestObjectKey, cancellationToken)
-            .ConfigureAwait(false);
+        using var reads = new ProviderCloudControlMetadataReadSet(controlStore, _budget);
+        var files = await CloudMetadataAuthority.ReadCommittedFilesAsync(controlStore, cancellationToken, readSet: reads).ConfigureAwait(false);
         ensureLeaseValid();
-        // The snapshot is authoritative when present, as it is for the local capture.
-        if ((snapshot ?? manifest) is not { } authoritative)
+        if (files?.ContainsKey("manifest.snapshot.json") != true)
         {
             return null;
         }
 
-        _cached = new PublishedManifest(
-            CloudManifestReader.DecodeManifest(authoritative.Data.Span),
-            new PublishedManifestIdentity(snapshot?.Version, manifest?.Version));
+        if (await ReadIdentityAsync(cancellationToken).ConfigureAwait(false) != identity)
+        {
+            throw new PantsBusyException("Committed cloud metadata changed while capturing WAL retirement coverage.");
+        }
+
+        _cached = new PublishedManifest(CloudManifestReader.DecodeMetadata(files), identity);
         return _cached;
     }
 
@@ -52,11 +50,9 @@ sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensu
     async ValueTask<PublishedManifestIdentity> ReadIdentityAsync(CancellationToken cancellationToken)
     {
         ensureLeaseValid();
-        var snapshot = await controlStore.HeadAsync(SnapshotObjectKey, cancellationToken)
-            .ConfigureAwait(false);
-        var manifest = await controlStore.HeadAsync(ManifestObjectKey, cancellationToken)
-            .ConfigureAwait(false);
+        using var reads = new ProviderCloudControlMetadataReadSet(controlStore, _budget);
+        var pointer = await reads.ReadAsync(CloudMetadataAuthority.PointerKey, cancellationToken).ConfigureAwait(false);
         ensureLeaseValid();
-        return new PublishedManifestIdentity(snapshot?.Version, manifest?.Version);
+        return new PublishedManifestIdentity(pointer?.Version, null, pointer is null ? 0 : CloudMetadataAuthority.ReadGenerationOrdinal(pointer.Data.Span));
     }
 }

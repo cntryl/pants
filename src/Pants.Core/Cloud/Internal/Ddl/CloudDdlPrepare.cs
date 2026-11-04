@@ -7,6 +7,8 @@ sealed class CloudDdlPrepare
 {
     [JsonPropertyName("op_id")] public string OperationId { get; set; } = string.Empty;
 
+    [JsonPropertyName("writer_epoch")] public ulong WriterEpoch { get; set; }
+
     public ulong ExpectedRemoteEpoch { get; set; }
 
     /// <summary>

@@ -18,7 +18,7 @@ public sealed class RecoveryCheckpointTests
     {
         using var directory = new TemporaryDirectory();
         WriteUnflushedCommits(directory.Path, CommitCount);
-        var walBytesBefore = WalBytes(directory.Path);
+        var walRecordsBefore = ReadWalRecords(directory.Path);
         var state = NewState();
 
         using (var recovering = LocalDiskStore.Open(
@@ -34,7 +34,7 @@ public sealed class RecoveryCheckpointTests
                 "Recovered memory should have been released at checkpoints.");
         }
 
-        Assert.Equal(walBytesBefore, WalBytes(directory.Path));
+        Assert.Equal(walRecordsBefore, ReadWalRecords(directory.Path));
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -81,21 +81,19 @@ public sealed class RecoveryCheckpointTests
                 1),
             WalCodec.EncodeTransactionBatch(
                 8,
-                2,
+                3,
                 1,
                 [new WalMutation(
                     0,
                     WalOperation.Put,
                     TestBytes.FromString("checkpoint-key"),
                     checkpointValue,
-                    3,
+                    4,
                     null,
                     null)]),
-            WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 7, 5, 1)
+            WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 7, 6, 1)
         };
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "wal.log"),
-            Frame(records));
+        WalTestFiles.ReplaceActiveRecords(directory.Path, records);
 
         using (LocalDiskStore.Open(
                    directory.Path,
@@ -105,11 +103,11 @@ public sealed class RecoveryCheckpointTests
         }
 
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
-        using (var manifest = JsonDocument.Parse(
-                   await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json"))))
+        using (var manifest = MetadataFrameCodec.Decode(
+                   await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json")), 1))
         {
             Assert.Equal(
-                4UL,
+                5UL,
                 Assert.Single(manifest.RootElement.GetProperty("flushed_through").EnumerateArray())
                     .GetProperty("through_sequence")
                     .GetUInt64());
@@ -167,7 +165,7 @@ public sealed class RecoveryCheckpointTests
             .WithMemtableLimits(16 * 1_024)
             .WithTransactionMemoryPool(spillOperations ? 1_024 : 256 * 1_024)
             .WithBackgroundCompaction(false);
-        var walPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var walPath = WalTestFiles.ActivePath(directory.Path);
 
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
@@ -288,6 +286,7 @@ public sealed class RecoveryCheckpointTests
         using var directory = new TemporaryDirectory();
         WriteUnflushedCommits(directory.Path, CommitCount);
         var walBytesBefore = WalBytes(directory.Path);
+        var walRecordsBefore = ReadWalRecords(directory.Path);
         var state = NewState();
         using var hybridCache = new HybridCacheManager(walBytesBefore + 64 * 1024);
 
@@ -304,7 +303,7 @@ public sealed class RecoveryCheckpointTests
             Assert.Equal(0, hybridCache.Ledger.ReservedBytes);
         }
 
-        Assert.Equal(walBytesBefore, WalBytes(directory.Path));
+        Assert.Equal(walRecordsBefore, ReadWalRecords(directory.Path));
     }
 
     [Fact]
@@ -337,7 +336,7 @@ public sealed class RecoveryCheckpointTests
         }
 
         payloads.Add(WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 9, 10, 1));
-        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"), Frame(payloads));
+        WalTestFiles.ReplaceActiveRecords(directory.Path, payloads);
         var walBytesBefore = WalBytes(directory.Path);
 
         using (var hybridCache = new HybridCacheManager(walBytesBefore + 32 * 1024))
@@ -366,17 +365,17 @@ public sealed class RecoveryCheckpointTests
         }
     }
 
-    static byte[] Frame(IEnumerable<byte[]> payloads)
+    static string[] ReadWalRecords(string root)
     {
-        using var stream = new MemoryStream();
-        foreach (var payload in payloads)
+        var records = new List<WalRecord>();
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(root, "wal"));
+        foreach (var member in ledger.Members)
         {
-            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
-            stream.Write(payload);
+            var path = Path.Combine(root, "wal", $"{member.Open.Id:00000000000000000000}.wal");
+            WalFrameReader.Visit(File.ReadAllBytes(path), (record, _) => records.Add(record));
         }
 
-        return stream.ToArray();
+        return records.OrderBy(static record => record.Sequence).Select(static record => Convert.ToHexString(WalCodec.EncodeRecord(record))).ToArray();
     }
 
     static long WalBytes(string root) =>

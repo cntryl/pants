@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
@@ -28,7 +29,8 @@ public sealed class PantsDiskResidentDifferentialTests
         await using var database = await PantsDatabase.OpenAsync(
             CreateOptions(path, simulatedCloud, clock));
         await ApplyCrashMutationsAsync(database, simulatedCloud);
-        await File.WriteAllTextAsync(Path.Combine(path, CrashReadyFileName), "ready");
+        var captured = await CrashChildProcess.CaptureWriterLeaseAsync(path, simulatedCloud);
+        await File.WriteAllTextAsync(Path.Combine(path, CrashReadyFileName), JsonSerializer.Serialize(captured));
 
         using var process = Process.GetCurrentProcess();
         try
@@ -54,13 +56,13 @@ public sealed class PantsDiskResidentDifferentialTests
             Assert.NotEqual(0, child.ExitCode);
         }
 
+        var captured = Assert.IsType<CrashChildProcess.WriterLeaseSnapshot>(
+            JsonSerializer.Deserialize<CrashChildProcess.WriterLeaseSnapshot>(
+                await File.ReadAllTextAsync(Path.Combine(directory.Path, CrashReadyFileName))));
+        await CrashChildProcess.ExpireStoppedWriterLeaseAsync(directory.Path, captured);
         if (simulatedCloud)
         {
             RemoveLocalCache(directory.Path);
-        }
-        else
-        {
-            await ExpireCrashedLeaseAsync(directory.Path);
         }
 
         var clock = new ManualClock(DateTimeOffset.UnixEpoch.AddHours(1));
@@ -286,25 +288,6 @@ public sealed class PantsDiskResidentDifferentialTests
             "differential crash child",
             path,
             Path.Combine(path, CrashReadyFileName));
-    }
-
-    static async Task ExpireCrashedLeaseAsync(string path)
-    {
-        var leasePath = Path.Combine(path, ".midge_leader");
-        var lines = await File.ReadAllLinesAsync(leasePath);
-        for (var index = 0; index < lines.Length; index++)
-        {
-            if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
-            {
-                lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
-            }
-        }
-
-        // The edit invalidates the record checksum, so the expired copy carries none.
-        await File.WriteAllLinesAsync(
-            leasePath,
-            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
-        File.Delete(Path.Combine(path, ".midge_leader.lock"));
     }
 
     static void RemoveLocalCache(string root)

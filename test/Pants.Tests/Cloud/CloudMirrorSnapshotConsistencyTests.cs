@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cntryl.Pants.Cloud.Internal;
+using Cntryl.Pants.Storage.Internal.Accounting;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -14,6 +15,96 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldCreditOnlyTheCapturedSharedCutWhenLaterLocalPublicationArrives(bool provider)
+    {
+        using var cache = new TemporaryDirectory();
+        var first = CreateSst(1, "a"u8.ToArray());
+        var second = CreateSst(2, "b"u8.ToArray());
+        WriteLocalFixture(cache.Path, [first]);
+        var owner = new MetadataAccountingOwner();
+        owner.RetainPublication(Receipt(first.Metadata));
+        var control = new SnapshotConsistencyCloudObjectStore();
+        using var upload = new ArmableBlockingCloudUploadFailpointHandler();
+        using var lease = new CloudLeaseCoordinator(new TestCloudLeaseStore(),
+            new ManualClock(DateTimeOffset.UnixEpoch), "writer", TimeSpan.FromMinutes(1), TimeSpan.Zero);
+        _ = await lease.AcquireAsync(CancellationToken.None);
+        await using ICloudPersistence persistence = provider
+            ? new ProviderCloudPersistence(cache.Path, new SnapshotConsistencyCloudObjectStore(),
+                new SnapshotConsistencyCloudObjectStore(), control, lease)
+            : new SimulatedCloudPersistence(cache.Path, 1, upload);
+        await persistence.MirrorMetadataAndSstsAsync(CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (provider)
+        {
+            control.BeforeGetAsync = async (key, _, token) =>
+            {
+                if (key.EndsWith("/manifest.snapshot.json", StringComparison.Ordinal) && entered.TrySetResult())
+                {
+                    await release.Task.WaitAsync(token);
+                }
+            };
+        }
+        else
+        {
+            WriteSst(cache.Path, CreateSst(3, "unreferenced"u8.ToArray()));
+            upload.Arm();
+        }
+
+        var mirror = Task.Run(async () => await persistence.MirrorMetadataAndSstsWithReceiptAsync(owner.Identity, CancellationToken.None));
+        try
+        {
+            if (provider)
+            {
+                await entered.Task.WaitAsync(TestTimeouts.Expected);
+            }
+            else
+            {
+                await upload.WaitUntilEnteredAsync(TestTimeouts.Expected);
+            }
+
+            AddSstAndAdvanceManifest(cache.Path, first, second);
+            owner.RetainPublication(Receipt(second.Metadata));
+        }
+        finally
+        {
+            release.TrySetResult();
+            upload.Release();
+        }
+
+        using var publication = await mirror.WaitAsync(TestTimeouts.Expected);
+        publication.InstallInto(owner);
+        var sharedFiles = await CloudMetadataAuthority.ReadCommittedFilesAsync(
+            provider ? control : new SimulatedCloudObjectStore(Path.Combine(cache.Path, "cloud_store")), CancellationToken.None);
+        var shared = CloudManifestReader.DecodeMetadata(Assert.IsAssignableFrom<IReadOnlyDictionary<string, ReadOnlyMemory<byte>>>(sharedFiles));
+        Assert.Equal(first.Metadata.Name, Assert.Single(shared.Files).Name);
+        var bucket = owner.Handle.Snapshot().Bucket(MetadataOrigin.CloudFlush, MetadataMedium.Persistent);
+        Assert.Equal(1UL, bucket[MetadataCounter.FlushCommittedCount]);
+        Assert.Equal(first.Metadata.SizeBytes, bucket[MetadataCounter.FlushCommittedSstBytes]);
+
+        var otherOwner = new MetadataAccountingOwner();
+        otherOwner.RetainPublication(Receipt(first.Metadata));
+        publication.InstallInto(otherOwner);
+        Assert.True(otherOwner.Handle.Snapshot().IncompleteObservations > 0);
+        Assert.Equal(0UL, otherOwner.Handle.Snapshot().Bucket(MetadataOrigin.CloudFlush, MetadataMedium.Persistent)[MetadataCounter.FlushCommittedCount]);
+        publication.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => publication.InstallInto(owner));
+
+        using var laterPublication = await persistence.MirrorMetadataAndSstsWithReceiptAsync(owner.Identity, CancellationToken.None);
+        laterPublication.InstallInto(owner);
+        bucket = owner.Handle.Snapshot().Bucket(MetadataOrigin.CloudFlush, MetadataMedium.Persistent);
+        Assert.Equal(2UL, bucket[MetadataCounter.FlushCommittedCount]);
+        Assert.Equal(first.Metadata.SizeBytes + second.Metadata.SizeBytes, bucket[MetadataCounter.FlushCommittedSstBytes]);
+        Assert.Equal(0UL, owner.Handle.Snapshot().IncompleteObservations);
+
+        MetadataPublicationReceipt Receipt(FileMeta file) => new(file.Name, file.ColumnFamilyId,
+            file.SstSequence, file.SizeBytes, file.ContentCrc32C,
+            MetadataOrigin.CloudFlush, MetadataMedium.Persistent, owner.Timestamp());
+    }
+
     [Fact]
     public async Task ShouldNotPublishManifestGivenReferencedSstWasAddedAfterProviderSnapshot()
     {
@@ -25,15 +116,6 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         var walStore = new SnapshotConsistencyCloudObjectStore();
         var sstStore = new SnapshotConsistencyCloudObjectStore();
         var controlStore = new SnapshotConsistencyCloudObjectStore();
-        var firstManifest = ReadLocalMetadata(cache.Path, "manifest.snapshot.json");
-        sstStore.Seed(PantsCloudObjectLayout.SstPrefix + first.Metadata.Name, first.Bytes);
-        controlStore.Seed(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json",
-            firstManifest);
-        controlStore.Seed(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.json",
-            firstManifest);
-
         var leaseStore = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         using var lease = new CloudLeaseCoordinator(
@@ -49,17 +131,19 @@ public sealed class CloudMirrorSnapshotConsistencyTests
             sstStore,
             controlStore,
             lease);
+        await persistence.MirrorMetadataAndSstsAsync(CancellationToken.None);
         var snapshotRead = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseSnapshotRead = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         controlStore.BeforeGetAsync = async (objectKey, count, cancellationToken) =>
         {
-            if (objectKey.EndsWith("/manifest.snapshot.json", StringComparison.Ordinal) &&
-                count == 2)
+            if (objectKey.EndsWith("/manifest.snapshot.json", StringComparison.Ordinal))
             {
-                snapshotRead.TrySetResult();
-                await releaseSnapshotRead.Task.WaitAsync(cancellationToken);
+                if (snapshotRead.TrySetResult())
+                {
+                    await releaseSnapshotRead.Task.WaitAsync(cancellationToken);
+                }
             }
         };
 
@@ -69,7 +153,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         releaseSnapshotRead.TrySetResult();
 
         var failure = await Record.ExceptionAsync(() => mirror);
-        AssertProviderManifestDependencies(controlStore, sstStore);
+        await AssertProviderManifestDependenciesAsync(controlStore, sstStore);
         Assert.Null(failure);
     }
 
@@ -82,7 +166,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         var unrelated = CreateSst(3, "c"u8.ToArray());
         WriteLocalFixture(cache.Path, [first]);
         using var failpoints = new ArmableBlockingCloudUploadFailpointHandler();
-        var persistence = new SimulatedCloudPersistence(cache.Path, 1, failpoints);
+        await using var persistence = new SimulatedCloudPersistence(cache.Path, 1, failpoints);
         WriteSst(cache.Path, unrelated);
         failpoints.Arm();
 
@@ -221,9 +305,9 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         IReadOnlyList<(FileMeta Metadata, byte[] Bytes)> ssts)
     {
         Directory.CreateDirectory(Path.Combine(root, "sst"));
-        File.WriteAllText(Path.Combine(root, "FORMAT"), "midge-format-version=3\n");
+        File.WriteAllText(Path.Combine(root, "FORMAT"), "midge-format-version=9\n");
         File.WriteAllBytes(Path.Combine(root, "manifest.journal"), []);
-        File.WriteAllText(Path.Combine(root, "intent_log.json"), "[]");
+        File.WriteAllBytes(Path.Combine(root, "intent_log.json"), []);
         foreach (var sst in ssts)
         {
             WriteSst(root, sst);
@@ -264,45 +348,37 @@ public sealed class CloudMirrorSnapshotConsistencyTests
             },
             EditCheckpointId = checked((ulong)files.Length)
         };
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+        var bytes = ManifestCodec.Encode(manifest, JsonOptions);
         AtomicStagedFile.Write(Path.Combine(root, "manifest.snapshot.json"), bytes);
         AtomicStagedFile.Write(Path.Combine(root, "manifest.json"), bytes);
     }
 
-    static byte[] ReadLocalMetadata(string root, string fileName) =>
-        File.ReadAllBytes(Path.Combine(root, fileName));
-
-    static void AssertProviderManifestDependencies(
+    static async Task AssertProviderManifestDependenciesAsync(
         SnapshotConsistencyCloudObjectStore controlStore,
         SnapshotConsistencyCloudObjectStore sstStore)
     {
-        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        var files = await CloudMetadataAuthority.ReadCommittedFilesAsync(controlStore, CancellationToken.None);
+        Assert.NotNull(files);
+        var manifest = CloudManifestReader.DecodeMetadata(files);
+        foreach (var file in manifest.Files)
         {
-            var bytes = Assert.IsType<byte[]>(controlStore.GetData(
-                PantsCloudObjectLayout.MetadataPrefix + fileName));
-            var manifest = CloudManifestReader.DecodeManifest(bytes);
-            foreach (var file in manifest.Files)
-            {
-                var sst = Assert.IsType<byte[]>(sstStore.GetData(
-                    PantsCloudObjectLayout.SstPrefix + file.Name));
-                CloudSstValidator.Validate(sst, file);
-            }
+            var sst = Assert.IsType<byte[]>(sstStore.GetData(PantsCloudObjectLayout.SstPrefix + file.Name));
+            CloudSstValidator.Validate(sst, file);
         }
     }
 
     static void AssertSimulatedManifestDependencies(string root)
     {
         var cloudRoot = Path.Combine(root, "cloud_store");
-        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+        var selected = CloudMetadataAuthority.ReadCommittedFilesAsync(new SimulatedCloudObjectStore(cloudRoot), CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        var manifest = CloudManifestReader.DecodeMetadata(Assert.IsType<Dictionary<string, ReadOnlyMemory<byte>>>(selected));
+        foreach (var file in manifest.Files)
         {
-            var bytes = File.ReadAllBytes(Path.Combine(cloudRoot, "metadata", fileName));
-            var manifest = CloudManifestReader.DecodeManifest(bytes);
-            foreach (var file in manifest.Files)
-            {
-                var path = Path.Combine(cloudRoot, "sst", file.Name);
-                Assert.True(File.Exists(path), $"Remote SST '{file.Name}' is missing.");
-                CloudSstValidator.Validate(File.ReadAllBytes(path), file);
-            }
+            var path = Path.Combine(cloudRoot, "sst", file.Name);
+            Assert.True(File.Exists(path), $"Remote SST '{file.Name}' is missing.");
+            CloudSstValidator.Validate(File.ReadAllBytes(path), file);
         }
+
     }
 }

@@ -1,9 +1,14 @@
 using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal.Wal;
 
 namespace Cntryl.Pants.Cloud.Internal;
 
 sealed record ProviderPublishedWalSegment
 {
+    public WalChainLink? Previous { get; init; }
+
+    public WalSealedFacts? Facts { get; init; }
+
     public ulong SegmentId { get; init; }
 
     public ulong WriterEpoch { get; init; }

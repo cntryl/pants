@@ -6,6 +6,7 @@ namespace Cntryl.Pants.Storage.Internal;
 sealed class FileLease : IDisposable
 {
     const int ReleaseAttempts = 20;
+    static readonly TimeSpan MaximumTimerDelay = TimeSpan.FromDays(1);
     static readonly TimeSpan ReleaseRetryDelay = TimeSpan.FromMilliseconds(25);
 
     readonly IPantsClock _clock;
@@ -17,8 +18,10 @@ sealed class FileLease : IDisposable
     readonly string _lockPath;
     readonly TimeProvider _time;
     readonly long _timeToLiveTimestamps;
+    readonly long _heartbeatIntervalTimestamps;
     readonly ITimer _watchdog;
     long _validUntilTimestamp;
+    long _nextHeartbeatTimestamp;
     bool _disposed;
     int _leaseLossNotified;
     volatile bool _valid = true;
@@ -41,13 +44,39 @@ sealed class FileLease : IDisposable
         _clock = clock;
         _time = time;
         _timeToLiveTimestamps = ToTimestamps(time, timeToLive);
+        _heartbeatIntervalTimestamps = ToTimestamps(time, heartbeatInterval);
         _validUntilTimestamp = AddSaturating(acquireStartedTimestamp, _timeToLiveTimestamps);
+        _nextHeartbeatTimestamp = AddSaturating(acquireStartedTimestamp, _heartbeatIntervalTimestamps);
         Epoch = epoch;
-        _watchdog = time.CreateTimer(_ => OnWatchdog(), null, timeToLive, Timeout.InfiniteTimeSpan);
-        _heartbeat = time.CreateTimer(_ => Renew(), null, heartbeatInterval, heartbeatInterval);
+        // Arm only after both timer handles exist, including an already-due heartbeat.
+        _watchdog = time.CreateTimer(_ => OnWatchdog(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        try
+        {
+            _heartbeat = time.CreateTimer(_ => OnHeartbeat(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            try
+            {
+                RescheduleWatchdog(_validUntilTimestamp - time.GetTimestamp());
+                RescheduleHeartbeat(_nextHeartbeatTimestamp - time.GetTimestamp());
+            }
+            catch
+            {
+                _heartbeat.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            _watchdog.Dispose();
+            throw;
+        }
     }
 
     public ulong Epoch { get; }
+
+    internal bool IsKnownValid => _valid && !Volatile.Read(ref _disposed) && !IsPastDeadline();
+
+    internal static ulong ReadStartupEpochFloor(string root) =>
+        ReadRecord(Path.Combine(root, ".midge_leader"))?.Epoch ?? 0;
 
     /// <summary>
     ///     Test-only hook invoked immediately after <see cref="Renew" /> writes the refreshed leader
@@ -79,6 +108,7 @@ sealed class FileLease : IDisposable
             }
 
             _disposed = true;
+            Interlocked.Exchange(ref _validUntilTimestamp, 0);
             _heartbeat.Dispose();
             _watchdog.Dispose();
             TryWriteReleaseSentinel();
@@ -156,7 +186,9 @@ sealed class FileLease : IDisposable
         TimeSpan heartbeatInterval,
         IPantsClock? clock = null,
         TimeSpan? leaseTimeToLive = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        StartupScope? startupScope = null,
+        IFailpointHandler? failpoints = null)
     {
         var time = timeProvider ?? TimeProvider.System;
         var acquireStarted = time.GetTimestamp();
@@ -181,7 +213,9 @@ sealed class FileLease : IDisposable
                 clock ?? SystemPantsClock.Instance,
                 effectiveTimeToLive,
                 time,
-                acquireStarted);
+                acquireStarted,
+                startupScope,
+                failpoints);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -201,7 +235,9 @@ sealed class FileLease : IDisposable
         IPantsClock effectiveClock,
         TimeSpan effectiveTimeToLive,
         TimeProvider time,
-        long acquireStarted)
+        long acquireStarted,
+        StartupScope? startupScope,
+        IFailpointHandler? failpoints)
     {
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
@@ -242,25 +278,52 @@ sealed class FileLease : IDisposable
         }
 
         var epoch = previousEpoch + 1;
-        WriteRecord(
-            leaderPath,
-            new LeaderRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O")));
-        var published = ReadRecord(leaderPath);
-        if (published?.Epoch != epoch || published.HolderId != holderId)
+        var candidate = new LeaderRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O"));
+        startupScope?.BeginLeasePublication();
+        try
         {
-            throw new PantsLeaseHeldException("Lost the Midge leader publication race.");
-        }
+            WriteRecord(leaderPath, candidate);
+            failpoints?.Hit(Failpoint.AfterLeaseAcquisitionWrite);
+            var published = ReadRecord(leaderPath);
+            if (published?.Epoch != epoch || published.HolderId != holderId)
+            {
+                startupScope?.ResolveLeasePublication();
+                throw new PantsLeaseHeldException("Lost the Midge leader publication race.");
+            }
 
-        return new FileLease(
-            root,
-            holderId,
-            epoch,
-            leaseLossCallback,
-            heartbeatInterval,
-            effectiveClock,
-            time,
-            effectiveTimeToLive,
-            acquireStarted);
+            var lease = new FileLease(root, holderId, epoch, leaseLossCallback, heartbeatInterval,
+                effectiveClock, time, effectiveTimeToLive, acquireStarted);
+            startupScope?.ResolveLeasePublication();
+            return lease;
+        }
+        catch (Exception exception)
+        {
+            startupScope?.WaitForCancellationCallbacksAsync().GetAwaiter().GetResult();
+            if (startupScope is not null)
+            {
+                try
+                {
+                    // The mutation lock is still held. Release only this exact candidate;
+                    // a conflicting owner must remain untouched.
+                    if (ReadRecord(leaderPath) is { } currentOwner &&
+                        currentOwner.Epoch == epoch && currentOwner.HolderId == holderId)
+                    {
+                        WriteRecord(leaderPath, currentOwner with { AcquiredAt = "1970-01-01T00:00:00Z" });
+                    }
+                    startupScope.ResolveLeasePublication();
+                }
+                catch (Exception)
+                {
+                    // An unconfirmed owner remains bounded by its original lease TTL.
+                }
+            }
+            if (startupScope is not null && exception is IOException or UnauthorizedAccessException or
+                PantsIOException or PantsTimeoutException or OperationCanceledException)
+            {
+                throw new PantsLeaseIndeterminateException("The local leader publication was not confirmed.", exception);
+            }
+            throw;
+        }
     }
 
     static long ToTimestamps(TimeProvider time, TimeSpan duration) =>
@@ -271,42 +334,80 @@ sealed class FileLease : IDisposable
     static long AddSaturating(long left, long right) =>
         left > long.MaxValue - right ? long.MaxValue : left + right;
 
-    bool IsPastDeadline() =>
-        _time.GetTimestamp() >= Volatile.Read(ref _validUntilTimestamp);
+    bool IsPastDeadline()
+    {
+        var deadline = Volatile.Read(ref _validUntilTimestamp);
+        return deadline == 0 || _time.GetTimestamp() >= deadline;
+    }
 
     /// <summary>
-    ///     Fences and reports loss once the monotonic deadline passes. It takes no lock, so a
-    ///     renewal blocked in IO while holding the gate cannot delay it.
+    ///     Fences only the expired validity it observed, without taking the IO gate. A renewal
+    ///     can win the atomic transition; a renewal blocked past expiry cannot restore authority.
     /// </summary>
     void OnWatchdog()
     {
-        var remaining = Volatile.Read(ref _validUntilTimestamp) - _time.GetTimestamp();
-        if (remaining > 0)
+        while (!Volatile.Read(ref _disposed))
         {
-            RescheduleWatchdog(remaining);
+            var observed = Volatile.Read(ref _validUntilTimestamp);
+            if (observed == 0 || !_valid)
+            {
+                return;
+            }
+            var remaining = observed - _time.GetTimestamp();
+            if (remaining > 0)
+            {
+                RescheduleWatchdog(remaining);
+                return;
+            }
+            if (Interlocked.CompareExchange(ref _validUntilTimestamp, 0, observed) != observed)
+            {
+                continue;
+            }
+            _valid = false;
+            if (!Volatile.Read(ref _disposed))
+            {
+                NotifyLeaseLoss();
+            }
             return;
         }
-
-        if (_valid)
-        {
-            _valid = false;
-        }
-
-        NotifyLeaseLoss();
     }
 
-    void RescheduleWatchdog(long remainingTimestamps)
+    void OnHeartbeat()
     {
+        if (Volatile.Read(ref _disposed) || !_valid)
+        {
+            return;
+        }
+        var observed = Volatile.Read(ref _nextHeartbeatTimestamp);
+        var remaining = observed - _time.GetTimestamp();
+        if (remaining > 0)
+        {
+            RescheduleHeartbeat(remaining);
+            return;
+        }
+        Renew(observed);
+    }
+
+    void RescheduleWatchdog(long remainingTimestamps) => Reschedule(_watchdog, remainingTimestamps);
+    void RescheduleHeartbeat(long remainingTimestamps) => Reschedule(_heartbeat, remainingTimestamps);
+
+    void Reschedule(ITimer timer, long remainingTimestamps)
+    {
+        if (Volatile.Read(ref _disposed) || !_valid)
+        {
+            return;
+        }
+        var seconds = Math.Max(0, (double)remainingTimestamps / _time.TimestampFrequency);
+        var due = seconds >= MaximumTimerDelay.TotalSeconds
+            ? MaximumTimerDelay
+            : TimeSpan.FromSeconds(seconds == 0 ? 0 : Math.Max(seconds, 0.001));
         try
         {
-            var seconds = (double)remainingTimestamps / _time.TimestampFrequency;
-            _watchdog.Change(
-                TimeSpan.FromSeconds(Math.Max(seconds, 0.001)),
-                Timeout.InfiniteTimeSpan);
+            timer.Change(due, Timeout.InfiniteTimeSpan);
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException) when (Volatile.Read(ref _disposed))
         {
-            // The lease was disposed; nothing is left to watch.
+            // Disposal can overtake an already-dispatched timer callback.
         }
     }
 
@@ -323,7 +424,10 @@ sealed class FileLease : IDisposable
         if (IsPastDeadline())
         {
             OnWatchdog();
-            throw new PantsFencedException("The Midge writer lease is no longer valid.");
+            if (!_valid || IsPastDeadline())
+            {
+                throw new PantsFencedException("The Midge writer lease is no longer valid.");
+            }
         }
 
         var leaseLost = false;
@@ -364,18 +468,24 @@ sealed class FileLease : IDisposable
         return _valid;
     }
 
-    void Renew()
+    void Renew(long? expectedHeartbeat = null)
     {
         var leaseLost = false;
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || !_valid)
             {
                 return;
             }
+            if (expectedHeartbeat is { } expected && Volatile.Read(ref _nextHeartbeatTimestamp) != expected)
+            {
+                RescheduleHeartbeat(Volatile.Read(ref _nextHeartbeatTimestamp) - _time.GetTimestamp());
+                return;
+            }
 
+            var observed = Volatile.Read(ref _validUntilTimestamp);
             var started = _time.GetTimestamp();
-            if (started >= Volatile.Read(ref _validUntilTimestamp))
+            if (observed == 0 || started >= observed)
             {
                 // A renewal that starts after the deadline cannot restore an expired lease.
                 _valid = false;
@@ -385,18 +495,20 @@ sealed class FileLease : IDisposable
             {
                 try
                 {
-                    leaseLost = !TryRenewRecord() || _time.GetTimestamp() >=
-                        Volatile.Read(ref _validUntilTimestamp);
+                    // The deadline counts from when renewal began, never from when IO ended.
+                    var deadline = AddSaturating(started, _timeToLiveTimestamps);
+                    leaseLost = !TryRenewRecord() || _time.GetTimestamp() >= observed ||
+                                Interlocked.CompareExchange(ref _validUntilTimestamp, deadline, observed) != observed;
                     if (leaseLost)
                     {
                         _valid = false;
                     }
                     else
                     {
-                        // The deadline counts from when the renewal began, never from when it ended.
-                        var deadline = AddSaturating(started, _timeToLiveTimestamps);
-                        Volatile.Write(ref _validUntilTimestamp, deadline);
+                        var heartbeat = AddSaturating(started, _heartbeatIntervalTimestamps);
+                        Volatile.Write(ref _nextHeartbeatTimestamp, heartbeat);
                         RescheduleWatchdog(deadline - _time.GetTimestamp());
+                        RescheduleHeartbeat(heartbeat - _time.GetTimestamp());
                     }
                 }
                 catch
@@ -432,6 +544,8 @@ sealed class FileLease : IDisposable
 
     void NotifyLeaseLoss()
     {
+        Interlocked.Exchange(ref _validUntilTimestamp, 0);
+        _valid = false;
         if (Interlocked.Exchange(ref _leaseLossNotified, 1) == 0)
         {
             try

@@ -2,6 +2,8 @@ namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 interface ICloudDdlAuthority
 {
+    ulong WriterEpoch { get; }
+
     ValueTask FenceDdlRegistryAsync(
         CloudDdlRegistry bootstrap,
         CancellationToken cancellationToken);

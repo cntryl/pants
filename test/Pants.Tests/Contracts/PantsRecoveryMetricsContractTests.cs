@@ -70,13 +70,14 @@ public sealed class PantsRecoveryMetricsContractTests
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
 
+        var reservedFloor = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal")).ReservedThrough;
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var recovery = await reopened.Diagnostics.GetRecoveryMetricsAsync();
         var runtime = await reopened.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.Equal(8, recovery.WalRecordsReplayed);
         Assert.True(recovery.WalBytesReplayed > 0);
-        Assert.Equal(8, runtime.CurrentSequence);
+        Assert.Equal(reservedFloor, runtime.CurrentSequence);
         Assert.Equal(recovery.WalBytesReplayed, runtime.WalRecoveryBytesReplayed);
     }
 }

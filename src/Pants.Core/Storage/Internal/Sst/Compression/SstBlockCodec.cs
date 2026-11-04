@@ -37,6 +37,50 @@ static class SstBlockCodec
         return AppendTrailer(payload, algorithm);
     }
 
+    internal static long GetDecodedSize(ReadOnlySpan<byte> block)
+    {
+        if (block.Length < TrailerSize)
+        {
+            throw new PantsCorruptionException("SST block is too small for trailer.");
+        }
+        var crcOffset = block.Length - sizeof(uint);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(block[crcOffset..]) != DiskFormat.Crc32C(block[..crcOffset]))
+        {
+            throw new PantsCorruptionException("SST block CRC32C mismatch.");
+        }
+        var payload = block[..^TrailerSize];
+        var algorithm = ParseAlgorithm(block[^TrailerSize]);
+        if (algorithm == CompressionAlgorithm.None)
+        {
+            return payload.Length;
+        }
+        ulong length;
+        if (algorithm == CompressionAlgorithm.Lz4)
+        {
+            if (payload.Length < 4)
+            {
+                throw new PantsCorruptionException("SST LZ4 size prefix is truncated.");
+            }
+            length = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        }
+        else
+        {
+            try
+            {
+                length = Decompressor.GetDecompressedSize(payload);
+            }
+            catch (Exception exception)
+            {
+                throw new PantsCorruptionException("SST Zstd content size is invalid.", exception);
+            }
+        }
+        if (length > DiskFormat.MaximumDecodedBlockBytes)
+        {
+            throw new PantsCorruptionException("SST decompressed block exceeds its maximum size.");
+        }
+        return checked((long)length);
+    }
+
     internal static byte[] DecompressWithTrailer(ReadOnlySpan<byte> block)
     {
         if (block.Length < TrailerSize)

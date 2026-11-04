@@ -21,24 +21,24 @@ public sealed class PantsMemoryBudgetSplitTests
             plan.CompactionMemoryPoolBytes +
             plan.ScanMemoryPoolBytes +
             2 * plan.MemtableSizeLimitBytes +
-            plan.BlockCacheBytes <= budget);
+            plan.BlockCacheBytes + plan.ReadMetadataBudgetBytes <= budget);
     }
 
     [Fact]
-    public void ShouldReserveEnoughCompactionMemoryForDecodedBlocksUnderASubMebibyteBudget()
+    public void ShouldReserveOneFifthForCompactionUnderASubMebibyteBudget()
     {
         const long budget = 64L * 1024;
         var options = PantsOpenOptions.InMemory()
             .WithMemoryBudget(PantsMemoryBudget.FromBytes(budget));
         var plan = RuntimePlan.Resolve(options);
 
-        Assert.True(plan.CompactionMemoryPoolBytes > budget / 2);
+        Assert.Equal(budget / 5, plan.CompactionMemoryPoolBytes);
         Assert.True(
             plan.TransactionMemoryPoolBytes +
             plan.CompactionMemoryPoolBytes +
             plan.ScanMemoryPoolBytes +
             2 * plan.MemtableSizeLimitBytes +
-            plan.BlockCacheBytes <= budget);
+            plan.BlockCacheBytes + plan.ReadMetadataBudgetBytes <= budget);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class PantsMemoryBudgetSplitTests
             plan.CompactionMemoryPoolBytes +
             plan.ScanMemoryPoolBytes +
             2 * plan.MemtableSizeLimitBytes +
-            plan.BlockCacheBytes <= budget);
+            plan.BlockCacheBytes + plan.ReadMetadataBudgetBytes <= budget);
     }
 
     [Fact]
@@ -68,7 +68,6 @@ public sealed class PantsMemoryBudgetSplitTests
 
         Assert.True(plan.CompactionMemoryPoolBytes > 0);
         Assert.True(plan.CompactionMemoryPoolBytes <= 256L * 1024 * 1024);
-        Assert.True(plan.ScanMemoryPoolBytes > 0);
-        Assert.True(plan.ScanMemoryPoolBytes <= 128L * 1024 * 1024);
+        Assert.Equal(0, plan.ScanMemoryPoolBytes);
     }
 }

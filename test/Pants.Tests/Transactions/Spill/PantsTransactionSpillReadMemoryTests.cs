@@ -168,7 +168,7 @@ public sealed class PantsTransactionSpillReadMemoryTests
     }
 
     [Fact]
-    public void ShouldRejectScanBeforeOpeningSpillRunIndexesWhenReservationDoesNotFit()
+    public void ShouldStreamSparseFramesWhenReverseChunkMetadataDoesNotFit()
     {
         using var directory = new TemporaryDirectory();
         var readers = new CountingRunReaders();
@@ -177,10 +177,14 @@ public sealed class PantsTransactionSpillReadMemoryTests
         using var view = store.CreateReadView([], memoryPool);
         var viewBytes = memoryPool.Used;
 
-        Assert.Throws<PantsResourceLimitException>(() =>
-            view.CreateKeyScan(null, null, PantsScanDirection.Reverse));
-
-        Assert.Equal(0, readers.PeakActive);
+        using var scan = view.CreateKeyScan(null, null, PantsScanDirection.Reverse);
+        var keys = new List<string>();
+        while (scan.MoveNext())
+        {
+            keys.Add(TestBytes.ToText(scan.Current));
+        }
+        Assert.Equal(Enumerable.Range(0, 8).Reverse().Select(index => $"key-{index:00}"), keys);
+        Assert.Equal(1, readers.PeakActive);
         Assert.Equal(0, readers.Active);
         Assert.Equal(viewBytes, memoryPool.Used);
     }

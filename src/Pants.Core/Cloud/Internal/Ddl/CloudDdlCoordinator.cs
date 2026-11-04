@@ -98,6 +98,7 @@ sealed class CloudDdlCoordinator
         var prepare = new CloudDdlPrepare
         {
             OperationId = Guid.NewGuid().ToString(),
+            WriterEpoch = _authority.WriterEpoch,
             ExpectedRemoteEpoch = registry.Epoch,
             Edit = edit.Clone()
         };
@@ -193,6 +194,14 @@ sealed class CloudDdlCoordinator
         {
             _diskStore.CommitColumnFamilyEdit(state, edit);
         }
+        catch (PantsCommitOutcomeUnknownException)
+        {
+            // The durable local prefix may already contain this edit. A retry here could append
+            // the same edit ID twice; only restart recovery may select the next journal position.
+            _authorityAmbiguous = true;
+            MarkPersistenceAnomaly(state);
+            throw;
+        }
         catch (Exception)
         {
             ApplyRemoteCommittedVisibility(state, edit);
@@ -258,6 +267,16 @@ sealed class CloudDdlCoordinator
             {
                 // In process the submitted CAS may still land; keep fencing until it is resolved.
                 _authorityAmbiguous = true;
+                return;
+            }
+
+            if (prepare.WriterEpoch != _authority.WriterEpoch)
+            {
+                // Startup fenced the registry with a successor epoch before reaching this point.
+                // If this operation is absent, the prior holder can no longer commit its CAS, so
+                // do not invent the edit under the successor's authority.
+                ClearPrepare();
+                _authorityAmbiguous = false;
                 return;
             }
 

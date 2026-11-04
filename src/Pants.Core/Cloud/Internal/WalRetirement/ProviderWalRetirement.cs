@@ -63,7 +63,7 @@ sealed class ProviderWalRetirement
         _settings = settings;
         _walRetirementDiagnostics = walRetirementDiagnostics;
         _markPersistenceAnomaly = markPersistenceAnomaly;
-        _manifests = new PublishedManifestReader(controlStore, lease.EnsureValid);
+        _manifests = new PublishedManifestReader(controlStore, lease.EnsureValid, settings.Budget);
         _prover = new WalSegmentProver(
             walStore,
             new WalRetirementAdmission(settings.Budget, settings.Gate),
@@ -273,6 +273,8 @@ sealed class ProviderWalRetirement
         {
             encodedCatalog = _encodeCatalog(catalog with
             {
+                Anchor = turn.Proven.OrderBy(static proof => proof.Segment.SegmentId).Last().Segment.Facts!.Link,
+                RetiredBy = Math.Max(catalog.RetiredBy, turn.Manifest!.Identity.Generation),
                 NextSegmentId = nextSegmentId,
                 WalHistoryStartSegmentId = walHistoryStartSegmentId,
                 Segments = retained

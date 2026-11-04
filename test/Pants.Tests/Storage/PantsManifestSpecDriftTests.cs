@@ -23,16 +23,16 @@ public sealed class PantsManifestSpecDriftTests
     public async Task ShouldReadSstGivenIncompleteBoundsInDurableManifestJournalWhenReopening()
     {
         // Arrange
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
-            "v3_populated_v4_sst_db");
-        var manifest = JsonNode.Parse(
-            await File.ReadAllTextAsync(Path.Combine(directory.Path, "manifest.json")))!.AsObject();
+        using var directory = Format9TestMetadata.CopyFixture("populated-local");
+        var manifest = Format9TestMetadata.ReadNode(Path.Combine(directory.Path, "manifest.snapshot.json")).AsObject();
         var file = manifest["files"]!.AsArray()[0]!.AsObject();
         file["level"] = 1;
         file["key_bounds_complete"] = false;
         file.Remove("smallest_key");
         file.Remove("largest_key");
         var edit = new JsonObject { ["AddSst"] = file.DeepClone() };
+        manifest["files"] = new JsonArray();
+        await Format9TestMetadata.WriteAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), manifest.ToJsonString());
         await File.WriteAllBytesAsync(
             Path.Combine(directory.Path, "manifest.journal"),
             BuildEnvelopedJournal((2, AddSstRecordType, edit.ToJsonString())));
@@ -51,45 +51,23 @@ public sealed class PantsManifestSpecDriftTests
     // Issue #47 -----------------------------------------------------------
 
     [Fact]
-    public async Task ShouldTakeMonotonicMaxGivenCloudCheckpointReplayedOutOfOrder()
+    public async Task ShouldRejectLegacyCloudCheckpointGivenFormat9Journal()
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
-        var journal = BuildJournal(
-            (SetCloudCheckpointRecordType, """{"SetCloudCheckpoint":{"checkpoint_sequence":10,"covering_ssts":[]}}"""),
-            (SetCloudCheckpointRecordType, """{"SetCloudCheckpoint":{"checkpoint_sequence":3,"covering_ssts":[]}}"""));
-        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
-
-        var checkpoint = await ReadCloudCheckpointAfterFlushAsync(directory.Path);
-
-        Assert.Equal(10u, checkpoint.GetProperty("checkpoint_sequence").GetUInt64());
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), BuildJournal(
+            (SetCloudCheckpointRecordType, """{"SetCloudCheckpoint":{"checkpoint_sequence":10,"covering_ssts":[]}}""")));
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
     }
 
     [Fact]
-    public async Task ShouldAdvanceCloudCheckpointGivenAscendingReplayOrder()
+    public async Task ShouldRejectLegacyWalSequenceEditGivenFormat9Journal()
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
-        var journal = BuildJournal(
-            (SetCloudCheckpointRecordType, """{"SetCloudCheckpoint":{"checkpoint_sequence":3,"covering_ssts":[]}}"""),
-            (SetCloudCheckpointRecordType, """{"SetCloudCheckpoint":{"checkpoint_sequence":10,"covering_ssts":[]}}"""));
-        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
-
-        var checkpoint = await ReadCloudCheckpointAfterFlushAsync(directory.Path);
-
-        Assert.Equal(10u, checkpoint.GetProperty("checkpoint_sequence").GetUInt64());
-    }
-
-    static async Task<JsonElement> ReadCloudCheckpointAfterFlushAsync(string path)
-    {
-        await using (var database = await OpenAsync(path))
-        {
-            await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-        }
-
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(path, "manifest.json")));
-        return document.RootElement.GetProperty("cloud_checkpoint").Clone();
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), BuildJournal(
+            (BumpWalSeqRecordType, """{"BumpWalSeq":{"seq":10}}""")));
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
     }
 
     // Issue #48 -------------------------------------------------------------
@@ -129,9 +107,9 @@ public sealed class PantsManifestSpecDriftTests
     public async Task ShouldFailLoadGivenManifestSnapshotHasDirectlyEmbeddedInvalidSstName()
     {
         using var directory = new TemporaryDirectory();
-        await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "manifest.json"),
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=9\n");
+        await Format9TestMetadata.WriteAsync(
+            Path.Combine(directory.Path, "manifest.snapshot.json"),
             """
             {
               "last_persisted_sequence": 0,
@@ -167,11 +145,11 @@ public sealed class PantsManifestSpecDriftTests
 
         var durableEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
-            """{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}""");
+            """{"edit_id":1,"edit":{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}}""");
         var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
         var tornEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
-            """{"CreateColumnFamily":{"id":2,"name":"torn-tail-family","created_at":2}}""");
+            """{"edit_id":2,"edit":{"CreateColumnFamily":{"id":2,"name":"torn-tail-family","created_at":2}}}""");
         var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
 
         using var stream = new MemoryStream();
@@ -308,7 +286,7 @@ public sealed class PantsManifestSpecDriftTests
         await WriteEmptyFixtureAsync(directory.Path);
         var durableEdit = EncodeJournalRecord(
             CreateColumnFamilyRecordType,
-            """{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}""");
+            """{"edit_id":1,"edit":{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}}""");
         var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
         var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
         var journal = durableEdit.Concat(durableMarker).Concat(tornMarker[..^2]).ToArray();
@@ -338,8 +316,7 @@ public sealed class PantsManifestSpecDriftTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        using var document = Format9TestMetadata.Read(Path.Combine(directory.Path, "manifest.snapshot.json"));
         var nextSstSeqs = document.RootElement.GetProperty("next_sst_seqs");
 
         Assert.Equal(JsonValueKind.Object, nextSstSeqs.ValueKind);
@@ -376,8 +353,6 @@ public sealed class PantsManifestSpecDriftTests
         const string reclaimedSst = "000001_00000000000000000001.sst";
         var journal = BuildJournal(
             (CreateColumnFamilyRecordType,
-                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
-            (CreateColumnFamilyRecordType,
                 """{"CreateColumnFamily":{"id":1,"name":"reclaimed","created_at":2}}"""),
             (AddSstRecordType,
                 $"{{\"AddSst\":{{\"name\":\"{reclaimedSst}\",\"level\":0,\"size_bytes\":1,\"cf_id\":1,\"sst_seq\":1,\"sublevel\":0}}}}"),
@@ -393,8 +368,7 @@ public sealed class PantsManifestSpecDriftTests
             subsequentId = (await database.ColumnFamilies.CreateAsync("subsequent")).Id;
         }
 
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        using var document = Format9TestMetadata.Read(Path.Combine(directory.Path, "manifest.snapshot.json"));
         var root = document.RootElement;
         Assert.DoesNotContain(
             root.GetProperty("files").EnumerateArray(),
@@ -415,8 +389,6 @@ public sealed class PantsManifestSpecDriftTests
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
         var journal = BuildJournal(
-            (CreateColumnFamilyRecordType,
-                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
             (CreateColumnFamilyRecordType,
                 $$$"""{"CreateColumnFamily":{"id":{{{uint.MaxValue}}},"name":"last","created_at":2}}"""));
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
@@ -450,41 +422,14 @@ public sealed class PantsManifestSpecDriftTests
     // Issue #264 ------------------------------------------------------------
 
     [Fact]
-    public async Task ShouldSynthesizeBareManifestEditIdsFromJournalMaximumGivenMixedJournalAndCheckpoint()
+    public async Task ShouldRejectBareManifestEditGivenFormat9Journal()
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "manifest.snapshot.json"),
-            """
-            {
-              "last_persisted_sequence": 5,
-              "files": [],
-              "column_families": [
-                { "id": 0, "name": "default", "created_at": 1 }
-              ],
-              "next_wal_seq": 1,
-              "next_sst_seqs": {},
-              "edit_checkpoint_id": 5
-            }
-            """);
-
-        var staleEnvelope = BuildEnvelopedJournal(
-            (4, BumpWalSeqRecordType, """{"BumpWalSeq":{"seq":99}}"""));
-        var legacyEdit = EncodeJournalRecord(
-            BumpWalSeqRecordType,
-            """{"BumpWalSeq":{"seq":100}}""");
-        var legacyMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(5));
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "manifest.journal"),
-            [.. staleEnvelope, .. legacyEdit, .. legacyMarker]);
-
-        await using var reopened = await OpenAsync(directory.Path);
-
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
-        Assert.Equal(5UL, document.RootElement.GetProperty("last_persisted_sequence").GetUInt64());
-        Assert.Equal(5UL, document.RootElement.GetProperty("edit_checkpoint_id").GetUInt64());
+        var edit = EncodeJournalRecord(6, """{"BumpNextSstSeq":{"cf_id":0,"next_seq":5}}""");
+        var marker = EncodeJournalRecord(9, DurabilityMarkerJson(1));
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), [.. edit, .. marker]);
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
     }
 
     // Issue #267 ------------------------------------------------------------
@@ -499,7 +444,7 @@ public sealed class PantsManifestSpecDriftTests
 
         await using var database = await OpenAsync(directory.Path);
 
-        Assert.Equal("midge-format-version=3\n", await File.ReadAllTextAsync(
+        Assert.Equal("midge-format-version=9\n", await File.ReadAllTextAsync(
             Path.Combine(directory.Path, "FORMAT")));
     }
 
@@ -541,10 +486,10 @@ public sealed class PantsManifestSpecDriftTests
     }
 
     [Theory]
-    [InlineData("midge-format-version=3")]
-    [InlineData("midge-format-version=3 \n")]
-    [InlineData("midge-format-version=3\r\n")]
-    [InlineData(" midge-format-version=3\n")]
+    [InlineData("midge-format-version=9")]
+    [InlineData("midge-format-version=9 \n")]
+    [InlineData("midge-format-version=9\r\n")]
+    [InlineData(" midge-format-version=9\n")]
     public async Task ShouldRejectNonCanonicalFormatMarkerBeforeCreatingDatabaseState(string marker)
     {
         using var directory = new TemporaryDirectory();
@@ -564,7 +509,7 @@ public sealed class PantsManifestSpecDriftTests
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
-        await File.WriteAllTextAsync(
+        await Format9TestMetadata.WriteAsync(
             Path.Combine(directory.Path, "manifest.snapshot.json"),
             """
             {
@@ -591,10 +536,9 @@ public sealed class PantsManifestSpecDriftTests
             Assert.Equal(1u, family.Id);
         }
 
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
+        using var document = Format9TestMetadata.Read(Path.Combine(directory.Path, "manifest.snapshot.json"));
         var families = document.RootElement.GetProperty("column_families").EnumerateArray().ToArray();
-        Assert.Equal(2, families.Length);
+        Assert.Single(families);
         var current = Assert.Single(families, family => family.GetProperty("id").GetUInt32() == 1);
         Assert.Equal("current", current.GetProperty("name").GetString());
         Assert.False(current.TryGetProperty("deleted_at", out _));
@@ -648,43 +592,16 @@ public sealed class PantsManifestSpecDriftTests
     }
 
     [Fact]
-    public async Task ShouldResurrectTombstonedColumnFamilyGivenCreateEditReusesItsId()
+    public async Task ShouldRejectTombstonedColumnFamilyIdReuseGivenCreateEdit()
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
         var journal = BuildJournal(
-            (CreateColumnFamilyRecordType,
-                """{"CreateColumnFamily":{"id":0,"name":"default","created_at":1}}"""),
-            (CreateColumnFamilyRecordType,
-                """{"CreateColumnFamily":{"id":1,"name":"before","created_at":2}}"""),
-            (DropColumnFamilyAtRecordType,
-                """{"DropColumnFamilyAt":{"id":1,"drop_sequence":3,"dropped_sst_names":[]}}"""),
-            (CreateColumnFamilyRecordType,
-                """{"CreateColumnFamily":{"id":1,"name":"after","created_at":4}}"""));
+            (CreateColumnFamilyRecordType, """{"CreateColumnFamily":{"id":1,"name":"before","created_at":2}}"""),
+            (DropColumnFamilyAtRecordType, """{"DropColumnFamilyAt":{"id":1,"drop_sequence":3,"dropped_sst_names":[]}}"""),
+            (CreateColumnFamilyRecordType, """{"CreateColumnFamily":{"id":1,"name":"after","created_at":4}}"""));
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.journal"), journal);
-
-        await using (var database = await OpenAsync(directory.Path))
-        {
-            var resurrected = Assert.IsAssignableFrom<IPantsColumnFamily>(
-                await database.ColumnFamilies.GetAsync("after"));
-            Assert.Equal(1u, resurrected.Id);
-            Assert.Null(await database.ColumnFamilies.GetAsync("before"));
-        }
-
-        using var document = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.json")));
-        var resurrectedMeta = Assert.Single(
-            document.RootElement.GetProperty("column_families").EnumerateArray(),
-            family => family.GetProperty("id").GetUInt32() == 1);
-        Assert.Equal("after", resurrectedMeta.GetProperty("name").GetString());
-        Assert.Equal(4u, resurrectedMeta.GetProperty("created_at").GetUInt64());
-        Assert.False(resurrectedMeta.TryGetProperty("deleted_at", out _));
-        Assert.Equal(
-            3UL,
-            document.RootElement.GetProperty("flushed_through").EnumerateArray()
-                .Single(frontier => frontier.GetProperty("cf_id").GetUInt32() == 1)
-                .GetProperty("through_sequence")
-                .GetUInt64());
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path).AsTask());
     }
 
     // Issue #265 ------------------------------------------------------------
@@ -746,8 +663,9 @@ public sealed class PantsManifestSpecDriftTests
         var sequence = 0UL;
         foreach (var (type, json) in edits)
         {
-            stream.Write(EncodeJournalRecord(type, json));
-            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(++sequence)));
+            sequence++;
+            stream.Write(EncodeJournalRecord(type, $"{{\"edit_id\":{sequence},\"edit\":{json}}}"));
+            stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(sequence)));
         }
 
         return stream.ToArray();
@@ -776,37 +694,22 @@ public sealed class PantsManifestSpecDriftTests
 
     static byte[] EncodeJournalRecord(byte recordType, string json)
     {
-        var payload = Encoding.UTF8.GetBytes(json);
+        var payload = MetadataFrameCodec.Encode(2, Encoding.UTF8.GetBytes(json));
         var record = new byte[1 + sizeof(uint) + payload.Length + sizeof(uint)];
         record[0] = recordType;
         BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), (uint)payload.Length);
         payload.CopyTo(record.AsSpan(5));
-        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(5 + payload.Length), Crc32(payload));
+        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(5 + payload.Length), DiskFormat.Crc32C(payload));
         return record;
-    }
-
-    static uint Crc32(ReadOnlySpan<byte> bytes)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in bytes)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
-            }
-        }
-
-        return ~crc;
     }
 
     static async Task WriteEmptyFixtureAsync(string path)
     {
         await File.WriteAllTextAsync(
             Path.Combine(path, "FORMAT"),
-            "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(path, "manifest.json"),
+            "midge-format-version=9\n");
+        await Format9TestMetadata.WriteAsync(
+            Path.Combine(path, "manifest.snapshot.json"),
             """
             {
               "last_persisted_sequence": 0,

@@ -193,6 +193,19 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
         }
     }
 
+    public InMemoryAzureBlobHandler CopyCommittedImage()
+    {
+        var image = new InMemoryAzureBlobHandler();
+        lock (_gate)
+        {
+            foreach (var (key, value) in _objects)
+            {
+                image._objects.Add(key, (value.Data.ToArray(), value.Version));
+            }
+        }
+        return image;
+    }
+
     public string[] GetObjectPaths(string pathFragment)
     {
         lock (_gate)
@@ -201,6 +214,24 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 .Where(path => path.Contains(pathFragment, StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)
                 .ToArray();
+        }
+    }
+
+    public byte[] GetObjectBytes(string pathFragment)
+    {
+        lock (_gate)
+        {
+            return _objects.Single(pair => pair.Key.Contains(pathFragment, StringComparison.Ordinal)).Value.Data.ToArray();
+        }
+    }
+
+    public void ReplaceObjectBytes(string pathFragment, byte[] bytes)
+    {
+        lock (_gate)
+        {
+            var key = _objects.Keys.Single(path => path.Contains(pathFragment, StringComparison.Ordinal));
+            var current = _objects[key];
+            _objects[key] = (bytes.ToArray(), current.Version + 1);
         }
     }
 
@@ -229,10 +260,12 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     TaskCompletionSource? _leaseWriteGate;
     TaskCompletionSource _leaseWriteBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    bool _leaseWriteIgnoresCancellation;
 
     /// <summary>Holds every write to the primary lease object until <see cref="ReleaseLeaseWrites" />.</summary>
-    public void BlockLeaseWrites()
+    public void BlockLeaseWrites(bool ignoreCancellation = false)
     {
+        _leaseWriteIgnoresCancellation = ignoreCancellation;
         _leaseWriteBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Interlocked.CompareExchange(
             ref _leaseWriteGate,
@@ -293,7 +326,15 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             Volatile.Read(ref _leaseWriteGate) is { } leaseGate)
         {
             _leaseWriteBlocked.TrySetResult();
-            await leaseGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (_leaseWriteIgnoresCancellation)
+            {
+                await leaseGate.Task.ConfigureAwait(false);
+                cancellationToken = CancellationToken.None;
+            }
+            else
+            {
+                await leaseGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (request.Method == HttpMethod.Get &&

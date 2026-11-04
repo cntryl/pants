@@ -1,5 +1,6 @@
 using System.Globalization;
 using BenchmarkDotNet.Running;
+using Cntryl.Pants.Checkpoint;
 using Cntryl.Pants.Reporting;
 using Cntryl.Pants.Tier4;
 
@@ -9,6 +10,12 @@ static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "checkpoint-campaign" or "checkpoint-cell" or "checkpoint-readback" or
+            "checkpoint-build-identity" or "checkpoint-readback-internal")
+        {
+            return await CheckpointCampaignCommand.RunAsync(args).ConfigureAwait(false);
+        }
+
         if (args is ["practical", ..])
         {
             return PracticalBenchmarkRunner.Run(args.Skip(1).ToArray());

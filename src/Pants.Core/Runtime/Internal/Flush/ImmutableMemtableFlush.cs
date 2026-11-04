@@ -3,6 +3,7 @@ namespace Cntryl.Pants.Runtime.Internal.Flush;
 sealed class ImmutableMemtableFlush(FrozenMemtableFlush frozen)
 {
     TaskCompletionSource<Exception?> _attemptCompletion = CreateCompletion();
+    long? _publicationStartedTimestamp;
 
     public FrozenMemtableFlush Frozen { get; } = frozen;
 
@@ -19,6 +20,14 @@ sealed class ImmutableMemtableFlush(FrozenMemtableFlush frozen)
     public bool PersistenceAnomaly { get; set; }
 
     public Task? RunningTask { get; private set; }
+
+    public void RecordPublicationAccepted(long startedTimestamp) =>
+        _publicationStartedTimestamp ??= startedTimestamp;
+
+    public TimeSpan? GetPublicationElapsed(TimeProvider timeProvider) =>
+        _publicationStartedTimestamp is { } started
+            ? timeProvider.GetElapsedTime(started)
+            : null;
 
     public void BeginAttempt()
     {

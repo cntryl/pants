@@ -7,6 +7,10 @@ sealed class WalRecoveryStateMachine : IDisposable
 
     readonly StorageBudgetLedger? _ledger;
     readonly string _scratchDirectory;
+    readonly long? _maximumReplayableTransactionBytes;
+    readonly Dictionary<(ulong WriterEpoch, ulong TransactionId), long> _pendingTransactions = [];
+    long _pendingBytes;
+    ulong? _writerEpoch;
 
     bool _disposed;
 
@@ -18,11 +22,13 @@ sealed class WalRecoveryStateMachine : IDisposable
     ///     database's own cleanup owns them. <paramref name="ledger" />, when a local-storage budget
     ///     applies, is charged for every spooled byte until its transaction resolves.
     /// </summary>
-    public WalRecoveryStateMachine(string scratchDirectory, StorageBudgetLedger? ledger = null)
+    public WalRecoveryStateMachine(string scratchDirectory, StorageBudgetLedger? ledger = null,
+        long? maximumReplayableTransactionBytes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scratchDirectory);
         _scratchDirectory = scratchDirectory;
         _ledger = ledger;
+        _maximumReplayableTransactionBytes = maximumReplayableTransactionBytes;
     }
 
     public void Dispose()
@@ -49,12 +55,25 @@ sealed class WalRecoveryStateMachine : IDisposable
         ArgumentNullException.ThrowIfNull(apply);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        if (_maximumReplayableTransactionBytes is not null && _writerEpoch != record.WriterEpoch)
+        {
+            foreach (var abandoned in _openTransactions.Values)
+            {
+                abandoned.Dispose();
+            }
+            _openTransactions.Clear();
+            _pendingTransactions.Clear();
+            _pendingBytes = 0;
+            _writerEpoch = record.WriterEpoch;
+        }
+
         if (record.Operation == WalOperation.TransactionBatch)
         {
             var mutations = WalCodec.DecodeTransactionBatch(
                 record,
+                _maximumReplayableTransactionBytes ?? WalCodec.DefaultTransactionBatchReplayBudget,
                 out var commitSequence,
-                out _);
+                out _, configuredReplayLimit: _maximumReplayableTransactionBytes is not null);
             foreach (var mutation in mutations)
             {
                 apply(mutation, commitSequence);
@@ -85,6 +104,13 @@ sealed class WalRecoveryStateMachine : IDisposable
                 (record.WriterEpoch, transactionId),
                 out var spool))
         {
+            if (record.ColumnFamilyId != spool.ColumnFamilyId)
+            {
+                throw new PantsCorruptionException("Split WAL transaction member belongs to another column family.");
+            }
+
+            ReservePending((record.WriterEpoch, transactionId),
+                288L + record.Key.LongLength + (record.Value?.LongLength ?? 0) + (record.RangeEnd?.LongLength ?? 0));
             spool.Append(record);
             return;
         }
@@ -105,7 +131,8 @@ sealed class WalRecoveryStateMachine : IDisposable
             throw new StorageException("WAL contains a duplicate transaction begin record.");
         }
 
-        _openTransactions.Add(key, new WalRecoverySpool(_scratchDirectory, _ledger));
+        ReservePending(key, 128);
+        _openTransactions.Add(key, new WalRecoverySpool(_scratchDirectory, _ledger, record.ColumnFamilyId));
     }
 
     void AcceptCommit(
@@ -120,10 +147,33 @@ sealed class WalRecoveryStateMachine : IDisposable
             return;
         }
 
+        if (_pendingTransactions.Remove((record.WriterEpoch, transactionId), out var pendingBytes))
+        {
+            _pendingBytes -= pendingBytes;
+        }
         using (spool)
         {
+            if (record.ColumnFamilyId != spool.ColumnFamilyId)
+            {
+                throw new PantsCorruptionException("Split WAL transaction commits in another column family.");
+            }
+
             spool.Replay(spooled => ApplyMutation(spooled, record.Sequence, apply));
         }
+    }
+
+    void ReservePending((ulong WriterEpoch, ulong TransactionId) key, long bytes)
+    {
+        if (_maximumReplayableTransactionBytes is not { } limit)
+        {
+            return;
+        }
+        if (bytes > limit - _pendingBytes)
+        {
+            throw new PantsResourceLimitException("Uncommitted WAL transactions exceed the configured replay buffer limit.");
+        }
+        _pendingBytes += bytes;
+        _pendingTransactions[key] = _pendingTransactions.GetValueOrDefault(key) + bytes;
     }
 
     static void ApplyMutation(

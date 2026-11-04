@@ -17,6 +17,15 @@ static class CompactionDebt
             return false;
         }
 
+        for (uint level = 1; level < configuration.MaximumLevels; level++)
+        {
+            if (CompactionLayout.RepairComponents(
+                    familyFiles.Where(file => file.Level == level).ToArray()).Length != 0)
+            {
+                return false;
+            }
+        }
+
         for (uint level = 1; level < configuration.MaximumLevels - 1; level++)
         {
             var levelSize = familyFiles

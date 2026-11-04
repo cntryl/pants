@@ -10,6 +10,9 @@ sealed class ScanBounds
         StartInclusive = Maximum(Copy(query.StartInclusive), Prefix);
         EndExclusive = Minimum(Copy(query.EndExclusive), PrefixSuccessor(Prefix));
         Limit = query.Limit ?? int.MaxValue;
+        CacheFill = query.CacheFill ?? (query.Limit is <= 64
+            ? PantsCacheFill.Normal
+            : PantsCacheFill.Bypass);
         if (!Enum.IsDefined(Direction))
         {
             throw PantsException.InvalidArgument("Scan direction is invalid.");
@@ -18,6 +21,11 @@ sealed class ScanBounds
         if (Limit < 0)
         {
             throw PantsException.InvalidArgument("Scan limit must not be negative.");
+        }
+
+        if (!Enum.IsDefined(CacheFill))
+        {
+            throw PantsException.InvalidArgument("Scan cache-fill policy is invalid.");
         }
 
         if (query.StartInclusive is { } start && query.EndExclusive is { } end &&
@@ -37,6 +45,8 @@ sealed class ScanBounds
     public PantsScanDirection Direction { get; }
 
     public int Limit { get; }
+
+    public PantsCacheFill CacheFill { get; }
 
     public bool Matches(ReadOnlySpan<byte> key) =>
         (StartInclusive is null || key.SequenceCompareTo(StartInclusive) >= 0) &&

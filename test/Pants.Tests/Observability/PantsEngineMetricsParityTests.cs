@@ -41,6 +41,7 @@ public sealed class PantsEngineMetricsParityTests
         transaction.Put(
             TestBytes.FromString($"key-{round}"),
             TestBytes.FromString("value"));
+        transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         await transaction.CommitAsync(PantsWriteOptions.Sync);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }

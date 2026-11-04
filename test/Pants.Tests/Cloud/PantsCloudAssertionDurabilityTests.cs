@@ -5,11 +5,8 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class PantsCloudAssertionDurabilityTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ShouldWaitForPendingCloudAsyncWriteGivenNonWritingCloudStrictCommit(
-        bool assertValue)
+    [Fact]
+    public async Task ShouldWaitForPendingCloudAsyncWriteGivenAssertionOnlyCloudStrictCommit()
     {
         // Arrange
         using var directory = new TemporaryDirectory();
@@ -33,14 +30,11 @@ public sealed class PantsCloudAssertionDurabilityTests
 
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(before.WalCloudDurableSequence < before.CurrentSequence);
-        var walBefore = PositionalFile.ReadAllBytes(Path.Combine(directory.Path, "wal", "wal.log"));
+        var walBefore = PositionalFile.ReadAllBytes(WalTestFiles.ActivePath(directory.Path));
         await using var confirming = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
-        if (assertValue)
-        {
-            confirming.AssertValue("key"u8.ToArray(), "value"u8.ToArray());
-        }
+        confirming.AssertValue("key"u8.ToArray(), "value"u8.ToArray());
 
         // Act
         var commit = confirming.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
@@ -66,7 +60,11 @@ public sealed class PantsCloudAssertionDurabilityTests
             Path.Combine(directory.Path, "cloud_store", "wal", "epochs"),
             "*.wal",
             SearchOption.AllDirectories));
-        Assert.Equal(walBefore, await File.ReadAllBytesAsync(publishedWal));
+        var publishedBytes = await File.ReadAllBytesAsync(publishedWal);
+        Assert.Equal(walBefore, publishedBytes[..walBefore.Length]);
+        var publishedRecords = new List<WalRecord>();
+        WalFrameReader.Visit(publishedBytes, (record, _) => publishedRecords.Add(record));
+        Assert.Single(publishedRecords);
     }
 
     [Theory]
@@ -91,7 +89,7 @@ public sealed class PantsCloudAssertionDurabilityTests
 
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.CurrentSequence, before.WalCloudDurableSequence);
-        var activeWalPath = Path.Combine(directory.Path, "wal", "wal.log");
+        var activeWalPath = WalTestFiles.ActivePath(directory.Path);
         var walBefore = PositionalFile.ReadAllBytes(activeWalPath);
         await using var confirming = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -110,7 +108,9 @@ public sealed class PantsCloudAssertionDurabilityTests
         Assert.Equal(before.CloudAsyncWalSegmentsSealed, after.CloudAsyncWalSegmentsSealed);
         Assert.Equal(before.CloudAsyncWalUploadsStarted, after.CloudAsyncWalUploadsStarted);
         Assert.Equal(walBefore, PositionalFile.ReadAllBytes(activeWalPath));
-        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Single(ledger.Members);
+        Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(ledger.ActivePath).Length);
     }
 
     [Fact]

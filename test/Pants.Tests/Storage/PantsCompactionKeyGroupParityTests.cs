@@ -286,7 +286,7 @@ public sealed class PantsCompactionKeyGroupParityTests
         sequence);
 
     static CompactionPlan Plan(
-        long? horizon = null,
+        ulong? horizon = null,
         bool pointGcEligible = true,
         bool rangeGcEligible = true) => new(
         0,

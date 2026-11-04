@@ -3,6 +3,7 @@ namespace Cntryl.Pants.Storage.Internal.Cache;
 sealed class SstReaderCache : IDisposable
 {
     readonly long _budgetBytes;
+    readonly SstReadResources? _readResources;
     readonly object _gate = new();
     readonly LinkedList<ReaderEntry> _idleOrder = [];
     readonly Func<string, SstReader> _openReader;
@@ -56,6 +57,38 @@ sealed class SstReaderCache : IDisposable
     internal SstReaderCache(long budgetBytes, SstReaderHandleBudget openReaderHandleBudget)
         : this(budgetBytes, openReaderHandleBudget, SstReader.Open)
     {
+    }
+
+    public SstReaderCache(SstReadResources resources)
+        : this(resources.MetadataBudget.Limit, resources.HandleBudget, path =>
+        {
+            using var admission = resources.EnterOpen(Path.GetFileName(path));
+            return SstReader.Open(path, null, resources.MetadataBudget);
+        })
+    {
+        _readResources = resources;
+    }
+
+    public bool TryEvictIdle()
+    {
+        lock (_gate)
+        {
+            var node = _idleOrder.First;
+            while (node is not null)
+            {
+                var entry = node.Value;
+                if (entry.References == 0 && _slots.TryGetValue(entry.File, out var slot) &&
+                    ReferenceEquals(slot.Reader, entry))
+                {
+                    slot.Reader = null;
+                    Retire(entry);
+                    RemoveUnusedSlot(entry.File, slot);
+                    return true;
+                }
+                node = node.Next;
+            }
+            return false;
+        }
     }
 
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
@@ -226,7 +259,13 @@ sealed class SstReaderCache : IDisposable
     }
 
     /// <summary>Opens an uncached reader under the same handle limit as cached readers.</summary>
-    public SstReader OpenUncached(string path)
+    public SstReader OpenUncached(string path) => OpenUncachedCore(path, true);
+
+    // Recovery validates one immutable file at a time before runtime read resources become an
+    // admission boundary. It keeps the same physical handle limit and never caches this reader.
+    public SstReader OpenForRecovery(string path) => OpenUncachedCore(path, false);
+
+    SstReader OpenUncachedCore(string path, bool useReadResources)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         IDisposable handleReservation;
@@ -241,7 +280,10 @@ sealed class SstReaderCache : IDisposable
         var openingCompleted = false;
         try
         {
-            var opened = SstReader.Open(path, handleReservation);
+            using var admission = useReadResources ? _readResources?.EnterOpen(Path.GetFileName(path)) : null;
+            var opened = _readResources is null || !useReadResources
+                ? SstReader.Open(path, handleReservation)
+                : SstReader.Open(path, handleReservation, _readResources.MetadataBudget);
             reader = opened;
             lock (_gate)
             {

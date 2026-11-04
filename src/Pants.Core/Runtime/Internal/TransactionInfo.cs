@@ -5,7 +5,7 @@ sealed class TransactionInfo : ISnapshotPin
     public TransactionInfo(
         long transactionId,
         PantsTransactionMode mode,
-        long beginSequence,
+        ulong beginSequence,
         DateTimeOffset startedAtUtc,
         DatabaseVersion snapshot)
     {
@@ -22,7 +22,7 @@ sealed class TransactionInfo : ISnapshotPin
 
     public long SnapshotId => TransactionId;
 
-    public long BeginSequence { get; }
+    public ulong BeginSequence { get; }
 
     public DateTimeOffset StartedAtUtc { get; }
 

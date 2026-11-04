@@ -1,5 +1,7 @@
 # Current Midge baseline review
 
+> Current writers target [LSM spec FORMAT 9](LsmSpecFormat9.md). This review records an older baseline.
+
 This is the historical qualification record for the pin below, not a current
 certificate of complete behavior parity. The
 [2026-09-04 gap analysis](MidgeBehaviorGapAnalysis.md) identifies stale test

@@ -24,9 +24,7 @@ public sealed class ProviderCloudHydrationLeaseTests
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var controlStore = new SnapshotConsistencyCloudObjectStore();
-        controlStore.Seed(
-            PantsCloudObjectLayout.MetadataPrefix + "FORMAT",
-            "format"u8);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial());
         var validationCount = 0;
 
         async ValueTask ValidateRemoteLeaseAsync(CancellationToken cancellationToken)
@@ -68,7 +66,8 @@ public sealed class ProviderCloudHydrationLeaseTests
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var walStore = new SnapshotConsistencyCloudObjectStore();
-        var segmentBytes = new byte[] { 0xFF };
+        var sealedSegment = TestWalSegment.Create(1, epoch, 1, "1.wal", [0xFF]);
+        var segmentBytes = sealedSegment.Bytes;
         var segmentKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 1);
         walStore.Seed(segmentKey, segmentBytes);
         var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -77,14 +76,9 @@ public sealed class ProviderCloudHydrationLeaseTests
                 FencingEpoch = epoch,
                 Segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>
                 {
-                    [1] = new()
+                    [1] = TestWalSegment.Publish(sealedSegment) with
                     {
-                        SegmentId = 1,
-                        WriterEpoch = epoch,
-                        MaximumSequence = 1,
-                        SizeBytes = checked((ulong)segmentBytes.Length),
-                        ContentCrc32C = uint.MaxValue,
-                        ObjectKey = segmentKey
+                        ContentCrc32C = DiskFormat.Crc32C(segmentBytes) ^ 1U
                     }
                 }
             },

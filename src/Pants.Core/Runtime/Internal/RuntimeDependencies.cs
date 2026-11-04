@@ -13,9 +13,15 @@ sealed class RuntimeDependencies
         IPantsClock? leaseClock = null,
         long? hybridLocalStorageBudgetBytes = null,
         TimeSpan? workerDisposalTimeout = null,
-        long? initialMemorySequence = null,
-        TimeSpan? cloudWalRetirementQuantum = null)
+        ulong? initialMemorySequence = null,
+        TimeSpan? cloudWalRetirementQuantum = null,
+        Action<RecoveryWorkCompleted>? recoveryWorkCompleted = null,
+        Action<StartupEvent>? startupObserver = null,
+        Action<long>? commitAdmittedObserver = null)
     {
+        RecoveryWorkCompleted = recoveryWorkCompleted;
+        StartupObserver = startupObserver;
+        CommitAdmittedObserver = commitAdmittedObserver;
         InitialMemorySequence = initialMemorySequence;
         CloudWalRetirementQuantum = cloudWalRetirementQuantum;
         WorkerDisposalTimeout = workerDisposalTimeout;
@@ -45,7 +51,7 @@ sealed class RuntimeDependencies
     }
 
     /// <summary>Seeds the in-memory runtime sequence so tests can reach sequence-space exhaustion.</summary>
-    public long? InitialMemorySequence { get; }
+    public ulong? InitialMemorySequence { get; }
 
     public IFailpointHandler Failpoints { get; }
 
@@ -72,6 +78,24 @@ sealed class RuntimeDependencies
     public long? HybridLocalStorageBudgetBytes { get; }
 
     public StartupPhaseRecorder StartupPhases { get; }
+
+    public Action<RecoveryWorkCompleted>? RecoveryWorkCompleted { get; }
+
+    public Action<StartupEvent>? StartupObserver { get; }
+
+    public Action<long>? CommitAdmittedObserver { get; }
+
+    public void ObserveStartup(StartupEvent startupEvent)
+    {
+        try
+        {
+            StartupObserver?.Invoke(startupEvent);
+        }
+        catch (Exception)
+        {
+            // Diagnostic observers cannot interrupt ownership transfer or resource cleanup.
+        }
+    }
 
     public static RuntimeDependencies Default { get; } = new();
 

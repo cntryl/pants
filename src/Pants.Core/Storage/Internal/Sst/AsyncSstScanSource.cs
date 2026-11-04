@@ -1,10 +1,8 @@
 namespace Cntryl.Pants.Storage.Internal.Sst;
 
 /// <summary>
-///     One SST's contribution to a scan merge. Its metadata is read when the scan starts, but the
-///     reader is released straight away and reacquired only when the merge reaches the file, so a
-///     scan over many files holds handles for the files it is actually reading rather than all of
-///     them.
+///     One SST contribution to a merge. Accounted metadata shares the physical cached reader.
+///     Trusted nonoverlapping runs defer opening until the merge reaches their manifest bounds.
 /// </summary>
 sealed class AsyncSstScanSource : IAsyncDisposable
 {
@@ -12,9 +10,14 @@ sealed class AsyncSstScanSource : IAsyncDisposable
     readonly byte[]? _endExclusive;
     readonly Func<CancellationToken, ValueTask<AsyncSstReader>> _reopenReader;
     readonly ResourceBudget? _resourceBudget;
+    readonly SstScanBlockCache? _blockCache;
     IDisposable? _readerMetadataReservation;
+    AsyncSstReader? _metadataReader;
+    bool _exhausted;
     readonly byte[]? _startInclusive;
     int _dataBlocksRead;
+    int _blockCacheHits;
+    int _blockCacheMisses;
     AsyncSstBlockIterator? _iterator;
 
     AsyncSstScanSource(
@@ -25,13 +28,15 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         byte[]? startInclusive,
         byte[]? endExclusive,
         ResourceBudget? resourceBudget,
-        IDisposable? readerMetadataReservation)
+        IDisposable? readerMetadataReservation,
+        SstScanBlockCache? blockCache)
     {
         _reopenReader = reopenReader;
         _direction = direction;
         _startInclusive = startInclusive;
         _endExclusive = endExclusive;
         _resourceBudget = resourceBudget;
+        _blockCache = blockCache;
         _readerMetadataReservation = readerMetadataReservation;
         SmallestKey = reader.SmallestKey ??
                       throw new PantsCorruptionException($"SST '{file.Name}' has no smallest key.");
@@ -41,22 +46,26 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         CandidateBlockCount = reader.CountOverlappingDataBlocks(startInclusive, endExclusive);
     }
 
-    public int CandidateBlockCount { get; }
+    public int CandidateBlockCount { get; private set; }
 
     public SstEntry Current => _iterator?.Current ??
                                throw new InvalidOperationException("The scan source has not advanced.");
 
     public int DataBlocksRead => checked(_dataBlocksRead + (_iterator?.DataBlocksRead ?? 0));
 
+    public int BlockCacheHits => checked(_blockCacheHits + (_iterator?.BlockCacheHits ?? 0));
+
+    public int BlockCacheMisses => checked(_blockCacheMisses + (_iterator?.BlockCacheMisses ?? 0));
+
     public byte[] SmallestKey { get; }
 
     public byte[] LargestKey { get; }
 
-    public IReadOnlyList<RangeTombstone> RangeTombstones { get; }
+    public IReadOnlyList<RangeTombstone> RangeTombstones { get; private set; }
 
     /// <summary>
-    ///     Reads <paramref name="reader" />'s metadata and releases it; the source reopens it
-    ///     through <paramref name="reopenReader" /> when the merge first advances it.
+    ///     Keeps the accounted reader lease. Standalone readers without an owner retain only
+    ///     separately admitted scan metadata and reopen through <paramref name="reopenReader" />.
     /// </summary>
     public static async ValueTask<AsyncSstScanSource> CreateAsync(
         FileMeta file,
@@ -65,13 +74,16 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         PantsScanDirection direction,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget,
+        SstScanBlockCache? blockCache = null)
     {
         IDisposable? readerMetadataReservation = null;
         AsyncSstScanSource? source = null;
         try
         {
-            readerMetadataReservation = resourceBudget?.Reserve(reader.EstimatedScanMetadataBytes);
+            readerMetadataReservation = reader.HasMetadataReservation
+                ? null
+                : resourceBudget?.Reserve(reader.EstimatedScanMetadataBytes);
             source = new AsyncSstScanSource(
                 file,
                 reader,
@@ -80,9 +92,17 @@ sealed class AsyncSstScanSource : IAsyncDisposable
                 startInclusive,
                 endExclusive,
                 resourceBudget,
-                readerMetadataReservation);
+                readerMetadataReservation,
+                blockCache);
             readerMetadataReservation = null;
-            await reader.DisposeAsync().ConfigureAwait(false);
+            if (reader.HasMetadataReservation)
+            {
+                source._metadataReader = reader;
+            }
+            else
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+            }
             return source;
         }
         catch
@@ -98,6 +118,29 @@ sealed class AsyncSstScanSource : IAsyncDisposable
         }
     }
 
+    AsyncSstScanSource(
+        FileMeta file,
+        Func<CancellationToken, ValueTask<AsyncSstReader>> reopenReader,
+        PantsScanDirection direction, byte[]? startInclusive, byte[]? endExclusive,
+        ResourceBudget? resourceBudget, SstScanBlockCache? blockCache)
+    {
+        _reopenReader = reopenReader;
+        _direction = direction;
+        _startInclusive = startInclusive;
+        _endExclusive = endExclusive;
+        _resourceBudget = resourceBudget;
+        _blockCache = blockCache;
+        SmallestKey = file.SmallestKey!;
+        LargestKey = file.LargestKey!;
+        RangeTombstones = [];
+    }
+
+    public static AsyncSstScanSource CreateLazy(
+        FileMeta file, Func<CancellationToken, ValueTask<AsyncSstReader>> reopenReader,
+        PantsScanDirection direction, byte[]? startInclusive, byte[]? endExclusive,
+        ResourceBudget? resourceBudget, SstScanBlockCache? blockCache = null) =>
+        new(file, reopenReader, direction, startInclusive, endExclusive, resourceBudget, blockCache);
+
     public async ValueTask DisposeAsync()
     {
         var iterator = _iterator;
@@ -107,28 +150,48 @@ sealed class AsyncSstScanSource : IAsyncDisposable
             if (iterator is not null)
             {
                 _dataBlocksRead = checked(_dataBlocksRead + iterator.DataBlocksRead);
+                _blockCacheHits = checked(_blockCacheHits + iterator.BlockCacheHits);
+                _blockCacheMisses = checked(_blockCacheMisses + iterator.BlockCacheMisses);
                 await iterator.DisposeAsync().ConfigureAwait(false);
             }
         }
         finally
         {
+            if (_metadataReader is { } metadataReader)
+            {
+                _metadataReader = null;
+                await metadataReader.DisposeAsync().ConfigureAwait(false);
+            }
             Interlocked.Exchange(ref _readerMetadataReservation, null)?.Dispose();
         }
     }
 
     public async ValueTask<bool> MoveNextAsync(CancellationToken cancellationToken)
     {
+        if (_exhausted)
+        {
+            return false;
+        }
         if (_iterator is null)
         {
-            var reader = await _reopenReader(cancellationToken).ConfigureAwait(false);
+            _metadataReader ??= await _reopenReader(cancellationToken).ConfigureAwait(false);
+            var reader = _metadataReader.Share();
+            RangeTombstones = reader.RangeTombstones;
+            CandidateBlockCount = reader.CountOverlappingDataBlocks(_startInclusive, _endExclusive);
             _iterator = new AsyncSstBlockIterator(
                 reader,
                 _direction,
                 _startInclusive,
                 _endExclusive,
-                _resourceBudget);
+                reader.HasMetadataReservation ? null : _resourceBudget,
+                _blockCache);
         }
 
-        return await _iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false);
+        if (await _iterator.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return true;
+        }
+        _exhausted = true;
+        return false;
     }
 }

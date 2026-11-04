@@ -18,7 +18,7 @@ public class MemtableBenchmarks : Tier1Benchmark
         var builder = ImmutableSortedDictionary.CreateBuilder<byte[], CellState>(ByteArrayComparer.Instance);
         for (var index = 0; index < 1_000; index++)
         {
-            builder.Add(BenchmarkData.Key(index), new CellState(_value, index, null));
+            builder.Add(BenchmarkData.Key(index), new CellState(_value, (ulong)index, null));
         }
 
         _memtable = builder.ToImmutable();

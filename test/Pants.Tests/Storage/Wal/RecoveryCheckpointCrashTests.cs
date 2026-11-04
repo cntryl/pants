@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -41,7 +42,8 @@ public sealed class RecoveryCheckpointCrashTests
             : 1;
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(path, storage == "simulated-cloud").WithMemtableLimits(16 * 1024),
-            new RuntimeDependencies(new CrashAfterCheckpointHandler(readyPath, failpoint, requiredCount)));
+            new RuntimeDependencies(new CrashAfterCheckpointHandler(path, readyPath,
+                storage == "simulated-cloud", failpoint, requiredCount)));
 
         Assert.Fail("Recovery finished without reaching the crash checkpoint.");
     }
@@ -99,8 +101,9 @@ public sealed class RecoveryCheckpointCrashTests
         }
         Assert.Equal(walBytesBefore, WalBytes(databasePath));
 
-        await WaitForLockReleaseAsync(databasePath);
-        await ExpireCrashedLeaseAsync(databasePath);
+        var captured = Assert.IsType<CrashChildProcess.WriterLeaseSnapshot>(
+            JsonSerializer.Deserialize<CrashChildProcess.WriterLeaseSnapshot>(await File.ReadAllTextAsync(readyPath)));
+        await CrashChildProcess.ExpireStoppedWriterLeaseAsync(databasePath, captured);
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(databasePath, simulatedCloud));
         var second = Assert.IsType<IPantsColumnFamily>(
             await reopened.ColumnFamilies.GetAsync(SecondFamily.Name),
@@ -145,8 +148,9 @@ public sealed class RecoveryCheckpointCrashTests
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(databasePath, "sst"), "*.sst"));
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(databasePath, "cloud_store", "sst"), "*.sst"));
 
-        await WaitForLockReleaseAsync(databasePath);
-        await ExpireCrashedLeaseAsync(databasePath);
+        var captured = Assert.IsType<CrashChildProcess.WriterLeaseSnapshot>(
+            JsonSerializer.Deserialize<CrashChildProcess.WriterLeaseSnapshot>(await File.ReadAllTextAsync(readyPath)));
+        await CrashChildProcess.ExpireStoppedWriterLeaseAsync(databasePath, captured);
         await using var reopened = await PantsDatabase.OpenAsync(CreateOptions(databasePath, true));
         var second = Assert.IsType<IPantsColumnFamily>(
             await reopened.ColumnFamilies.GetAsync(SecondFamily.Name),
@@ -174,6 +178,9 @@ public sealed class RecoveryCheckpointCrashTests
             var value = await reader.GetAsync(TestBytes.FromString($"key-{index:D3}"));
             Assert.NotNull(value);
             Assert.Equal(ValueFor(prefix, index), value.Value.ToArray());
+            var peer = await reader.GetAsync(TestBytes.FromString($"peer-{index:D3}"));
+            Assert.NotNull(peer);
+            Assert.Equal(ValueFor(prefix, index), peer.Value.ToArray());
         }
 
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
@@ -183,12 +190,12 @@ public sealed class RecoveryCheckpointCrashTests
             count++;
         }
 
-        Assert.Equal(TransactionCount, count);
+        Assert.Equal(TransactionCount * 2, count);
     }
 
     /// <summary>
-    ///     Each transaction writes the same key to both families in one WAL batch, so a recovery that
-    ///     made only one family's half visible would show up as a missing or mismatched value.
+    ///     Each family receives its own legal two-key transaction. Checkpoints may separate family
+    ///     frontiers, but must not lose either key or replay any transaction twice.
     /// </summary>
     static void WriteUnflushedCrossFamilyTransactions(string root)
     {
@@ -197,16 +204,18 @@ public sealed class RecoveryCheckpointCrashTests
         store.CreateColumnFamily(SecondFamily);
         for (var index = 0; index < TransactionCount; index++)
         {
-            var key = TestBytes.FromString($"key-{index:D3}");
-            _ = store.AppendCommit(
-                CreateCommitPayload(
+            foreach (var family in new[] { DefaultFamily, SecondFamily })
+            {
+                _ = store.AppendCommit(
+                    CreateCommitPayload(
+                        state,
+                        [
+                            CreatePut(0, family, TestBytes.FromString($"key-{index:D3}"), ValueFor(family.Name, index)),
+                            CreatePut(1, family, TestBytes.FromString($"peer-{index:D3}"), ValueFor(family.Name, index))
+                        ]),
                     state,
-                    [
-                        CreatePut(0, DefaultFamily, key, ValueFor("default", index)),
-                        CreatePut(1, SecondFamily, key, ValueFor("second", index))
-                    ]),
-                state,
-                PantsDurability.Sync);
+                    PantsDurability.Sync);
+            }
         }
     }
 
@@ -253,48 +262,10 @@ public sealed class RecoveryCheckpointCrashTests
         Directory.GetFiles(Path.Combine(root, "wal"))
             .Sum(static path => new FileInfo(path).Length);
 
-    static async Task WaitForLockReleaseAsync(string path)
-    {
-        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
-        while (true)
-        {
-            try
-            {
-                await using var stream = new FileStream(
-                    Path.Combine(path, "LOCK"),
-                    FileMode.Open,
-                    FileAccess.ReadWrite,
-                    FileShare.None);
-                return;
-            }
-            catch (IOException) when (!timeout.IsCancellationRequested)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
-            }
-        }
-    }
-
-    static async Task ExpireCrashedLeaseAsync(string path)
-    {
-        var leasePath = Path.Combine(path, ".midge_leader");
-        var lines = await File.ReadAllLinesAsync(leasePath);
-        for (var index = 0; index < lines.Length; index++)
-        {
-            if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
-            {
-                lines[index] = "acquired_at: 1970-01-01T00:00:00Z";
-            }
-        }
-
-        // The edit invalidates the record checksum, so the expired copy carries none.
-        await File.WriteAllLinesAsync(
-            leasePath,
-            lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
-        File.Delete(Path.Combine(path, ".midge_leader.lock"));
-    }
-
     sealed class CrashAfterCheckpointHandler(
+        string databasePath,
         string readyPath,
+        bool simulatedCloud,
         Failpoint targetFailpoint,
         int requiredCount) : IFailpointHandler
     {
@@ -307,7 +278,9 @@ public sealed class RecoveryCheckpointCrashTests
                 return;
             }
 
-            File.WriteAllText(readyPath, "ready");
+            var captured = CrashChildProcess.CaptureWriterLeaseAsync(databasePath, simulatedCloud)
+                .GetAwaiter().GetResult();
+            File.WriteAllText(readyPath, JsonSerializer.Serialize(captured));
             using var process = Process.GetCurrentProcess();
             try
             {

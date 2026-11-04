@@ -90,7 +90,7 @@ public sealed class MidgeWalRetentionRegressionsParityTests
             if (pin is Pin.EmptyRange)
             {
                 transaction.Put("r"u8.ToArray(), "kept"u8.ToArray());
-                transaction.DeleteRange("r"u8.ToArray(), "r"u8.ToArray());
+                Assert.Throws<PantsInvalidArgumentException>(() => transaction.DeleteRange("r"u8.ToArray(), "r"u8.ToArray()));
             }
 
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
@@ -154,15 +154,15 @@ public sealed class MidgeWalRetentionRegressionsParityTests
             "cloud_store",
             "wal",
             "publication-catalog.v1.json")));
-        return catalog.RootElement.GetProperty("segments").EnumerateObject().Count();
+        return catalog.RootElement.GetProperty("segments").GetArrayLength();
     }
 
     static JsonElement[] ReadProviderCatalogSegments(InMemoryAzureBlobHandler handler)
     {
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
-        return catalog.RootElement.GetProperty("segments").EnumerateObject()
-            .Select(static property => property.Value.Clone())
+        return catalog.RootElement.GetProperty("segments").EnumerateArray()
+            .Select(static segment => segment.Clone())
             .ToArray();
     }
 

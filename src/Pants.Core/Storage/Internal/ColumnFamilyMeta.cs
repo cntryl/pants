@@ -1,9 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace Cntryl.Pants.Storage.Internal;
 
 sealed class ColumnFamilyMeta
 {
+    [JsonRequired]
     public uint Id { get; set; }
 
+    [JsonRequired]
     public string Name { get; set; } = string.Empty;
 
     public ulong CreatedAt { get; set; }

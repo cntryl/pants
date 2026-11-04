@@ -28,6 +28,7 @@ public sealed class MidgeEngineGarbageCollectionParityTests
                     TestBytes.FromString("v1"));
             }
 
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(family);
         }

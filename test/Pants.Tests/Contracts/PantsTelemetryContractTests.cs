@@ -100,7 +100,7 @@ public sealed class PantsTelemetryContractTests
             Assert.Equal(0, failed.CloudAsyncWalUploadsCompleted);
             Assert.True(failed.CloudAsyncWalUploadsFailed >= 1);
             Assert.Equal(1, failed.PendingCloudUploads);
-            Assert.Equal(0, failed.WalCloudDurableSequence);
+            Assert.Equal(0UL, failed.WalCloudDurableSequence);
 
             failpoints.AllowSuccess();
             var recovered = await WaitForMetricsAsync(
@@ -357,8 +357,10 @@ public sealed class PantsTelemetryContractTests
         }
 
         var afterScan = await database.Diagnostics.GetReadPathDiagnosticsAsync();
-        Assert.Equal(beforeScan.SstBlockCacheHits, afterScan.SstBlockCacheHits);
-        Assert.Equal(beforeScan.SstBlockCacheMisses, afterScan.SstBlockCacheMisses);
+        // Bypass consults existing cache entries without inserting the missed blocks.
+        Assert.Equal(beforeScan.SstBlockCacheHits + 1, afterScan.SstBlockCacheHits);
+        Assert.Equal(beforeScan.SstBlockCacheMisses + afterScan.DataBlocksRead - beforeScan.DataBlocksRead,
+            afterScan.SstBlockCacheMisses);
 
         Assert.NotNull(await reader.GetAsync("key-0064"u8.ToArray()));
         var afterHotRead = await database.Diagnostics.GetReadPathDiagnosticsAsync();

@@ -121,21 +121,8 @@ public sealed class PantsPointReadDiagnosticsTests
                 .WithSimulatedCloudLocalStorageBudget(HybridLocalBudgetBytes)
                 .WithBackgroundCompaction(false));
         var expected = CreateValue(24 * 1024, 83);
-        await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
-        for (var index = 0; index < 12; index++)
-        {
-            await FlushAsync(
-                database,
-                $"diagnostics-seed-{index}",
-                CreateValue(expected.Length, 84 + index),
-                PantsWriteOptions.CloudStrict);
-        }
-
-        await FlushAsync(
-            database,
-            "eviction-window",
-            CreateValue(expected.Length, 90),
-            PantsWriteOptions.CloudStrict);
+        await SeedCloudReadsAsync(database, expected);
+        var unrelatedFiles = await CountUnrelatedCloudFilesAsync(database, directory.Path);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -144,7 +131,7 @@ public sealed class PantsPointReadDiagnosticsTests
         var resident = await reader.GetWithDiagnosticsAsync("cloud-key"u8.ToArray());
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(hydrated.Value).ToArray());
-        Assert.Equal(12, hydrated.Trace.KeyRangeRejects);
+        Assert.Equal(unrelatedFiles, hydrated.Trace.KeyRangeRejects);
         var hydratedSst = Assert.Single(hydrated.Trace.Ssts);
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, hydratedSst.Tier);
         Assert.Equal(PantsBloomFilterOutcome.TruePositive, hydratedSst.BloomFilterOutcome);
@@ -154,13 +141,69 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Equal(1, hydratedSst.DataBlocksRead);
 
         Assert.Equal(expected, Assert.IsType<ReadOnlyMemory<byte>>(resident.Value).ToArray());
-        Assert.Equal(12, resident.Trace.KeyRangeRejects);
+        Assert.Equal(unrelatedFiles, resident.Trace.KeyRangeRejects);
         var residentSst = Assert.Single(resident.Trace.Ssts);
         Assert.Equal(hydratedSst.Name, residentSst.Name);
         Assert.Equal(PantsSstReadTier.HydratedFromCloud, residentSst.Tier);
-        Assert.Equal(PantsCacheReadOutcome.Miss, residentSst.ReaderCacheOutcome);
+        Assert.Equal(PantsCacheReadOutcome.Hit, residentSst.ReaderCacheOutcome);
         Assert.Equal(PantsCacheReadOutcome.Hit, residentSst.BlockCacheOutcome);
         Assert.Equal(0, residentSst.DataBlocksRead);
+    }
+
+    [Fact]
+    public async Task ShouldAttributeRemoteReaderCacheHitsToTheQueryWithoutAnotherProviderRead()
+    {
+        using var directory = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var recording = new SstRequestRecordingHandler(handler);
+        using var client = new HttpClient(recording);
+        var options = PantsOpenOptions.Cloud(directory.Path, new PantsCloudStorageLocation(
+                new PantsAzureBlobProvider("account", "container", new Uri("https://storage.example.test"),
+                    new PantsAzureCredentialSource.SasToken("sig=test")), "diagnostics"))
+            .WithCloudLocalStorageBudget(HybridLocalBudgetBytes).WithBackgroundCompaction(false);
+        await using var database = await PantsDatabase.OpenForTestingAsync(options,
+            new RuntimeDependencies(cloudHttpClient: client));
+        var expected = CreateValue(24 * 1024, 83);
+        await SeedCloudReadsAsync(database, expected);
+        var unrelatedFiles = await CountUnrelatedCloudFilesAsync(database, directory.Path);
+        await using var reader = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+        var before = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+
+        recording.Clear();
+        var cold = await reader.GetWithDiagnosticsAsync("cloud-key"u8.ToArray());
+        var coldRequests = recording.Requests;
+        var afterCold = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+        recording.Clear();
+        var warm = await reader.GetWithDiagnosticsAsync("cloud-key"u8.ToArray());
+        var afterWarm = await database.Diagnostics.GetReadPathDiagnosticsAsync();
+
+        Assert.Equal(expected, cold.Value?.ToArray());
+        Assert.Equal(expected, warm.Value?.ToArray());
+        Assert.Equal(unrelatedFiles, cold.Trace.KeyRangeRejects);
+        Assert.Equal(unrelatedFiles, warm.Trace.KeyRangeRejects);
+        var coldSst = Assert.Single(cold.Trace.Ssts);
+        var warmSst = Assert.Single(warm.Trace.Ssts);
+        Assert.Equal(coldSst.Name, warmSst.Name);
+        Assert.Equal(PantsSstReadTier.HydratedFromCloud, coldSst.Tier);
+        Assert.Equal(PantsSstReadTier.HydratedFromCloud, warmSst.Tier);
+        Assert.Equal(PantsCacheReadOutcome.Miss, coldSst.ReaderCacheOutcome);
+        Assert.Equal(PantsCacheReadOutcome.Hit, warmSst.ReaderCacheOutcome);
+        Assert.Equal(PantsCacheReadOutcome.Miss, coldSst.BlockCacheOutcome);
+        Assert.Equal(PantsCacheReadOutcome.Hit, warmSst.BlockCacheOutcome);
+        Assert.Equal(1, coldSst.DataBlocksRead);
+        Assert.Equal(0, warmSst.DataBlocksRead);
+        Assert.Contains(coldRequests, request => request.Name == coldSst.Name && request.IsRangedGet);
+        Assert.DoesNotContain(coldRequests, static request => request.IsWholeGet);
+        Assert.Empty(recording.Requests);
+        Assert.Equal(1, afterCold.SstReaderCacheMisses - before.SstReaderCacheMisses);
+        Assert.Equal(0, afterCold.SstReaderCacheHits - before.SstReaderCacheHits);
+        Assert.Equal(1, afterWarm.SstReaderCacheHits - afterCold.SstReaderCacheHits);
+        Assert.Equal(0, afterWarm.SstReaderCacheMisses - afterCold.SstReaderCacheMisses);
+        Assert.Equal(1, afterCold.DataBlocksRead - before.DataBlocksRead);
+        Assert.Equal(0, afterWarm.DataBlocksRead - afterCold.DataBlocksRead);
+        Assert.Equal(unrelatedFiles, afterCold.KeyRangeRejects - before.KeyRangeRejects);
+        Assert.Equal(unrelatedFiles, afterWarm.KeyRangeRejects - afterCold.KeyRangeRejects);
     }
 
     [Fact]
@@ -271,6 +314,35 @@ public sealed class PantsPointReadDiagnosticsTests
         Assert.Null(ordinaryRangeDeleted);
         Assert.Equal(before, await database.Diagnostics.GetReadPathDiagnosticsAsync());
         Assert.Equal(amplificationBefore, await database.Diagnostics.GetReadAmplificationMetricsAsync());
+    }
+
+    static async ValueTask SeedCloudReadsAsync(IPantsDatabase database, byte[] expected)
+    {
+        await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
+        for (var index = 0; index < 12; index++)
+        {
+            await FlushAsync(database, $"diagnostics-seed-{index}", CreateValue(expected.Length, 84 + index),
+                PantsWriteOptions.CloudStrict);
+        }
+        await FlushAsync(database, "eviction-window", CreateValue(expected.Length, 90), PantsWriteOptions.CloudStrict);
+    }
+
+    static async ValueTask<int> CountUnrelatedCloudFilesAsync(IPantsDatabase database, string root)
+    {
+        var layout = await database.Diagnostics.GetStorageLayoutAsync();
+        var files = layout.Levels.SelectMany(static level => level.Files)
+            .Where(file => file.ColumnFamilyId == database.ColumnFamilies.DefaultFamily.Id).ToArray();
+        Assert.Equal(14, files.Length);
+        var target = Assert.Single(files, file => file.SmallestKey is { } smallest &&
+            smallest.Span.SequenceEqual("cloud-key"u8));
+        Assert.Equal("cloud-key"u8.ToArray(), target.LargestKey?.ToArray());
+        Assert.False(File.Exists(Path.Combine(root, "sst", target.Name)));
+        var unrelated = files.Where(file => !StringComparer.Ordinal.Equals(file.Name, target.Name)).ToArray();
+        Assert.All(unrelated, static file =>
+        {
+            Assert.True(file.SmallestKey is { } smallest && smallest.Span.SequenceCompareTo("cloud-key"u8) > 0);
+        });
+        return unrelated.Length;
     }
 
     static async ValueTask FlushAsync(

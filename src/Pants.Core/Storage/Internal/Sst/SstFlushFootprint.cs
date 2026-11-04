@@ -1,11 +1,11 @@
 namespace Cntryl.Pants.Storage.Internal.Sst;
 
 /// <summary>
-///     Bounds the V4 SST bytes needed to flush a set of WAL mutations without encoding the file.
+///     Bounds the V5 SST bytes needed to flush a set of WAL mutations without encoding the file.
 /// </summary>
 sealed class SstFlushFootprint
 {
-    const long DataEntryHeaderAndExtendedLengthBytes = 34;
+    const long DataEntryHeaderAndRestartBytes = 40;
     const long MaximumTrieNodeAndEdgeBytesPerBlock = 48;
     const long MaximumBloomBytesPerMutation = 21;
     const long SparseIndexEntryHeaderBytes = 20;
@@ -62,13 +62,13 @@ sealed class SstFlushFootprint
             return 0;
         }
 
-        // Each point entry stores at most its full key/value and the V4 entry header. A block can
+        // Each point entry stores at most its full key/value and the V5 entry header plus its restart directory. A block can
         // hold several entries, but one entry may also force its own block, so point count bounds
         // both data-block count and the number of sparse-index/trie and bloom contributions.
         var dataRawBytes = checked(
             _pointKeyBytes +
             _valueBytes +
-            _pointCount * DataEntryHeaderAndExtendedLengthBytes);
+            _pointCount * DataEntryHeaderAndRestartBytes);
         var bloomRawBytes = checked(
             sizeof(uint) + _pointCount * MaximumBloomBytesPerMutation);
         var sparseIndexRawBytes = _pointCount == 0

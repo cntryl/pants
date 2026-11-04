@@ -27,10 +27,10 @@ public sealed class MidgeWalUploadRetryParityTests
                 TimeSpan.FromHours(1),
                 2));
 
-        handler.FailWalSegmentWrites(segmentId: 1, attempts: 3);
-
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
+            var firstSegmentId = checked((ulong)(await database.Diagnostics.GetRuntimeMetricsAsync()).WalCurrentSegmentId);
+            handler.FailWalSegmentWrites(firstSegmentId, attempts: 3);
             for (var index = 0; index < 6; index++)
             {
                 await CommitCloudAsyncAsync(database, TestBytes.FromString($"midge-key-{index}"));

@@ -2,6 +2,8 @@ namespace Cntryl.Pants.Cloud.Internal.Leases;
 
 sealed class CloudLeaseCoordinator : IDisposable
 {
+    internal static readonly TimeSpan RenewalWriteDeadlineMargin = TimeSpan.FromSeconds(11);
+    static readonly TimeSpan MaximumTimerDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     static readonly TimeSpan RenewalReconciliationPollInterval = TimeSpan.FromMilliseconds(50);
     static readonly TimeSpan RenewalReconciliationMaximumPollInterval = TimeSpan.FromSeconds(1);
 
@@ -15,10 +17,14 @@ sealed class CloudLeaseCoordinator : IDisposable
     readonly string _ownerToken = Guid.NewGuid().ToString("N");
     readonly ICloudLeaseStore _store;
     readonly TimeProvider _timeProvider;
+    readonly TimeSpan _providerTimeout;
+    TaskCompletionSource _validityChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     int _activeOperations;
     int _disposed;
     int _disposeCancellationCompleted;
     ulong _epoch;
+    CloudLeaseRecord? _acquisitionCandidate;
+    StartupScope? _acquisitionScope;
 
     /// <summary>
     ///     Fencing deadline as a monotonic timestamp. Elapsed time, not wall-clock: a backward
@@ -46,11 +52,14 @@ sealed class CloudLeaseCoordinator : IDisposable
         TimeSpan leaseDuration,
         TimeSpan clockSkewTolerance,
         Action? leaseLossCallback = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TimeSpan? providerTimeout = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _providerTimeout = providerTimeout ?? TimeSpan.FromSeconds(30);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_providerTimeout, TimeSpan.Zero);
         ArgumentException.ThrowIfNullOrWhiteSpace(holderId);
         if (leaseDuration <= TimeSpan.Zero)
         {
@@ -69,7 +78,15 @@ sealed class CloudLeaseCoordinator : IDisposable
         _leaseLossCallback = leaseLossCallback;
     }
 
+    public string HolderId => _holderId;
+
+    public string OwnerToken => _ownerToken;
+
     public ulong Epoch => Volatile.Read(ref _epoch);
+
+    internal bool HasKnownValidLease => Volatile.Read(ref _lost) == 0 && Epoch != 0 &&
+        _timeProvider.GetTimestamp() < Volatile.Read(ref _expiresAtTimestamp) &&
+        Volatile.Read(ref _latestObservedUtcTicks) < Volatile.Read(ref _expiresAtUtcTicks);
 
     public bool IsHealthy
     {
@@ -97,6 +114,7 @@ sealed class CloudLeaseCoordinator : IDisposable
         {
             DisposeWatchdog();
             Volatile.Write(ref _lost, 1);
+            SignalValidityChanged();
             try
             {
                 _disposeCancellation.Cancel();
@@ -124,7 +142,11 @@ sealed class CloudLeaseCoordinator : IDisposable
     ///     <paramref name="minimumEpoch" />, so a deleted or reset lease object can never hand out
     ///     an epoch the catalog or WAL already used.
     /// </summary>
-    public async ValueTask<ulong> AcquireAsync(ulong minimumEpoch, CancellationToken cancellationToken)
+    public ValueTask<ulong> AcquireAsync(ulong minimumEpoch, CancellationToken cancellationToken) =>
+        AcquireAsync(minimumEpoch, null, cancellationToken);
+
+    public async ValueTask<ulong> AcquireAsync(ulong minimumEpoch, StartupScope? startupScope,
+        CancellationToken cancellationToken)
     {
         await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -151,14 +173,14 @@ sealed class CloudLeaseCoordinator : IDisposable
             if (current is null)
             {
                 nextEpoch = Math.Max(1, checked(minimumEpoch + 1));
-                acquired = await _store.TryCreateAsync(
+                acquired = await TryAcquireCandidateAsync(
                     new CloudLeaseRecord(
                         _holderId,
                         nextEpoch,
                         _ownerToken,
                         now,
                         AddSaturating(now, _leaseDuration)),
-                    cancellationToken).ConfigureAwait(false);
+                    null, startupScope, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -184,15 +206,14 @@ sealed class CloudLeaseCoordinator : IDisposable
                 }
 
                 nextEpoch = Math.Max(checked(current.Lease.Epoch + 1), checked(minimumEpoch + 1));
-                acquired = await _store.TryReplaceAsync(
-                    current.Version,
+                acquired = await TryAcquireCandidateAsync(
                     new CloudLeaseRecord(
                         _holderId,
                         nextEpoch,
                         _ownerToken,
                         now,
                         AddSaturating(now, _leaseDuration)),
-                    cancellationToken).ConfigureAwait(false);
+                    current.Version, startupScope, cancellationToken).ConfigureAwait(false);
             }
 
             if (!acquired)
@@ -205,7 +226,9 @@ sealed class CloudLeaseCoordinator : IDisposable
                 ref _expiresAtUtcTicks,
                 AddSaturating(now, _leaseDuration).UtcTicks);
             Volatile.Write(ref _epoch, nextEpoch);
+            ResolveAcquisitionCandidate();
             ArmWatchdog();
+            SignalValidityChanged();
             return nextEpoch;
         }
         finally
@@ -214,63 +237,182 @@ sealed class CloudLeaseCoordinator : IDisposable
         }
     }
 
+    async ValueTask<bool> TryAcquireCandidateAsync(CloudLeaseRecord candidate, string? expectedVersion,
+        StartupScope? startupScope, CancellationToken cancellationToken)
+    {
+        startupScope?.BeginLeasePublication();
+        _acquisitionCandidate = candidate;
+        _acquisitionScope = startupScope;
+        try
+        {
+            var acquired = expectedVersion is null
+                ? await _store.TryCreateAsync(candidate, cancellationToken).ConfigureAwait(false)
+                : await _store.TryReplaceAsync(expectedVersion, candidate, cancellationToken).ConfigureAwait(false);
+            if (!acquired)
+            {
+                ResolveAcquisitionCandidate();
+            }
+            return acquired;
+        }
+        catch (Exception exception) when (exception is PantsIOException or PantsTimeoutException or
+                                          PantsLeaseIndeterminateException or OperationCanceledException or IOException)
+        {
+            throw new PantsLeaseIndeterminateException("The conditional cloud lease acquisition was not confirmed.", exception);
+        }
+        catch
+        {
+            ResolveAcquisitionCandidate();
+            throw;
+        }
+    }
+
+    void ResolveAcquisitionCandidate()
+    {
+        _acquisitionScope?.ResolveLeasePublication();
+        _acquisitionScope = null;
+        _acquisitionCandidate = null;
+    }
+
+    public async ValueTask WaitForRenewalAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            EnsureValid();
+            var changed = Volatile.Read(ref _validityChanged).Task;
+            var due = (Int128)Volatile.Read(ref _expiresAtTimestamp) - DurationTimestampTicks(_leaseDuration) +
+                      DurationTimestampTicks(interval);
+            var remainingTicks = due - _timeProvider.GetTimestamp();
+            var remaining = remainingTicks <= 0 ? TimeSpan.Zero :
+                TimestampInterval(remainingTicks > long.MaxValue ? long.MaxValue : (long)remainingTicks);
+            if (remaining == TimeSpan.Zero)
+            {
+                return;
+            }
+            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var delay = Task.Delay(remaining < MaximumTimerDelay ? remaining : MaximumTimerDelay,
+                _timeProvider, waitCancellation.Token);
+            await Task.WhenAny(delay, changed).ConfigureAwait(false);
+            await waitCancellation.CancelAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    public TimeSpan RenewalRetryPause => TimeSpan.FromTicks(Math.Clamp(_leaseDuration.Ticks / 20,
+        TimeSpan.TicksPerMillisecond * 10, TimeSpan.TicksPerSecond));
+
     public async ValueTask RenewAsync(CancellationToken cancellationToken)
     {
         await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureValid();
-            var current = await ReadForRenewalAsync(cancellationToken).ConfigureAwait(false);
-            EnsureValid();
-            var epoch = Epoch;
-            if (!Owns(current.Lease, epoch))
+            var remaining = RemainingValidity();
+            if (remaining <= RenewalWriteDeadlineMargin)
             {
-                LoseLease();
-                throw new PantsFencedException("The cloud primary lease is owned by another writer.");
+                throw new PantsFencedException("Insufficient validity remains for bounded cloud lease renewal.");
             }
-
-            var renewedAt = _timeProvider.GetTimestamp();
-            var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
-            var proposed = current.Lease with { ExpiresAtUtc = expiresAt, ExpiryMalformed = false };
-            EnsureValid();
-            CloudLeaseSnapshot? confirmed = null;
-            try
+            // Every GET and CAS consumes this one old-validity-minus-margin window.
+            var window = OperationDeadline.FromBudget(remaining - RenewalWriteDeadlineMargin, _timeProvider);
+            while (true)
             {
-                var renewed = await _store.TryReplaceAsync(
-                    current.Version,
-                    proposed,
-                    cancellationToken).ConfigureAwait(false);
+                EnsureValid();
+                var windowRemaining = window.Remaining;
+                var readShare = windowRemaining == TimeSpan.Zero ? TimeSpan.Zero :
+                    TimeSpan.FromTicks(Math.Max(1, windowRemaining.Ticks / 2));
+                var readTimeout = Minimum(readShare, _providerTimeout, RemainingValidity());
+                if (readTimeout == TimeSpan.Zero)
+                {
+                    throw new PantsFencedException("Cloud lease renewal exhausted its provider window.");
+                }
+                var readDeadline = OperationDeadline.FromBudget(readTimeout, _timeProvider);
+                var current = await readDeadline.RunAsync(ReadForRenewalAsync, cancellationToken).ConfigureAwait(false);
+                if (readDeadline.IsExpired)
+                {
+                    throw new PantsTimeoutException("Cloud lease renewal GET exceeded its bounded read window.");
+                }
+                EnsureValid();
+                var epoch = Epoch;
+                if (!Owns(current.Lease, epoch))
+                {
+                    throw new PantsFencedException("The cloud primary lease is owned by another writer.");
+                }
+                if (!current.Lease.ExpiryMalformed &&
+                    ObserveMonotonicUtcNow() > AddSaturating(current.Lease.ExpiresAtUtc, _clockSkewTolerance))
+                {
+                    throw new PantsFencedException("The stored cloud primary lease expired before renewal.");
+                }
+                var renewedAt = _timeProvider.GetTimestamp();
+                var expiresAt = AddSaturating(ObserveMonotonicUtcNow(), _leaseDuration);
+                var proposed = current.Lease with { ExpiresAtUtc = expiresAt, ExpiryMalformed = false };
+                var writeTimeout = Minimum(window.Remaining, _providerTimeout);
+                if (writeTimeout == TimeSpan.Zero)
+                {
+                    throw new PantsFencedException("Cloud lease renewal exhausted its conditional write window.");
+                }
+                bool renewed;
+                var writeDeadline = OperationDeadline.FromBudget(writeTimeout, _timeProvider);
+                var writeFinished = 0;
+                using var deadlineFence = _timeProvider.CreateTimer(_ =>
+                {
+                    if (Interlocked.CompareExchange(ref writeFinished, 1, 0) == 0)
+                    {
+                        LoseLease();
+                    }
+                }, null, writeTimeout, Timeout.InfiniteTimeSpan);
+                try
+                {
+                    renewed = await writeDeadline.RunAsync(
+                        token => _store.TryReplaceAsync(current.Version, proposed, token), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (Interlocked.CompareExchange(ref writeFinished, 1, 0) != 0 || writeDeadline.IsExpired)
+                    {
+                        throw new PantsTimeoutException("The conditional cloud lease renewal exceeded its provider cap.");
+                    }
+                }
+                catch (Exception error) when (error is PantsLeaseIndeterminateException or PantsTimeoutException or
+                                              PantsIOException or IOException or OperationCanceledException)
+                {
+                    Interlocked.Exchange(ref writeFinished, 1);
+                    // A delayed CAS may still land. Fence before any exact-candidate reconciliation.
+                    LoseLease();
+                    var writeError = error as PantsException ?? new PantsLeaseIndeterminateException(
+                        "The conditional cloud lease renewal outcome is unknown.", error);
+                    await ReconcileIndeterminateRenewalAsync(proposed, writeError, renewedAt, cancellationToken)
+                        .ConfigureAwait(false);
+                    throw new PantsLeaseUnavailableException("The cloud primary lease renewal was not confirmed.", writeError);
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref writeFinished, 1);
+                }
                 if (!renewed)
                 {
-                    LoseLease();
-                    throw new PantsFencedException("The cloud primary lease renewal was fenced.");
+                    // A definite rejection has no ambiguous effect. Reread live ownership before retrying.
+                    continue;
                 }
-            }
-            catch (PantsException error) when (
-                error is PantsLeaseIndeterminateException or PantsTimeoutException or PantsIOException)
-            {
-                confirmed = await ConfirmIndeterminateRenewalAsync(
-                    proposed,
-                    error,
-                    renewedAt,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!TryAdvanceDeadline(epoch, AddSaturating(renewedAt, _leaseDuration), expiresAt))
-            {
-                LoseLease();
-                await TryExpireLateRenewalAsync(proposed, confirmed, cancellationToken)
-                    .ConfigureAwait(false);
-                throw new PantsFencedException(
-                    "The cloud primary lease renewal completed after its monotonic deadline.");
+                if (window.IsExpired || !TryAdvanceDeadline(epoch, AddSaturating(renewedAt, _leaseDuration), expiresAt))
+                {
+                    LoseLease();
+                    await TryExpireLateRenewalAsync(proposed, null, cancellationToken).ConfigureAwait(false);
+                    throw new PantsFencedException("The cloud primary lease renewal completed after its bounded deadline.");
+                }
+                return;
             }
         }
-        catch (PantsException)
+        catch (IOException error) when (IsHealthy)
         {
-            LoseLease();
+            throw new PantsIOException("The cloud lease renewal read failed transiently.", error);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested && IsHealthy)
+        {
+            throw new PantsTimeoutException("The cloud lease renewal read timed out transiently.", error);
+        }
+        catch (PantsException error) when (error is PantsIOException or PantsTimeoutException or PantsLeaseIndeterminateException && IsHealthy)
+        {
+            // Read failures have no authority effect. The heartbeat may retry while old validity survives.
             throw;
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
             LoseLease();
             throw;
@@ -280,6 +422,30 @@ sealed class CloudLeaseCoordinator : IDisposable
             ExitGate();
         }
     }
+
+    TimeSpan RemainingValidity() => Minimum(Until(Volatile.Read(ref _expiresAtTimestamp)),
+        TimeSpan.FromTicks(Math.Max(0, Volatile.Read(ref _expiresAtUtcTicks) - ObserveMonotonicUtcTicks())));
+
+    TimeSpan Until(long deadline)
+    {
+        var ticks = deadline - _timeProvider.GetTimestamp();
+        return ticks <= 0 ? TimeSpan.Zero : TimestampInterval(ticks);
+    }
+
+    TimeSpan TimestampInterval(long ticks)
+    {
+        var timeTicks = (UInt128)(ulong)ticks * TimeSpan.TicksPerSecond / (ulong)_timeProvider.TimestampFrequency;
+        return TimeSpan.FromTicks(timeTicks > long.MaxValue ? long.MaxValue : (long)timeTicks);
+    }
+
+    Int128 DurationTimestampTicks(TimeSpan duration) =>
+        (Int128)duration.Ticks * _timeProvider.TimestampFrequency / TimeSpan.TicksPerSecond;
+
+    static TimeSpan Minimum(TimeSpan first, TimeSpan second) => first <= second ? first : second;
+    static TimeSpan Minimum(TimeSpan first, TimeSpan second, TimeSpan third) => Minimum(Minimum(first, second), third);
+
+    void SignalValidityChanged() => Interlocked.Exchange(ref _validityChanged,
+        new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();
 
     /// <summary>
     ///     Re-reads the stored lease and confirms this process still owns it, so a successor that
@@ -314,17 +480,19 @@ sealed class CloudLeaseCoordinator : IDisposable
         await EnterGateAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (Volatile.Read(ref _lost) != 0 || Epoch == 0)
+            var epoch = _acquisitionCandidate?.Epoch ?? Epoch;
+            if ((Volatile.Read(ref _lost) != 0 && _acquisitionCandidate is null) || epoch == 0)
             {
                 return;
             }
 
             var current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
             if (current is null ||
-                current.Lease.Epoch != Epoch ||
+                current.Lease.Epoch != epoch ||
                 !StringComparer.Ordinal.Equals(current.Lease.HolderId, _holderId) ||
                 !StringComparer.Ordinal.Equals(current.Lease.OwnerToken, _ownerToken))
             {
+                ResolveAcquisitionCandidate();
                 LoseLease();
                 return;
             }
@@ -337,6 +505,7 @@ sealed class CloudLeaseCoordinator : IDisposable
                     ExpiryMalformed = false
                 },
                 cancellationToken).ConfigureAwait(false);
+            ResolveAcquisitionCandidate();
             if (released)
             {
                 Volatile.Write(ref _lost, 1);
@@ -363,47 +532,6 @@ sealed class CloudLeaseCoordinator : IDisposable
 
         LoseLease();
         throw new PantsFencedException("The cloud primary lease document disappeared.");
-    }
-
-    async ValueTask<CloudLeaseSnapshot> ConfirmIndeterminateRenewalAsync(
-        CloudLeaseRecord proposed,
-        PantsException writeError,
-        long renewalStartedAt,
-        CancellationToken cancellationToken)
-    {
-        CloudLeaseSnapshot? current;
-        try
-        {
-            current = await _store.ReadAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (PantsException readError)
-        {
-            LoseLease();
-            await ReconcileIndeterminateRenewalAsync(
-                proposed,
-                writeError,
-                renewalStartedAt,
-                cancellationToken,
-                readError).ConfigureAwait(false);
-            throw new PantsLeaseUnavailableException(
-                "The cloud primary lease renewal was not confirmed by bounded reconciliation.",
-                writeError);
-        }
-
-        if (current?.Lease != proposed)
-        {
-            LoseLease();
-            await ReconcileIndeterminateRenewalAsync(
-                proposed,
-                writeError,
-                renewalStartedAt,
-                cancellationToken).ConfigureAwait(false);
-            throw new PantsLeaseUnavailableException(
-                "The cloud primary lease renewal was not confirmed by bounded reconciliation.",
-                writeError);
-        }
-
-        return current;
     }
 
     async ValueTask ReconcileIndeterminateRenewalAsync(
@@ -648,6 +776,7 @@ sealed class CloudLeaseCoordinator : IDisposable
         Volatile.Write(ref _expiresAtTimestamp, Math.Max(currentDeadline, candidateTimestamp));
         Volatile.Write(ref _expiresAtUtcTicks, Math.Max(currentUtcDeadline, candidate.UtcTicks));
         ArmWatchdog();
+        SignalValidityChanged();
         return Volatile.Read(ref _lost) == 0;
     }
 
@@ -663,7 +792,7 @@ sealed class CloudLeaseCoordinator : IDisposable
             return;
         }
 
-        var remaining = RemainingUntilDeadline();
+        var remaining = Minimum(RemainingUntilDeadline(), MaximumTimerDelay);
         lock (_watchdogLock)
         {
             if (_watchdog is null)
@@ -695,10 +824,8 @@ sealed class CloudLeaseCoordinator : IDisposable
 
     TimeSpan RemainingUntilDeadline()
     {
-        var ticks = Volatile.Read(ref _expiresAtTimestamp) - _timeProvider.GetTimestamp();
-        return ticks <= 0
-            ? TimeSpan.Zero
-            : TimeSpan.FromSeconds((double)ticks / _timeProvider.TimestampFrequency) + TimeSpan.FromMilliseconds(1);
+        var remaining = Until(Volatile.Read(ref _expiresAtTimestamp));
+        return remaining == TimeSpan.Zero ? TimeSpan.Zero : AddSaturating(remaining, TimeSpan.FromMilliseconds(1));
     }
 
     async ValueTask TryExpireLateRenewalAsync(
@@ -790,7 +917,15 @@ sealed class CloudLeaseCoordinator : IDisposable
         if (Interlocked.Exchange(ref _lost, 1) == 0)
         {
             DisposeWatchdog();
-            _leaseLossCallback?.Invoke();
+            SignalValidityChanged();
+            try
+            {
+                _leaseLossCallback?.Invoke();
+            }
+            catch (Exception)
+            {
+                // Notification cannot restore authority or let a user callback crash the watchdog.
+            }
         }
     }
 

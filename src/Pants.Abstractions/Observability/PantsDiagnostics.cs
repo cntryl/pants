@@ -56,4 +56,13 @@ public static class PantsDiagnostics
 
     internal static Counter<long> WalRecoveryRecords { get; } =
         Meter.CreateCounter<long>("pants.recovery.wal_records");
+
+    internal static Counter<long> RecoveryCompletedBytes { get; } =
+        Meter.CreateCounter<long>("pants.recovery.completed_bytes", "By");
+
+    internal static Counter<long> RecoveryCompletedFrames { get; } =
+        Meter.CreateCounter<long>("pants.recovery.completed_frames");
+
+    internal static Counter<long> RecoveryCompletedOperations { get; } =
+        Meter.CreateCounter<long>("pants.recovery.completed_operations");
 }

@@ -16,9 +16,8 @@ public sealed class ProviderCloudControlMetadataReadTests
     {
         using var cache = new TemporaryDirectory();
         var controlStore = new ScriptedCloudObjectStore();
-        controlStore.Write(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json",
-            new byte[1024]);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial(), new byte[1024]);
+        controlStore.ResetRequests();
         var budget = new ResourceBudget(512);
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
@@ -34,8 +33,7 @@ public sealed class ProviderCloudControlMetadataReadTests
                 .AsTask());
 
         Assert.Equal(0, budget.Current);
-        Assert.Contains(controlStore.RequestsFor(
-                PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json"),
+        Assert.Contains(controlStore.RequestsFor(CloudMetadataAuthority.SentinelKey),
             static request => request.Operation == StoreOperation.Head);
         Assert.DoesNotContain(controlStore.Requests,
             static request => request.Operation is StoreOperation.Get or StoreOperation.GetRange or
@@ -158,10 +156,9 @@ public sealed class ProviderCloudControlMetadataReadTests
     {
         using var cache = new TemporaryDirectory();
         var controlStore = new ScriptedCloudObjectStore();
-        controlStore.Write(
-            PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json",
-            new byte[32]);
-        var budget = new ResourceBudget(4096);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial(), MetadataFrameCodec.Encode(1, "{}"u8));
+        controlStore.ResetRequests();
+        var budget = new ResourceBudget(64 * 1024);
 
         await Assert.ThrowsAsync<PantsCorruptionException>(() =>
             ProviderCloudPersistence.HydrateLocalCacheAsync(
@@ -206,8 +203,8 @@ public sealed class ProviderCloudControlMetadataReadTests
     {
         using var cache = new TemporaryDirectory();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-        controlStore.Write(manifestKey, new byte[32]);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial());
+        controlStore.ResetRequests();
         controlStore.BeforeRangeRead = static (_, _) =>
             ValueTask.FromException(new PantsIOException("synthetic control read failure"));
         var walStore = new ScriptedCloudObjectStore();
@@ -235,10 +232,12 @@ public sealed class ProviderCloudControlMetadataReadTests
     [Fact]
     public async Task ShouldRejectWholeObjectFallbackAboveItsSmallObjectLimit()
     {
-        const string objectKey = "metadata/manifest.snapshot.json";
         using var cache = new TemporaryDirectory();
         var controlStore = new ScriptedCloudObjectStore { SupportsRanges = false };
-        controlStore.Write(objectKey, new byte[ProviderCloudControlMetadataReadSet.MaximumWholeObjectBytes + 1]);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial(),
+            new byte[ProviderCloudControlMetadataReadSet.MaximumWholeObjectBytes + 1]);
+        var objectKey = ReadManifestObjectKey(controlStore);
+        controlStore.ResetRequests();
         var budget = new ResourceBudget(2 * 1024 * 1024);
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
@@ -256,9 +255,10 @@ public sealed class ProviderCloudControlMetadataReadTests
         Assert.Equal(0, budget.Current);
         Assert.Contains(controlStore.RequestsFor(objectKey),
             static request => request.Operation == StoreOperation.Head);
+        Assert.DoesNotContain(controlStore.RequestsFor(objectKey),
+            static request => request.Operation is StoreOperation.Get or StoreOperation.Put or StoreOperation.Delete);
         Assert.DoesNotContain(controlStore.Requests,
-            static request => request.Operation is StoreOperation.Get or StoreOperation.Put or
-                StoreOperation.Delete);
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
     }
 
     [Fact]
@@ -266,8 +266,9 @@ public sealed class ProviderCloudControlMetadataReadTests
     {
         using var cache = new TemporaryDirectory();
         var controlStore = new ScriptedCloudObjectStore();
-        var manifestKey = PantsCloudObjectLayout.MetadataPrefix + "manifest.snapshot.json";
-        controlStore.Write(manifestKey, new byte[1024]);
+        await CloudTestMetadata.SeedAsync(controlStore, ManifestState.CreateInitial(), new byte[1024]);
+        var manifestKey = ReadManifestObjectKey(controlStore);
+        controlStore.ResetRequests();
         var walStore = new ScriptedCloudObjectStore();
         walStore.Write(
             PantsCloudObjectLayout.WalCatalogMirrorObjectKey,
@@ -293,13 +294,22 @@ public sealed class ProviderCloudControlMetadataReadTests
                 .AsTask());
 
         Assert.Equal(0, budget.Current);
+        Assert.DoesNotContain(controlStore.RequestsFor(manifestKey),
+            static request => request.Operation is StoreOperation.Get or StoreOperation.GetRange);
         Assert.DoesNotContain(controlStore.Requests,
-            static request => request.Operation is StoreOperation.Get or StoreOperation.GetRange or
-                StoreOperation.Put or StoreOperation.Delete);
+            static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
         Assert.DoesNotContain(walStore.Requests,
             static request => request.Operation is StoreOperation.Put or StoreOperation.Delete);
         Assert.True(walStore.Contains(PantsCloudObjectLayout.WalCatalogMirrorObjectKey));
         Assert.False(walStore.Contains(PantsCloudObjectLayout.WalCatalogObjectKey));
+    }
+
+    static string ReadManifestObjectKey(ScriptedCloudObjectStore store)
+    {
+        using var pointer = MetadataFrameCodec.Decode(store.Read(CloudMetadataAuthority.PointerKey), 4);
+        var reference = pointer.RootElement.GetProperty("committed").GetProperty("objects").EnumerateArray()
+            .Single(item => item.GetProperty("file_name").GetString() == "manifest.snapshot.json");
+        return reference.GetProperty("object_key").GetString()!;
     }
 
     sealed class ShortRangeStore(ICloudObjectStore inner) : ICloudObjectStore

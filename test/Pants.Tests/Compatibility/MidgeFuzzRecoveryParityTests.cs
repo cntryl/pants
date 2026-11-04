@@ -44,13 +44,13 @@ public sealed class MidgeFuzzRecoveryParityTests
         var validIntent = await File.ReadAllBytesAsync(intentPath);
         await File.WriteAllBytesAsync(intentPath, ReadFixture("intent_timeout_18.bin"));
 
-        var verification = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+        var verification = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
             PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-        var recovery = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+        var recovery = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
             OpenAsync(directory.Path).AsTask());
 
-        Assert.Equal(PantsErrorCode.RecoveryFailed, verification.Code);
-        Assert.Equal(PantsErrorCode.RecoveryFailed, recovery.Code);
+        Assert.Equal(PantsErrorCode.CompatibilityError, verification.Code);
+        Assert.Equal(PantsErrorCode.CompatibilityError, recovery.Code);
         Assert.Equal(ReadFixture("intent_timeout_18.bin"), await File.ReadAllBytesAsync(intentPath));
 
         await File.WriteAllBytesAsync(intentPath, validIntent);
@@ -66,28 +66,21 @@ public sealed class MidgeFuzzRecoveryParityTests
             using var directory = new TemporaryDirectory();
             await SeedDatabaseAsync(directory.Path);
             var intentPath = Path.Combine(directory.Path, "intent_log.json");
+            var validIntent = await File.ReadAllBytesAsync(intentPath);
             await File.WriteAllBytesAsync(intentPath, ReadFixture("intent_timeout_1.bin"));
 
-            var verification = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            var verification = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
                 PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
-            var strict = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            var strict = await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
                 OpenAsync(directory.Path).AsTask());
-            Assert.Equal(PantsErrorCode.RecoveryFailed, verification.Code);
-            Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
+            Assert.Equal(PantsErrorCode.CompatibilityError, verification.Code);
+            Assert.Equal(PantsErrorCode.CompatibilityError, strict.Code);
 
-            await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
+            await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
                 OpenAsync(directory.Path).AsTask());
-            await using (var salvaged = await OpenAsync(directory.Path, PantsRecoveryPolicy.Salvage))
-            {
-                var metrics = await salvaged.Diagnostics.GetRuntimeMetricsAsync();
-                Assert.Equal(PantsEngineHealth.SalvageMode, metrics.Health);
-            }
-
-            Assert.NotEmpty(Directory.GetFiles(directory.Path, "intent_log.json.salvage-retained*"));
-            using (var intent = JsonDocument.Parse(await File.ReadAllBytesAsync(intentPath)))
-            {
-                Assert.Empty(intent.RootElement.EnumerateArray());
-            }
+            await Assert.ThrowsAsync<PantsCompatibilityException>(() => OpenAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
+            Assert.Equal(ReadFixture("intent_timeout_1.bin"), await File.ReadAllBytesAsync(intentPath));
+            await File.WriteAllBytesAsync(intentPath, validIntent);
 
             await using var successor = await OpenAsync(directory.Path);
             await successor.ShutdownAsync(ShutdownTimeout);

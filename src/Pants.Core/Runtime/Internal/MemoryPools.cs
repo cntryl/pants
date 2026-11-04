@@ -1,9 +1,8 @@
 namespace Cntryl.Pants.Runtime.Internal;
 
 /// <summary>
-///     Splits one memory budget into the transaction, compaction, scan, memtable, and block-cache
-///     pools. Mirrors Midge's <c>derive_memory_pools</c>; the scan pool and the sub-MiB compaction
-///     reservation are Pants adaptations.
+///     Splits one memory budget into transaction, compaction, memtable and shared SST read
+///     allowances. Read resources divide their allowance between content and shared metadata.
 /// </summary>
 sealed record MemoryPools(
     long TransactionMemoryPoolBytes,
@@ -15,7 +14,6 @@ sealed record MemoryPools(
 {
     const long Mebibyte = 1024L * 1024;
     const long MaximumCompactionPoolBytes = 256 * Mebibyte;
-    const long MaximumScanPoolBytes = 128 * Mebibyte;
     const long MaximumEconomyBlockCacheBytes = 256 * Mebibyte;
 
     public static MemoryPools Derive(
@@ -33,23 +31,15 @@ sealed record MemoryPools(
             throw PantsException.ResourceLimit("Transaction memory pool exceeds the total memory budget.");
         }
 
-        // Compaction keeps one decoded block per input stream live alongside a bounded output
-        // partition. A tenth of the budget let the default four-file L0 fan-in exhaust the pool
-        // under small budgets, so every retry failed and maintenance stalled for good. Tiny
-        // automatic budgets reserve two thirds so decoded input blocks still fit.
         var remainingAfterRequiredPools = Math.Max(0, budgetBytes - transactionPool - 2);
-        var desiredCompactionPool = budgetBytes < Mebibyte && automaticMemtables
-            ? Math.Max(1, budgetBytes * 2 / 3)
-            : Math.Min(budgetBytes / 5, MaximumCompactionPoolBytes);
+        var desiredCompactionPool = Math.Min(budgetBytes / 5, MaximumCompactionPoolBytes);
         var compactionPool = Math.Min(desiredCompactionPool, remainingAfterRequiredPools);
         if (compactionPool <= 0)
         {
             throw PantsException.ResourceLimit("The memory budget leaves no capacity for bounded compaction.");
         }
 
-        var scanPool = Math.Min(
-            Math.Max(1, Math.Min(budgetBytes / 20, MaximumScanPoolBytes)),
-            remainingAfterRequiredPools - compactionPool);
+        const long scanPool = 0;
 
         // Automatic persistent memtables leave a quarter of what remains for SST reads, so a
         // small budget still has block-cache capacity. Explicit memtables keep their full share.

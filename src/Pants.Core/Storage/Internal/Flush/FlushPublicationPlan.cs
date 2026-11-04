@@ -6,4 +6,7 @@ namespace Cntryl.Pants.Storage.Internal.Flush;
 sealed record FlushPublicationPlan(
     List<ManifestEdit> Edits,
     List<IntentEntry> Intents,
-    List<StagedSstOutput> Outputs);
+    List<StagedSstOutput> Outputs)
+{
+    public MetadataOrigin Origin { get; init; } = MetadataOrigin.Unclassified;
+}

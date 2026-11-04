@@ -288,6 +288,7 @@ public sealed class MidgeTransactionSnapshotTrackingParityTests
             var immediateMetrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(1, immediateMetrics.ActiveSnapshots);
             Assert.InRange(immediateMetrics.OldestSnapshotAgeSeconds, 0, 1);
+            Assert.True(immediateMetrics.PinnedSsts > 0);
 
             for (var generation = 0; generation < 2; generation++)
             {
