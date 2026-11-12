@@ -283,6 +283,7 @@ public sealed class S3ObjectStoreTests
         Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
         Assert.Equal(2, handler.Requests.Count);
         Assert.Contains("list-type=2", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
+        Assert.Contains("max-keys=32", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains("prefix=database%2Fsst%2F", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains(
             "continuation-token=token%2Fwith%20spaces",

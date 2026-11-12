@@ -35,6 +35,119 @@ public sealed class CloudSstGarbageCollectionTests
     }
 
     [Fact]
+    public async Task ShouldResumeCloudSstOrphanCollectionAcrossBoundedListPages()
+    {
+        var store = new PagedCloudObjectStore();
+        const string firstName = "000000_01_00000000000000000001.sst";
+        const string secondName = "000000_01_00000000000000000002.sst";
+        var firstObjectKey = PantsCloudObjectLayout.SstPrefix + firstName;
+        var secondObjectKey = PantsCloudObjectLayout.SstPrefix + secondName;
+        store.Seed(firstObjectKey);
+        store.Seed(secondObjectKey);
+        var collector = CreateCollector(store, static () => { });
+
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(new string?[] { null }, store.ListContinuations);
+        Assert.False(store.Contains(firstObjectKey));
+        Assert.True(store.Contains(secondObjectKey));
+
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(new string?[] { null, "page-2" }, store.ListContinuations);
+        Assert.False(store.Contains(secondObjectKey));
+
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(new string?[] { null, "page-2", null }, store.ListContinuations);
+    }
+
+    [Fact]
+    public async Task ShouldDrainBoundedOrphanCandidatesBeforeFollowingListContinuation()
+    {
+        var firstPageKeys = Enumerable.Range(1, 9)
+            .Select(sequence => PantsCloudObjectLayout.SstPrefix + $"000000_01_{sequence:D20}.sst")
+            .ToArray();
+        var secondPageKey = PantsCloudObjectLayout.SstPrefix + "000000_01_00000000000000000010.sst";
+        var store = new BoundedBatchCloudObjectStore(firstPageKeys, secondPageKey);
+        foreach (var objectKey in firstPageKeys.Append(secondPageKey))
+        {
+            store.Seed(objectKey);
+        }
+
+        var collector = CreateCollector(store, static () => { });
+
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(8, store.HeadRequestCount);
+        Assert.Equal(new string?[] { null }, store.ListContinuations);
+        Assert.All(firstPageKeys.Take(8), objectKey => Assert.False(store.Contains(objectKey)));
+        Assert.True(store.Contains(firstPageKeys[8]));
+        Assert.True(store.Contains(secondPageKey));
+
+        var headsBeforeSecondSweep = store.HeadRequestCount;
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(1, store.HeadRequestCount - headsBeforeSecondSweep);
+        Assert.Equal(9, store.HeadRequestCount);
+        Assert.Equal(new string?[] { null }, store.ListContinuations);
+        Assert.False(store.Contains(firstPageKeys[8]));
+        Assert.True(store.Contains(secondPageKey));
+
+        var headsBeforeThirdSweep = store.HeadRequestCount;
+        Assert.True(await collector.CollectAsync(CancellationToken.None));
+
+        Assert.Equal(1, store.HeadRequestCount - headsBeforeThirdSweep);
+        Assert.Equal(10, store.HeadRequestCount);
+        Assert.Equal(new string?[] { null, "page-2" }, store.ListContinuations);
+        Assert.False(store.Contains(secondPageKey));
+    }
+
+    [Fact]
+    public async Task ShouldRejectCloudSstListPageOverThirtyTwoKeysBeforeProbingCandidates()
+    {
+        var objectKeys = Enumerable.Range(1, 33)
+            .Select(sequence => PantsCloudObjectLayout.SstPrefix +
+                $"000000_01_{sequence:D20}.sst")
+            .ToArray();
+        var store = new GuardedListPageCloudObjectStore(objectKeys);
+        foreach (var objectKey in objectKeys)
+        {
+            store.Seed(objectKey);
+        }
+
+        var collector = CreateCollector(store, static () => { });
+
+        var complete = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.Equal(0, store.HeadRequestCount);
+        Assert.Equal(0, store.DeleteRequestCount);
+        Assert.False(complete);
+        Assert.All(objectKeys, objectKey => Assert.True(store.Contains(objectKey)));
+    }
+
+    [Fact]
+    public async Task ShouldRejectCloudSstListPageOverSixtyFourKilobytesBeforeProbingCandidates()
+    {
+        const string eligibleObjectKey = "sst/000000_01_00000000000000000001.sst";
+        var objectKeys = new[] { eligibleObjectKey }
+            .Concat(Enumerable.Range(0, 31).Select(_ =>
+                PantsCloudObjectLayout.SstPrefix + new string('x', 2_200) + ".sst"))
+            .ToArray();
+        Assert.True(objectKeys.Sum(Encoding.UTF8.GetByteCount) > 64 * 1024);
+        var store = new GuardedListPageCloudObjectStore(objectKeys);
+        store.Seed(eligibleObjectKey);
+        var collector = CreateCollector(store, static () => { });
+
+        var complete = await collector.CollectAsync(CancellationToken.None);
+
+        Assert.Equal(0, store.HeadRequestCount);
+        Assert.Equal(0, store.DeleteRequestCount);
+        Assert.False(complete);
+        Assert.True(store.Contains(eligibleObjectKey));
+    }
+
+    [Fact]
     public async Task ShouldCollectPartialCompactionOutputGivenGuardedMissingSiblingProof()
     {
         var store = new TestCloudObjectStore();
@@ -671,5 +784,177 @@ public sealed class CloudSstGarbageCollectionTests
         public void Seed(string key) => _inner.Seed(key, "data"u8);
 
         public bool Contains(string key) => _inner.GetData(key) is not null;
+    }
+
+    sealed class PagedCloudObjectStore : ICloudObjectStore
+    {
+        const string FirstObjectKey = "sst/000000_01_00000000000000000001.sst";
+        const string SecondObjectKey = "sst/000000_01_00000000000000000002.sst";
+
+        readonly SnapshotConsistencyCloudObjectStore _inner = new();
+
+        public List<string?> ListContinuations { get; } = [];
+
+        public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
+            _inner.GetAsync(objectKey, cancellationToken);
+
+        public ValueTask<CloudObjectMetadata?> HeadAsync(string objectKey, CancellationToken cancellationToken) =>
+            _inner.HeadAsync(objectKey, cancellationToken);
+
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken) =>
+            _inner.PutAsync(objectKey, data, condition, cancellationToken);
+
+        public ValueTask<CloudObjectListPage> ListPageAsync(
+            string prefix,
+            string? continuationToken,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ListContinuations.Add(continuationToken);
+            var objectKey = continuationToken switch
+            {
+                null => FirstObjectKey,
+                "page-2" => SecondObjectKey,
+                _ => throw new PantsInvalidArgumentException("The test store received an unknown continuation token.")
+            };
+            var objectKeys = objectKey.StartsWith(prefix, StringComparison.Ordinal) &&
+                             _inner.GetData(objectKey) is not null
+                ? new[] { objectKey }
+                : [];
+            var nextToken = continuationToken is null ? "page-2" : null;
+            return ValueTask.FromResult(new CloudObjectListPage(objectKeys, nextToken));
+        }
+
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            CloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken) =>
+            _inner.DeleteAsync(objectKey, condition, cancellationToken);
+
+        public void Seed(string objectKey) => _inner.Seed(objectKey, "orphan"u8);
+
+        public bool Contains(string objectKey) => _inner.GetData(objectKey) is not null;
+    }
+
+    sealed class BoundedBatchCloudObjectStore : ICloudObjectStore
+    {
+        readonly string[] _firstPageKeys;
+        readonly string _secondPageKey;
+        readonly SnapshotConsistencyCloudObjectStore _inner = new();
+        int _headRequestCount;
+
+        public BoundedBatchCloudObjectStore(string[] firstPageKeys, string secondPageKey)
+        {
+            _firstPageKeys = firstPageKeys;
+            _secondPageKey = secondPageKey;
+        }
+
+        public List<string?> ListContinuations { get; } = [];
+
+        public int HeadRequestCount => Volatile.Read(ref _headRequestCount);
+
+        public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
+            _inner.GetAsync(objectKey, cancellationToken);
+
+        public ValueTask<CloudObjectMetadata?> HeadAsync(string objectKey, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _headRequestCount);
+            return _inner.HeadAsync(objectKey, cancellationToken);
+        }
+
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken) =>
+            _inner.PutAsync(objectKey, data, condition, cancellationToken);
+
+        public ValueTask<CloudObjectListPage> ListPageAsync(
+            string prefix,
+            string? continuationToken,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ListContinuations.Add(continuationToken);
+            var page = continuationToken switch
+            {
+                null => _firstPageKeys,
+                "page-2" => [_secondPageKey],
+                _ => throw new PantsInvalidArgumentException("The test store received an unknown continuation token.")
+            };
+            var objectKeys = page
+                .Where(objectKey => objectKey.StartsWith(prefix, StringComparison.Ordinal) &&
+                                    _inner.GetData(objectKey) is not null)
+                .ToArray();
+            var nextToken = continuationToken is null ? "page-2" : null;
+            return ValueTask.FromResult(new CloudObjectListPage(objectKeys, nextToken));
+        }
+
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            CloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken) =>
+            _inner.DeleteAsync(objectKey, condition, cancellationToken);
+
+        public void Seed(string objectKey) => _inner.Seed(objectKey, "orphan"u8);
+
+        public bool Contains(string objectKey) => _inner.GetData(objectKey) is not null;
+    }
+
+    sealed class GuardedListPageCloudObjectStore(string[] objectKeys) : ICloudObjectStore
+    {
+        readonly SnapshotConsistencyCloudObjectStore _inner = new();
+        int _headRequestCount;
+        int _deleteRequestCount;
+
+        public int HeadRequestCount => Volatile.Read(ref _headRequestCount);
+
+        public int DeleteRequestCount => Volatile.Read(ref _deleteRequestCount);
+
+        public ValueTask<CloudObject?> GetAsync(string objectKey, CancellationToken cancellationToken) =>
+            _inner.GetAsync(objectKey, cancellationToken);
+
+        public ValueTask<CloudObjectMetadata?> HeadAsync(string objectKey, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _headRequestCount);
+            return _inner.HeadAsync(objectKey, cancellationToken);
+        }
+
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken) =>
+            _inner.PutAsync(objectKey, data, condition, cancellationToken);
+
+        public ValueTask<CloudObjectListPage> ListPageAsync(
+            string prefix,
+            string? continuationToken,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pageKeys = continuationToken is null
+                ? objectKeys.Where(objectKey => objectKey.StartsWith(prefix, StringComparison.Ordinal))
+                    .ToArray()
+                : [];
+            return ValueTask.FromResult(new CloudObjectListPage(pageKeys, null));
+        }
+
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            CloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _deleteRequestCount);
+            return _inner.DeleteAsync(objectKey, condition, cancellationToken);
+        }
+
+        public void Seed(string objectKey) => _inner.Seed(objectKey, "orphan"u8);
+
+        public bool Contains(string objectKey) => _inner.GetData(objectKey) is not null;
     }
 }

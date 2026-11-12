@@ -2,6 +2,9 @@ namespace Cntryl.Pants.Cloud.Internal.Objects;
 
 abstract class CloudObjectStore : ICloudObjectStore
 {
+    internal const int MaximumListPageKeys = 32;
+    internal const int MaximumListPageBytes = 64 * 1024;
+
     public virtual ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);

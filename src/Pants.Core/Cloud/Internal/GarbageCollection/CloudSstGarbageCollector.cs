@@ -1,13 +1,24 @@
+using System.Text;
+
 namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 sealed class CloudSstGarbageCollector
 {
+    const int MaximumCandidateProbesPerSweep = 8;
+    const int MaximumRetiredSstsPerSweep = 8;
+    const int MaximumContinuationTokenBytes = 4096;
+
     readonly Func<CancellationToken, ValueTask<CloudSstRetentionProof>> _captureProofAsync;
     readonly Action _ensureAuthority;
     readonly IFailpointHandler _failpoints;
     readonly Func<IReadOnlySet<string>> _readLocalProtectedNames;
     readonly ICloudObjectStore _sstStore;
     readonly Func<CancellationToken, ValueTask> _validateRemoteAuthorityAsync;
+    Queue<string> _pendingListCandidates = new();
+    string? _listContinuation;
+    string? _pendingListContinuation;
+    string? _retiredSstContinuation;
+    bool _hasPendingListPage;
 
     public CloudSstGarbageCollector(
         ICloudObjectStore sstStore,
@@ -31,13 +42,71 @@ sealed class CloudSstGarbageCollector
         {
             _ensureAuthority();
             using var proof = await _captureProofAsync(cancellationToken).ConfigureAwait(false);
-            var objectKeys = await _sstStore.ListAllAsync(
-                PantsCloudObjectLayout.SstPrefix,
-                cancellationToken).ConfigureAwait(false);
+            if (!_hasPendingListPage)
+            {
+                var page = await _sstStore.ListPageAsync(
+                    PantsCloudObjectLayout.SstPrefix,
+                    _listContinuation,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (page.ObjectKeys.Count > CloudObjectStore.MaximumListPageKeys)
+                {
+                    throw new PantsInternalException(
+                        $"Cloud LIST page item count exceeded limit of {CloudObjectStore.MaximumListPageKeys}.");
+                }
+
+                var pageBytes = 0;
+                foreach (var objectKey in page.ObjectKeys)
+                {
+                    var objectKeyBytes = Encoding.UTF8.GetByteCount(objectKey);
+                    if (objectKeyBytes > CloudObjectStore.MaximumListPageBytes - pageBytes)
+                    {
+                        throw new PantsInternalException(
+                            $"Cloud LIST page byte count exceeded limit of {CloudObjectStore.MaximumListPageBytes}.");
+                    }
+
+                    pageBytes += objectKeyBytes;
+                }
+
+                var nextListContinuation = string.IsNullOrEmpty(page.ContinuationToken)
+                    ? null
+                    : page.ContinuationToken;
+                if (nextListContinuation is not null &&
+                    Encoding.UTF8.GetByteCount(nextListContinuation) > MaximumContinuationTokenBytes)
+                {
+                    throw new PantsInternalException(
+                        $"Cloud LIST continuation token exceeded limit of {MaximumContinuationTokenBytes} bytes.");
+                }
+                else if (nextListContinuation is not null &&
+                         StringComparer.Ordinal.Equals(nextListContinuation, _listContinuation))
+                {
+                    throw new PantsInternalException("Cloud LIST repeated continuation token.");
+                }
+
+                _pendingListCandidates = new Queue<string>(page.ObjectKeys);
+                _pendingListContinuation = nextListContinuation;
+                _hasPendingListPage = true;
+            }
+
+            var hasRetiredSsts = proof.RetiredSsts is { Count: > 0 };
+            var listCandidateLimit = hasRetiredSsts
+                ? MaximumCandidateProbesPerSweep - 1
+                : MaximumCandidateProbesPerSweep;
+            var listCandidates = _pendingListCandidates
+                .Take(listCandidateLimit)
+                .ToArray();
+            var retiredBatch = SelectRetiredSsts(
+                proof.RetiredSsts,
+                _retiredSstContinuation,
+                Math.Min(
+                    MaximumRetiredSstsPerSweep,
+                    MaximumCandidateProbesPerSweep - listCandidates.Length));
+            var objectKeys = listCandidates
+                .Concat(retiredBatch.Names.Select(static name => PantsCloudObjectLayout.SstPrefix + name))
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal);
             var encounteredAnomaly = false;
-            foreach (var objectKey in objectKeys.Concat(proof.RetiredSsts?.Keys.Select(static name => PantsCloudObjectLayout.SstPrefix + name) ?? [])
-                         .Distinct(StringComparer.Ordinal)
-                         .Order(StringComparer.Ordinal))
+            foreach (var objectKey in objectKeys)
             {
                 _ensureAuthority();
                 if (!CloudSstObjectKey.TryGetName(objectKey, out var name))
@@ -133,7 +202,25 @@ sealed class CloudSstGarbageCollector
                 }
             }
 
-            return !encounteredAnomaly;
+            if (encounteredAnomaly)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < listCandidates.Length; index++)
+            {
+                _pendingListCandidates.Dequeue();
+            }
+
+            if (_pendingListCandidates.Count == 0)
+            {
+                _listContinuation = _pendingListContinuation;
+                _pendingListContinuation = null;
+                _hasPendingListPage = false;
+            }
+
+            _retiredSstContinuation = retiredBatch.NextContinuation;
+            return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -147,6 +234,52 @@ sealed class CloudSstGarbageCollector
         {
             return false;
         }
+    }
+
+    static (string[] Names, string? NextContinuation) SelectRetiredSsts(
+        IReadOnlyDictionary<string, FileMeta>? retiredSsts,
+        string? continuation,
+        int maximumNames)
+    {
+        if (retiredSsts is null || retiredSsts.Count == 0)
+        {
+            return (Array.Empty<string>(), null);
+        }
+
+        var names = GetNextNames(retiredSsts.Keys, continuation, maximumNames, out var hasMore);
+        if (names.Length == 0 && continuation is not null)
+        {
+            names = GetNextNames(retiredSsts.Keys, null, maximumNames, out hasMore);
+        }
+
+        return names.Length == 0
+            ? (names, null)
+            : (names, hasMore ? names[^1] : null);
+    }
+
+    static string[] GetNextNames(
+        IEnumerable<string> source,
+        string? continuation,
+        int maximumNames,
+        out bool hasMore)
+    {
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        hasMore = false;
+        foreach (var name in source)
+        {
+            if (continuation is not null && StringComparer.Ordinal.Compare(name, continuation) <= 0)
+            {
+                continue;
+            }
+
+            if (names.Add(name) && names.Count > maximumNames)
+            {
+                names.Remove(names.Max!);
+                hasMore = true;
+            }
+        }
+
+        return names.ToArray();
     }
 
     async ValueTask<bool> VerifyRetiredBytesAsync(

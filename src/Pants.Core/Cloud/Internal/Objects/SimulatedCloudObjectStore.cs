@@ -155,7 +155,21 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var keys = Directory.Exists(_root) ? Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories)
                 .Select(path => Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/'))
                 .Where(key => !key.StartsWith(".midge-locks/", StringComparison.Ordinal) && key.StartsWith(prefix, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray() : [];
-            return ValueTask.FromResult(new CloudObjectListPage(keys, null));
+            var continuationIndex = 0;
+            if (continuationToken is not null)
+            {
+                var index = Array.BinarySearch(keys, continuationToken, StringComparer.Ordinal);
+                continuationIndex = index >= 0 ? index + 1 : ~index;
+            }
+
+            var pageKeys = keys
+                .Skip(continuationIndex)
+                .Take(CloudObjectStore.MaximumListPageKeys)
+                .ToArray();
+            var nextContinuation = continuationIndex + pageKeys.Length < keys.Length && pageKeys.Length > 0
+                ? pageKeys[^1]
+                : null;
+            return ValueTask.FromResult(new CloudObjectListPage(pageKeys, nextContinuation));
         }
     }
 

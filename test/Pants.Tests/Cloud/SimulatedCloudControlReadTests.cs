@@ -6,6 +6,35 @@ namespace Cntryl.Pants.Cloud;
 
 public sealed class SimulatedCloudControlReadTests
 {
+    [Fact]
+    public async Task ShouldReturnSortedSimulatedCloudListPagesOfAtMostThirtyTwoObjects()
+    {
+        using var directory = new TemporaryDirectory();
+        await using var store = new SimulatedCloudObjectStore(directory.Path);
+        var expectedKeys = Enumerable.Range(1, 40)
+            .Select(index => $"sst/{index:D3}.sst")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var objectKey in expectedKeys.Reverse())
+        {
+            Assert.True(await store.PutAsync(
+                objectKey,
+                new byte[] { 1 },
+                new CloudObjectWriteCondition.IfAbsent(),
+                CancellationToken.None));
+        }
+
+        var firstPage = await store.ListPageAsync("sst/", null, CancellationToken.None);
+
+        Assert.Equal(expectedKeys[..32], firstPage.ObjectKeys);
+        Assert.NotNull(firstPage.ContinuationToken);
+
+        var secondPage = await store.ListPageAsync("sst/", firstPage.ContinuationToken, CancellationToken.None);
+
+        Assert.Equal(expectedKeys[32..], secondPage.ObjectKeys);
+        Assert.Null(secondPage.ContinuationToken);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

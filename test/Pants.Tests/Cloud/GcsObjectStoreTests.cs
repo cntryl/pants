@@ -241,6 +241,7 @@ public sealed class GcsObjectStoreTests
         Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
         Assert.Equal(2, handler.Requests.Count);
         Assert.Contains("prefix=database%2Fsst%2F", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
+        Assert.Contains("maxResults=32", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains("pageToken=opaque%2B%2F%20token", handler.Requests[1].Uri.Query, StringComparison.Ordinal);
     }
 
@@ -311,6 +312,7 @@ public sealed class GcsObjectStoreTests
         Assert.Equal(["sst/0001.sst", "sst/0002.sst"], objectKeys);
         Assert.Equal(2, handler.Requests.Count);
         Assert.All(handler.Requests, static request => Assert.Equal(0, request.ContentLength));
+        Assert.Contains("max-keys=32", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains(
             "marker=database%2Fsst%2F0001.sst",
             handler.Requests[1].Uri.Query,
