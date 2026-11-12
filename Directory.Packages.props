@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="Cntryl.Conventions.Testing.Analyzers" Version="1.0.0" />
+    <PackageVersion Include="Cntryl.Conventions.Testing.Analyzers" Version="1.0.1" />
     <PackageVersion Include="Cntryl.Conventions.Testing.CodeFixes" Version="1.0.0" />
     <PackageVersion Include="Corvus.Text.Json.Validator" Version="5.7.9" />
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />
