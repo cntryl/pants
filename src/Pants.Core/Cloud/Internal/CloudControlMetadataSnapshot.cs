@@ -1,5 +1,7 @@
 using System.Collections.Frozen;
+using System.Text.Json;
 using Cntryl.Pants.Storage.Internal;
+using Cntryl.Pants.Storage.Internal.Accounting;
 using Cntryl.Pants.Storage.Internal.IO;
 using Microsoft.Win32.SafeHandles;
 
@@ -16,9 +18,11 @@ sealed class CloudControlMetadataSnapshot : IDisposable
         FrozenDictionary<string, ReadOnlyMemory<byte>> files,
         ManifestState[] manifests,
         ManifestState? authoritativeManifest,
-        IDisposable reservation)
+        IDisposable reservation,
+        MetadataAccountingHandle? bootstrapAccounting = null)
     {
         _reservation = reservation;
+        BootstrapAccounting = bootstrapAccounting;
         Files = files;
         Manifests = manifests;
         AuthoritativeManifest = authoritativeManifest;
@@ -28,7 +32,7 @@ sealed class CloudControlMetadataSnapshot : IDisposable
             .ToArray();
         MaximumManifestSequence = manifests.Length == 0
             ? 0
-            : manifests.Max(static manifest => manifest.LastPersistedSequence);
+            : manifests.Max(static manifest => manifest.EditCheckpointId);
     }
 
     public FrozenDictionary<string, ReadOnlyMemory<byte>> Files { get; }
@@ -41,10 +45,88 @@ sealed class CloudControlMetadataSnapshot : IDisposable
 
     public ulong MaximumManifestSequence { get; }
 
+    public MetadataAccountingHandle? BootstrapAccounting { get; }
+
     public void Dispose()
     {
         Interlocked.Exchange(ref _reservation, null)?.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    public static CloudControlMetadataSnapshot CreateBootstrapCandidate(ResourceBudget budget) =>
+        CreateBootstrapCandidate(budget, out _);
+
+    internal static CloudControlMetadataSnapshot CreateBootstrapCandidate(ResourceBudget budget,
+        out MetadataAccountingHandle accounting)
+    {
+        // FORMAT 9's empty manifest has a fixed, small shape. Admit its complete encoded/decoded
+        // envelope before creating any payload, independently of the later persistent runtime.
+        const int maximumEncodedBytes = 1024;
+        var owner = new MetadataAccountingOwner();
+        accounting = owner.Handle;
+        using var checkpoint = owner.Begin(MetadataOperationKind.Checkpoint, MetadataOrigin.Bootstrap,
+            MetadataMedium.MemoryOnly);
+        IDisposable? reservation = null;
+        try
+        {
+            reservation = budget.Reserve(GetWorkspaceBytes(maximumEncodedBytes));
+            var manifest = ManifestState.CreateInitial();
+            var encoded = ManifestCodec.Encode(manifest,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
+            var format = "midge-format-version=9\n"u8.ToArray();
+            if (encoded.Length + format.Length > maximumEncodedBytes)
+            {
+                throw new PantsResourceLimitException("The empty bootstrap manifest exceeds its fixed admission envelope.");
+            }
+
+            using var formatWrite = owner.Begin(MetadataOperationKind.OtherMetadata, MetadataOrigin.Bootstrap,
+                MetadataMedium.MemoryOnly);
+            format = StageMemoryPayload(format, formatWrite.Observe(MetadataPayload.OtherMetadata));
+            formatWrite.Finish(true);
+            encoded = StageMemoryPayload(encoded, checkpoint.Observe(MetadataPayload.Snapshot));
+
+            var files = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
+            {
+                ["FORMAT"] = format,
+                ["manifest.snapshot.json"] = encoded,
+                ["manifest.journal"] = ReadOnlyMemory<byte>.Empty
+            };
+            var candidate = new CloudControlMetadataSnapshot(files.ToFrozenDictionary(StringComparer.Ordinal),
+                [manifest], manifest, reservation, accounting);
+            // This checkpoint installs only volatile immutable memory. No native filesystem
+            // barrier or Persistent cost is claimed by its independent MemoryOnly owner.
+            checkpoint.SnapshotDurable(checked((ulong)encoded.Length));
+            checkpoint.CheckpointComplete();
+            checkpoint.Finish(true);
+            reservation = null;
+            return candidate;
+        }
+        catch
+        {
+            checkpoint.Finish(false);
+            throw;
+        }
+        finally
+        {
+            reservation?.Dispose();
+        }
+    }
+
+    static byte[] StageMemoryPayload(ReadOnlySpan<byte> bytes, MetadataIoObservation observation)
+    {
+        using var staging = new MemoryStream(bytes.Length);
+        observation.Issued(checked((ulong)bytes.Length));
+        try
+        {
+            staging.Write(bytes);
+            observation.Returned(checked((ulong)bytes.Length));
+        }
+        catch
+        {
+            observation.Mutation();
+            throw;
+        }
+        return staging.ToArray();
     }
 
     public static CloudControlMetadataSnapshot Capture(
@@ -103,16 +185,10 @@ sealed class CloudControlMetadataSnapshot : IDisposable
                 files.Add(name, PositionalFile.ReadExactly(handle, 0, length));
             }
 
-            var manifests = new List<ManifestState>(2);
-            var referencedNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
+            var manifests = new List<ManifestState>(1);
+            if (files.ContainsKey("manifest.snapshot.json"))
             {
-                if (files.TryGetValue(fileName, out var bytes))
-                {
-                    var manifest = CloudManifestReader.DecodeManifest(bytes.Span);
-                    CloudSstReferenceReader.AddManifestNames(manifest, referencedNames);
-                    manifests.Add(manifest);
-                }
+                manifests.Add(CloudManifestReader.DecodeMetadata(files));
             }
 
             var authoritativeManifest = manifests.FirstOrDefault();

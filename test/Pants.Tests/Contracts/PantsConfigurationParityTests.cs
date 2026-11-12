@@ -144,7 +144,7 @@ public sealed class PantsConfigurationParityTests
         Assert.Equal(TimeSpan.FromSeconds(1), explicitProfile.LeaseClockSkewTolerance);
         Assert.Equal(TimeSpan.FromSeconds(10.0 / 3), explicitProfile.LeaseHeartbeatInterval);
         Assert.Equal(TimeSpan.MaxValue, maximum.LeaseTimeToLive);
-        Assert.Equal(TimeSpan.FromSeconds(10), maximum.LeaseHeartbeatInterval);
+        Assert.Equal(TimeSpan.FromTicks(TimeSpan.MaxValue.Ticks / 3), maximum.LeaseHeartbeatInterval);
     }
 
     [Theory]
@@ -169,7 +169,7 @@ public sealed class PantsConfigurationParityTests
             .WithLeaseTimeToLive(TimeSpan.FromTicks(1)));
 
         Assert.Equal(TimeSpan.FromTicks(1), plan.LeaseTimeToLive);
-        Assert.Equal(TimeSpan.FromMilliseconds(1), plan.LeaseHeartbeatInterval);
+        Assert.Equal(TimeSpan.FromTicks(1), plan.LeaseHeartbeatInterval);
     }
 
     [Fact]

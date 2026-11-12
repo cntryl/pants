@@ -5,6 +5,37 @@ namespace Cntryl.Pants.Storage.Wal;
 
 public sealed class RemoteWalReplayTests
 {
+    [Theory]
+    [InlineData(PantsRecoveryPolicy.Strict, "timeout")]
+    [InlineData(PantsRecoveryPolicy.Salvage, "timeout")]
+    [InlineData(PantsRecoveryPolicy.Strict, "busy")]
+    [InlineData(PantsRecoveryPolicy.Salvage, "busy")]
+    [InlineData(PantsRecoveryPolicy.Strict, "io")]
+    [InlineData(PantsRecoveryPolicy.Salvage, "io")]
+    public void ShouldPreserveTypedRemoteFailureWithoutChangingLocalHistory(PantsRecoveryPolicy policy, string kind)
+    {
+        using var source = new TemporaryDirectory();
+        var segment = SealOneCommit(source.Path);
+        using var consumer = new TemporaryDirectory();
+        var state = NewState();
+        PantsException expected = kind switch
+        {
+            "timeout" => new PantsTimeoutException("Injected remote verification timeout."),
+            "busy" => new PantsBusyException("Injected remote verification contention."),
+            _ => new PantsIOException("Injected remote verification I/O failure.")
+        };
+        using var store = LocalDiskStore.Open(consumer.Path, state, recoveryPolicy: policy,
+            remoteWalSegments: [new VerificationFailureSegment(segment.Id, segment.Bytes, expected)],
+            remoteWalHead: segment.Facts.Link, remoteSequenceFloor: segment.Facts.Link.LastSeq, deferWalReplay: true);
+        var ledgerPath = Path.Combine(consumer.Path, "wal", "LEDGER");
+        var authority = File.ReadAllBytes(ledgerPath);
+
+        var actual = Record.Exception(() => store.ReplayDeferredWal(state, new StartupPhaseRecorder(null), static _ => { }));
+
+        Assert.Same(expected, actual);
+        Assert.Equal(authority, File.ReadAllBytes(ledgerPath));
+    }
+
     static readonly ColumnFamilyIdentity DefaultFamily = new(
         0,
         "default",
@@ -15,14 +46,16 @@ public sealed class RemoteWalReplayTests
     {
         using var directory = new TemporaryDirectory();
         var segment = SealOneCommit(directory.Path);
-        File.Delete(segment.Path);
+        using var consumer = new TemporaryDirectory();
 
         using var store = LocalDiskStore.Open(
-            directory.Path,
+            consumer.Path,
             NewState(),
-            remoteWalSegments: [new BytesRemoteSegment(segment.Id, segment.Bytes)]);
+            remoteWalSegments: [new BytesRemoteSegment(segment.Id, segment.Bytes)],
+            remoteWalHead: segment.Facts.Link,
+            remoteSequenceFloor: segment.Facts.Link.LastSeq);
 
-        Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.wal"));
+        Assert.Single(Directory.GetFiles(Path.Combine(consumer.Path, "wal"), "*.wal"));
         Assert.True(store.WriterEpoch > 0);
     }
 
@@ -31,14 +64,16 @@ public sealed class RemoteWalReplayTests
     {
         using var directory = new TemporaryDirectory();
         var segment = SealOneCommit(directory.Path);
-        File.Delete(segment.Path);
+        using var consumer = new TemporaryDirectory();
         var remote = new BlockingBytesRemoteSegment(segment.Id, segment.Bytes);
         var state = NewState();
         using var store = LocalDiskStore.Open(
-            directory.Path,
+            consumer.Path,
             state,
             remoteWalSegments: [remote],
-            deferWalReplay: true);
+            deferWalReplay: true,
+            remoteWalHead: segment.Facts.Link,
+            remoteSequenceFloor: segment.Facts.Link.LastSeq);
         var deadline = OperationDeadline.FromBudget(TimeSpan.FromSeconds(1));
         var replay = Task.Run(async () => await deadline.RunAsync(
             token =>
@@ -93,7 +128,7 @@ public sealed class RemoteWalReplayTests
         new ManualClock(DateTimeOffset.UnixEpoch),
         new RuntimeTelemetry());
 
-    static (string Path, ulong Id, byte[] Bytes) SealOneCommit(string root)
+    static (string Path, ulong Id, byte[] Bytes, WalSealedFacts Facts) SealOneCommit(string root)
     {
         var state = NewState();
         using (var store = LocalDiskStore.Open(root, state))
@@ -102,8 +137,10 @@ public sealed class RemoteWalReplayTests
             _ = store.RotateActiveLocalWal();
         }
 
-        var path = Assert.Single(Directory.GetFiles(Path.Combine(root, "wal"), "*.wal"));
-        return (path, ulong.Parse(Path.GetFileNameWithoutExtension(path), System.Globalization.CultureInfo.InvariantCulture), File.ReadAllBytes(path));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(root, "wal"));
+        var member = Assert.Single(ledger.Members, static member => member.Sealed is not null);
+        var path = Path.Combine(root, "wal", $"{member.Open.Id:00000000000000000000}.wal");
+        return (path, ulong.Parse(Path.GetFileNameWithoutExtension(path), System.Globalization.CultureInfo.InvariantCulture), File.ReadAllBytes(path), member.Sealed!);
     }
 
     static CommitPayload CreateCommitPayload(RuntimeState state)
@@ -143,6 +180,31 @@ public sealed class RemoteWalReplayTests
 
         public Stream OpenRead(CancellationToken cancellationToken = default) =>
             new MemoryStream(bytes, false);
+    }
+
+    sealed class VerificationFailureSegment(ulong segmentId, byte[] bytes, PantsException failure) : IRemoteWalSegment
+    {
+        public ulong SegmentId => segmentId;
+        public string Name => $"remote-{segmentId}";
+        public ulong SizeBytes => (ulong)bytes.Length;
+        public Stream OpenRead(CancellationToken cancellationToken = default) => new VerificationFailureStream(bytes, failure);
+    }
+
+    sealed class VerificationFailureStream(byte[] bytes, PantsException failure) : MemoryStream(bytes, false)
+    {
+        public override long Position
+        {
+            get => base.Position;
+            set
+            {
+                if (value == 0 && base.Position == Length)
+                {
+                    throw failure;
+                }
+
+                base.Position = value;
+            }
+        }
     }
 
     sealed class BlockingBytesRemoteSegment(ulong segmentId, byte[] bytes) : IRemoteWalSegment

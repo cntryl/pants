@@ -14,7 +14,7 @@ public class IteratorBenchmarks : Tier1Benchmark
         _entries = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
         for (var index = 0; index < 1_000; index++)
         {
-            _entries.Add(BenchmarkData.Key(index), new CellState(BenchmarkData.Value(64), index, null));
+            _entries.Add(BenchmarkData.Key(index), new CellState(BenchmarkData.Value(64), (ulong)index, null));
         }
 
         _middle = BenchmarkData.Key(500);

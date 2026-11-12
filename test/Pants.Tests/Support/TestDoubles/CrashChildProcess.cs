@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Cntryl.Pants.Storage.Internal.Lease;
 using Xunit.Sdk;
 
 namespace Cntryl.Pants.Support.TestDoubles;
@@ -35,6 +36,69 @@ sealed class CrashChildProcess : IDisposable
     public Task<string> StandardOutput { get; }
 
     public Task<string> StandardError { get; }
+
+    public static async Task<WriterLeaseSnapshot> CaptureWriterLeaseAsync(string databasePath, bool simulatedCloud)
+    {
+        var local = LeaderRecordCodec.Decode(
+            await File.ReadAllBytesAsync(Path.Combine(databasePath, ".midge_leader")));
+        Assert.StartsWith($"{Environment.ProcessId}.", local.HolderId, StringComparison.Ordinal);
+        CloudLeaseSnapshot? shared = null;
+        if (simulatedCloud)
+        {
+            await using var objects = new SimulatedCloudObjectStore(Path.Combine(databasePath, "cloud_store"));
+            var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
+            shared = Assert.IsType<CloudLeaseSnapshot>(await store.ReadAsync(CancellationToken.None));
+            Assert.Equal(local.Epoch, shared.Lease.Epoch);
+            Assert.StartsWith($"pants-{Environment.ProcessId}-", shared.Lease.HolderId, StringComparison.Ordinal);
+        }
+
+        return new WriterLeaseSnapshot(local, shared);
+    }
+
+    /// <summary>Called only after the captured writer exited or its copied-image source was disposed.</summary>
+    public static async Task ExpireStoppedWriterLeaseAsync(string databasePath, WriterLeaseSnapshot captured)
+    {
+        using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+        FileStream exclusion;
+        while (true)
+        {
+            try
+            {
+                exclusion = new FileStream(Path.Combine(databasePath, "LOCK"), FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException) when (!timeout.IsCancellationRequested)
+            {
+                await Task.Delay(PollInterval, timeout.Token);
+            }
+        }
+
+        // Keep the stopped owner's local exclusion while checking identities and expiring records.
+        await using (exclusion)
+        {
+            var leasePath = Path.Combine(databasePath, ".midge_leader");
+            var local = LeaderRecordCodec.Decode(await File.ReadAllBytesAsync(leasePath));
+            Assert.Equal(captured.LocalLease.Epoch, local.Epoch);
+            Assert.Equal(captured.LocalLease.HolderId, local.HolderId);
+            if (captured.SharedLease is { } capturedShared)
+            {
+                await using var objects = new SimulatedCloudObjectStore(Path.Combine(databasePath, "cloud_store"));
+                var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
+                var shared = Assert.IsType<CloudLeaseSnapshot>(await store.ReadAsync(CancellationToken.None));
+                Assert.Equal(capturedShared.Lease.Epoch, shared.Lease.Epoch);
+                Assert.Equal(capturedShared.Lease.HolderId, shared.Lease.HolderId);
+                Assert.Equal(capturedShared.Lease.OwnerToken, shared.Lease.OwnerToken);
+                Assert.Equal(capturedShared.Lease.AcquiredAtUtc, shared.Lease.AcquiredAtUtc);
+                Assert.True(await store.TryReplaceAsync(shared.Version,
+                    shared.Lease with { ExpiresAtUtc = DateTimeOffset.UnixEpoch }, CancellationToken.None));
+            }
+
+            await File.WriteAllBytesAsync(leasePath,
+                LeaderRecordCodec.Encode(local with { AcquiredAt = "1970-01-01T00:00:00Z" }));
+            await PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath);
+        }
+    }
 
     public static ProcessStartInfo CreateStartInfo(Type testClass, string childTestName)
     {
@@ -276,4 +340,6 @@ sealed class CrashChildProcess : IDisposable
 
     static bool HasEntries(string path) =>
         Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any();
+
+    public sealed record WriterLeaseSnapshot(LeaderRecord LocalLease, CloudLeaseSnapshot? SharedLease);
 }

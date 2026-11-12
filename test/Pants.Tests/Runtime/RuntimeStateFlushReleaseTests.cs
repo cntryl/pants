@@ -34,7 +34,7 @@ public sealed class RuntimeStateFlushReleaseTests
         state.ReleaseFlushedGeneration(Flush([Mutation(1, 1)]));
 
         Assert.True(state.FamilyData[Family].TryGetValue(Key(1), out var cell));
-        Assert.Equal(5, cell!.WriteSequence);
+        Assert.Equal(5UL, cell!.WriteSequence);
     }
 
     [Fact]

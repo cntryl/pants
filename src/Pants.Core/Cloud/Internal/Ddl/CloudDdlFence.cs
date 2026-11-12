@@ -2,8 +2,6 @@ namespace Cntryl.Pants.Cloud.Internal.Ddl;
 
 static class CloudDdlFence
 {
-    const int EpochBitCount = sizeof(ulong) * 8;
-
     public static byte[] Encode(ReadOnlySpan<byte> registryBytes, ulong writerEpoch)
     {
         if (writerEpoch == 0)
@@ -12,26 +10,13 @@ static class CloudDdlFence
                 "Cloud DDL fencing requires a non-zero writer epoch.");
         }
 
-        _ = CloudDdlJson.DeserializeRegistry(registryBytes);
-        var contentLength = registryBytes.Length;
-        while (contentLength > 0 && IsJsonWhitespace(registryBytes[contentLength - 1]))
+        var registry = CloudDdlJson.DeserializeRegistry(registryBytes);
+        if (registry.WriterEpoch > writerEpoch)
         {
-            contentLength--;
+            throw new PantsFencedException("The cloud DDL registry is owned by a successor.");
         }
 
-        var fenced = new byte[contentLength + EpochBitCount + 2];
-        registryBytes[..contentLength].CopyTo(fenced);
-        fenced[contentLength] = (byte)'\n';
-        for (var bit = 0; bit < EpochBitCount; bit++)
-        {
-            fenced[contentLength + bit + 1] =
-                (writerEpoch & (1UL << bit)) == 0 ? (byte)' ' : (byte)'\t';
-        }
-
-        fenced[^1] = (byte)'\n';
-        return fenced;
+        registry.WriterEpoch = writerEpoch;
+        return CloudDdlJson.SerializeRegistry(registry);
     }
-
-    static bool IsJsonWhitespace(byte value) =>
-        value is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n';
 }

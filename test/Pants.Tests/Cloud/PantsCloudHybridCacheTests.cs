@@ -236,7 +236,7 @@ public sealed class PantsCloudHybridCacheTests
         Assert.Contains(corruptingHandler.CorruptedObjectPath, remoteSsts);
         Assert.True(File.Exists(localSst));
 
-        await CommitEmptyCloudStrictAsync(database);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
         Assert.Single(LocalSsts(cache.Path));
         await AssertReadableAsync(database, "provider-failed-readback");
@@ -334,14 +334,6 @@ public sealed class PantsCloudHybridCacheTests
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), value);
         await transaction.CommitAsync(writeOptions);
-    }
-
-    static async Task CommitEmptyCloudStrictAsync(IPantsDatabase database)
-    {
-        await using var transaction = await database.Transactions.BeginAsync(
-            database.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadWrite);
-        await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
     }
 
     static async Task AssertReadableAsync(

@@ -4,24 +4,38 @@ namespace Cntryl.Pants.Cloud.Internal.GarbageCollection;
 
 static class SimulatedCloudSstGarbageCollector
 {
-    static readonly string[] ManifestFileNames =
-    [
-        "manifest.snapshot.json",
-        "manifest.json"
-    ];
-
     public static bool Collect(
         string localRoot,
         string cloudRoot,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints,
+        Func<IReadOnlyDictionary<string, FileMeta>>? readDeletionCandidates = null,
+        Action<FileMeta>? acknowledgeDeletion = null,
+        Action? ensureAuthority = null)
     {
         try
         {
-            var proof = CaptureProof(localRoot, cloudRoot);
+            ensureAuthority?.Invoke();
+            var proof = CaptureProof(localRoot, cloudRoot, readDeletionCandidates?.Invoke(), acknowledgeDeletion is not null);
             var cloudSstDirectory = Path.Combine(cloudRoot, "sst");
             Directory.CreateDirectory(cloudSstDirectory);
             ReconcileQuarantines(cloudSstDirectory);
             var encounteredAnomaly = false;
+            foreach (var retired in proof.ReleasedRetired.Values)
+            {
+                var path = Path.Combine(cloudSstDirectory, retired.Name);
+                if (!File.Exists(path) && !CloudSstReferenceReader.ReadLocalProtectedNames(localRoot).Contains(retired.Name))
+                {
+                    ensureAuthority?.Invoke();
+                    if (!VerifyProof(proof))
+                    {
+                        return false;
+                    }
+
+                    AtomicStagedFile.FlushDirectory(cloudSstDirectory);
+                    acknowledgeDeletion!(retired);
+                }
+            }
+
             foreach (var path in Directory.EnumerateFiles(
                          cloudSstDirectory,
                          "*",
@@ -40,7 +54,15 @@ static class SimulatedCloudSstGarbageCollector
                     continue;
                 }
 
-                var expectedVersion = CreateVersion(File.ReadAllBytes(path));
+                var bytes = File.ReadAllBytes(path);
+                proof.ReleasedRetired.TryGetValue(name, out var retired);
+                if (retired is not null && (!retired.ContentCrc32C.HasValue || retired.SizeBytes != (ulong)bytes.Length || retired.ContentCrc32C.Value != DiskFormat.Crc32C(bytes)))
+                {
+                    encounteredAnomaly = true;
+                    continue;
+                }
+
+                var expectedVersion = CreateVersion(bytes);
                 if (!VerifyProof(proof) ||
                     CloudSstReferenceReader.ReadLocalProtectedNames(localRoot).Contains(name))
                 {
@@ -48,9 +70,16 @@ static class SimulatedCloudSstGarbageCollector
                 }
 
                 failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
-                if (!QuarantineAndDelete(path, expectedVersion))
+                ensureAuthority?.Invoke();
+                if (!VerifyProof(proof) || !QuarantineAndDelete(path, expectedVersion))
                 {
                     return false;
+                }
+
+                if (retired is not null)
+                {
+                    AtomicStagedFile.FlushDirectory(cloudSstDirectory);
+                    acknowledgeDeletion!(retired);
                 }
             }
 
@@ -91,33 +120,43 @@ static class SimulatedCloudSstGarbageCollector
         }
     }
 
-    static (IReadOnlySet<string> ProtectedNames, IReadOnlyList<SimulatedCloudObjectGuard> Guards)
-        CaptureProof(string localRoot, string cloudRoot)
+    static (IReadOnlySet<string> ProtectedNames, IReadOnlyList<SimulatedCloudObjectGuard> Guards, IReadOnlyDictionary<string, FileMeta> ReleasedRetired)
+        CaptureProof(string localRoot, string cloudRoot, IReadOnlyDictionary<string, FileMeta>? candidates, bool canAcknowledge)
     {
         var names = new HashSet<string>(
             CloudSstReferenceReader.ReadLocalProtectedNames(localRoot),
             StringComparer.Ordinal);
         var guards = new List<SimulatedCloudObjectGuard>();
-        foreach (var fileName in ManifestFileNames)
+        var pointerPath = Path.Combine(cloudRoot, CloudMetadataAuthority.PointerKey.Replace('/', Path.DirectorySeparatorChar));
+        var pointerBytes = File.ReadAllBytes(pointerPath);
+        var selected = CloudMetadataAuthority.ReadCommittedFilesAsync(new SimulatedCloudObjectStore(cloudRoot), CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult() ?? throw new PantsRecoveryFailedException("Simulated cloud has no committed metadata authority.");
+        var manifest = CloudManifestReader.DecodeMetadata(selected);
+        CloudSstReferenceReader.AddManifestNames(manifest, names);
+        var released = new Dictionary<string, FileMeta>(StringComparer.Ordinal);
+        foreach (var retired in manifest.RetiredSsts)
         {
-            var path = Path.Combine(cloudRoot, "metadata", fileName);
-            if (!File.Exists(path))
+            if (canAcknowledge && candidates?.TryGetValue(retired.Key, out var candidate) == true && ManifestTransitions.SameIdentity(retired.Value, candidate))
             {
-                continue;
+                released.Add(retired.Key, retired.Value.Clone());
             }
-
-            var bytes = File.ReadAllBytes(path);
-            CloudSstReferenceReader.AddManifestNames(
-                CloudManifestReader.DecodeManifest(bytes),
-                names);
-            guards.Add(new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
+            else
+            {
+                names.Add(retired.Key);
+            }
+        }
+        if (selected.TryGetValue("intent_log.json", out var intentBytes))
+        {
+            CloudSstReferenceReader.AddIntentNames(intentBytes, names);
         }
 
-        return (names, guards);
+        guards.Add(new SimulatedCloudObjectGuard(pointerPath, CreateVersion(pointerBytes)));
+
+        return (names, guards, released);
     }
 
     static bool VerifyProof(
-        (IReadOnlySet<string> ProtectedNames, IReadOnlyList<SimulatedCloudObjectGuard> Guards) proof)
+        (IReadOnlySet<string> ProtectedNames, IReadOnlyList<SimulatedCloudObjectGuard> Guards, IReadOnlyDictionary<string, FileMeta> ReleasedRetired) proof)
     {
         foreach (var guard in proof.Guards)
         {

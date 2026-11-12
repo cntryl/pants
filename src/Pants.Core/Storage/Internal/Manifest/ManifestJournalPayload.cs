@@ -49,7 +49,7 @@ static class ManifestJournalPayload
 
         if (id is null || editStart < 0)
         {
-            return 0;
+            throw new PantsCorruptionException("FORMAT 9 journal edits require an edit identity envelope.");
         }
 
         editId = id;

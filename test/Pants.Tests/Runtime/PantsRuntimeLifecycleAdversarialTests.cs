@@ -70,8 +70,8 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
             new RuntimeDependencies(failpoint));
 
         _ = await actor.GetRecoveryMetricsAsync(CancellationToken.None);
-        failpoint.Arm();
-        _ = await actor.GetRecoveryMetricsAsync(CancellationToken.None);
+        failpoint.ArmOnRuntimeMetricsResponse();
+        _ = await actor.GetRuntimeMetricsAsync(CancellationToken.None);
         await failpoint.WaitUntilFaultedAsync(TestTimeouts.Expected);
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>

@@ -5,6 +5,23 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class WalSegmentCoverageTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShouldRetainWalWhenItsFamilyHasNoDurableFlushAuthority(bool familyIsActive)
+    {
+        using var directory = new TemporaryDirectory();
+        var payload = WalCodec.EncodeRecord(new WalRecord(42, WalOperation.Put,
+            "key"u8.ToArray(), "value"u8.ToArray(), 1, null, null, null, 1));
+        var coverage = WalSegmentCoverage.Evaluate(Frame([payload]),
+            new Dictionary<uint, ulong> { [0] = 100 },
+            familyIsActive ? new HashSet<uint> { 0, 42 } : new HashSet<uint> { 0 },
+            directory.Path);
+
+        Assert.False(coverage.Covered);
+        Assert.Equal(42U, coverage.FirstUncoveredFamilyId);
+    }
+
     [Fact]
     public void ShouldPruneOnlyTheCoveredOldestPrefixWhenWriterEpochsAreMonotonic()
     {

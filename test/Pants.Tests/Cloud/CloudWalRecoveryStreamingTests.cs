@@ -68,7 +68,7 @@ public sealed class CloudWalRecoveryStreamingTests
         var walStore = new RangeTrackingCloudObjectStore();
         var payload = new byte[(ProviderCloudPersistence.WalRecoveryPageBytes * 3) + 17];
         Random.Shared.NextBytes(payload);
-        await PublishSegmentAsync(cache.Path, walStore, payload);
+        var segmentBytes = await PublishSegmentAsync(cache.Path, walStore, payload);
         walStore.ResetReadTracking();
 
         var hydrated = await ProviderCloudPersistence.HydrateLocalCacheAsync(
@@ -86,10 +86,10 @@ public sealed class CloudWalRecoveryStreamingTests
             !Directory.Exists(walDirectory) || Directory.GetFiles(walDirectory).Length == 0,
             "Recovery staged a local copy of a remote-only WAL segment.");
         using var stream = remote.OpenRead();
-        var read = new byte[payload.Length];
+        var read = new byte[segmentBytes.Length];
         stream.Position = 5;
         Assert.True(DiskFormat.ReadExactly(stream, read.AsSpan(5)));
-        Assert.Equal(payload.AsSpan(5).ToArray(), read.AsSpan(5).ToArray());
+        Assert.Equal(segmentBytes.AsSpan(5).ToArray(), read.AsSpan(5).ToArray());
         Assert.True(walStore.LargestSingleReadBytes <= ProviderCloudPersistence.WalRecoveryPageBytes);
     }
 
@@ -150,7 +150,7 @@ public sealed class CloudWalRecoveryStreamingTests
         Assert.True(walStore.LargestSingleReadBytes < 4096);
     }
 
-    static async Task PublishSegmentAsync(
+    static async Task<byte[]> PublishSegmentAsync(
         string cachePath,
         ICloudObjectStore walStore,
         byte[] payload)
@@ -171,9 +171,10 @@ public sealed class CloudWalRecoveryStreamingTests
             new TestCloudObjectStore(),
             lease);
 
-        await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
-            CancellationToken.None);
+        new Random(17).NextBytes(payload);
+        var segment = TestWalSegment.Create(1, epoch, 1, "1.wal", payload);
+        await persistence.PublishWalBatchAsync([segment], CancellationToken.None);
+        return segment.Bytes;
     }
 
     sealed class RangeTrackingCloudObjectStore : ICloudObjectStore

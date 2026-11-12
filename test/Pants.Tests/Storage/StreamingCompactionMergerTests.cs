@@ -70,6 +70,105 @@ public sealed class StreamingCompactionMergerTests
     }
 
     [Fact]
+    public void ShouldNotRollARangeOnlyPartitionBelowTheTarget()
+    {
+        var source = Build([], [("a", "b", 3), ("c", "d", 2)]);
+
+        var partitions = Partition(source, Plan(rangeTombstoneGcEligible: false), 37);
+
+        var partition = Assert.Single(partitions);
+        Assert.Empty(partition.Entries);
+        Assert.Equal(2, partition.RangeTombstones.Count);
+    }
+
+    [Fact]
+    public void ShouldNotRollARangeOnlyPartitionWithoutTombstones()
+    {
+        var partitions = Partition(Build([], []), Plan(), 1);
+
+        Assert.Empty(partitions);
+    }
+
+    [Fact]
+    public void ShouldNotRollAnEmptyPartitionOnWriterOverheadAlone()
+    {
+        var partitions = Partition(Build([], []), Plan(), 10_000);
+
+        Assert.Empty(partitions);
+    }
+
+    [Fact]
+    public void ShouldNotRollAtAGroupThatDropsItsOnlyVersion()
+    {
+        var source = Build(
+            [("a", 1, "v"), ("b", 2, null), ("c", 1, "v"), ("d", 1, "v")],
+            []);
+
+        var partitions = Partition(source, Plan(2), 68);
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Equal(
+            ["a", "c"],
+            partitions[0].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(["d"], partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+    }
+
+    [Fact]
+    public void ShouldNotRollWhenThePartitionIsBelowTheTargetSize()
+    {
+        var source = Build([("a", 1, "v"), ("b", 2, "v")]);
+
+        var partitions = Partition(source, Plan(), 69);
+
+        var partition = Assert.Single(partitions);
+        Assert.Equal(["a", "b"], partition.Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+    }
+
+    [Fact]
+    public void ShouldRollARangeOnlyPartitionWhenTombstonesReachTheTarget()
+    {
+        var source = Build([], [("a", "b", 3), ("c", "d", 2), ("e", "f", 1)]);
+
+        var partitions = Partition(source, Plan(rangeTombstoneGcEligible: false), 36);
+
+        Assert.Equal([2, 1], partitions.Select(static partition => partition.RangeTombstones.Count));
+    }
+
+    [Fact]
+    public void ShouldRollWhenThePartitionReachesTheTargetSize()
+    {
+        var source = Build([("a", 1, "v"), ("b", 2, "v"), ("c", 3, "v")]);
+
+        var partitions = Partition(source, Plan(), 68);
+
+        Assert.Equal([2, 1], partitions.Select(static partition => partition.Entries.Count));
+    }
+
+    [Fact]
+    public void ShouldTreatAZeroTargetAsOneByte()
+    {
+        var source = Build([("a", 1, "v"), ("b", 2, "v")]);
+
+        var partitions = Partition(source, Plan(), 0);
+
+        Assert.Equal(2, partitions.Length);
+        Assert.Equal(
+            ["a", "b"],
+            partitions.SelectMany(static partition => partition.Entries)
+                .Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(2, CompactionOutputPartitioner.Partition(
+            CompactionMerger.Merge([source], Plan()),
+            0).Count);
+
+        var fragmentSource = Build([("a", 1, "v"), ("z", 2, "v")]);
+        Assert.Equal(2, Partition(fragmentSource, FragmentPlan("a", "z", "m"), 0).Length);
+        Assert.Throws<ArgumentOutOfRangeException>(() => Partition(source, Plan(), -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CompactionOutputPartitioner.Partition(
+            CompactionMerger.Merge([source], Plan()),
+            -1));
+    }
+
+    [Fact]
     public void ShouldMergeManySmallInputsAcrossMultipleOverlappingKeyRanges()
     {
         var files = Enumerable.Range(0, 6)
@@ -249,9 +348,21 @@ public sealed class StreamingCompactionMergerTests
         Assert.Equal(2, partitions.Length);
         Assert.Empty(partitions[0].Entries);
         Assert.Equal(["z"], partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
+        Assert.Equal(
+            source.Entries.Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)),
+            partitions.SelectMany(static partition => partition.Entries).Select(entry => (
+                Key: TestBytes.ToText(entry.Key),
+                entry.Sequence,
+                Value: entry.Value is null ? null : TestBytes.ToText(entry.Value),
+                entry.IsDelete)));
         Assert.Equal(("a", "b"), (
             TestBytes.ToText(Assert.Single(partitions[0].RangeTombstones).Start),
             TestBytes.ToText(partitions[0].RangeTombstones[0].End)));
+        Assert.Empty(partitions[1].RangeTombstones);
     }
 
     [Fact]
@@ -349,7 +460,7 @@ public sealed class StreamingCompactionMergerTests
     public void ShouldKeepFinalKeyWithItsEndingRangeWithinOneFragmentOutput()
     {
         var source = Build(
-            [("a", 1, "value"), ("m", 2, "value"), ("n", 3, "value"), ("z", 4, "value")],
+            [("a", 1, "value"), ("n", 3, "value"), ("z", 4, "value")],
             [("a", "z", 5)]);
         using var directory = new TemporaryDirectory();
         using var reader = OpenReader(directory.Path, "source.sst", source);
@@ -358,12 +469,12 @@ public sealed class StreamingCompactionMergerTests
         var partitions = StreamingCompactionMerger.MergeAndPartition(
                 [reader],
                 plan,
-                100)
+                1)
             .ToArray();
 
         Assert.Equal(2, partitions.Length);
         Assert.Equal(
-            ["m", "n", "z"],
+            ["n", "z"],
             partitions[1].Entries.Select(static entry => TestBytes.ToText(entry.Key)));
         Assert.Equal(("m", "z"), (
             TestBytes.ToText(Assert.Single(partitions[1].RangeTombstones).Start),
@@ -504,6 +615,14 @@ public sealed class StreamingCompactionMergerTests
         }
     }
 
+    static CompactionMergeResult[] Partition(SstContents content, CompactionPlan plan, long targetSizeBytes)
+    {
+        using var directory = new TemporaryDirectory();
+        using var reader = OpenReader(directory.Path, "input.sst", content);
+
+        return StreamingCompactionMerger.MergeAndPartition([reader], plan, targetSizeBytes).ToArray();
+    }
+
     static void AssertPartitionEqual(CompactionMergeResult expected, CompactionMergeResult actual)
     {
         Assert.Equal(
@@ -538,7 +657,7 @@ public sealed class StreamingCompactionMergerTests
     }
 
     static CompactionPlan Plan(
-        long? snapshotHorizon = null,
+        ulong? snapshotHorizon = null,
         bool pointTombstoneGcEligible = true,
         bool rangeTombstoneGcEligible = true) => new(
         0,

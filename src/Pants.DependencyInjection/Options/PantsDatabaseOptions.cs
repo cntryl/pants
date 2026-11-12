@@ -19,6 +19,8 @@ public sealed class PantsDatabaseOptions
 
     public PantsCloudWriteOptions? CloudWritePolicy { get; set; }
 
+    public PantsWriteBackpressureConfiguration WriteBackpressure { get; set; } = new();
+
     public TimeSpan StorageTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan? RuntimeResponseTimeout { get; set; }
@@ -39,7 +41,8 @@ public sealed class PantsDatabaseOptions
 
     public TimeSpan LeaseTimeToLive { get; set; } = TimeSpan.FromSeconds(30);
 
-    public TimeSpan LeaseClockSkewTolerance { get; set; } = TimeSpan.FromSeconds(15);
+    /// <summary>Null derives the clock-skew tolerance from half the configured TTL.</summary>
+    public TimeSpan? LeaseClockSkewTolerance { get; set; }
 
     public ulong MinimumEpoch { get; set; }
 

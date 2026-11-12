@@ -6,7 +6,7 @@ namespace Cntryl.Pants.Observability;
 public sealed class PantsCompactionPublicationMetricsTests
 {
     [Fact]
-    public async Task ShouldRecordEachPhysicalPublicationAndItsOutputBytesGivenRecursiveCompaction()
+    public async Task ShouldRecordPhysicalRewriteBytesWithoutCreditingSubsequentMetadataPromotion()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
@@ -18,8 +18,8 @@ public sealed class PantsCompactionPublicationMetricsTests
         var level = Assert.Single(layout.Levels);
         Assert.Equal(2, level.Level);
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.Equal(2, metrics.CompactionsRun);
-        Assert.Equal(checked(level.TotalBytes * 2), metrics.CompactionBytesRewritten);
+        Assert.Equal(1, metrics.CompactionsRun);
+        Assert.Equal(level.TotalBytes, metrics.CompactionBytesRewritten);
         Assert.Equal(0, metrics.CompactionFailures);
     }
 
@@ -65,6 +65,7 @@ public sealed class PantsCompactionPublicationMetricsTests
             transaction.Put(
                 TestBytes.FromString($"key-{index}"),
                 TestBytes.FromString($"value-{index}"));
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }

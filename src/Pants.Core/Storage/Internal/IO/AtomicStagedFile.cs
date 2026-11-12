@@ -16,7 +16,8 @@ static class AtomicStagedFile
     /// </summary>
     public static void CreateDirectoryDurably(
         string path,
-        Action? beforeParentDirectorySync = null)
+        Action? beforeParentDirectorySync = null,
+        MetadataIoObservation? observation = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
@@ -39,14 +40,14 @@ static class AtomicStagedFile
         var created = false;
         while (missing.TryPop(out var child))
         {
-            Directory.CreateDirectory(child);
-            SyncParentDirectory(child, beforeParentDirectorySync);
+            MetadataIoObservation.Run(observation, () => Directory.CreateDirectory(child));
+            SyncParentDirectory(child, beforeParentDirectorySync, observation);
             created = true;
         }
 
         if (!created)
         {
-            SyncParentDirectory(fullPath, beforeParentDirectorySync);
+            SyncParentDirectory(fullPath, beforeParentDirectorySync, observation);
         }
     }
 
@@ -62,7 +63,8 @@ static class AtomicStagedFile
     public static async ValueTask WriteStreamedAsync(
         string path,
         Func<SafeFileHandle, ValueTask> writePayloadAsync,
-        bool overwrite = true)
+        bool overwrite = true,
+        MetadataIoObservation? observation = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(writePayloadAsync);
@@ -72,7 +74,7 @@ static class AtomicStagedFile
                             "A staged file path must have a parent directory.",
                             nameof(path));
         StoragePathGuard.EnsureNotLink(fullPath);
-        Directory.CreateDirectory(directory);
+        MetadataIoObservation.Run(observation, () => Directory.CreateDirectory(directory));
         StoragePathGuard.EnsureNotLink(fullPath);
         var temporary = Path.Combine(
             directory,
@@ -80,27 +82,35 @@ static class AtomicStagedFile
 
         try
         {
-            using (var handle = File.OpenHandle(
+            using (var handle = MetadataIoObservation.Run(observation, () => File.OpenHandle(
                        temporary,
                        FileMode.CreateNew,
                        FileAccess.Write,
-                       FileShare.None))
+                       FileShare.None)))
             {
-                await writePayloadAsync(handle).ConfigureAwait(false);
-                RandomAccess.FlushToDisk(handle);
+                observation?.Mutation();
+                try
+                {
+                    await writePayloadAsync(handle).ConfigureAwait(false);
+                }
+                finally
+                {
+                    observation?.Mutation();
+                }
+                MetadataIoObservation.Run(observation, () => RandomAccess.FlushToDisk(handle));
             }
 
             lock (GetPublishLock(fullPath))
             {
-                TransientSharingRetry.Move(temporary, fullPath, overwrite);
-                FlushParentDirectory(directory);
+                MetadataIoObservation.Run(observation, () => TransientSharingRetry.Move(temporary, fullPath, overwrite));
+                MetadataIoObservation.Run(observation, () => FlushParentDirectory(directory));
             }
         }
         finally
         {
             try
             {
-                TransientSharingRetry.Delete(temporary);
+                MetadataIoObservation.Run(observation, () => TransientSharingRetry.Delete(temporary));
             }
             catch (Exception exception) when (
                 exception is IOException or UnauthorizedAccessException)
@@ -118,14 +128,16 @@ static class AtomicStagedFile
         string? temporaryFileName = null,
         Action? afterPublish = null,
         Action<string>? deleteTemporary = null,
-        Action<Exception>? cleanupFailure = null)
+        Action<Exception>? cleanupFailure = null,
+        MetadataIoObservation? observation = null,
+        Action<string>? flushDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
                         throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
         StoragePathGuard.EnsureNotLink(fullPath);
-        Directory.CreateDirectory(directory);
+        MetadataIoObservation.Run(observation, () => Directory.CreateDirectory(directory));
         if (temporaryFileName is not null &&
             (!string.Equals(Path.GetFileName(temporaryFileName), temporaryFileName, StringComparison.Ordinal) ||
              string.IsNullOrWhiteSpace(temporaryFileName)))
@@ -142,29 +154,40 @@ static class AtomicStagedFile
 
         try
         {
-            using (var handle = File.OpenHandle(
+            using (var handle = MetadataIoObservation.Run(observation, () => File.OpenHandle(
                        temporary,
                        temporaryFileName is null ? FileMode.CreateNew : FileMode.Create,
                        FileAccess.Write,
-                       FileShare.None))
+                       FileShare.None)))
             {
-                RandomAccess.Write(handle, bytes, 0);
-                RandomAccess.FlushToDisk(handle);
+                observation?.Issued((ulong)bytes.Length);
+                try
+                {
+                    RandomAccess.Write(handle, bytes, 0);
+                    observation?.Returned((ulong)bytes.Length);
+                }
+                catch
+                {
+                    observation?.Mutation();
+                    throw;
+                }
+
+                MetadataIoObservation.Run(observation, () => RandomAccess.FlushToDisk(handle));
             }
 
             beforePublish?.Invoke();
             lock (GetPublishLock(fullPath))
             {
-                TransientSharingRetry.Move(temporary, fullPath, overwrite);
+                MetadataIoObservation.Run(observation, () => TransientSharingRetry.Move(temporary, fullPath, overwrite));
                 afterPublish?.Invoke();
-                FlushParentDirectory(directory);
+                MetadataIoObservation.Run(observation, () => (flushDirectory ?? FlushParentDirectory)(directory));
             }
         }
         finally
         {
             try
             {
-                (deleteTemporary ?? TransientSharingRetry.Delete)(temporary);
+                MetadataIoObservation.Run(observation, () => (deleteTemporary ?? TransientSharingRetry.Delete)(temporary));
             }
             catch (IOException exception)
             {
@@ -219,7 +242,9 @@ static class AtomicStagedFile
         }
     }
 
-    public static void Delete(string path)
+    public static void Delete(string path) => Delete(path, null);
+
+    public static void Delete(string path, MetadataIoObservation? observation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
@@ -229,19 +254,21 @@ static class AtomicStagedFile
             return;
         }
 
-        File.Delete(fullPath);
+        MetadataIoObservation.Run(observation, () => File.Delete(fullPath));
         var directory = Path.GetDirectoryName(fullPath) ??
                         throw new ArgumentException("A staged file path must have a parent directory.", nameof(path));
-        FlushParentDirectory(directory);
+        MetadataIoObservation.Run(observation, () => FlushParentDirectory(directory));
     }
 
-    public static void FlushDirectory(string directory)
+    public static void FlushDirectory(string directory) => FlushDirectory(directory, null);
+
+    public static void FlushDirectory(string directory, MetadataIoObservation? observation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        FlushParentDirectory(Path.GetFullPath(directory));
+        MetadataIoObservation.Run(observation, () => FlushParentDirectory(Path.GetFullPath(directory)));
     }
 
-    static void SyncParentDirectory(string path, Action? beforeParentDirectorySync)
+    static void SyncParentDirectory(string path, Action? beforeParentDirectorySync, MetadataIoObservation? observation)
     {
         var parent = Path.GetDirectoryName(path);
         if (parent is null)
@@ -250,7 +277,7 @@ static class AtomicStagedFile
         }
 
         beforeParentDirectorySync?.Invoke();
-        FlushParentDirectory(parent);
+        MetadataIoObservation.Run(observation, () => FlushParentDirectory(parent));
     }
 
     static StringComparer StringComparerForPaths =>

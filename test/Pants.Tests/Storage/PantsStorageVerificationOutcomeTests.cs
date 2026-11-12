@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -161,7 +162,7 @@ public sealed class PantsStorageVerificationOutcomeTests
     }
 
     [Fact]
-    public async Task ShouldReportCorruptionGivenMissingManifestJournal()
+    public async Task ShouldReportHealthyGivenAuthoritativeSnapshotNeedsNoManifestJournal()
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
@@ -169,8 +170,8 @@ public sealed class PantsStorageVerificationOutcomeTests
 
         var outcome = await PantsDatabase.VerifyPathOutcomeAsync(directory.Path);
 
-        Assert.Equal(PantsStorageVerificationOutcomeKind.Corruption, outcome.Kind);
-        Assert.Equal(PantsErrorCode.Corruption, outcome.ErrorCode);
+        Assert.Equal(PantsStorageVerificationOutcomeKind.Healthy, outcome.Kind);
+        Assert.Null(outcome.ErrorCode);
     }
 
     [Fact]
@@ -323,19 +324,13 @@ public sealed class PantsStorageVerificationOutcomeTests
     {
         await File.WriteAllTextAsync(
             Path.Combine(path, "FORMAT"),
-            "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(path, "manifest.json"),
-            """
+            "midge-format-version=9\n");
+        await File.WriteAllBytesAsync(
+            Path.Combine(path, "manifest.snapshot.json"),
+            ManifestCodec.Encode(ManifestState.CreateInitial(), new JsonSerializerOptions
             {
-              "last_persisted_sequence": 0,
-              "files": [],
-              "column_families": [],
-              "next_wal_seq": 1,
-              "next_sst_seqs": {},
-              "edit_checkpoint_id": 0
-            }
-            """);
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+            }));
         await File.WriteAllBytesAsync(Path.Combine(path, "manifest.journal"), []);
     }
 }

@@ -1,0 +1,15 @@
+{
+  "producer": "Midge 0.5.2",
+  "sourceCommit": "c684310d9d8ce8ecd1151c47151d4bea98b348cf",
+  "cargoLockSha256": "6a497fab02a0dde008ae9029af4d877e8982bd0fa3113efe3c291bafd091dc88",
+  "features": [
+    "cloud-aws"
+  ],
+  "operation": "Cross-engine phase 0: Sync multi-key commit, side family commit, both flushes, CompactAll, shutdown",
+  "expectedPhase": 0,
+  "omitted": [
+    "process-local leader record and mutation lock"
+  ],
+  "rawBytes": "Copied unchanged from writer output; no re-encoding",
+  "harnessSha256": "48e10b7d39ea7f8e63c75ae31c5c400388864be55ecfa38a18d660a22c92d7f0"
+}

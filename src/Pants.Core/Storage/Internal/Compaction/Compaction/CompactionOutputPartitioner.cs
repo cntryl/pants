@@ -9,6 +9,11 @@ static class CompactionOutputPartitioner
         CompactionMergeResult merged,
         long targetSizeBytes)
     {
+        if (targetSizeBytes == 0)
+        {
+            targetSizeBytes = 1;
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSizeBytes);
         if (merged.Entries.Count == 0)
         {

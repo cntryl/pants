@@ -67,7 +67,7 @@ public sealed class PantsBufferedWalSyncWindowTests
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
     }
 
-    static async Task WaitForNewSyncAsync(IPantsDatabase database, long before)
+    static async Task WaitForNewSyncAsync(IPantsDatabase database, ulong before)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         while ((await database.Diagnostics.GetRuntimeMetricsAsync()).WalLastSyncedSequence <= before)

@@ -2,9 +2,9 @@ namespace Cntryl.Pants.Storage.Internal;
 
 interface ILocalFlushStore
 {
-    void Flush(RuntimeState state);
+    void Flush(MetadataOrigin origin);
 
-    void Flush(RuntimeState state, ColumnFamilyIdentity identity);
+    void Flush(ColumnFamilyIdentity identity, MetadataOrigin origin);
 
     FlushPublicationPlan BuildFrozenFlushPlan(FrozenMemtableFlush frozen);
 

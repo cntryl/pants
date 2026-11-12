@@ -31,7 +31,7 @@ public sealed class PantsStreamingScanHardeningTests
     }
 
     [Fact]
-    public async Task ShouldShareSstFanInBudgetAcrossScansAndReleaseItOnDisposal()
+    public async Task ShouldShareReaderMetadataAcrossConcurrentScansAndRetainItForPointReads()
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path)
@@ -40,7 +40,7 @@ public sealed class PantsStreamingScanHardeningTests
             .WithCompaction(new PantsCompactionConfiguration(
                 L0FileCountTrigger: 1000,
                 BackgroundEnabled: false));
-        Assert.Equal(6_553, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
+        Assert.Equal(0, PantsOpenOptionsResolver.Resolve(options).ScanMemoryPoolBytes);
 
         await using var database = await PantsDatabase.OpenAsync(options);
         for (var index = 0; index < 20; index++)
@@ -65,8 +65,8 @@ public sealed class PantsStreamingScanHardeningTests
         Assert.True(firstScan.IsActive);
         var metricsDuringFirstScan = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(
-            metricsDuringFirstScan.ScanBufferUsedBytes > 0,
-            $"Expected scan memory to be reserved, found {metricsDuringFirstScan.ScanBufferUsedBytes} bytes.");
+            metricsDuringFirstScan.ReadMetadataUsedBytes > 0,
+            $"Expected scan memory to be reserved, found {metricsDuringFirstScan.ReadMetadataUsedBytes} bytes.");
 
         await using var secondTransaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -74,21 +74,22 @@ public sealed class PantsStreamingScanHardeningTests
         await using var secondScan = await secondTransaction.ScanAsync(new PantsScanQuery());
         var secondEnumerator = secondScan.GetAsyncEnumerator();
 
-        var failure = await Assert.ThrowsAsync<PantsResourceLimitException>(
-            () => secondEnumerator.MoveNextAsync().AsTask());
-
-        Assert.Equal(PantsErrorCode.ResourceLimit, failure.Code);
-        Assert.True(secondScan.IsFailed);
+        Assert.True(await secondEnumerator.MoveNextAsync());
+        Assert.True(secondScan.IsActive);
         Assert.True(firstScan.IsActive);
         Assert.Equal(
-            metricsDuringFirstScan.ScanBufferUsedBytes,
-            (await database.Diagnostics.GetRuntimeMetricsAsync()).ScanBufferUsedBytes);
+            metricsDuringFirstScan.ReadMetadataUsedBytes,
+            (await database.Diagnostics.GetRuntimeMetricsAsync()).ReadMetadataUsedBytes);
 
         await firstScan.DisposeAsync();
-        var metricsAfterDisposal = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.True(
-            metricsAfterDisposal.ScanBufferUsedBytes == 0,
-            $"Scan memory remained reserved after disposal: {metricsAfterDisposal.ScanBufferUsedBytes} bytes.");
+        Assert.True(await secondEnumerator.MoveNextAsync());
+        await secondScan.DisposeAsync();
+        var retained = (await database.Diagnostics.GetRuntimeMetricsAsync()).ReadMetadataUsedBytes;
+        Assert.True(retained > 0);
+        Assert.NotNull(await firstTransaction.GetAsync(TestBytes.FromString("key-0019")));
+        var afterPoint = await database.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.InRange(afterPoint.ReadMetadataUsedBytes, retained, afterPoint.ReadMetadataCapacityBytes);
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ScanBufferUsedBytes);
     }
 
     [Fact]

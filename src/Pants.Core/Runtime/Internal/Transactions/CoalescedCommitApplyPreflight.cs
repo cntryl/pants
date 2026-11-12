@@ -4,12 +4,13 @@ static class CoalescedCommitApplyPreflight
 {
     public static IReadOnlyList<PreparedCoalescedCommit> Create(
         RuntimeState state,
-        IReadOnlyList<CommitRuntimeCommand> commands)
+        IReadOnlyList<CommitRuntimeCommand> commands,
+        ulong? sequenceFloor = null)
     {
         var prepared = new List<PreparedCoalescedCommit>(commands.Count);
         var totalBytesByFamily = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
-        var sequence = state.Sequence;
+        var sequence = Math.Max(state.Sequence, sequenceFloor ?? state.Sequence);
         foreach (var command in commands)
         {
             sequence = SequenceSpace.CommitSequenceAfter(

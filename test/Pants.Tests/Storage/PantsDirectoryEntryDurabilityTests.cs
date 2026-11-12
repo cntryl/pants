@@ -16,7 +16,7 @@ public sealed class PantsDirectoryEntryDurabilityTests
         var root = Path.Combine(directory.Path, "database");
         var options = PantsOpenOptions.Local(root).WithBackgroundCompaction(false);
         var walDirectory = Path.Combine(root, "wal");
-        var walPath = Path.Combine(walDirectory, "wal.log");
+        var walPath = WalTestFiles.ActivePath(root);
         if (failpointName != nameof(Failpoint.BeforeDatabaseRootDirectorySync))
         {
             await using (var initialized = await PantsDatabase.OpenAsync(options))
@@ -29,7 +29,7 @@ public sealed class PantsDirectoryEntryDurabilityTests
             }
             else if (failpointName == nameof(Failpoint.BeforeWalFileDirectorySync))
             {
-                File.Delete(walPath);
+                Directory.Delete(walDirectory, recursive: true);
             }
             else
             {

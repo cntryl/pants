@@ -25,6 +25,18 @@ static class WalFrameScanner
     {
         var cursor = 0;
         var acknowledged = false;
+        if (proof.Offset == 0)
+        {
+            if (window.Length < WalSegmentCodec.HeaderSize)
+            {
+                return WalSegmentCodec.HeaderSize;
+            }
+
+            proof.AcknowledgeHeader(window[..WalSegmentCodec.HeaderSize]);
+            cursor = WalSegmentCodec.HeaderSize;
+            acknowledged = true;
+        }
+
         while (proof.Remaining > 0)
         {
             var available = window.Length - cursor;
@@ -68,10 +80,16 @@ static class WalFrameScanner
                     $"Published cloud WAL object '{proof.Segment.ObjectKey}' has a frame checksum mismatch.");
             }
 
+            if (WalSegmentCodec.IsFooter(payload))
+            {
+                proof.AcknowledgeFooter(frame);
+                return 0;
+            }
+
             WalRecord record;
             try
             {
-                record = WalCodec.DecodeRecord(payload);
+                record = WalCodec.DecodeRecord(payload, proof.Segment.WriterEpoch);
             }
             catch (PantsException exception) when (exception is not PantsCorruptionException)
             {

@@ -6,7 +6,7 @@ namespace Cntryl.Pants.Storage.Internal;
 
 static class DiskFormat
 {
-    public const int FormatVersion = 3;
+    public const int FormatVersion = 9;
     public const int WalMaximumRecordBytes = 64 * 1024 * 1024;
 
     /// <summary>
@@ -14,7 +14,7 @@ static class DiskFormat
     ///     can encode to.
     /// </summary>
     public const int MaximumDecodedBlockBytes = 64 * 1024 * 1024;
-    public const uint SstFormatVersion = 4;
+    public const uint SstFormatVersion = 5;
     public const int SstFooterSize = 84;
     public const ulong SstFooterMagic = 0xdb47_7524_8b80_fb57;
 
@@ -64,8 +64,9 @@ static class DiskFormat
         return true;
     }
 
-    public static byte[] Decompress(ReadOnlySpan<byte> bytes, byte algorithm)
+    public static byte[] Decompress(ReadOnlySpan<byte> bytes, byte algorithm, int? maximumDecodedBytes = null)
     {
+        var limit = maximumDecodedBytes ?? MaximumDecodedBlockBytes;
         switch (algorithm)
         {
             case 0:
@@ -77,7 +78,7 @@ static class DiskFormat
                 }
 
                 var decodedLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(bytes));
-                if (decodedLength > MaximumDecodedBlockBytes)
+                if (decodedLength > limit)
                 {
                     throw new StorageException("Midge LZ4 payload exceeds the decompression limit.");
                 }
@@ -94,7 +95,13 @@ static class DiskFormat
             case 3:
                 using (var decompressor = new Decompressor())
                 {
-                    var output = decompressor.Unwrap(bytes.ToArray());
+                    if (maximumDecodedBytes is not null)
+                    {
+                        var destination = new byte[limit];
+                        var length = decompressor.Unwrap(bytes, destination.AsSpan());
+                        return length == destination.Length ? destination : destination.AsSpan(0, length).ToArray();
+                    }
+                    var output = decompressor.Unwrap(bytes, MaximumDecodedBlockBytes);
                     if (output.Length > MaximumDecodedBlockBytes)
                     {
                         throw new StorageException("Midge Zstd payload exceeds the decompression limit.");

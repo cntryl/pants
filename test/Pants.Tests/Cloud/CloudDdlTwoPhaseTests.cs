@@ -43,7 +43,7 @@ public sealed class CloudDdlTwoPhaseTests
         }
 
         using var registry = ReadRegistry(directory.Path);
-        Assert.Equal(2UL, registry.RootElement.GetProperty("epoch").GetUInt64());
+        Assert.Equal(2UL, registry.RootElement.GetProperty("ddl_epoch").GetUInt64());
         var operations = registry.RootElement.GetProperty("operations").EnumerateArray().ToArray();
         Assert.Equal(2, operations.Length);
         Assert.Equal(2, operations.Select(static operation =>
@@ -74,7 +74,7 @@ public sealed class CloudDdlTwoPhaseTests
         Assert.Equal("cas-retry", created.Name);
         Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         using var registry = ReadRegistry(directory.Path);
-        Assert.Equal(1UL, registry.RootElement.GetProperty("epoch").GetUInt64());
+        Assert.Equal(1UL, registry.RootElement.GetProperty("ddl_epoch").GetUInt64());
         Assert.Single(registry.RootElement.GetProperty("operations").EnumerateArray());
     }
 
@@ -102,7 +102,7 @@ public sealed class CloudDdlTwoPhaseTests
 
         Assert.Equal("cas-reopen", created.Name);
         using var registry = ReadRegistry(directory.Path);
-        Assert.Equal(1UL, registry.RootElement.GetProperty("epoch").GetUInt64());
+        Assert.Equal(1UL, registry.RootElement.GetProperty("ddl_epoch").GetUInt64());
         Assert.Single(registry.RootElement.GetProperty("operations").EnumerateArray());
     }
 
@@ -407,7 +407,7 @@ public sealed class CloudDdlTwoPhaseTests
     }
 
     [Fact]
-    public async Task ShouldRedriveAmbiguousDdlExactlyOnceWhenReopeningAfterCrashBeforeCasSubmission()
+    public async Task ShouldAbortPriorEpochAmbiguousDdlWhenReopeningAfterCrashBeforeCasSubmission()
     {
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
@@ -420,21 +420,80 @@ public sealed class CloudDdlTwoPhaseTests
                 database.ColumnFamilies.CreateAsync("redriven").AsTask());
         }
 
+        using var prepare = JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(directory.Path, "ddl.prepare.json")));
+        Assert.True(prepare.RootElement.GetProperty("remote_cas_ambiguous").GetBoolean());
+        var operationId = prepare.RootElement.GetProperty("op_id").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(operationId));
+        Assert.True(prepare.RootElement.GetProperty("writer_epoch").GetUInt64() > 0);
+        using (var registryBeforeReopen = ReadRegistry(directory.Path))
+        {
+            Assert.DoesNotContain(
+                registryBeforeReopen.RootElement.GetProperty("operations").EnumerateArray(),
+                operation => StringComparer.Ordinal.Equals(
+                    operationId,
+                    operation.GetProperty("op_id").GetString()));
+        }
+
         await using (var reopened = await PantsDatabase.OpenAsync(options))
         {
-            Assert.NotNull(await reopened.ColumnFamilies.GetAsync("redriven"));
+            Assert.Null(await reopened.ColumnFamilies.GetAsync("redriven"));
             Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
         }
 
         await using var again = await PantsDatabase.OpenAsync(options);
-        Assert.NotNull(await again.ColumnFamilies.GetAsync("redriven"));
+        Assert.Null(await again.ColumnFamilies.GetAsync("redriven"));
         using var registry = ReadRegistry(directory.Path);
-        Assert.Equal(1UL, registry.RootElement.GetProperty("epoch").GetUInt64());
-        Assert.Single(registry.RootElement.GetProperty("operations").EnumerateArray());
+        Assert.Equal(0UL, registry.RootElement.GetProperty("ddl_epoch").GetUInt64());
+        Assert.DoesNotContain(
+            registry.RootElement.GetProperty("operations").EnumerateArray(),
+            operation => StringComparer.Ordinal.Equals(
+                operationId,
+                operation.GetProperty("op_id").GetString()));
     }
 
     [Fact]
-    public async Task ShouldFailOpenFencedGivenAmbiguousDdlAndAdvancedRegistryEpoch()
+    public async Task ShouldAbortPriorEpochAmbiguousDdlWhenProviderLeaseChangesBeforeReopen()
+    {
+        using var directory = new TemporaryDirectory();
+        using var handler = new InMemoryAzureBlobHandler();
+        using var client = new HttpClient(handler);
+        var options = CreateProviderOptions(directory.Path);
+        var failpoints = new DdlFailpointHandler("AfterDdlAmbiguousPrepare");
+        await using (var database = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(failpoints, cloudHttpClient: client)))
+        {
+            await Assert.ThrowsAsync<PantsFencedException>(() =>
+                database.ColumnFamilies.CreateAsync("provider-prior-epoch").AsTask());
+        }
+
+        using var prepare = JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(directory.Path, "ddl.prepare.json")));
+        Assert.True(prepare.RootElement.GetProperty("remote_cas_ambiguous").GetBoolean());
+        var operationId = prepare.RootElement.GetProperty("op_id").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(operationId));
+        Assert.True(prepare.RootElement.GetProperty("writer_epoch").GetUInt64() > 0);
+
+        await using (var reopened = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(cloudHttpClient: client)))
+        {
+            Assert.Null(await reopened.ColumnFamilies.GetAsync("provider-prior-epoch"));
+            Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
+        }
+
+        using var registry = JsonDocument.Parse(handler.GetObjectText("/metadata/ddl.registry.json"));
+        Assert.Equal(0UL, registry.RootElement.GetProperty("ddl_epoch").GetUInt64());
+        Assert.DoesNotContain(
+            registry.RootElement.GetProperty("operations").EnumerateArray(),
+            operation => StringComparer.Ordinal.Equals(
+                operationId,
+                operation.GetProperty("op_id").GetString()));
+    }
+
+    [Fact]
+    public async Task ShouldDiscardPriorEpochAmbiguousDdlGivenRegistryEpochAdvancedBeforeReopen()
     {
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path);
@@ -447,19 +506,30 @@ public sealed class CloudDdlTwoPhaseTests
                 database.ColumnFamilies.CreateAsync("undecidable").AsTask());
         }
 
+        using var prepare = JsonDocument.Parse(
+            File.ReadAllBytes(Path.Combine(directory.Path, "ddl.prepare.json")));
+        var operationId = prepare.RootElement.GetProperty("op_id").GetString();
+
         var registryPath = Path.Combine(
             directory.Path,
             "cloud_store",
             "metadata",
             "ddl.registry.json");
         var registry = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(registryPath))!;
-        registry["epoch"] = 7;
+        registry["ddl_epoch"] = 7;
         File.WriteAllBytes(registryPath, System.Text.Encoding.UTF8.GetBytes(registry.ToJsonString()));
 
-        await Assert.ThrowsAsync<PantsFencedException>(async () =>
-            await PantsDatabase.OpenAsync(options));
+        await using var reopened = await PantsDatabase.OpenAsync(options);
 
-        Assert.True(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
+        Assert.Null(await reopened.ColumnFamilies.GetAsync("undecidable"));
+        Assert.False(File.Exists(Path.Combine(directory.Path, "ddl.prepare.json")));
+        using var recoveredRegistry = ReadRegistry(directory.Path);
+        Assert.Equal(7UL, recoveredRegistry.RootElement.GetProperty("ddl_epoch").GetUInt64());
+        Assert.DoesNotContain(
+            recoveredRegistry.RootElement.GetProperty("operations").EnumerateArray(),
+            operation => StringComparer.Ordinal.Equals(
+                operationId,
+                operation.GetProperty("op_id").GetString()));
     }
 
     [Theory]

@@ -7,6 +7,9 @@ public sealed record PantsRuntimeConfiguration(
     TimeSpan? RuntimeResponseTimeout,
     TimeSpan ShutdownTimeout)
 {
+    /// <summary>Optional aggregate startup budget. Null leaves startup unbounded.</summary>
+    public TimeSpan? OpenTimeout { get; init; }
+
     /// <summary>
     ///     Age after which an active snapshot is reported as long-lived. The snapshot remains
     ///     registered until its transaction or scan is disposed.

@@ -25,6 +25,7 @@ global using Cntryl.Pants.Runtime.Internal.Verification;
 global using Cntryl.Pants.Scan;
 global using Cntryl.Pants.Storage;
 global using Cntryl.Pants.Storage.Internal;
+global using Cntryl.Pants.Storage.Internal.Accounting;
 global using Cntryl.Pants.Storage.Internal.Cache;
 global using Cntryl.Pants.Storage.Internal.Cache.Policy;
 global using Cntryl.Pants.Storage.Internal.Compaction;

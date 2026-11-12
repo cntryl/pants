@@ -15,13 +15,13 @@ sealed class WalRuntimeService(
 
     public async ValueTask<WalCommitResult> AppendCommitAsync(
         CommitPayload payload,
-        RuntimeState state,
+        ulong publishedSequence,
         PantsDurability durability,
         OperationDeadline deadline = default,
         CancellationToken cancellationToken = default)
     {
         var result = await ExecuteAsync(
-                new AppendWalCommitRuntimeRequest(payload, state, durability, deadline),
+                new AppendWalCommitRuntimeRequest(payload, publishedSequence, durability, deadline),
                 cancellationToken)
             .ConfigureAwait(false);
         return result.Commit ??
@@ -42,7 +42,7 @@ sealed class WalRuntimeService(
 
     public async ValueTask<WalCommitGroupResult> AppendCommitGroupAsync(
         IReadOnlyList<WalCommitGroupEntry> commits,
-        RuntimeState state,
+        ulong publishedSequence,
         PantsDurability durability,
         Failpoint beforeSync,
         OperationDeadline deadline = default,
@@ -51,7 +51,7 @@ sealed class WalRuntimeService(
         var result = await ExecuteAsync(
                 new AppendWalCommitGroupRuntimeRequest(
                     commits,
-                    state,
+                    publishedSequence,
                     durability,
                     beforeSync,
                     deadline),
@@ -194,7 +194,7 @@ sealed class WalRuntimeService(
     {
         var result = store.AppendCommit(
             request.Payload,
-            request.State,
+            request.PublishedSequence,
             request.Durability,
             _metrics);
         return ValueTask.FromResult(new WalRuntimeResult(Commit: result));
@@ -206,7 +206,7 @@ sealed class WalRuntimeService(
     {
         var result = store.AppendCommitGroup(
             request.Commits,
-            request.State,
+            request.PublishedSequence,
             request.Durability,
             () => failpoints.Hit(request.BeforeSync),
             _metrics);

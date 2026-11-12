@@ -32,6 +32,8 @@ sealed class AsyncSstScanReadValidator(
             sources.Sum(static source => source.DataBlocksRead),
             0,
             0,
-            0);
+            0,
+            sources.Sum(static source => source.BlockCacheHits),
+            sources.Sum(static source => source.BlockCacheMisses));
     }
 }

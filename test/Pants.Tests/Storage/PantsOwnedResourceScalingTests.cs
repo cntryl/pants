@@ -66,7 +66,7 @@ public sealed class PantsOwnedResourceScalingTests
             Assert.Equal(0, metrics.ScanBufferUsedBytes);
             Assert.True(metrics.BlockCacheUsedBytes <= metrics.BlockCacheCapacityBytes);
             Assert.True(metrics.CompactionBufferPeakBytes <= metrics.CompactionBufferCapacityBytes);
-            Assert.InRange(metrics.ScanBufferPeakBytes, 1, metrics.ScanBufferCapacityBytes);
+            Assert.InRange(metrics.ReadMetadataPeakBytes, 1, metrics.ReadMetadataCapacityBytes);
             observations.Add((count, metrics));
         }
 

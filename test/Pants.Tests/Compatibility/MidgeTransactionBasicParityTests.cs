@@ -201,7 +201,7 @@ public sealed class MidgeTransactionBasicParityTests
         var family = await database.ColumnFamilies.CreateAsync("test");
         await using var transaction = await BeginWriteAsync(database, family);
 
-        await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+        await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
             transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask());
     }
 
@@ -258,11 +258,11 @@ public sealed class MidgeTransactionBasicParityTests
         await ForEachDatabaseAsync(["cloud"], async (_, database, family) =>
         {
             await using var sync = await BeginWriteAsync(database, family);
-            await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
                 sync.CommitAsync(PantsWriteOptions.Sync).AsTask());
 
             await using var buffered = await BeginWriteAsync(database, family);
-            await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
                 buffered.CommitAsync(PantsWriteOptions.Buffered).AsTask());
         });
     }
@@ -389,7 +389,7 @@ public sealed class MidgeTransactionBasicParityTests
             var incompatibleOptions = mode == "cloud"
                 ? PantsWriteOptions.Sync
                 : PantsWriteOptions.CloudStrict;
-            await Assert.ThrowsAsync<PantsNotSupportedException>(() =>
+            await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
                 transaction.CommitAsync(incompatibleOptions).AsTask());
 
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).ActiveSnapshots);

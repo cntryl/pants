@@ -12,10 +12,8 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     readonly IEnumerator<byte[]> _snapshotKeys;
     readonly IReadOnlyList<CommittedRangeTombstone> _snapshotRangeTombstones;
     readonly DateTimeOffset _snapshotTime;
-    readonly IDisposable? _sstFanInReservation;
     readonly bool[] _sstActivated;
     readonly SstEntry?[] _sstHeads;
-    readonly IReadOnlyList<RangeTombstone> _sstRangeTombstones;
     readonly AsyncSstScanSource?[] _sstSources;
     bool _advanceIntent;
     bool _advanceSnapshot;
@@ -31,7 +29,6 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         TransactionIntentReadView intents,
         ScanBounds bounds,
         IReadOnlyList<AsyncSstScanSource>? sstSources = null,
-        IDisposable? sstFanInReservation = null,
         CancellationToken cancellationToken = default)
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
@@ -45,7 +42,6 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         _cancellationToken = cancellationToken;
         _intents = intents;
         _direction = bounds.Direction;
-        _sstFanInReservation = sstFanInReservation;
         var snapshotKeys = _snapshot.Keys.Where(key => bounds.Matches(key));
         if (bounds.Direction == PantsScanDirection.Reverse)
         {
@@ -60,9 +56,6 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             bounds.Direction);
         _sstSources = (sstSources ?? []).Cast<AsyncSstScanSource?>().ToArray();
         _sstActivated = new bool[_sstSources.Length];
-        _sstRangeTombstones = _sstSources
-            .SelectMany(static source => source!.RangeTombstones)
-            .ToArray();
         _sstHeads = new SstEntry?[_sstSources.Length];
     }
 
@@ -83,6 +76,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 return false;
             }
 
+            await ReleaseExpiredRangeSourcesAsync(key).ConfigureAwait(false);
             var sstValue = await ResolveFromSstSourcesAsync(key).ConfigureAwait(false);
 
             byte[]? baseValue;
@@ -132,48 +126,13 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             return;
         }
 
-        try
+        _snapshotKeys.Dispose();
+        _intentKeys.Dispose();
+        for (var index = 0; index < _sstSources.Length; index++)
         {
-            _snapshotKeys.Dispose();
-            _intentKeys.Dispose();
-            for (var index = 0; index < _sstSources.Length; index++)
-            {
-                await DisposeSourceAsync(index).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            _sstFanInReservation?.Dispose();
+            await DisposeSourceAsync(index).ConfigureAwait(false);
         }
     }
-
-    internal static long EstimateSstFanInMetadataBytes(
-        IReadOnlyList<AsyncSstScanSource> sources)
-    {
-        if (sources.Count == 0)
-        {
-            return 0;
-        }
-
-        long rangeTombstoneCount = 0;
-        foreach (var source in sources)
-        {
-            rangeTombstoneCount = checked(rangeTombstoneCount + source.RangeTombstones.Count);
-        }
-
-        var sourceReferenceArrayBytes = ReferenceArrayBytes(sources.Count);
-        var activationArrayBytes = checked(
-            (long)sources.Count + IntPtr.Size * 4L);
-        var rangeTombstoneArrayBytes = ReferenceArrayBytes(rangeTombstoneCount);
-        return checked(
-            sourceReferenceArrayBytes * 2 +
-            activationArrayBytes +
-            rangeTombstoneArrayBytes);
-    }
-
-    static long ReferenceArrayBytes(long count) => count == 0
-        ? 0
-        : checked((count + 4L) * IntPtr.Size);
 
     async ValueTask InitializeAsync()
     {
@@ -212,7 +171,10 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             }
             else
             {
-                await DisposeSourceAsync(index).ConfigureAwait(false);
+                if (source.RangeTombstones.Count == 0)
+                {
+                    await DisposeSourceAsync(index).ConfigureAwait(false);
+                }
             }
         }
     }
@@ -291,7 +253,10 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 else
                 {
                     _sstHeads[index] = null;
-                    await DisposeSourceAsync(index).ConfigureAwait(false);
+                    if (source.RangeTombstones.Count == 0)
+                    {
+                        await DisposeSourceAsync(index).ConfigureAwait(false);
+                    }
                 }
 
                 head = _sstHeads[index];
@@ -301,9 +266,10 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         if (best is null ||
             best.IsDelete ||
             UnixTimestamp.IsExpired(best.Expiration, _snapshotTime) ||
-            SstRangeTombstoneMask.Covers(_sstRangeTombstones, key, best.Sequence) ||
+            _sstSources.Any(source => source is not null &&
+                SstRangeTombstoneMask.Covers(source.RangeTombstones, key, best.Sequence)) ||
             _snapshotRangeTombstones.Any(tombstone =>
-                tombstone.WriteSequence > checked((long)best.Sequence) &&
+                tombstone.WriteSequence > best.Sequence &&
                 ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
                 ByteArrayComparer.Instance.Compare(key, tombstone.EndExclusive) < 0))
         {
@@ -311,6 +277,24 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         }
 
         return best.Value;
+    }
+
+    async ValueTask ReleaseExpiredRangeSourcesAsync(byte[] key)
+    {
+        for (var index = 0; index < _sstSources.Length; index++)
+        {
+            if (!_sstActivated[index] || _sstHeads[index] is not null || _sstSources[index] is not { } source)
+            {
+                continue;
+            }
+            var passed = _direction == PantsScanDirection.Forward
+                ? key.AsSpan().SequenceCompareTo(source.LargestKey) > 0
+                : key.AsSpan().SequenceCompareTo(source.SmallestKey) < 0;
+            if (passed)
+            {
+                await DisposeSourceAsync(index).ConfigureAwait(false);
+            }
+        }
     }
 
     async ValueTask DisposeSourceAsync(int index)

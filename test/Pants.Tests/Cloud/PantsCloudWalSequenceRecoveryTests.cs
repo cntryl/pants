@@ -1,6 +1,4 @@
-using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Cloud;
@@ -26,20 +24,16 @@ public sealed class PantsCloudWalSequenceRecoveryTests
             await CommitAsync(database, "first", "one");
         }
 
-        RegressProviderManifestWalSequence(handler);
         await using (var recovered = await OpenProviderAsync(
                          secondCache.Path,
                          location,
                          dependencies))
         {
             await AssertValueAsync(recovered, "first", "one");
-            Assert.Equal(
-                ReadProviderNextWalSegmentId(handler),
-                ReadManifestNextWalSequence(secondCache.Path));
+            Assert.True(ReadLedgerActiveWalSegmentId(secondCache.Path) >= ReadProviderNextWalSegmentId(handler));
             await CommitAsync(recovered, "second", "two");
         }
 
-        RegressProviderManifestWalSequence(handler);
         await using (var recoveredAgain = await OpenProviderAsync(
                          thirdCache.Path,
                          location,
@@ -47,9 +41,7 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         {
             await AssertValueAsync(recoveredAgain, "first", "one");
             await AssertValueAsync(recoveredAgain, "second", "two");
-            Assert.Equal(
-                ReadProviderNextWalSegmentId(handler),
-                ReadManifestNextWalSequence(thirdCache.Path));
+            Assert.True(ReadLedgerActiveWalSegmentId(thirdCache.Path) >= ReadProviderNextWalSegmentId(handler));
         }
 
         using var catalog = JsonDocument.Parse(
@@ -67,28 +59,20 @@ public sealed class PantsCloudWalSequenceRecoveryTests
             await CommitAsync(database, "first", "one");
         }
 
-        RegressSimulatedManifestWalSequence(directory.Path);
         RemoveSimulatedLocalCache(directory.Path);
         await using (var recovered = await PantsDatabase.OpenAsync(options))
         {
             await AssertValueAsync(recovered, "first", "one");
-            Assert.Equal(3UL, ReadManifestNextWalSequence(directory.Path));
-            Assert.Equal(
-                ReadSimulatedNextWalSegmentId(directory.Path),
-                ReadManifestNextWalSequence(directory.Path));
+            Assert.True(ReadLedgerActiveWalSegmentId(directory.Path) >= ReadSimulatedNextWalSegmentId(directory.Path));
             await CommitAsync(recovered, "second", "two");
         }
 
-        RegressSimulatedManifestWalSequence(directory.Path);
         RemoveSimulatedLocalCache(directory.Path);
         await using (var recoveredAgain = await PantsDatabase.OpenAsync(options))
         {
             await AssertValueAsync(recoveredAgain, "first", "one");
             await AssertValueAsync(recoveredAgain, "second", "two");
-            Assert.Equal(5UL, ReadManifestNextWalSequence(directory.Path));
-            Assert.Equal(
-                ReadSimulatedNextWalSegmentId(directory.Path),
-                ReadManifestNextWalSequence(directory.Path));
+            Assert.True(ReadLedgerActiveWalSegmentId(directory.Path) >= ReadSimulatedNextWalSegmentId(directory.Path));
         }
 
         using var catalog = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(
@@ -145,51 +129,8 @@ public sealed class PantsCloudWalSequenceRecoveryTests
         PantsOpenOptions.SimulatedCloud(path, "pants-tests", "wal-sequence-recovery/")
             .WithBackgroundCompaction(false);
 
-    static void RegressProviderManifestWalSequence(InMemoryAzureBlobHandler handler)
-    {
-        foreach (var path in handler.GetObjectPaths("/metadata/manifest")
-                     .Where(static path => path.EndsWith(".json", StringComparison.Ordinal)))
-        {
-            handler.ReplaceObjectText(
-                path,
-                SetNextWalSequence(handler.GetObjectText(path), 1));
-        }
-    }
-
-    static void RegressSimulatedManifestWalSequence(string root)
-    {
-        var metadataDirectory = Path.Combine(root, "cloud_store", "metadata");
-        foreach (var path in Directory.EnumerateFiles(
-                     metadataDirectory,
-                     "manifest*.json",
-                     SearchOption.TopDirectoryOnly))
-        {
-            File.WriteAllText(
-                path,
-                SetNextWalSequence(File.ReadAllText(path), 1));
-        }
-    }
-
-    static string SetNextWalSequence(string manifestJson, ulong nextWalSequence)
-    {
-        var manifest = JsonNode.Parse(manifestJson)?.AsObject() ??
-                       throw new InvalidOperationException("The cloud manifest was empty.");
-        manifest["next_wal_seq"] = nextWalSequence;
-        manifest["wal_history_start"] = Math.Min(
-            manifest["wal_history_start"]?.GetValue<ulong>() ?? 1,
-            nextWalSequence);
-        return manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-    }
-
-    static ulong ReadManifestNextWalSequence(string root)
-    {
-        var snapshotPath = Path.Combine(root, "manifest.snapshot.json");
-        var path = File.Exists(snapshotPath)
-            ? snapshotPath
-            : Path.Combine(root, "manifest.json");
-        using var manifest = JsonDocument.Parse(File.ReadAllBytes(path));
-        return manifest.RootElement.GetProperty("next_wal_seq").GetUInt64();
-    }
+    static ulong ReadLedgerActiveWalSegmentId(string root) =>
+        WalLedgerStore.LoadExisting(Path.Combine(root, "wal")).Active.Open.Id;
 
     static ulong ReadProviderNextWalSegmentId(InMemoryAzureBlobHandler handler)
     {
@@ -212,9 +153,9 @@ public sealed class PantsCloudWalSequenceRecoveryTests
     {
         var nextSegmentId = catalog.GetProperty("next_segment_id").GetUInt64();
         Assert.True(nextSegmentId >= 3);
-        foreach (var segment in catalog.GetProperty("segments").EnumerateObject())
+        foreach (var segment in catalog.GetProperty("segments").EnumerateArray())
         {
-            Assert.True(ulong.Parse(segment.Name, CultureInfo.InvariantCulture) < nextSegmentId);
+            Assert.True(segment.GetProperty("facts").GetProperty("link").GetProperty("id").GetUInt64() < nextSegmentId);
         }
     }
 

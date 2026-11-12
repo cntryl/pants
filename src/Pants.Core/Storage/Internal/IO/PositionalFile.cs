@@ -81,7 +81,10 @@ static class PositionalFile
         Action? afterWrite = null,
         Action? beforeFlush = null,
         Action? afterFlush = null,
-        Action<string>? flushDirectory = null)
+        Action<string>? flushDirectory = null,
+        Action? beforeWrite = null,
+        MetadataIoObservation? observation = null,
+        Action<SafeFileHandle, IReadOnlyList<ReadOnlyMemory<byte>>, long>? writeOperation = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(buffers);
@@ -90,21 +93,34 @@ static class PositionalFile
                         throw new ArgumentException("An append target must have a parent directory.", nameof(path));
         StoragePathGuard.EnsureNotLink(fullPath);
         var created = !File.Exists(fullPath);
-        using (var handle = File.OpenHandle(
+        using (var handle = MetadataIoObservation.Run(observation, () => File.OpenHandle(
                    fullPath,
                    FileMode.OpenOrCreate,
-                   FileAccess.Write))
+                   FileAccess.Write)))
         {
-            RandomAccess.Write(handle, buffers, RandomAccess.GetLength(handle));
+            beforeWrite?.Invoke();
+            var bytes = buffers.Aggregate(0UL, static (total, buffer) => checked(total + (ulong)buffer.Length));
+            observation?.Issued(bytes);
+            try
+            {
+                (writeOperation ?? RandomAccess.Write)(handle, buffers, RandomAccess.GetLength(handle));
+                observation?.Returned(bytes);
+            }
+            catch
+            {
+                observation?.Mutation();
+                throw;
+            }
+
             afterWrite?.Invoke();
             beforeFlush?.Invoke();
-            RandomAccess.FlushToDisk(handle);
+            MetadataIoObservation.Run(observation, () => RandomAccess.FlushToDisk(handle));
             afterFlush?.Invoke();
         }
 
         if (created)
         {
-            (flushDirectory ?? AtomicStagedFile.FlushDirectory)(directory);
+            MetadataIoObservation.Run(observation, () => (flushDirectory ?? AtomicStagedFile.FlushDirectory)(directory));
         }
     }
 }

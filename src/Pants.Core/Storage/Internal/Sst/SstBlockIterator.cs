@@ -16,6 +16,7 @@ sealed class SstBlockIterator : IDisposable
     readonly ResourceBudget? _resourceBudget;
     readonly byte[]? _startInclusive;
     IReadOnlyList<SstEntry>? _blockEntries;
+    SstEntry? _boundaryEntry;
     int _blockIndex;
     IDisposable? _blockReservation;
     bool _finished;
@@ -157,25 +158,52 @@ sealed class SstBlockIterator : IDisposable
         _blockEntries = null;
         _blockReservation?.Dispose();
         _blockReservation = null;
-        var block = _reader.ReadDataBlock(blockIndex);
-        using var transientBlockReservation = _resourceBudget?.Reserve(block.Length);
-        var entries = SstCodec.DecodeDataBlock(block);
-        // The decompressed byte buffer above is temporary; this longer-lived reservation charges
-        // the decoded key/value arrays retained by _blockEntries. A compaction output reservation
-        // keeps charging entries that outlive this iterator block.
-        var accountedBytes = checked(entries.Sum(static entry =>
-            entry.Key.Length + (entry.Value?.Length ?? 0) + 32));
-        var reservation = _resourceBudget?.Reserve(accountedBytes);
-        _blockReservation = reservation;
-        CurrentBlockBytes = block.Length;
-        _blockEntries = entries;
-        _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : _blockEntries.Count - 1;
+        using var boundaryReservation = _boundaryEntry is null
+            ? null
+            : _resourceBudget?.Reserve(checked(
+                _boundaryEntry.Key.Length + (_boundaryEntry.Value?.Length ?? 0) + SstCodec.DecodedEntryOverheadBytes));
+        using var ownedBlock = _reader.ReadDataBlockOwned(blockIndex, _resourceBudget);
+        var block = ownedBlock.Content;
+        IDisposable? decodedReservation = _resourceBudget?.Reserve(SstCodec.MeasureDecodedDataBlockBytes(block));
+        try
+        {
+            var entries = SstCodec.DecodeDataBlock(block);
+            if (entries.Count == 0 || !entries[0].Key.AsSpan().SequenceEqual(_reader.GetFirstKey(blockIndex)))
+            {
+                throw new PantsCorruptionException("SST index first key does not match its data block.");
+            }
+
+            if (_boundaryEntry is not null)
+            {
+                if (_direction == PantsScanDirection.Forward)
+                {
+                    SstCodec.ValidateAdjacentEntries(_boundaryEntry, entries[0]);
+                }
+                else
+                {
+                    SstCodec.ValidateAdjacentEntries(entries[^1], _boundaryEntry);
+                }
+            }
+
+            _boundaryEntry = _direction == PantsScanDirection.Forward ? entries[^1] : entries[0];
+            _blockReservation = decodedReservation;
+            decodedReservation = null;
+            CurrentBlockBytes = block.Length;
+            _blockEntries = entries;
+            _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : _blockEntries.Count - 1;
+        }
+        finally
+        {
+            decodedReservation?.Dispose();
+        }
     }
 
     bool Finish()
     {
         _finished = true;
         _blockEntries = null;
+        _boundaryEntry = null;
+        Current = null!;
         _blockReservation?.Dispose();
         _blockReservation = null;
         CurrentBlockBytes = 0;

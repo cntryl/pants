@@ -73,5 +73,17 @@ public interface IPantsTransaction : IAsyncDisposable
         PantsWriteOptions options,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Commits and returns the sequence associated with this transaction's completion.</summary>
+    /// <remarks>
+    ///     Writes return their assigned commit sequence. Read-only and pure empty transactions
+    ///     return their start sequence; assertion-only transactions return the validated server
+    ///     cut without allocating a sequence. A cloud-async result can be passed to
+    ///     <see cref="IPantsCloudDatabase.WaitForDurableAsync"/> for explicit remote confirmation.
+    ///     An unknown outcome does not return a sequence and requires reconciliation before retry.
+    /// </remarks>
+    ValueTask<ulong> CommitWithSequenceAsync(
+        PantsWriteOptions options,
+        CancellationToken cancellationToken = default);
+
     ValueTask RollbackAsync(CancellationToken cancellationToken = default);
 }

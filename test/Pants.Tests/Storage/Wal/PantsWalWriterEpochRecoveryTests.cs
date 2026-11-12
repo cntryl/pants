@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -9,71 +9,47 @@ public sealed class PantsWalWriterEpochRecoveryTests
     [Theory]
     [InlineData(PantsRecoveryPolicy.Strict)]
     [InlineData(PantsRecoveryPolicy.Salvage)]
-    public async Task ShouldSkipLateLowerEpochMutationGivenNewerWriterAlreadyAppeared(
-        PantsRecoveryPolicy recoveryPolicy)
+    public async Task ShouldRejectSequenceRegressionOrSalvageItsVerifiedPrefix(PantsRecoveryPolicy recoveryPolicy)
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        await WriteWalAsync(
-            directory.Path,
-            CreatePut("legacy", "preserved", 1, 1),
-            CreatePut("target", "fresh", 10, 2),
-            CreatePut("target", "stale", 2, 1));
+        await WriteWalAsync(directory.Path, CreatePut("legacy", "preserved", 1, 1), CreatePut("target", "fresh", 10, 1), CreatePut("target", "stale", 2, 1));
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        if (recoveryPolicy == PantsRecoveryPolicy.Strict)
+        {
+            await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, recoveryPolicy).AsTask());
+            return;
+        }
 
-        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
-        await using var database = await OpenAsync(directory.Path, recoveryPolicy);
-
-        Assert.Equal(10, report.WalBoundary);
-        Assert.Equal(2, report.WalRecoveryRecordsReplayed);
-        Assert.Equal("preserved", await ReadAsync(database, "legacy"));
-        Assert.Equal("fresh", await ReadAsync(database, "target"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
-        Assert.Equal(2, (await database.Diagnostics.GetRecoveryMetricsAsync()).WalRecordsReplayed);
+        await using var recovered = await OpenAsync(directory.Path, recoveryPolicy);
+        Assert.Equal("preserved", await ReadAsync(recovered, "legacy"));
+        Assert.Equal("fresh", await ReadAsync(recovered, "target"));
+        Assert.Equal(PantsEngineHealth.SalvageMode, (await recovered.Diagnostics.GetRuntimeMetricsAsync()).Health);
     }
 
     [Fact]
-    public async Task ShouldSkipOverlappingLowerEpochMutationGivenNewerWriterAppearsLater()
+    public async Task ShouldRejectRegressingSequenceWithinOnePhysicalSegment()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        await WriteWalAsync(
-            directory.Path,
-            CreatePut("stale-first", "stale", 3, 1),
-            CreatePut("fresh-second", "fresh", 2, 2));
+        await WriteWalAsync(directory.Path, CreatePut("first", "one", 3, 1), CreatePut("second", "two", 2, 1));
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+    }
 
-        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
+    [Fact]
+    public async Task ShouldRecoverIncreasingEpochsAcrossLinkedSealedAndActiveSegments()
+    {
+        using var directory = new TemporaryDirectory();
+        await InitializeDatabaseAsync(directory.Path);
+        WriteEpochSegments(directory.Path, (1, [CreatePut("first", "one", 1, 1)]), (2, [CreatePut("second", "two", 2, 2)]));
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
-
-        Assert.Equal(2, report.WalBoundary);
-        Assert.Equal(1, report.WalRecoveryRecordsReplayed);
-        Assert.Null(await ReadAsync(database, "stale-first"));
-        Assert.Equal("fresh", await ReadAsync(database, "fresh-second"));
+        Assert.Equal("one", await ReadAsync(database, "first"));
+        Assert.Equal("two", await ReadAsync(database, "second"));
     }
 
     [Fact]
-    public async Task ShouldCarryWriterEpochFrontierAcrossSealedAndActiveWal()
-    {
-        using var directory = new TemporaryDirectory();
-        await InitializeDatabaseAsync(directory.Path);
-        await WriteWalFileAsync(
-            directory.Path,
-            "00000000000000000001.wal",
-            CreatePut("stale-sealed", "stale", 3, 1));
-        await WriteWalAsync(
-            directory.Path,
-            CreatePut("fresh-active", "fresh", 2, 2));
-
-        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
-        await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
-
-        Assert.Equal(2, report.WalBoundary);
-        Assert.Equal(1, report.WalRecoveryRecordsReplayed);
-        Assert.Null(await ReadAsync(database, "stale-sealed"));
-        Assert.Equal("fresh", await ReadAsync(database, "fresh-active"));
-    }
-
-    [Fact]
-    public async Task ShouldFailStrictRecoveryGivenStaleTransactionBatchIsCorrupt()
+    public async Task ShouldFailStrictRecoveryGivenCorruptTransactionBatchBeforeAnotherRecord()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
@@ -82,9 +58,9 @@ public sealed class PantsWalWriterEpochRecoveryTests
             10,
             1,
             [CreateMutation("stale", "hidden", 0)]);
-        var batchMagicOffset = staleBatch.AsSpan().IndexOf("TB"u8);
-        Assert.True(batchMagicOffset >= 0);
-        staleBatch[batchMagicOffset] = (byte)'X';
+        var staleRecord = WalCodec.DecodeRecord(staleBatch);
+        staleRecord.Value![0] = (byte)'X';
+        staleBatch = WalCodec.EncodeRecord(staleRecord);
         await WriteWalAsync(
             directory.Path,
             staleBatch,
@@ -97,7 +73,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
     }
 
     [Fact]
-    public async Task ShouldFailStrictRecoveryGivenStaleTransactionBeginIsDuplicated()
+    public async Task ShouldFailStrictRecoveryGivenDuplicateTransactionBegin()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
@@ -123,53 +99,20 @@ public sealed class PantsWalWriterEpochRecoveryTests
     }
 
     [Fact]
-    public async Task ShouldIsolateReusedTransactionIdGivenWriterEpochChanges()
+    public async Task ShouldIsolateReusedTransactionIdAcrossLinkedEpochSegments()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        const ulong transactionId = 1;
-        await WriteWalAsync(
-            directory.Path,
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionBegin,
-                transactionId,
-                1,
-                11),
-            WalCodec.EncodeTransactionMutation(
-                CreateMutation("orphaned", "hidden", 2),
-                transactionId,
-                11),
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionBegin,
-                transactionId,
-                3,
-                12),
-            WalCodec.EncodeTransactionMutation(
-                CreateMutation("committed", "visible", 4),
-                transactionId,
-                12),
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionCommit,
-                transactionId,
-                5,
-                12),
-            WalCodec.EncodeTransactionMarker(
-                WalOperation.TransactionCommit,
-                transactionId,
-                6,
-                11));
-
-        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
+        WriteEpochSegments(directory.Path,
+            (11, [WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 1, 1, 11), WalCodec.EncodeTransactionMutation(CreateMutation("orphaned", "hidden", 2), 1, 11)]),
+            (12, [WalCodec.EncodeTransactionMarker(WalOperation.TransactionBegin, 1, 3, 12), WalCodec.EncodeTransactionMutation(CreateMutation("committed", "visible", 4), 1, 12), WalCodec.EncodeTransactionMarker(WalOperation.TransactionCommit, 1, 5, 12)]));
         await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
-
-        Assert.Equal(5, report.WalBoundary);
-        Assert.Equal(5, report.WalRecoveryRecordsReplayed);
         Assert.Null(await ReadAsync(database, "orphaned"));
         Assert.Equal("visible", await ReadAsync(database, "committed"));
     }
 
     [Fact]
-    public async Task ShouldSalvageFreshMixedEpochPrefixGivenCorruptTail()
+    public async Task ShouldSalvageVerifiedSequencePrefixGivenRegressingRecordAndCorruptTail()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
@@ -296,40 +239,21 @@ public sealed class PantsWalWriterEpochRecoveryTests
     }
 
     [Fact]
-    public async Task ShouldApplyIdenticalRecordOnceWhenItRepeatsInALaterWalFile()
+    public async Task ShouldRejectRepeatedSequenceAcrossLinkedSegmentsEvenGivenIdenticalValue()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        var frame = Frame([CreatePut("duplicate", "original", 7, 1)]);
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
-            frame);
-        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "wal", "wal.log"), frame);
-        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
-
-        await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
-
-        Assert.Equal("original", await ReadAsync(database, "duplicate"));
-        Assert.Equal(PantsEngineHealth.Healthy, (await database.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        WriteEpochSegments(directory.Path, (1, [CreatePut("duplicate", "original", 7, 1)]), (1, [CreatePut("duplicate", "original", 7, 1)]));
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
     }
 
     [Fact]
-    public async Task ShouldFailStrictRecoveryGivenSameVersionWithDifferentContentInALaterWalFile()
+    public async Task ShouldRejectRepeatedSequenceAcrossLinkedSegmentsGivenConflictingValue()
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
-            Frame([CreatePut("duplicate", "original", 7, 1)]));
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "wal.log"),
-            Frame([CreatePut("duplicate", "conflicting", 7, 1)]));
-        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
-
-        var exception = await Assert.ThrowsAsync<PantsRecoveryFailedException>(() =>
-            OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
-
-        Assert.Equal(PantsErrorCode.RecoveryFailed, exception.Code);
+        WriteEpochSegments(directory.Path, (1, [CreatePut("duplicate", "original", 7, 1)]), (1, [CreatePut("duplicate", "conflicting", 7, 1)]));
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
     }
 
     [Fact]
@@ -338,9 +262,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
-            CreateDuplicateLogicalVersionWal("conflicting"));
+        await WriteRawFramesAsync(directory.Path, CreateDuplicateLogicalVersionWal("conflicting"));
 
         var exception =
             await Assert.ThrowsAsync<PantsCorruptionException>(() =>
@@ -385,36 +307,29 @@ public sealed class PantsWalWriterEpochRecoveryTests
         }
 
         DeleteSealedWalSegments(directory.Path);
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "wal.log"),
-            CreateDuplicateLogicalVersionWal("conflicting", columnFamilyId));
+        await WriteRawFramesAsync(directory.Path, CreateDuplicateLogicalVersionWal("conflicting", columnFamilyId));
+
+        if (!droppedFamily)
+        {
+            // Unknown authority cannot authorize a salvage rewrite, even when another record
+            // independently violates the WAL sequence contract.
+            await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, recoveryPolicy).AsTask());
+            return;
+        }
 
         await AssertDuplicateRecoveryAsync(directory.Path, recoveryPolicy);
     }
 
     [Theory]
-    [InlineData(10, 2, 10)]
-    [InlineData(7, 7, 7)]
-    public async Task ShouldReportMaximumSequenceAndReopenGivenDistinctKeysAreNotOrdered(
-        int firstSequence,
-        int secondSequence,
-        long expectedBoundary)
+    [InlineData(10, 2)]
+    [InlineData(7, 7)]
+    public async Task ShouldRejectNonIncreasingRecordSequencesGivenDistinctKeys(int firstSequence, int secondSequence)
     {
         using var directory = new TemporaryDirectory();
         await InitializeDatabaseAsync(directory.Path);
-        await WriteWalAsync(
-            directory.Path,
-            CreatePut("first", "one", checked((ulong)firstSequence), 1),
-            CreatePut("second", "two", checked((ulong)secondSequence), 1));
-
-        var report = await PantsDatabase.VerifyPathAsync(directory.Path);
-        await using var database = await OpenAsync(directory.Path, PantsRecoveryPolicy.Strict);
-
-        Assert.Equal(expectedBoundary, report.WalBoundary);
-        Assert.Equal(2, report.WalRecoveryRecordsReplayed);
-        Assert.Equal("one", await ReadAsync(database, "first"));
-        Assert.Equal("two", await ReadAsync(database, "second"));
-        Assert.Equal(expectedBoundary, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
+        await WriteWalAsync(directory.Path, CreatePut("first", "one", (ulong)firstSequence, 1), CreatePut("second", "two", (ulong)secondSequence, 1));
+        await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
     }
 
     static async Task InitializeDatabaseAsync(string path)
@@ -517,32 +432,67 @@ public sealed class PantsWalWriterEpochRecoveryTests
         null,
         null);
 
-    static Task WriteWalAsync(string path, params byte[][] payloads) =>
-        WriteWalFileAsync(path, "wal.log", payloads);
-
-    static async Task WriteWalFileAsync(string path, string fileName, params byte[][] payloads)
+    static void WriteEpochSegments(string path, params (ulong Epoch, byte[][] Payloads)[] segments)
     {
-        await File.WriteAllBytesAsync(Path.Combine(path, "wal", fileName), Frame(payloads));
-        if (!StringComparer.Ordinal.Equals(fileName, "wal.log"))
+        var directory = Path.Combine(path, "wal");
+        var holder = WalLedgerStore.LoadExisting(directory).Holder;
+        foreach (var existing in Directory.GetFiles(directory, "*.wal"))
         {
-            await MarkLegacyWalSequenceReservationVersionAsync(path);
+            File.Delete(existing);
         }
+
+        var previous = WalChainLink.Genesis;
+        var members = new List<WalLedgerMember>();
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            var id = (ulong)index + 1;
+            var first = WalCodec.DecodeRecord(segment.Payloads[0]).Sequence;
+            var open = new WalOpenFacts(id, segment.Epoch, first, previous);
+            var walPath = Path.Combine(directory, $"{id:00000000000000000000}.wal");
+            using var stream = new FileStream(walPath, FileMode.Create, FileAccess.ReadWrite);
+            stream.Write(WalSegmentCodec.EncodeHeader(open, holder));
+            stream.Write(Frame(segment.Payloads));
+            if (index < segments.Length - 1)
+            {
+                var facts = WalSegmentCodec.Seal(stream);
+                members.Add(new WalLedgerMember(open, facts, facts.DataLen));
+                previous = facts.Link;
+            }
+            else
+            {
+                members.Add(new WalLedgerMember(open, null, (ulong)stream.Length));
+            }
+        }
+
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
+        {
+            ["Snapshot"] = new { holder, anchor = WalChainLink.Genesis, members, next_segment_id = (ulong)segments.Length + 1, seq_reserved_through = 100UL }
+        }, WalLedgerStore.JsonOptions);
+        var bytes = new byte[20 + payload.Length];
+        "MDGLEDGR"u8.CopyTo(bytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8), 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12), (uint)payload.Length);
+        payload.CopyTo(bytes, 20);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), DiskFormat.Crc32CAppend(DiskFormat.Crc32C(bytes.AsSpan(12, 4)), payload));
+        File.WriteAllBytes(Path.Combine(directory, "LEDGER"), bytes);
     }
 
-    static async Task MarkLegacyWalSequenceReservationVersionAsync(string path)
+    static Task WriteWalAsync(string path, params byte[][] payloads)
     {
-        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
-        {
-            var manifestPath = Path.Combine(path, fileName);
-            if (!File.Exists(manifestPath))
-            {
-                continue;
-            }
+        WalTestFiles.ReplaceActiveRecords(path, payloads);
+        return Task.CompletedTask;
+    }
 
-            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
-            manifest["wal_sequence_reservation_version"] = 0;
-            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
-        }
+    static Task WriteRawFramesAsync(string path, byte[] frames)
+    {
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(path, "wal"));
+        var header = WalSegmentCodec.EncodeHeader(ledger.Active.Open, ledger.Holder);
+        var bytes = header.Concat(frames).ToArray();
+        File.WriteAllBytes(ledger.ActivePath, bytes);
+        ledger.SyncOpen(checked((ulong)bytes.Length));
+        ledger.Reserve(Math.Max(ledger.ReservedThrough, 100));
+        return Task.CompletedTask;
     }
 
     static async Task WriteWalWithCorruptTailAsync(string path, params byte[][] payloads)
@@ -554,7 +504,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         DiskFormat.WriteUInt32(stream, checked((uint)corruptPayload.Length));
         DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(corruptPayload) ^ uint.MaxValue);
         stream.Write(corruptPayload);
-        await File.WriteAllBytesAsync(Path.Combine(path, "wal", "wal.log"), stream.ToArray());
+        await WriteRawFramesAsync(path, stream.ToArray());
     }
 
     static Task WriteWalWithCorruptedLengthBeforeValidSuffixAsync(string path)
@@ -571,13 +521,11 @@ public sealed class PantsWalWriterEpochRecoveryTests
         BinaryPrimitives.WriteUInt32LittleEndian(
             bytes.AsSpan(prefix.Length),
             checked((uint)bytes.Length));
-        return File.WriteAllBytesAsync(Path.Combine(path, "wal", "wal.log"), bytes);
+        return WriteRawFramesAsync(path, bytes);
     }
 
     static Task WriteWalWithDuplicateLogicalVersionAsync(string path, string duplicateValue) =>
-        File.WriteAllBytesAsync(
-            Path.Combine(path, "wal", "wal.log"),
-            CreateDuplicateLogicalVersionWal(duplicateValue));
+        WriteRawFramesAsync(path, CreateDuplicateLogicalVersionWal(duplicateValue));
 
     static byte[] CreateDuplicateLogicalVersionWal(
         string duplicateValue,
@@ -599,13 +547,16 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
     static void DeleteSealedWalSegments(string path)
     {
-        foreach (var walPath in Directory.EnumerateFiles(
-                     Path.Combine(path, "wal"),
-                     "*.wal",
-                     SearchOption.TopDirectoryOnly))
+        var directory = Path.Combine(path, "wal");
+        var prior = WalLedgerStore.LoadExisting(directory);
+        foreach (var file in Directory.EnumerateFiles(directory, "*.wal"))
         {
-            File.Delete(walPath);
+            File.Delete(file);
         }
+
+        var open = new WalOpenFacts(1, 1, 1, WalChainLink.Genesis);
+        File.WriteAllBytes(Path.Combine(directory, "00000000000000000001.wal"), WalSegmentCodec.EncodeHeader(open, prior.Holder));
+        new WalLedgerStore(directory, prior.Holder, WalChainLink.Genesis, [new WalLedgerMember(open, null, 128)], 2, prior.ReservedThrough).Save();
     }
 
     static async Task AssertDuplicateRecoveryAsync(

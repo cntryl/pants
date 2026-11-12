@@ -19,6 +19,12 @@ public abstract class PantsException : Exception
     /// <summary>How a host should act on this failure: retry, back off, step down or halt.</summary>
     public PantsErrorSeverity Severity => Code.GetSeverity();
 
+    /// <summary>
+    ///     Whether a refused safe family drop identified committed data that may be discarded
+    ///     explicitly. Busy and unknown outcomes do not grant this permission.
+    /// </summary>
+    public bool LicensesUnflushedDiscard => this is PantsUnflushedDataPresentException;
+
     internal static PantsException Create(
         PantsErrorCode code,
         string message,

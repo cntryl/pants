@@ -2,7 +2,7 @@ namespace Cntryl.Pants;
 
 public static class PantsErrorCodeExtensions
 {
-    /// <summary>Classifies an error code for retry, backpressure, fencing or halt.</summary>
+    /// <summary>Classifies an error code for retry, backpressure, fencing, reconciliation or halt.</summary>
     public static PantsErrorSeverity GetSeverity(this PantsErrorCode code) => code switch
     {
         PantsErrorCode.NotFound or
@@ -10,7 +10,8 @@ public static class PantsErrorCodeExtensions
             PantsErrorCode.NotSupported or
             PantsErrorCode.InvalidPath or
             PantsErrorCode.MemoryModeViolation or
-            PantsErrorCode.WriteConflict => PantsErrorSeverity.Caller,
+            PantsErrorCode.WriteConflict or
+            PantsErrorCode.UnflushedDataPresent => PantsErrorSeverity.Caller,
 
         PantsErrorCode.Io or
             PantsErrorCode.LeaseHeld or
@@ -31,8 +32,9 @@ public static class PantsErrorCodeExtensions
 
         PantsErrorCode.Corruption or
             PantsErrorCode.RecoveryFailed or
-            PantsErrorCode.CompatibilityError or
-            PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.Fatal,
+            PantsErrorCode.CompatibilityError => PantsErrorSeverity.Fatal,
+
+        PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.OutcomeUnknown,
 
         _ => PantsErrorSeverity.Defect
     };

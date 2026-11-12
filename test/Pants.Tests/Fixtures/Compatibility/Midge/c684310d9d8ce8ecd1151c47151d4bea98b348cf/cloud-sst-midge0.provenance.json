@@ -1,0 +1,12 @@
+{
+  "producer": "Midge0.5.2",
+  "sourceCommit": "c684310d9d8ce8ecd1151c47151d4bea98b348cf",
+  "sourceFeatures": [
+    "cloud-aws",
+    "internal-testing"
+  ],
+  "workload": "phase0 cloud-strict default+side transactions, flush both families, compact, normal shutdown",
+  "sourceCargoLockSha256": "6a497fab02a0dde008ae9029af4d877e8982bd0fa3113efe3c291bafd091dc88",
+  "excludedFiles": "process-local cache and native coordination stripes; unchanged shared object bytes retained",
+  "harnessDirectory": "/tmp/pants-format9-cloud-cross-engine-20261104"
+}

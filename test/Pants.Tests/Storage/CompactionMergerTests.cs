@@ -104,7 +104,7 @@ public sealed class CompactionMergerTests
         null,
         isDelete);
 
-    static CompactionPlan Plan(bool pointEligible, bool rangeEligible, long? horizon) => new(
+    static CompactionPlan Plan(bool pointEligible, bool rangeEligible, ulong? horizon) => new(
         0,
         1,
         0,

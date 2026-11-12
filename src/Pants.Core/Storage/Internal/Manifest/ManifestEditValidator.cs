@@ -23,7 +23,11 @@ static class ManifestEditValidator
                 ValidateEdit(nestedEdit, options, true);
             }
 
-            ValidateFlushFrontierPairs(nested, options);
+            if (!insideBatch)
+            {
+                ValidateFlushFrontierPairs(nested, options);
+            }
+
             return;
         }
 
@@ -78,7 +82,7 @@ static class ManifestEditValidator
         {
             if (edit.Variant == "Batch")
             {
-                flattened.AddRange(GetBatchEdits(edit, options));
+                FlattenEdits(GetBatchEdits(edit, options), options, flattened);
             }
             else
             {
@@ -97,8 +101,7 @@ static class ManifestEditValidator
 
             var frontier = GetValue(frontierEdit, options);
             var familyId = GetRequiredUInt32(frontier, "cf_id");
-            var throughSequence = GetRequiredUInt64(frontier, "through_sequence");
-            var sstName = GetRequiredString(frontier, "sst_name");
+            var throughSequence = GetRequiredUInt64(frontier, "freeze_sequence");
             if (!advancedFamilies.Add(familyId))
             {
                 throw PantsException.Create(
@@ -109,8 +112,7 @@ static class ManifestEditValidator
             var pairedOutputExists = flattened.Take(index)
                 .Where(static edit => edit.Variant == "AddSst")
                 .Select(edit => GetSst(edit, options))
-                .Any(output => output.Name == sstName &&
-                               output.ColumnFamilyId == familyId &&
+                .Any(output => output.ColumnFamilyId == familyId &&
                                output.LargestSequence.HasValue &&
                                output.LargestSequence.Value <= throughSequence);
             var outputIsRemoved = flattened.Skip(index + 1)
@@ -119,12 +121,27 @@ static class ManifestEditValidator
                 .Any(value => value.ValueKind == JsonValueKind.Object &&
                               value.TryGetProperty("name", out var name) &&
                               name.ValueKind == JsonValueKind.String &&
-                              name.GetString() == sstName);
+                              flattened.Take(index).Where(static candidate => candidate.Variant == "AddSst").Select(candidate => GetSst(candidate, options)).Any(file => file.Name == name.GetString() && file.ColumnFamilyId == familyId));
             if (!pairedOutputExists || outputIsRemoved)
             {
                 throw PantsException.Create(
                     PantsErrorCode.InvalidArgument,
                     $"Flush frontier for family {familyId} must follow its retained SST in the same manifest batch.");
+            }
+        }
+    }
+
+    static void FlattenEdits(IReadOnlyList<ManifestEdit> edits, JsonSerializerOptions options, List<ManifestEdit> output)
+    {
+        foreach (var edit in edits)
+        {
+            if (edit.Variant == "Batch")
+            {
+                FlattenEdits(GetBatchEdits(edit, options), options, output);
+            }
+            else
+            {
+                output.Add(edit);
             }
         }
     }
@@ -181,18 +198,15 @@ static class ManifestEditValidator
                 if (value.ValueKind != JsonValueKind.Object ||
                     !value.TryGetProperty("cf_id", out var familyId) ||
                     !familyId.TryGetUInt32(out _) ||
-                    !value.TryGetProperty("through_sequence", out var through) ||
+                    !value.TryGetProperty("freeze_sequence", out var through) ||
                     !through.TryGetUInt64(out var throughSequence) ||
-                    throughSequence == ulong.MaxValue ||
-                    !value.TryGetProperty("sst_name", out var sstName) ||
-                    sstName.ValueKind != JsonValueKind.String)
+                    throughSequence == ulong.MaxValue)
                 {
                     throw PantsException.Create(
                         PantsErrorCode.InvalidArgument,
                         "The flush-frontier edit is invalid.");
                 }
 
-                RequireSafeName(sstName.GetString()!);
                 return;
             case "AdvanceWalHistoryStart":
                 if (value.ValueKind != JsonValueKind.Object ||

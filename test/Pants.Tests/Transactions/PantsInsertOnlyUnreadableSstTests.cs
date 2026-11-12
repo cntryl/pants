@@ -23,7 +23,7 @@ public sealed class PantsInsertOnlyUnreadableSstTests
         if (spill)
         {
             options = options
-                .WithMemoryBudget(PantsMemoryBudget.FromBytes(4 * 1_024))
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1_024))
                 .WithMemtableLimits(1_024)
                 .WithTransactionMemoryPool(1_024);
         }

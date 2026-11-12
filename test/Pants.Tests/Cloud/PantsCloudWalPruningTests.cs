@@ -37,7 +37,7 @@ public sealed class PantsCloudWalPruningTests
         Assert.False(handler.ContainsObjectPath("/wal/epochs/"));
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
-        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateObject());
+        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateArray());
     }
 
     [Fact]
@@ -472,8 +472,8 @@ public sealed class PantsCloudWalPruningTests
     {
         using var catalog = JsonDocument.Parse(
             handler.GetObjectText("/wal/publication-catalog.v1.json"));
-        return catalog.RootElement.GetProperty("segments").EnumerateObject()
-            .Select(static property => property.Value.Clone())
+        return catalog.RootElement.GetProperty("segments").EnumerateArray()
+            .Select(static segment => segment.Clone())
             .ToArray();
     }
 
@@ -489,8 +489,8 @@ public sealed class PantsCloudWalPruningTests
             CloudRoot(root),
             "wal",
             "publication-catalog.v1.json")));
-        return document.RootElement.GetProperty("segments").EnumerateObject()
-            .Select(static property => property.Value.Clone())
+        return document.RootElement.GetProperty("segments").EnumerateArray()
+            .Select(static segment => segment.Clone())
             .ToArray();
     }
 

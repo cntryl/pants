@@ -1,0 +1,74 @@
+{
+  "midge_commit": "c684310d9d8ce8ecd1151c47151d4bea98b348cf",
+  "format": 9,
+  "sst_version": 5,
+  "codec_sequence": 9223372036854775824,
+  "public_engine_commit_sequence": 9223372036854775827,
+  "rows": {
+    "u64-row": "midge-codec",
+    "engine-row": "actual-runtime"
+  },
+  "producer": "Actual Midge internal-testing WalRecord/SegmentBuilder then public Engine Sync commit, optional flush, shutdown and fresh verify-high reopen. Only the first legal handout floor is arranged through canonical LEDGER Reserve; final data files are unchanged Midge output.",
+  "omitted_native_coordination": [
+    "LOCK",
+    ".midge_leader",
+    ".midge_leader.lock",
+    ".midge_writer_effect.v2.lock",
+    ".midge_writer_effect.v2.fallback.lock"
+  ],
+  "evidence": "/tmp/pants-numeric-width-proof-20261104",
+  "files": {
+    "unsigned-sequence-high-sst/FORMAT": {
+      "bytes": 23,
+      "sha256": "9be590eb3e58b8a9e06eafca7ae44a4a84e73db5562b07dc688b6e0897a8720e"
+    },
+    "unsigned-sequence-high-sst/intent_log.json": {
+      "bytes": 394,
+      "sha256": "a4a935f0cb219598fe694d173b349071bc5659282144ad1429bda213a9496b79"
+    },
+    "unsigned-sequence-high-sst/manifest.journal": {
+      "bytes": 436,
+      "sha256": "49e5f39b1edf6910cb0900644973ea869065162196bef43c521a09f406d820c8"
+    },
+    "unsigned-sequence-high-sst/manifest.snapshot.json": {
+      "bytes": 122,
+      "sha256": "dce1af3bf8c07d6e13262e234baa700c68923959204995c474bb86afe59bf565"
+    },
+    "unsigned-sequence-high-sst/sst/000000_00_00000000000000000001.sst": {
+      "bytes": 298,
+      "sha256": "b5aa8f58f7036e1b6872ec632fcaf72be36979a49e8ac52a0326b6e8e6474c3e"
+    },
+    "unsigned-sequence-high-sst/wal/00000000000000000005.wal": {
+      "bytes": 128,
+      "sha256": "776f6e64fcba521f2747524cedde0f89a43ae80cf9512838cbfb2130892f9cbf"
+    },
+    "unsigned-sequence-high-sst/wal/LEDGER": {
+      "bytes": 751,
+      "sha256": "e568ee43ab1075c48dfc7b509a45289b82628a7e067001a9d2762f8f55fed5d5"
+    },
+    "unsigned-sequence-high-wal/FORMAT": {
+      "bytes": 23,
+      "sha256": "9be590eb3e58b8a9e06eafca7ae44a4a84e73db5562b07dc688b6e0897a8720e"
+    },
+    "unsigned-sequence-high-wal/wal/00000000000000000001.wal": {
+      "bytes": 278,
+      "sha256": "b07e75e725705d64844b42b37c02f7face636dbfe7789c9cb084c23b0e703f5b"
+    },
+    "unsigned-sequence-high-wal/wal/00000000000000000002.wal": {
+      "bytes": 355,
+      "sha256": "5cd8f4cedb012de9deadc54272635139273bd4639eae83395f89f0c0f6a63db7"
+    },
+    "unsigned-sequence-high-wal/wal/00000000000000000004.wal": {
+      "bytes": 128,
+      "sha256": "f5735f2ee5251a76aaa69808326aa73fb15992628355c18e5e38d3acb4c73367"
+    },
+    "unsigned-sequence-high-wal/wal/LEDGER": {
+      "bytes": 1420,
+      "sha256": "8e2394a295d27e18a147d64a3118db0d014724713fe3f37984d3c4e004766042"
+    }
+  },
+  "public_engine_reopen_allocation_sequence": 9223372036857921552,
+  "public_engine_reopen_snapshot_sequence": 9223372036854775827,
+  "public_engine_reopen_local_durable_sequence": 9223372036857921552,
+  "public_engine_reopen_last_synced_sequence": 0
+}

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using Cntryl.Pants.Storage.Internal.IO;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -34,16 +36,16 @@ public sealed class PantsBufferedSequencePowerLossTests
         try
         {
             var marker = (await File.ReadAllLinesAsync(readyPath))
-                .Select(line => long.Parse(line, CultureInfo.InvariantCulture))
+                .Select(line => ulong.Parse(line, CultureInfo.InvariantCulture))
                 .ToArray();
             Assert.Equal(2, marker.Length);
             var lostSequence = marker[0];
-            var syncedWalLength = marker[1];
+            var syncedWalLength = checked((long)marker[1]);
 
             child.TryKillProcessTree();
             await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
 
-            var walPath = Path.Combine(databasePath, "wal", "wal.log");
+            var walPath = WalTestFiles.ActivePath(databasePath);
             Assert.True(new FileInfo(walPath).Length > syncedWalLength);
             using var wal = new FileStream(
                 walPath,
@@ -93,18 +95,18 @@ public sealed class PantsBufferedSequencePowerLossTests
         try
         {
             var marker = (await File.ReadAllLinesAsync(readyPath))
-                .Select(line => long.Parse(line, CultureInfo.InvariantCulture))
+                .Select(line => ulong.Parse(line, CultureInfo.InvariantCulture))
                 .ToArray();
             Assert.Equal(2, marker.Length);
             var acceptedSequence = marker[0];
-            var priorDurableWalLength = marker[1];
+            var priorDurableWalLength = checked((long)marker[1]);
 
             child.TryKillProcessTree();
             await child.Process.WaitForExitAsync().WaitAsync(TestTimeouts.Expected);
             await WaitForLockReleaseAsync(databasePath);
             await ExpireCrashedLeaseAsync(databasePath);
 
-            var walPath = Path.Combine(databasePath, "wal", "wal.log");
+            var walPath = WalTestFiles.ActivePath(databasePath);
             Assert.True(new FileInfo(walPath).Length > priorDurableWalLength);
             var failedSyncProbe = new RecoveryWalSyncProbe(walPath, throwOnSync: true);
             var syncFailure = Assert.Throws<StorageException>(() => LocalDiskStore.Open(
@@ -170,7 +172,7 @@ public sealed class PantsBufferedSequencePowerLossTests
             CreateCommitPayload(state, 1, "synced"),
             state,
             PantsDurability.Sync);
-        var syncedWalLength = new FileInfo(Path.Combine(databasePath, "wal", "wal.log")).Length;
+        var syncedWalLength = new FileInfo(WalTestFiles.ActivePath(databasePath)).Length;
         failpoints.Arm();
         _ = store.AppendCommit(
             CreateCommitPayload(state, 2, "buffered"),
@@ -179,12 +181,9 @@ public sealed class PantsBufferedSequencePowerLossTests
         var lostSequence = state.Sequence;
         await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
 
-        await File.WriteAllLinesAsync(
-            readyPath,
-            [
-                lostSequence.ToString(CultureInfo.InvariantCulture),
-                syncedWalLength.ToString(CultureInfo.InvariantCulture)
-            ]);
+        AtomicStagedFile.Write(readyPath, Encoding.UTF8.GetBytes(
+            $"{lostSequence.ToString(CultureInfo.InvariantCulture)}\n" +
+            $"{syncedWalLength.ToString(CultureInfo.InvariantCulture)}\n"));
         await Task.Delay(Timeout.InfiniteTimeSpan);
     }
 

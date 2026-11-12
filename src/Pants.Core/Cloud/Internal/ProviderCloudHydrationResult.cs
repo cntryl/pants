@@ -1,3 +1,5 @@
+using Cntryl.Pants.Storage.Internal.Wal;
+
 namespace Cntryl.Pants.Cloud.Internal;
 
 sealed record ProviderCloudHydrationResult(
@@ -5,7 +7,10 @@ sealed record ProviderCloudHydrationResult(
     ulong CloudDurableSequence,
     bool RequiresSalvage,
     IReadOnlyList<IRemoteWalSegment>? RemoteWalSegments = null,
-    ulong NextWalSegmentId = 1)
+    ulong NextWalSegmentId = 1,
+    WalChainLink? WalHead = null,
+    ulong SequenceFloor = 0,
+    bool RequiresBootstrap = false)
 {
     public static ProviderCloudHydrationResult Empty { get; } =
         new(

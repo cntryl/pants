@@ -26,19 +26,21 @@ The engine-owned retained-memory bound is:
 ```text
 2 x memtable limit
 + transaction pool
-+ block cache
-+ scan pool
++ shared read allowance (content + reader/open metadata)
 + compaction pool
-+ bounded cloud buffers
-+ manifest and live-reader metadata
++ bounded per-cursor payload and cloud buffers
++ manifest/control metadata
 ```
 
 The two memtables are the active generation and at most one generation being published. A
 successful publication removes the covered generation from the current runtime root; an older
 active snapshot may keep its immutable root alive until that snapshot is disposed. Transaction,
-block-cache, scan, and compaction allocations have explicit capacities. Ranged cloud reads and
-complete-file staging use bounded chunks. Manifests, SST indexes/blooms/range-tombstone metadata,
-and live reader handles grow with the number of files, but published key/value payloads do not
+content-cache, shared reader metadata, and compaction allocations have explicit capacities. There
+is no separate scan pool. Public scan payloads use format-bounded cursor state, which may exceed
+the read metadata allowance for a single valid large value; this is not a global RSS bound. Ranged
+cloud reads and complete-file staging use bounded chunks. Manifest/control metadata and the SST
+inventory grow with the number of files, but reader metadata is admitted into its fixed allowance.
+Published key/value payloads do not
 remain in `RuntimeState.FamilyData`, recovery state, or newly-created snapshots.
 
 Disk bytes and file metadata are expected to grow with the corpus. The proof is that retained

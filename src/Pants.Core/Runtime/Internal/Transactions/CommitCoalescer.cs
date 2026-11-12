@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-
 namespace Cntryl.Pants.Runtime.Internal.Transactions;
 
 sealed class CommitCoalescer(
@@ -8,12 +6,12 @@ sealed class CommitCoalescer(
     RuntimeTelemetry telemetry,
     Func<
         IReadOnlyList<WalCommitGroupEntry>,
-        RuntimeState,
+        ulong,
         PantsDurability,
         Failpoint,
         OperationDeadline,
         ValueTask<WalCommitGroupResult>> appendGroupAsync,
-    Action<RuntimeState, TransactionIntentOperation, long> applyOperation)
+    Action afterOperationStaged)
 {
     public bool CanAttempt(IReadOnlyCollection<CommitRuntimeCommand> commits) =>
         enabled && commits.Count > 1;
@@ -166,8 +164,9 @@ sealed class CommitCoalescer(
 
     public static IReadOnlyList<PreparedCoalescedCommit> CreatePreparedCommits(
         RuntimeState state,
-        IReadOnlyList<CommitRuntimeCommand> commands) =>
-        CoalescedCommitApplyPreflight.Create(state, commands);
+        IReadOnlyList<CommitRuntimeCommand> commands,
+        ulong? sequenceFloor = null) =>
+        CoalescedCommitApplyPreflight.Create(state, commands, sequenceFloor);
 
     public async ValueTask AppendAsync(
         RuntimeState state,
@@ -204,8 +203,12 @@ sealed class CommitCoalescer(
             }
         }
 
-        var result = await appendGroupAsync(group, state, walDurability, beforeSync, deadline)
+        var result = await appendGroupAsync(group, state.Sequence, walDurability, beforeSync, deadline)
             .ConfigureAwait(false);
+        if (result.CommitSequence != prepared[^1].Sequence)
+        {
+            throw new PantsInternalException("The WAL receipt does not match its admitted commit group.");
+        }
         if (durability == PantsDurability.Sync)
         {
             telemetry.RecordDurabilityWaitersFannedOut(result.CommitCount);
@@ -216,65 +219,19 @@ sealed class CommitCoalescer(
         RuntimeState state,
         IReadOnlyList<PreparedCoalescedCommit> prepared)
     {
-        var checkpoints = new Dictionary<ColumnFamilyIdentity, FamilyApplyCheckpoint>(
-            ColumnFamilyIdentityComparer.Instance);
-        foreach (var family in prepared.SelectMany(static commit => commit.Families).Distinct(
-                     ColumnFamilyIdentityComparer.Instance))
+        var staged = new StagedMemtableApply(state);
+        foreach (var commit in prepared)
         {
-            checkpoints.Add(
-                family,
-                new FamilyApplyCheckpoint(
-                    state.FamilyData[family],
-                    state.RangeTombstones[family],
-                    state.ActiveMemtableBytes[family],
-                    state.UnflushedFamilies.Contains(family)));
-        }
-
-        try
-        {
-            foreach (var commit in prepared)
+            foreach (var operation in commit.Operations)
             {
-                foreach (var operation in commit.Operations)
-                {
-                    applyOperation(state, operation, commit.Sequence);
-                }
-
-                foreach (var pair in commit.BytesByFamily)
-                {
-                    state.ActiveMemtableBytes[pair.Key] = checked(
-                        state.ActiveMemtableBytes[pair.Key] + pair.Value);
-                }
-
-                foreach (var family in commit.Families)
-                {
-                    state.UnflushedFamilies.Add(family);
-                }
+                staged.Stage(operation, commit.Sequence);
+                afterOperationStaged();
             }
         }
-        catch
-        {
-            foreach (var (family, checkpoint) in checkpoints)
-            {
-                state.FamilyData[family] = checkpoint.FamilyData;
-                state.RangeTombstones[family] = checkpoint.RangeTombstones;
-                state.ActiveMemtableBytes[family] = checkpoint.ActiveMemtableBytes;
-                if (checkpoint.WasUnflushed)
-                {
-                    state.UnflushedFamilies.Add(family);
-                }
-                else
-                {
-                    state.UnflushedFamilies.Remove(family);
-                }
-            }
 
-            throw;
+        if (prepared.Count != 0)
+        {
+            staged.Publish(prepared[^1].Sequence);
         }
     }
-
-    readonly record struct FamilyApplyCheckpoint(
-        ImmutableSortedDictionary<byte[], CellState> FamilyData,
-        ImmutableArray<CommittedRangeTombstone> RangeTombstones,
-        long ActiveMemtableBytes,
-        bool WasUnflushed);
 }

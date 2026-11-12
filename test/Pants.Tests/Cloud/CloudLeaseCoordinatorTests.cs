@@ -8,7 +8,7 @@ public sealed class CloudLeaseCoordinatorTests
     [Theory]
     [InlineData(PantsErrorCode.Timeout)]
     [InlineData(PantsErrorCode.Io)]
-    public async Task ShouldConfirmAppliedRenewalGivenProviderWriteOutcomeIsAmbiguous(
+    public async Task ShouldFenceAppliedRenewalGivenProviderWriteOutcomeIsAmbiguous(
         PantsErrorCode errorCode)
     {
         var store = new TestCloudLeaseStore();
@@ -17,10 +17,10 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3));
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.ApplyReplaceBeforeException = true;
         store.NextReplaceException = errorCode switch
         {
@@ -29,10 +29,10 @@ public sealed class CloudLeaseCoordinatorTests
             _ => throw new InvalidOperationException()
         };
 
-        await lease.RenewAsync(CancellationToken.None);
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() => lease.RenewAsync(CancellationToken.None).AsTask());
 
-        Assert.True(lease.IsHealthy);
-        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15), store.Lease?.ExpiresAtUtc);
+        Assert.False(lease.IsHealthy);
+        Assert.True(store.Lease!.ExpiresAtUtc + TimeSpan.FromSeconds(3) < clock.UtcNow);
     }
 
     [Fact]
@@ -135,8 +135,8 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3));
         await lease.AcquireAsync(CancellationToken.None);
         var renewalStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -302,7 +302,7 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(30),
             TimeSpan.Zero);
         await lease.AcquireAsync(CancellationToken.None);
         store.Seed(Assert.IsType<CloudLeaseRecord>(store.Lease) with
@@ -334,7 +334,7 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
-    public async Task ShouldKeepLastValueForDuplicateFieldsAndIgnoreUnknownLines()
+    public async Task ShouldRejectDuplicateFieldsAndUnknownLines()
     {
         var objects = new TestCloudObjectStore();
         objects.Seed(
@@ -345,14 +345,11 @@ public sealed class CloudLeaseCoordinatorTests
                 "expires_at: 2026-08-21T12:00:30.0000000Z\n"));
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
 
-        var snapshot = await store.ReadAsync(CancellationToken.None);
-
-        Assert.Equal("holder", snapshot!.Lease.HolderId);
-        Assert.Equal(1UL, snapshot.Lease.Epoch);
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(async () => await store.ReadAsync(CancellationToken.None));
     }
 
     [Fact]
-    public async Task ShouldAcceptLegacyDocumentWithoutEpochOrOwnerToken()
+    public async Task ShouldRejectLegacyDocumentWithoutEpochOrOwnerToken()
     {
         var objects = new TestCloudObjectStore();
         objects.Seed(
@@ -362,10 +359,7 @@ public sealed class CloudLeaseCoordinatorTests
                 "expires_at: 2026-08-21T12:00:30.0000000Z\n"));
         var store = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
 
-        var snapshot = await store.ReadAsync(CancellationToken.None);
-
-        Assert.Equal(0UL, snapshot!.Lease.Epoch);
-        Assert.Equal(string.Empty, snapshot.Lease.OwnerToken);
+        await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(async () => await store.ReadAsync(CancellationToken.None));
     }
 
     [Fact]
@@ -422,11 +416,11 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
+            TimeSpan.FromSeconds(30),
             TimeSpan.Zero);
         await lease.AcquireAsync(CancellationToken.None);
         store.Seed(Assert.IsType<CloudLeaseRecord>(store.Lease) with { ExpiryMalformed = true });
-        clock.UtcNow += TimeSpan.FromSeconds(1);
+        clock.UtcNow += TimeSpan.FromSeconds(3);
 
         await lease.RenewAsync(CancellationToken.None);
 
@@ -563,7 +557,7 @@ public sealed class CloudLeaseCoordinatorTests
     }
 
     [Fact]
-    public async Task ShouldSurfaceIndeterminateRenewalAndFailClosed()
+    public async Task ShouldKeepOldValidityAfterATransientIndeterminateRenewalRead()
     {
         var store = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
@@ -572,8 +566,8 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
         store.IndeterminateRead = true;
@@ -581,9 +575,9 @@ public sealed class CloudLeaseCoordinatorTests
         await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
             lease.RenewAsync(CancellationToken.None).AsTask());
 
-        Assert.False(lease.IsHealthy);
-        Assert.Throws<PantsFencedException>(lease.EnsureValid);
-        Assert.Equal(1, leaseLosses);
+        Assert.True(lease.IsHealthy);
+        lease.EnsureValid();
+        Assert.Equal(0, leaseLosses);
     }
 
     [Fact]
@@ -596,12 +590,12 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
-        store.AfterNextRead = () => clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
+        store.AfterNextRead = () => clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(30);
 
         await Assert.ThrowsAsync<PantsFencedException>(() => lease.RenewAsync(CancellationToken.None).AsTask());
 
@@ -624,11 +618,11 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.BeforeNextReplaceAsync = async cancellationToken =>
         {
             renewalStarted.SetResult();
@@ -637,14 +631,14 @@ public sealed class CloudLeaseCoordinatorTests
 
         var renewal = lease.RenewAsync(CancellationToken.None).AsTask();
         await renewalStarted.Task.WaitAsync(TestTimeouts.Expected);
-        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(30);
         Assert.False(lease.IsHealthy);
         allowRenewal.SetResult();
 
         await Assert.ThrowsAsync<PantsFencedException>(() => renewal);
 
         Assert.NotNull(store.Lease);
-        Assert.True(store.Lease.ExpiresAtUtc + TimeSpan.FromSeconds(1) < clock.UtcNow);
+        Assert.True(store.Lease.ExpiresAtUtc + TimeSpan.FromSeconds(3) < clock.UtcNow);
         Assert.Equal(2, store.ReplaceAttempts);
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, leaseLosses);
@@ -664,22 +658,22 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3));
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.AfterNextReplace = () =>
-            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(9);
+            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(27);
 
         await lease.RenewAsync(CancellationToken.None);
-        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(10);
+        clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(30);
 
         Assert.True(lease.IsHealthy);
-        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15), store.Lease?.ExpiresAtUtc);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(45), store.Lease?.ExpiresAtUtc);
     }
 
     [Fact]
-    public async Task ShouldConfirmIndeterminateRenewalGivenMatchingReadbackBeforeDeadline()
+    public async Task ShouldFenceIndeterminateRenewalGivenMatchingReadbackBeforeDeadline()
     {
         var store = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
@@ -688,20 +682,20 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.ApplyIndeterminateReplace = true;
         store.IndeterminateReplace = true;
 
-        await lease.RenewAsync(CancellationToken.None);
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() => lease.RenewAsync(CancellationToken.None).AsTask());
 
-        Assert.True(lease.IsHealthy);
-        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15), store.Lease?.ExpiresAtUtc);
-        Assert.Equal(1, store.ReplaceAttempts);
-        Assert.Equal(0, leaseLosses);
+        Assert.False(lease.IsHealthy);
+        Assert.True(store.Lease!.ExpiresAtUtc + TimeSpan.FromSeconds(3) < clock.UtcNow);
+        Assert.Equal(2, store.ReplaceAttempts);
+        Assert.Equal(1, leaseLosses);
     }
 
     [Fact]
@@ -714,15 +708,15 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.IndeterminateReplace = true;
         store.AfterNextReplace = () =>
             store.AfterNextRead = () =>
-                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
 
         await Assert.ThrowsAsync<PantsLeaseUnavailableException>(() =>
             lease.RenewAsync(CancellationToken.None).AsTask());
@@ -742,15 +736,15 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.IndeterminateReplace = true;
         store.AfterNextReplace = () => store.IndeterminateRead = true;
         store.AfterIndeterminateRead = _ =>
-            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+            clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
 
         await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() =>
             lease.RenewAsync(CancellationToken.None).AsTask());
@@ -770,14 +764,14 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         var lateRenewal = Assert.IsType<CloudLeaseRecord>(store.Lease) with
         {
-            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15)
+            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(45)
         };
         store.NextReplaceException = new PantsTimeoutException(
             "The provider timed out after accepting the renewal.");
@@ -789,7 +783,7 @@ public sealed class CloudLeaseCoordinatorTests
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, leaseLosses);
         Assert.NotNull(store.Lease);
-        Assert.True(store.Lease!.ExpiresAtUtc + TimeSpan.FromSeconds(1) < clock.UtcNow);
+        Assert.True(store.Lease!.ExpiresAtUtc + TimeSpan.FromSeconds(3) < clock.UtcNow);
         Assert.Equal(2, store.ReplaceAttempts);
     }
 
@@ -803,17 +797,17 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         var successor = new CloudLeaseRecord(
             "successor",
             2,
             "successor-token",
             clock.UtcNow,
-            clock.UtcNow + TimeSpan.FromSeconds(10));
+            clock.UtcNow + TimeSpan.FromSeconds(30));
         store.NextReplaceException = new PantsTimeoutException(
             "The provider timed out before the renewal became visible.");
         store.AfterNextReplace = () => store.AfterNextRead = () => store.Seed(successor);
@@ -837,11 +831,11 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.NextReplaceException = new PantsTimeoutException(
             "The provider timed out before the renewal could be confirmed.");
         store.AfterNextReplace = () => store.IndeterminateRead = true;
@@ -851,7 +845,7 @@ public sealed class CloudLeaseCoordinatorTests
             indeterminateReadCount = failureCount;
             if (failureCount == 3)
             {
-                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
             }
         };
 
@@ -875,14 +869,14 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         var lateRenewal = Assert.IsType<CloudLeaseRecord>(store.Lease) with
         {
-            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(15)
+            ExpiresAtUtc = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(45)
         };
         var expiryAttempts = 0;
         Action? retryExpiry = null;
@@ -891,7 +885,7 @@ public sealed class CloudLeaseCoordinatorTests
             expiryAttempts++;
             if (expiryAttempts == 2)
             {
-                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(16) + TimeSpan.FromTicks(1);
+                clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
                 return;
             }
 
@@ -930,12 +924,12 @@ public sealed class CloudLeaseCoordinatorTests
             store,
             clock,
             "holder",
-            TimeSpan.FromSeconds(10),
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(3),
             () => leaseLosses++,
             timeProvider);
         await lease.AcquireAsync(CancellationToken.None);
-        clock.UtcNow += TimeSpan.FromSeconds(5);
+        clock.UtcNow += TimeSpan.FromSeconds(15);
         store.NextReplaceException = new PantsTimeoutException(
             "The provider timed out before the renewal could be confirmed.");
         store.AfterNextReplace = () => store.IndeterminateRead = true;
@@ -943,7 +937,7 @@ public sealed class CloudLeaseCoordinatorTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         store.AfterIndeterminateRead = failureCount =>
         {
-            if (failureCount == 4)
+            if (failureCount == 3)
             {
                 reconciliationWaiting.SetResult();
             }
@@ -1003,11 +997,11 @@ public sealed class CloudLeaseCoordinatorTests
 
         Assert.Equal(1UL, await lease.AcquireAsync(CancellationToken.None));
         var document = Encoding.UTF8.GetString(objects.Data.Span);
-        Assert.Contains("epoch: 1\n", document, StringComparison.Ordinal);
-        Assert.Contains("holder_id: holder@host\n", document, StringComparison.Ordinal);
-        Assert.Contains("owner_token: ", document, StringComparison.Ordinal);
-        Assert.Contains("acquired_at: 2026-08-21T12:00:00.0000000Z\n", document, StringComparison.Ordinal);
-        Assert.Contains("expires_at: 2026-08-21T12:00:30.0000000Z\n", document, StringComparison.Ordinal);
+        Assert.Contains("fencing_epoch: 1\n", document, StringComparison.Ordinal);
+        Assert.Contains("holder: holder@host\n", document, StringComparison.Ordinal);
+        Assert.Contains("owner: ", document, StringComparison.Ordinal);
+        Assert.Contains("acquired: 2026-08-21T12:00:00.0000000Z\n", document, StringComparison.Ordinal);
+        Assert.Contains("expires: 2026-08-21T12:00:30.0000000Z\n", document, StringComparison.Ordinal);
         Assert.IsType<PantsCloudObjectWriteCondition.IfAbsent>(objects.LastCondition);
 
         clock.UtcNow += TimeSpan.FromSeconds(5);

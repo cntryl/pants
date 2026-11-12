@@ -411,6 +411,45 @@ public sealed class AsyncSstReaderCacheTests
     }
 
     [Fact]
+    public async Task ShouldKeepEveryConcurrentFirstOpenAMissAndReportTheLaterCachedLookupAsAHit()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = CreateSst(directory.Path);
+        var counter = new ReadCounter();
+        using var release = new ManualResetEventSlim();
+        using var cache = new AsyncSstReaderCache(long.MaxValue);
+        var file = new FileMeta { Name = "a.sst" };
+        var opens = Enumerable.Range(0, 8)
+            .Select(_ => cache.GetOrOpenWithOutcomeAsync(file,
+                async token =>
+                {
+                    await Task.Run(() => Assert.True(release.Wait(TestTimeouts.Expected)), token);
+                    return await OpenAsync(path, file, counter, token);
+                }, CancellationToken.None).AsTask())
+            .ToArray();
+        release.Set();
+        var cold = await Task.WhenAll(opens).WaitAsync(TestTimeouts.Expected);
+        try
+        {
+            Assert.All(cold, static receipt => Assert.False(receipt.CacheHit));
+            Assert.Equal(1, counter.Opens);
+            var warm = await cache.GetOrOpenWithOutcomeAsync(file,
+                token => OpenAsync(path, file, counter, token), CancellationToken.None);
+            await using var warmReader = warm.Reader;
+            Assert.True(warm.CacheHit);
+            Assert.Equal(1, counter.Opens);
+            Assert.True(warmReader.DataBlockCount > 0);
+        }
+        finally
+        {
+            foreach (var receipt in cold)
+            {
+                await receipt.Reader.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task ShouldShareOneOpenAcrossConcurrentFirstOpens()
     {
         using var directory = new TemporaryDirectory();

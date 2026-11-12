@@ -57,6 +57,18 @@ public sealed class PantsCrashSoakTests(ITestOutputHelper output)
         Assert.True(report.Acked > 0, "The Sqrzl smoke seed acknowledged nothing, so it verified nothing.");
     }
 
+    [Fact]
+    public async Task ShouldRecoverAnUnsyncedTornActiveTailAfterRepeatedSimulatedCloudCrashes()
+    {
+        var report = await _runner.RunAsync(
+            CrashSoakScenario.FromSeed(2_929, CrashSoakBackend.SimulatedCloud, 96),
+            4);
+
+        output.WriteLine(report.ToString());
+        Assert.True(report.Acked > 0, "The deferred-recovery regression acknowledged no writes.");
+        Assert.Contains("killed 'hit 25 of MidWalAppend'", report.Cycles[3], StringComparison.Ordinal);
+    }
+
     [CrashSoakFact]
     [Trait("Category", "Soak")]
     public async Task ShouldHonorLedgerGivenOptInSoak()

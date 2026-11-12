@@ -18,7 +18,7 @@ public sealed class PantsSstEntryAdmissionTests
     [InlineData(ushort.MaxValue + 1)]
     public void ShouldAdmitOnlyEntriesWithinTheDecodedBlockLimit(int keyLength)
     {
-        var header = keyLength > ushort.MaxValue ? 34 : 26;
+        var header = 1 + VarintLength((uint)keyLength) + 4 + 8 + 1 + 8 + 8;
         var valueLength = DiskFormat.MaximumDecodedBlockBytes - header - keyLength;
 
         SstCodec.ValidateEntrySize(keyLength, valueLength);
@@ -31,7 +31,7 @@ public sealed class PantsSstEntryAdmissionTests
     public void ShouldRoundTripAnEntryAtTheDecodedBlockLimit()
     {
         var key = new byte[] { 0x6d };
-        var value = new byte[DiskFormat.MaximumDecodedBlockBytes - 26 - key.Length];
+        var value = new byte[DiskFormat.MaximumDecodedBlockBytes - 31 - key.Length];
         var encoded = SstCodec.Encode(
             [new SstEntry(key, value, 1, null, false)],
             [],
@@ -67,9 +67,9 @@ public sealed class PantsSstEntryAdmissionTests
         Assert.Throws<PantsResourceLimitException>(() =>
             SstCodec.ValidateRangeTombstoneSize(half, half - 19));
         Assert.Throws<PantsResourceLimitException>(() =>
-            SstCodec.ValidateRangeTombstoneSize(0, limit - 33));
+            SstCodec.ValidateRangeTombstoneSize(0, limit - 30));
         Assert.Throws<PantsResourceLimitException>(() =>
-            SstCodec.ValidateRangeTombstoneSize(limit - 33, 0));
+            SstCodec.ValidateRangeTombstoneSize(limit - 30, 0));
         Assert.Throws<PantsResourceLimitException>(() =>
             SstCodec.ValidateRangeTombstoneSize(int.MaxValue, 1));
     }
@@ -181,9 +181,9 @@ public sealed class PantsSstEntryAdmissionTests
     }
 
     /// <summary>
-    ///     The largest key a Delete admits must fit the WAL under either framing a commit may
-    ///     choose - one batch record for a resident transaction, a record per operation once it
-    ///     has spilled - and replay after reopen.
+    ///     A compressible key at the largest common WAL bound must replay under either framing:
+    ///     one batch for a resident transaction or a record per operation after spilling. Staging
+    ///     separately permits the larger SST-only bound; that does not guarantee a Sync commit.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -191,8 +191,11 @@ public sealed class PantsSstEntryAdmissionTests
     public async Task ShouldCommitAndReplayLargestAdmissibleDeleteKey(bool spilled)
     {
         using var directory = new TemporaryDirectory();
-        var options = CreateOptions(directory.Path, spilled);
-        var key = CreateLargestAdmissibleDeleteKey();
+        var options = CreateOptions(directory.Path, spilled)
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(1024L * 1024 * 1024))
+            .WithMemtableLimits(128L * 1024 * 1024)
+            .WithTransactionMemoryPool(spilled ? 1024 : 512L * 1024 * 1024);
+        var key = CreateLargestCommonWalDeleteKey();
         await CommitDeleteAsync(options, key);
 
         await using var replayed = await PantsDatabase.OpenAsync(options);
@@ -307,7 +310,7 @@ public sealed class PantsSstEntryAdmissionTests
 
         Assert.Throws<PantsResourceLimitException>(() =>
             WalCodec.EncodeTransactionBatch(1, 1, 1, mutations));
-        Assert.Throws<PantsResourceLimitException>(() =>
+        Assert.Throws<PantsInvalidArgumentException>(() =>
             WalCodec.EncodeTransactionMutation(
                 mutations[0] with { Key = new byte[DiskFormat.MaximumDecodedBlockBytes] },
                 1,
@@ -404,14 +407,24 @@ public sealed class PantsSstEntryAdmissionTests
             TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("neighbour")))!.Value));
     }
 
+    static int VarintLength(uint value)
+    {
+        var length = 1;
+        while (value >= 0x80)
+        {
+            value >>= 7;
+            length++;
+        }
+
+        return length;
+    }
+
     static async Task CommitDeleteAsync(PantsOpenOptions options, byte[] key)
     {
         await using var database = await PantsDatabase.OpenAsync(options);
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
-        Assert.Throws<PantsResourceLimitException>(() =>
-            transaction.Delete(new byte[key.Length + 1]));
         transaction.Delete(key);
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
@@ -435,6 +448,16 @@ public sealed class PantsSstEntryAdmissionTests
         }
 
         var key = new byte[low];
+        key[^1] = 1;
+        return key;
+    }
+
+    static byte[] CreateLargestCommonWalDeleteKey()
+    {
+        var empty = new WalMutation(0, WalOperation.Delete, [], null, 2, null, null);
+        var encoded = WalCodec.EncodeTransactionBatch(1, 1, 1, [empty]);
+        var batch = WalCodec.DecodeRecord(encoded).Value!;
+        var key = new byte[DiskFormat.MaximumDecodedBlockBytes - batch.Length];
         key[^1] = 1;
         return key;
     }

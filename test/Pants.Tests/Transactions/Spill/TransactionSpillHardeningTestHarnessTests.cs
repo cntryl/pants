@@ -12,8 +12,10 @@ public sealed class TransactionSpillHardeningTestHarnessTests
         var walDirectory = Path.Combine(directory.Path, "wal");
         Directory.CreateDirectory(walDirectory);
         var payload = CreateWalPayloadWithUnsupportedCompression();
-        using (var stream = File.Create(Path.Combine(walDirectory, "wal.log")))
+        var ledger = WalLedgerStore.LoadOrCreate(walDirectory, 1);
+        using (var stream = new FileStream(ledger.ActivePath, FileMode.Open, FileAccess.Write))
         {
+            stream.Seek(0, SeekOrigin.End);
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
@@ -27,14 +29,13 @@ public sealed class TransactionSpillHardeningTestHarnessTests
     {
         using var payload = new MemoryStream();
         payload.Write("MW"u8);
-        payload.WriteByte(1);
+        payload.WriteByte(2);
         WriteTlv(payload, 1, [0]);
         WriteTlvUInt32(payload, 2, 0);
         WriteTlvUInt64(payload, 3, 1);
         WriteTlv(payload, 4, "key"u8);
         WriteTlv(payload, 5, "value"u8);
         WriteTlv(payload, 9, [byte.MaxValue]);
-        WriteTlvUInt64(payload, 10, 1);
         return payload.ToArray();
     }
 

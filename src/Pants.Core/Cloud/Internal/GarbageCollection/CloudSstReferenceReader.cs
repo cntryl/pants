@@ -50,7 +50,7 @@ static class CloudSstReferenceReader
     {
         try
         {
-            using var document = JsonDocument.Parse(bytes);
+            using var document = IntentLogCodec.ToDocument(IntentLogCodec.Read(bytes.ToArray()).Entries);
             Visit(document.RootElement, names);
         }
         catch (JsonException exception)
@@ -64,7 +64,7 @@ static class CloudSstReferenceReader
     public static IReadOnlyList<CloudCompactionOutputSet> ReadOutputDurableCompactions(
         ReadOnlyMemory<byte> bytes)
     {
-        using var document = JsonDocument.Parse(bytes);
+        using var document = IntentLogCodec.ToDocument(IntentLogCodec.Read(bytes.ToArray()).Entries);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
         {
             return [];

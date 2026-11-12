@@ -9,6 +9,8 @@ sealed record FrozenMemtableFlush(
     ulong FrontierSequence,
     long SizeBytes)
 {
+    public MetadataOrigin Origin { get; init; } = MetadataOrigin.OrdinaryLocalFlush;
+
     public long FlushOutputBoundBytes { get; init; }
 
     public bool HasReservedFlushHeadroom { get; init; }

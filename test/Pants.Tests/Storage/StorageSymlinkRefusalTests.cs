@@ -4,6 +4,53 @@ namespace Cntryl.Pants.Storage;
 
 public sealed class StorageSymlinkRefusalTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShouldRejectLinkedSimulatedCloudBeforeAnyOutsideAuthorityWrite(bool timedOpen)
+    {
+        using var directory = new TemporaryDirectory();
+        using var outside = new TemporaryDirectory();
+        var markerPath = Path.Combine(outside.Path, "keep");
+        var marker = "unchanged outside target"u8.ToArray();
+        await File.WriteAllBytesAsync(markerPath, marker);
+        if (!TryCreateDirectoryLink(Path.Combine(directory.Path, "cloud_store"), outside.Path))
+        {
+            return;
+        }
+
+        var options = PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "path-guard/");
+        if (timedOpen)
+        {
+            options = options.WithOpenTimeout(TimeSpan.FromSeconds(5));
+        }
+        await Assert.ThrowsAsync<PantsInvalidPathException>(() => PantsDatabase.OpenAsync(options).AsTask());
+        Assert.Equal(marker, await File.ReadAllBytesAsync(markerPath));
+        Assert.Equal([markerPath], Directory.GetFileSystemEntries(outside.Path));
+    }
+
+    [Fact]
+    public async Task ShouldRetainSimulatedCloudRootAliasAndReopenItsCanonicalTarget()
+    {
+        using var directory = new TemporaryDirectory();
+        using var target = new TemporaryDirectory();
+        var alias = Path.Combine(directory.Path, "database");
+        if (!TryCreateDirectoryLink(alias, target.Path))
+        {
+            return;
+        }
+
+        await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.SimulatedCloud(alias, "pants-tests", "root-alias/")))
+        {
+            await using var write = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
+            write.Put("alias"u8.ToArray(), "value"u8.ToArray());
+            await write.CommitAsync(PantsWriteOptions.CloudStrict);
+        }
+        await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.SimulatedCloud(target.Path, "pants-tests", "root-alias/"));
+        await using var reader = await reopened.Transactions.BeginAsync(reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+        Assert.Equal("value"u8.ToArray(), (await reader.GetAsync("alias"u8.ToArray()))?.ToArray());
+    }
+
     [Fact]
     public async Task ShouldRefuseOpenWhenSstDirectoryIsLinkedOutsideStore()
     {

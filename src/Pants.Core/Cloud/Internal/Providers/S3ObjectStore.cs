@@ -633,7 +633,8 @@ sealed class S3ObjectStore : CloudObjectStore
         var parameters = new List<KeyValuePair<string, string>>
         {
             new("list-type", "2"),
-            new("prefix", fullPrefix)
+            new("prefix", fullPrefix),
+            new("max-keys", CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture))
         };
         if (continuationToken is not null)
         {

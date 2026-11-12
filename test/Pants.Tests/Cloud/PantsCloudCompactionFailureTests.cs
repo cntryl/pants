@@ -262,7 +262,7 @@ public sealed class PantsCloudCompactionFailureTests
         var failpoints = new CloudCompactionFailpointHandler();
         await using var database = await OpenAsync(
             CreateOptions(directory.Path)
-                .WithMemoryBudget(PantsMemoryBudget.FromBytes(4L * 1024 * 1024)),
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(6L * 1024 * 1024)),
             failpoints);
         var family = database.ColumnFamilies.DefaultFamily;
         var value = new byte[512];
@@ -300,7 +300,7 @@ public sealed class PantsCloudCompactionFailureTests
     {
         for (var batch = 0; batch < 4; batch++)
         {
-            await CommitAsync(database, family, $"{keyPrefix}-{batch}");
+            await CommitAsync(database, family, $"{keyPrefix}-{batch}", forceRewrite: true);
             await database.Maintenance.FlushAsync(family);
         }
     }
@@ -319,12 +319,18 @@ public sealed class PantsCloudCompactionFailureTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key,
+        bool forceRewrite = false)
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+        if (forceRewrite)
+        {
+            // Overlap only empty keyspace so this fixture requires a physical rewrite.
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+        }
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
     }
 

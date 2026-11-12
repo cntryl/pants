@@ -20,7 +20,8 @@ sealed class ProviderWalCatalogStore(
     Action ensureLeaseValid,
     Func<CancellationToken, ValueTask> validateRemoteLease,
     ProviderWalCatalogReadAdmission? readAdmission = null,
-    CloudMetadataWriteAdmission? writeAdmission = null)
+    CloudMetadataWriteAdmission? writeAdmission = null,
+    RecoveryWorkSink? recoveryWork = null)
 {
     const int MaximumRepairAttempts = 4;
 
@@ -70,7 +71,6 @@ sealed class ProviderWalCatalogStore(
                     mirrorMetadata,
                     cancellationToken).ConfigureAwait(false);
                 var primaryCatalog = TryDecode(primary, out var primaryError);
-                var mirrorCatalog = TryDecode(mirror, out var mirrorError);
 
                 if (primary is not null && primaryCatalog is not null)
                 {
@@ -89,6 +89,9 @@ sealed class ProviderWalCatalogStore(
                     return TransferRead(primary.Version, primaryCatalog, ref readLease);
                 }
 
+                // Only decode the recovery copy after the primary has been proven unusable.
+                // A mirror with another format cannot override a valid primary's authority.
+                var mirrorCatalog = TryDecode(mirror, out var mirrorError);
                 if (mirror is null || mirrorCatalog is null)
                 {
                     if (primary is null && mirror is null)
@@ -101,9 +104,15 @@ sealed class ProviderWalCatalogStore(
                         return TransferRead(null, null, ref readLease);
                     }
 
-                    throw primaryError ?? mirrorError ??
-                          new PantsCorruptionException(
-                              "Both cloud WAL publication catalog copies are unusable.");
+                    var primaryFailure = primary is null
+                        ? "missing"
+                        : $"invalid: {primaryError?.Message}";
+                    var mirrorFailure = mirror is null
+                        ? "missing"
+                        : $"invalid: {mirrorError?.Message}";
+                    throw new PantsCorruptionException(
+                        "Both cloud WAL publication catalog copies are unusable " +
+                        $"(primary: {primaryFailure}; mirror: {mirrorFailure}).");
                 }
 
                 if (!repairCopies)
@@ -252,6 +261,7 @@ sealed class ProviderWalCatalogStore(
 
             range.Data.Span.CopyTo(bytes.AsSpan(offset, length));
             offset += length;
+            recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", length, 0, 0));
         }
 
         return new CloudObject(bytes, metadata.Version);
@@ -277,6 +287,10 @@ sealed class ProviderWalCatalogStore(
                 $"Cloud WAL catalog object '{objectKey}' returned a different byte length than HEAD.");
         }
 
+        if (!whole.Data.IsEmpty)
+        {
+            recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", whole.Data.Length, 0, 0));
+        }
         return whole;
     }
 

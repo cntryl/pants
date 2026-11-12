@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Transactions.Internal;
 
 sealed class TransactionOperationSource : ITransactionOperationSource, IDisposable
 {
-    readonly DateTimeOffset _commitTime;
+    readonly DateTimeOffset? _commitTime;
     readonly bool _ownsSpillStore;
     readonly TransactionIntentOperation[] _residentOperations;
     readonly TransactionSpillStore? _spillStore;
@@ -12,7 +12,7 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
         TransactionSpillStore? spillStore,
         IReadOnlyList<TransactionIntentOperation> residentOperations,
         ulong count,
-        DateTimeOffset commitTime,
+        DateTimeOffset? commitTime,
         bool ownsSpillStore = false)
     {
         ArgumentNullException.ThrowIfNull(residentOperations);
@@ -108,8 +108,10 @@ sealed class TransactionOperationSource : ITransactionOperationSource, IDisposab
             operation.Key.ToArray(),
             operation.EndExclusive?.ToArray(),
             operation.Value?.ToArray(),
-            null,
-            null,
+            _commitTime.HasValue ? null : operation.TimeToLive,
+            operation.ExpiryUtc,
             operation.InsertOnly,
-            UnixTimestamp.ExpirationFromTimeToLive(_commitTime, operation.TimeToLive));
+            operation.ExpirationUnixMilliseconds ?? (_commitTime is { } commitTime
+                ? UnixTimestamp.ExpirationFromTimeToLive(commitTime, operation.TimeToLive)
+                : null));
 }

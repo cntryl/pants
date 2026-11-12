@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage.Wal;
@@ -11,7 +10,7 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
         RuntimeState.DefaultFamilyVersion);
 
     [Fact]
-    public async Task ShouldRecoverSealedSegmentGivenLegacyWalFileName()
+    public async Task ShouldRejectLedgerOwnedSegmentRenamedToLegacyWalFileName()
     {
         using var directory = new TemporaryDirectory();
         var telemetry = new RuntimeTelemetry();
@@ -28,37 +27,16 @@ public sealed class LegacyWalSegmentNamingRecoveryTests
         }
 
         var walDirectory = Path.Combine(directory.Path, "wal");
-        var sealedSegments = Directory.EnumerateFiles(walDirectory, "*.wal").ToArray();
-        var sealedSegment = Assert.Single(sealedSegments);
+        var ledger = WalLedgerStore.LoadExisting(walDirectory);
+        var member = Assert.Single(ledger.Members, static member => member.Sealed is not null);
+        var sealedSegment = Path.Combine(walDirectory, $"{member.Open.Id:00000000000000000000}.wal");
+        var original = await File.ReadAllBytesAsync(sealedSegment);
         var legacyPath = Path.Combine(walDirectory, "wal_000042.log");
         File.Move(sealedSegment, legacyPath);
-        await MarkLegacyWalSequenceReservationVersionAsync(directory.Path);
 
-        await using var reopened = await PantsDatabase.OpenAsync(
-            PantsOpenOptions.Local(directory.Path));
-        await using var reader = await reopened.Transactions.BeginAsync(
-            reopened.ColumnFamilies.DefaultFamily,
-            PantsTransactionMode.ReadOnly);
-        var value = await reader.GetAsync("legacy-key"u8.ToArray());
-        Assert.Equal(
-            "legacy-value",
-            TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
-    }
-
-    static async Task MarkLegacyWalSequenceReservationVersionAsync(string path)
-    {
-        foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
-        {
-            var manifestPath = Path.Combine(path, fileName);
-            if (!File.Exists(manifestPath))
-            {
-                continue;
-            }
-
-            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
-            manifest["wal_sequence_reservation_version"] = 0;
-            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
-        }
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => PantsDatabase.OpenAsync(
+            PantsOpenOptions.Local(directory.Path)).AsTask());
+        Assert.Equal(original, await File.ReadAllBytesAsync(legacyPath));
     }
 
     static CommitPayload CreateCommitPayload(RuntimeState state)

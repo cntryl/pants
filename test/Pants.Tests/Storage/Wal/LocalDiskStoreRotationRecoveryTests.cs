@@ -89,91 +89,58 @@ public sealed class LocalDiskStoreRotationRecoveryTests
     }
 
     [Fact]
-    public void ShouldReuseDurableSegmentReservationWhenRotationFailsBeforeRename()
+    public async Task ShouldFenceWriterAfterDisposalFailureAndRecoverCommittedRotation()
     {
         using var directory = new TemporaryDirectory();
-        var state = new RuntimeState(
-            new ManualClock(DateTimeOffset.UnixEpoch),
-            new RuntimeTelemetry());
+        var state = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
         var failpoints = new ArmableFailpointHandler();
         using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
         {
             _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
-
+            var original = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal")).Active.Open.Id;
             failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
-            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
 
-            Assert.False(store.IsWalFenced);
-            _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
-            _ = store.RotateActiveLocalWal();
+            Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
 
-            Assert.True(File.Exists(Path.Combine(
-                directory.Path,
-                "wal",
-                $"{1UL:00000000000000000000}.wal")));
+            Assert.True(store.IsWalFenced);
+            Assert.Throws<PantsFencedException>(() => store.AppendCommit(
+                CreateCommitPayload(state, "rejected"u8.ToArray(), "ghost"u8.ToArray()), state, PantsDurability.Sync));
+            var committed = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+            Assert.True(committed.Active.Open.Id > original);
+            Assert.Contains(committed.Members, member => member.Open.Id == original && member.Sealed is not null);
         }
 
-        var recoveredState = new RuntimeState(
-            new ManualClock(DateTimeOffset.UnixEpoch),
-            new RuntimeTelemetry());
-        using var reopened = LocalDiskStore.Open(directory.Path, recoveredState);
-        _ = reopened.AppendCommit(
-            CreateCommitPayload(recoveredState),
-            recoveredState,
-            PantsDurability.Sync);
-        _ = reopened.RotateActiveLocalWal();
-
-        Assert.True(File.Exists(Path.Combine(
-            directory.Path,
-            "wal",
-            $"{2UL:00000000000000000000}.wal")));
+        await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+        Assert.Equal("rotation-value", TestBytes.ToText((await reader.GetAsync("rotation-key"u8.ToArray()))!.Value));
+        Assert.Null(await reader.GetAsync("rejected"u8.ToArray()));
     }
 
     [Fact]
-    public void ShouldRecoverReservedWalIdentityAcrossCrashBeforeRename()
+    public void ShouldRecoverCommittedLedgerIdentityAfterWriterDisposalFailure()
     {
         using var directory = new TemporaryDirectory();
-        var state = new RuntimeState(
-            new ManualClock(DateTimeOffset.UnixEpoch),
-            new RuntimeTelemetry());
+        var state = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
         var failpoints = new ArmableFailpointHandler();
+        ulong nextSegmentId;
         using (var store = LocalDiskStore.Open(directory.Path, state, failpoints: failpoints))
         {
             _ = store.AppendCommit(CreateCommitPayload(state), state, PantsDurability.Sync);
             failpoints.Arm(Failpoint.AfterWalRotationStreamDisposed);
-
-            _ = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
-
-            Assert.True(File.Exists(Path.Combine(directory.Path, "wal", "wal.log")));
-            Assert.False(File.Exists(Path.Combine(
-                directory.Path,
-                "wal",
-                $"{1UL:00000000000000000000}.wal")));
+            Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
+            var committed = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+            nextSegmentId = committed.NextSegmentId;
+            Assert.True(File.Exists(committed.ActivePath));
         }
 
-        var recoveredState = new RuntimeState(
-            new ManualClock(DateTimeOffset.UnixEpoch),
-            new RuntimeTelemetry());
+        var recoveredState = new RuntimeState(new ManualClock(DateTimeOffset.UnixEpoch), new RuntimeTelemetry());
         using var reopened = LocalDiskStore.Open(directory.Path, recoveredState);
-
-        Assert.Equal(state.Sequence, recoveredState.Sequence);
-        Assert.True(File.Exists(Path.Combine(
-            directory.Path,
-            "wal",
-            $"{1UL:00000000000000000000}.wal")));
-        _ = reopened.AppendCommit(
-            CreateCommitPayload(recoveredState),
-            recoveredState,
-            PantsDurability.Sync);
-        Assert.True(
-            recoveredState.Sequence > state.Sequence,
-            "The next commit must allocate beyond the durable commit-sequence reservation.");
+        Assert.True(recoveredState.Sequence >= state.Sequence);
+        _ = reopened.AppendCommit(CreateCommitPayload(recoveredState), recoveredState, PantsDurability.Sync);
+        Assert.True(recoveredState.Sequence > state.Sequence);
         _ = reopened.RotateActiveLocalWal();
-
-        Assert.True(File.Exists(Path.Combine(
-            directory.Path,
-            "wal",
-            $"{2UL:00000000000000000000}.wal")));
+        Assert.True(WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal")).NextSegmentId > nextSegmentId);
     }
 
     [Fact]
@@ -246,7 +213,7 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         var state = new RuntimeState(
             new ManualClock(DateTimeOffset.UnixEpoch),
             telemetry);
-        var failpoints = new WalRotationRecoveryFailureFailpointHandler();
+        var failpoints = new ArmableFailpointHandler();
         using (var store = LocalDiskStore.Open(
                    directory.Path,
                    state,
@@ -258,9 +225,8 @@ public sealed class LocalDiskStoreRotationRecoveryTests
                 PantsDurability.Sync);
             Assert.Null(result.PostDurabilityFailure);
 
-            var failure = Assert.Throws<WalRotationRecoveryException>(() => store.RotateActiveLocalWal());
-            Assert.IsType<IOException>(failure.RotationFailure);
-            Assert.IsType<IOException>(failure.RecoveryFailure);
+            failpoints.Arm(Failpoint.BeforeWalReplacementWriterCreate);
+            var failure = Assert.Throws<IOException>(() => store.RotateActiveLocalWal());
 
             var fenced = Assert.Throws<PantsFencedException>(() =>
                 store.CreateColumnFamily(new ColumnFamilyIdentity(1, "fenced", 1)));
@@ -446,10 +412,9 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         Assert.False(store.IsLeaseHealthy);
         Assert.Equal(1, store.WalPendingWrites);
         Assert.NotEqual(0, store.ActiveWalBytes);
-        Assert.Empty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "wal"),
-            "*.wal",
-            SearchOption.TopDirectoryOnly));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Null(Assert.Single(ledger.Members).Sealed);
+        Assert.True(File.Exists(ledger.ActivePath));
     }
 
     [Fact]
@@ -482,10 +447,9 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         Assert.Equal(1, Volatile.Read(ref validations));
         Assert.Equal(1, store.WalPendingWrites);
         Assert.NotEqual(0, store.ActiveWalBytes);
-        Assert.Empty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "wal"),
-            "*.wal",
-            SearchOption.TopDirectoryOnly));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Null(Assert.Single(ledger.Members).Sealed);
+        Assert.True(File.Exists(ledger.ActivePath));
     }
 
     static CommitPayload CreateCommitPayload(RuntimeState state) =>

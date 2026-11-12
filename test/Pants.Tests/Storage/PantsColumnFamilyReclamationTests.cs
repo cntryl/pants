@@ -24,7 +24,7 @@ public sealed class PantsColumnFamilyReclamationTests
         Assert.NotEmpty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
 
         await database.ColumnFamilies.DropAsync(family);
-
+        await WaitForFamilyReclamationAsync(directory.Path, family.Id, simulatedCloud);
         Assert.Empty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
         Assert.DoesNotContain(
             (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
@@ -59,6 +59,7 @@ public sealed class PantsColumnFamilyReclamationTests
             (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
             file => file.ColumnFamilyId == family.Id);
         await snapshot.RollbackAsync();
+        await WaitForFamilyReclamationAsync(directory.Path, family.Id, simulatedCloud);
         Assert.Empty(FamilyFiles(directory.Path, family.Id, simulatedCloud));
         Assert.DoesNotContain(
             (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),

@@ -69,7 +69,7 @@ public sealed class CompactionVersionConflictTests
         SstEntry[] left,
         SstEntry[] right,
         RangeTombstone[]? ranges = null,
-        long? horizon = null)
+        ulong? horizon = null)
     {
         var plan = new CompactionPlan(0, 1, 0, horizon, true, true, []);
         if (!streaming)

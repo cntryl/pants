@@ -6,8 +6,10 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
     readonly byte[]? _endExclusive;
     readonly AsyncSstReader _reader;
     readonly ResourceBudget? _resourceBudget;
+    readonly SstScanBlockCache? _blockCache;
     readonly byte[]? _startInclusive;
     IReadOnlyList<SstEntry>? _blockEntries;
+    SstEntry? _boundaryEntry;
     int _blockIndex;
     IDisposable? _blockReservation;
     bool _finished;
@@ -19,18 +21,24 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         PantsScanDirection direction,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        ResourceBudget? resourceBudget)
+        ResourceBudget? resourceBudget,
+        SstScanBlockCache? blockCache = null)
     {
         _reader = reader;
         _direction = direction;
         _startInclusive = startInclusive;
         _endExclusive = endExclusive;
         _resourceBudget = resourceBudget;
+        _blockCache = blockCache;
     }
 
     public SstEntry Current { get; private set; } = null!;
 
     public int DataBlocksRead { get; private set; }
+
+    public int BlockCacheHits { get; private set; }
+
+    public int BlockCacheMisses { get; private set; }
 
     public async ValueTask DisposeAsync()
     {
@@ -132,22 +140,76 @@ sealed class AsyncSstBlockIterator : IAsyncDisposable
         _blockEntries = null;
         _blockReservation?.Dispose();
         _blockReservation = null;
-        var block = await _reader.ReadDataBlockAsync(blockIndex, cancellationToken)
-            .ConfigureAwait(false);
-        DataBlocksRead = checked(DataBlocksRead + 1);
-        using var transientReservation = _resourceBudget?.Reserve(block.Length);
-        var entries = SstCodec.DecodeDataBlock(block);
-        var accountedBytes = checked(entries.Sum(static entry =>
-            entry.Key.Length + (entry.Value?.Length ?? 0) + 32));
-        _blockReservation = _resourceBudget?.Reserve(accountedBytes);
-        _blockEntries = entries;
-        _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : entries.Count - 1;
+        using var boundaryReservation = _boundaryEntry is null
+            ? null
+            : _resourceBudget?.Reserve(checked(
+                _boundaryEntry.Key.Length + (_boundaryEntry.Value?.Length ?? 0) + SstCodec.DecodedEntryOverheadBytes));
+        SstReadBlock? ownedBlock = null;
+        ReadOnlyMemory<byte> block = default;
+        IDisposable? decodedReservation = null;
+        try
+        {
+            var cacheHit = _blockCache is not null && _blockCache.TryGet(blockIndex, out block);
+            if (cacheHit)
+            {
+                BlockCacheHits = checked(BlockCacheHits + 1);
+            }
+            else
+            {
+                if (_blockCache is not null)
+                {
+                    BlockCacheMisses = checked(BlockCacheMisses + 1);
+                }
+
+                ownedBlock = await _reader.ReadDataBlockOwnedAsync(blockIndex, _resourceBudget, cancellationToken)
+                    .ConfigureAwait(false);
+                block = ownedBlock.Content;
+                DataBlocksRead = checked(DataBlocksRead + 1);
+            }
+            decodedReservation = _resourceBudget?.Reserve(SstCodec.MeasureDecodedDataBlockBytes(block.Span));
+            var entries = SstCodec.DecodeDataBlock(block.Span);
+            if (entries.Count == 0 || !entries[0].Key.AsSpan().SequenceEqual(_reader.GetFirstKey(blockIndex)))
+            {
+                throw new PantsCorruptionException("SST index first key does not match its data block.");
+            }
+
+            if (_boundaryEntry is not null)
+            {
+                if (_direction == PantsScanDirection.Forward)
+                {
+                    SstCodec.ValidateAdjacentEntries(_boundaryEntry, entries[0]);
+                }
+                else
+                {
+                    SstCodec.ValidateAdjacentEntries(entries[^1], _boundaryEntry);
+                }
+            }
+
+            _boundaryEntry = _direction == PantsScanDirection.Forward ? entries[^1] : entries[0];
+            _blockReservation = decodedReservation;
+            decodedReservation = null;
+            if (!cacheHit)
+            {
+                // Admit only complete, validated blocks after their retained decode fits. The
+                // shared cache never receives an invalid or partially admitted scan block.
+                _blockCache?.Admit(blockIndex, block.Span);
+            }
+            _blockEntries = entries;
+            _positionInBlock = _direction == PantsScanDirection.Forward ? 0 : entries.Count - 1;
+        }
+        finally
+        {
+            ownedBlock?.Dispose();
+            decodedReservation?.Dispose();
+        }
     }
 
     bool Finish()
     {
         _finished = true;
         _blockEntries = null;
+        _boundaryEntry = null;
+        Current = null!;
         _blockReservation?.Dispose();
         _blockReservation = null;
         return false;

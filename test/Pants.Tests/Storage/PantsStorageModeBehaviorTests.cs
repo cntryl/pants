@@ -128,6 +128,7 @@ public sealed class PantsStorageModeBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await StorageModeTestHarness.OpenAsync(mode, directory.Path);
+        await StorageModeTestHarness.PutAsync(database, mode, "sibling", "value");
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
@@ -136,6 +137,7 @@ public sealed class PantsStorageModeBehaviorTests
         await transaction.CommitAsync(StorageModeTestHarness.GetWriteOptions(mode));
 
         Assert.Null(await StorageModeTestHarness.GetTextAsync(database, "missing"));
+        Assert.Equal("value", await StorageModeTestHarness.GetTextAsync(database, "sibling"));
     }
 
     [Theory]

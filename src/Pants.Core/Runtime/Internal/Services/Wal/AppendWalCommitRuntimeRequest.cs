@@ -2,6 +2,6 @@ namespace Cntryl.Pants.Runtime.Internal.Services.Wal;
 
 sealed record AppendWalCommitRuntimeRequest(
     CommitPayload Payload,
-    RuntimeState State,
+    ulong PublishedSequence,
     PantsDurability Durability,
     OperationDeadline Deadline = default) : WalRuntimeRequest;

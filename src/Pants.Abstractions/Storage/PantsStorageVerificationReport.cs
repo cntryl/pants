@@ -1,12 +1,12 @@
 namespace Cntryl.Pants.Storage;
 
 public sealed record PantsStorageVerificationReport(
-    long ManifestEpoch,
+    ulong ManifestEpoch,
     int ManifestFilesVerified,
     int SstFilesVerified,
     long BytesVerified,
     long DataBlocksVerified,
-    long? WalBoundary,
+    ulong? WalBoundary,
     long WalRecoveryRecordsReplayed,
     long WalRecoveryBytesReplayed,
     int IntentEntriesLoaded,

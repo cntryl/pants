@@ -10,7 +10,7 @@ static class LeveledCompactionPlanner
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
-        long? snapshotHorizon,
+        ulong? snapshotHorizon,
         bool force,
         long? preferredWorkBytes = null) =>
         PickCore(
@@ -20,6 +20,7 @@ static class LeveledCompactionPlanner
             snapshotHorizon,
             l0ForceFloor: force ? 2 : int.MaxValue,
             innerForceFloor: force ? 2 : int.MaxValue,
+            prioritizeL0: false,
             preferredWorkBytes);
 
     /// <summary>
@@ -30,7 +31,7 @@ static class LeveledCompactionPlanner
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
-        long? snapshotHorizon,
+        ulong? snapshotHorizon,
         long? preferredWorkBytes = null) =>
         PickCore(
             files,
@@ -39,6 +40,27 @@ static class LeveledCompactionPlanner
             snapshotHorizon,
             l0ForceFloor: 1,
             innerForceFloor: int.MaxValue,
+            prioritizeL0: false,
+            preferredWorkBytes);
+
+    /// <summary>
+    ///     Picks L0 work for a family whose slot ceiling is exhausted. This overrides ordinary
+    ///     inner-level priority so writes can resume before more downstream debt is created.
+    /// </summary>
+    public static CompactionPlan? PickCriticalL0(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration,
+        ulong? snapshotHorizon,
+        long? preferredWorkBytes = null) =>
+        PickCore(
+            files,
+            columnFamilyId,
+            configuration,
+            snapshotHorizon,
+            l0ForceFloor: 1,
+            innerForceFloor: int.MaxValue,
+            prioritizeL0: true,
             preferredWorkBytes);
 
     /// <summary>
@@ -49,9 +71,10 @@ static class LeveledCompactionPlanner
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
         PantsCompactionConfiguration configuration,
-        long? snapshotHorizon,
+        ulong? snapshotHorizon,
         int l0ForceFloor,
         int innerForceFloor,
+        bool prioritizeL0,
         long? preferredWorkBytes)
     {
         ValidateConfiguration(configuration);
@@ -69,19 +92,44 @@ static class LeveledCompactionPlanner
 
         var l0Files = FilesAtLevel(familyFiles, 0);
         var l0Size = l0Files.Aggregate(0UL, static (total, file) => checked(total + file.SizeBytes));
-        if (l0Size > checked((ulong)configuration.L0SizeTriggerBytes) ||
-            l0Files.Length >= configuration.L0FileCountTrigger ||
-            l0Files.Length >= l0ForceFloor)
+        CompactionPlan? PickL0Plan()
         {
+            if (l0Size <= checked((ulong)configuration.L0SizeTriggerBytes) &&
+                l0Files.Length < configuration.L0FileCountTrigger &&
+                l0Files.Length < l0ForceFloor)
+            {
+                return null;
+            }
+
             var source = l0Files
                 .OrderBy(static file => file.SstSequence)
                 .Take(Math.Min(l0Files.Length, configuration.L0FileCountTrigger))
                 .ToArray();
-            return CreatePlan(familyFiles, source, FilesAtLevel(familyFiles, 1), 0, 1,
-                columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon, null);
+            return CreatePlan(
+                familyFiles,
+                source,
+                FilesAtLevel(familyFiles, 1),
+                0,
+                1,
+                columnFamilyId,
+                configuration.MaximumInputFiles,
+                snapshotHorizon,
+                null);
         }
 
-        for (uint level = 1; level < configuration.MaximumLevels - 1; level++)
+        var l0Plan = PickL0Plan();
+        if (prioritizeL0 && l0Plan is not null)
+        {
+            return l0Plan;
+        }
+
+        var repairPlan = PickRepairFromFamilyFiles(familyFiles, columnFamilyId, configuration);
+        if (repairPlan is not null)
+        {
+            return repairPlan;
+        }
+
+        for (uint level = checked((uint)(configuration.MaximumLevels - 2)); level > 0; level--)
         {
             var sourceLevelFiles = FilesAtLevel(familyFiles, level);
             if (IsOverfull(sourceLevelFiles, configuration, level) ||
@@ -96,6 +144,44 @@ static class LeveledCompactionPlanner
                     level + 1, columnFamilyId, configuration.MaximumInputFiles, snapshotHorizon,
                     preferredWorkBytes);
             }
+        }
+
+        return l0Plan;
+    }
+
+    public static CompactionPlan? PickRepair(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration)
+    {
+        ValidateConfiguration(configuration);
+        var familyFiles = files.Where(file => file.ColumnFamilyId == columnFamilyId).ToArray();
+        ValidateMetadata(familyFiles, columnFamilyId, configuration.MaximumLevels);
+        return PickRepairFromFamilyFiles(familyFiles, columnFamilyId, configuration);
+    }
+
+    static CompactionPlan? PickRepairFromFamilyFiles(
+        IReadOnlyList<FileMeta> familyFiles,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration)
+    {
+        for (var level = configuration.MaximumLevels - 1; level > 0; level--)
+        {
+            var components = CompactionLayout.RepairComponents(FilesAtLevel(familyFiles, checked((uint)level)));
+            if (components.Length == 0)
+            {
+                continue;
+            }
+
+            return new CompactionPlan(
+                checked((uint)level),
+                checked((uint)level),
+                columnFamilyId,
+                null,
+                false,
+                false,
+                components[0],
+                CompactionPurpose.Repair);
         }
 
         return null;
@@ -193,6 +279,11 @@ static class LeveledCompactionPlanner
             return HasSameFragmentBoundary(plan, currentFiles);
         }
 
+        if (plan.Purpose == CompactionPurpose.Repair)
+        {
+            return HasSameRepairComponent(plan, currentFiles);
+        }
+
         var sources = plan.Inputs
             .Where(file => file.Level == plan.SourceLevel)
             .ToArray();
@@ -215,6 +306,24 @@ static class LeveledCompactionPlanner
             .Select(static file => file.Name)
             .ToHashSet(StringComparer.Ordinal);
         return expectedTargetNames.SetEquals(currentTargetNames);
+    }
+
+    static bool HasSameRepairComponent(CompactionPlan plan, IReadOnlyList<FileMeta> currentFiles)
+    {
+        if (plan.SourceLevel == 0 || plan.TargetLevel != plan.SourceLevel ||
+            plan.PointTombstoneGcEligible || plan.RangeTombstoneGcEligible ||
+            plan.Inputs.Count < 2 || plan.Inputs.Any(file => file.Level != plan.SourceLevel))
+        {
+            return false;
+        }
+
+        var currentLevel = currentFiles
+            .Where(file => file.ColumnFamilyId == plan.ColumnFamilyId && file.Level == plan.SourceLevel)
+            .ToArray();
+        var expectedNames = plan.Inputs.Select(static file => file.Name).ToHashSet(StringComparer.Ordinal);
+        return CompactionLayout.RepairComponents(currentLevel)
+            .Any(component => component.Select(static file => file.Name).ToHashSet(StringComparer.Ordinal)
+                .SetEquals(expectedNames));
     }
 
     static bool HasSameFragmentBoundary(CompactionPlan plan, IReadOnlyList<FileMeta> currentFiles)
@@ -268,7 +377,7 @@ static class LeveledCompactionPlanner
         uint targetLevel,
         uint columnFamilyId,
         int maximumInputs,
-        long? snapshotHorizon,
+        ulong? snapshotHorizon,
         long? preferredWorkBytes)
     {
         var sources = sourceFiles.ToList();

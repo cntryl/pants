@@ -4,6 +4,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
 {
     readonly ScanBounds _bounds;
     readonly Func<ValueTask> _releaseSnapshot;
+    readonly Action? _validateReadAuthority;
     CancellationToken _cancellationToken;
     int _disposed;
     int _emitted;
@@ -16,10 +17,12 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     internal ScanInstance(
         Func<CancellationToken, ValueTask<IAsyncEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
-        Func<ValueTask> releaseSnapshot)
+        Func<ValueTask> releaseSnapshot,
+        Action? validateReadAuthority = null)
     {
         _entriesFactory = entriesFactory ?? throw new ArgumentNullException(nameof(entriesFactory));
         _releaseSnapshot = releaseSnapshot ?? throw new ArgumentNullException(nameof(releaseSnapshot));
+        _validateReadAuthority = validateReadAuthority;
         _bounds = new ScanBounds(query);
         Direction = _bounds.Direction;
     }
@@ -27,12 +30,14 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     internal ScanInstance(
         Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
-        Func<ValueTask> releaseSnapshot)
+        Func<ValueTask> releaseSnapshot,
+        Action? validateReadAuthority = null)
         : this(
             async cancellationToken => new SyncAsyncEnumerator(
                 await entriesFactory(cancellationToken).ConfigureAwait(false)),
             query,
-            releaseSnapshot)
+            releaseSnapshot,
+            validateReadAuthority)
     {
     }
 
@@ -100,30 +105,17 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     {
         try
         {
-            _cancellationToken.ThrowIfCancellationRequested();
-            if (_emitted >= _bounds.Limit)
+            _validateReadAuthority?.Invoke();
+            try
             {
-                await ExhaustAsync().ConfigureAwait(false);
-                return false;
+                return await ReadNextAsync().ConfigureAwait(false);
             }
-
-            await EnsureEntriesInitializedAsync().ConfigureAwait(false);
-            while (await _entries!.MoveNextAsync().ConfigureAwait(false))
+            finally
             {
-                var candidate = _entries.Current;
-                var key = candidate.Key.Span;
-                if (!_bounds.Matches(key))
-                {
-                    continue;
-                }
-
-                Current = new PantsEntry(candidate.Key.ToArray(), candidate.Value.ToArray());
-                _emitted++;
-                return true;
+                // A successor can reclaim an SST while a read is in flight. Fencing replaces
+                // both its result and any storage error or normal end-of-range outcome.
+                _validateReadAuthority?.Invoke();
             }
-
-            await ExhaustAsync().ConfigureAwait(false);
-            return false;
         }
         catch (Exception exception)
         {
@@ -139,6 +131,34 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
 
             throw;
         }
+    }
+
+    async ValueTask<bool> ReadNextAsync()
+    {
+        _cancellationToken.ThrowIfCancellationRequested();
+        if (_emitted >= _bounds.Limit)
+        {
+            await ExhaustAsync().ConfigureAwait(false);
+            return false;
+        }
+
+        await EnsureEntriesInitializedAsync().ConfigureAwait(false);
+        while (await _entries!.MoveNextAsync().ConfigureAwait(false))
+        {
+            var candidate = _entries.Current;
+            var key = candidate.Key.Span;
+            if (!_bounds.Matches(key))
+            {
+                continue;
+            }
+
+            Current = new PantsEntry(candidate.Key.ToArray(), candidate.Value.ToArray());
+            _emitted++;
+            return true;
+        }
+
+        await ExhaustAsync().ConfigureAwait(false);
+        return false;
     }
 
     async ValueTask EnsureEntriesInitializedAsync()

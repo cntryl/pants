@@ -113,7 +113,7 @@ public sealed class PantsTransactionConcurrencyTests
 
         Assert.True(conflict.IsRangeConflict);
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.InRange(metrics.ScanBufferPeakBytes, 1, metrics.ScanBufferCapacityBytes);
+        Assert.InRange(metrics.ReadMetadataPeakBytes, 1, metrics.ReadMetadataCapacityBytes);
         Assert.Equal(0, metrics.ScanBufferUsedBytes);
     }
 

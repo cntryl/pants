@@ -401,7 +401,7 @@ public sealed class PantsTransactionParityTests
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.ActiveSnapshots);
-        Assert.Equal(2_000, metrics.CurrentSequence);
+        Assert.Equal(6_000UL, metrics.CurrentSequence);
         Assert.Equal("value", await ReadAsync(database, "key-1999"));
     }
 

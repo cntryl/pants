@@ -110,6 +110,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
                         new byte[1024]);
                 }
 
+                transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
                 await transaction.CommitAsync(PantsWriteOptions.Buffered);
             }
 
@@ -148,7 +149,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
     }
 
     [Fact]
-    public async Task ShouldReportAndReleaseScanBufferBytesForAnActiveSstScan()
+    public async Task ShouldReportSharedReaderMetadataAndRetainTheCachedReaderAfterScanDisposal()
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
@@ -177,16 +178,18 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
             Assert.True(await enumerator.MoveNextAsync());
 
             var duringScan = await database.Diagnostics.GetRuntimeMetricsAsync();
-            Assert.True(duringScan.ScanBufferUsedBytes > 0);
-            Assert.True(duringScan.ScanBufferPeakBytes >= duringScan.ScanBufferUsedBytes);
+            Assert.True(duringScan.ReadMetadataUsedBytes > 0);
+            Assert.True(duringScan.ReadMetadataPeakBytes >= duringScan.ReadMetadataUsedBytes);
             Assert.Equal(
-                RuntimePlan.Resolve(options).ScanMemoryPoolBytes,
-                duringScan.ScanBufferCapacityBytes);
+                RuntimePlan.Resolve(options).ReadMetadataBudgetBytes,
+                duringScan.ReadMetadataCapacityBytes);
+            Assert.Equal(0, duringScan.ScanBufferCapacityBytes);
         }
 
         var afterScan = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, afterScan.ScanBufferUsedBytes);
-        Assert.True(afterScan.ScanBufferPeakBytes > 0);
+        Assert.InRange(afterScan.ReadMetadataUsedBytes, 1, afterScan.ReadMetadataCapacityBytes);
+        Assert.True(afterScan.ReadMetadataPeakBytes > 0);
     }
 
     [Fact]

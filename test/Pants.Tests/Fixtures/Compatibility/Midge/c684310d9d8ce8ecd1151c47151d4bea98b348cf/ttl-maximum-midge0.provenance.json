@@ -1,0 +1,15 @@
+{
+  "midgeCommit": "c684310d9d8ce8ecd1151c47151d4bea98b348cf",
+  "producer": "Actual public Midge transaction with TTL u64::MAX, followed by SST flush and Midge read at253402300799999 Unix milliseconds",
+  "sourceEvidence": "/tmp/pants-numeric-width-proof-20261104",
+  "transformation": "No persisted bytes changed; process coordination files omitted",
+  "filesSha256": {
+    "FORMAT": "9be590eb3e58b8a9e06eafca7ae44a4a84e73db5562b07dc688b6e0897a8720e",
+    "intent_log.json": "29ab3b99926ad133a6f76015b8e0abdc2fead11db3b7540fea1c6b732679633d",
+    "manifest.journal": "602a7323ba7bb8b88e68a3eee7f810d623cbd65e03f9c0e7ea0eb2b700c6dcc7",
+    "manifest.snapshot.json": "dce1af3bf8c07d6e13262e234baa700c68923959204995c474bb86afe59bf565",
+    "sst/000000_00_00000000000000000001.sst": "2762a669ee0bf7a2560a7b5065e825678dc827e93afcc45170bec417b8a3a935",
+    "wal/00000000000000000003.wal": "468ef290c766bd5364c96790bcea06a96b7aade0b82dc316fc0abe5a5fefc384",
+    "wal/LEDGER": "510bb6bf5bae27aa8d033b2ee29ad1a3908ac95813c2ba0eb9575a8da129efdb"
+  }
+}

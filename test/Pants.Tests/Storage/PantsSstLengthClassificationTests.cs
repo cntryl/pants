@@ -9,8 +9,7 @@ public sealed class PantsSstLengthClassificationTests
     [Fact]
     public void ShouldClassifyOversizedDataEntryValueLengthAsCorruption()
     {
-        var block = new byte[26];
-        BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(4), UnsupportedLength);
+        byte[] block = [0, 0, 0x80, 0x80, 0x80, 0x80, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0];
 
         Assert.Throws<PantsCorruptionException>(() =>
             SstCodec.DataBlockContainsKey(block, "key"u8));

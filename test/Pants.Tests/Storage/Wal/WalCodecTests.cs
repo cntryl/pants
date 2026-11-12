@@ -38,7 +38,7 @@ public sealed class WalCodecTests
         var encoded = WalCodec.EncodeTransactionBatch(7, 0, 9, mutations);
         var record = WalCodec.DecodeRecord(encoded);
 
-        var error = Assert.Throws<StorageException>(() =>
+        var error = Assert.Throws<PantsResourceLimitException>(() =>
             WalCodec.DecodeTransactionBatch(record, 512, out _, out _));
 
         Assert.Contains("replay", error.Message, StringComparison.OrdinalIgnoreCase);
@@ -82,7 +82,7 @@ public sealed class WalCodecTests
 
         var encoded = WalCodec.EncodeTransactionBatch(7, 11, 9, mutations);
 
-        var decoded = WalCodec.DecodeTransactionBatch(encoded, out var commitSequence, out var writerEpoch);
+        var decoded = WalCodec.DecodeTransactionBatch(WalCodec.DecodeRecord(encoded, 9), out var commitSequence, out var writerEpoch);
 
         Assert.True(
             HasTopLevelTlvTag(encoded, 9),
@@ -173,12 +173,11 @@ public sealed class WalCodecTests
     {
         using var payload = new MemoryStream();
         payload.Write("MW"u8);
-        payload.WriteByte(1);
+        payload.WriteByte(2);
         WriteTlv(payload, 1, [(byte)operation]);
         WriteTlvUInt32(payload, 2, 1);
         WriteTlvUInt64(payload, 3, 5);
         WriteTlv(payload, 4, key);
-        WriteTlvUInt64(payload, 10, 9);
         if (includeValue)
         {
             WriteTlv(payload, 5, value);

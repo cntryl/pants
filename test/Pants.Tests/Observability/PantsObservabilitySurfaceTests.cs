@@ -57,10 +57,9 @@ public sealed class PantsObservabilitySurfaceTests
         Assert.Equal(0, metrics.CacheHits + metrics.CacheMisses);
         Assert.Equal(0, metrics.CloudAsyncWalUploadsFailed);
         Assert.Equal(0, metrics.HybridPendingEvictions);
-        Assert.Empty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "wal"),
-            "*.wal",
-            SearchOption.TopDirectoryOnly));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Single(ledger.Members);
+        Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(ledger.ActivePath).Length);
 
         Assert.Equal(PantsEngineHealth.Healthy, layout.Health);
         var files = layout.Levels.SelectMany(static level => level.Files).ToArray();

@@ -22,6 +22,7 @@ public sealed class MidgeSimulatedCloudControlParityTests
         var crashImagePath = Path.Combine(directory.Path, "crash-image");
         var options = CreateOptions(livePath);
         var expected = CreateExpectedState();
+        CrashChildProcess.WriterLeaseSnapshot crashOwner;
 
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
@@ -76,10 +77,11 @@ public sealed class MidgeSimulatedCloudControlParityTests
             Assert.Equal(0, metrics.PendingCloudUploads);
 
             CopyCrashImage(livePath, crashImagePath);
-            ExpireWriterLease(crashImagePath);
+            crashOwner = await CrashChildProcess.CaptureWriterLeaseAsync(crashImagePath, true);
             await reopened.ShutdownAsync(TestTimeouts.Expected);
         }
 
+        await CrashChildProcess.ExpireStoppedWriterLeaseAsync(crashImagePath, crashOwner);
         await using var recovered = await PantsDatabase.OpenAsync(CreateOptions(crashImagePath));
         await AssertRecoveredStateAsync(recovered, expected);
     }
@@ -192,15 +194,4 @@ public sealed class MidgeSimulatedCloudControlParityTests
         }
     }
 
-    static void ExpireWriterLease(string path)
-    {
-        var leasePath = Path.Combine(path, ".midge_leader");
-        var lines = File.ReadAllLines(leasePath)
-            .Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal))
-            .Select(static line => line.StartsWith("acquired_at: ", StringComparison.Ordinal)
-                ? "acquired_at: 1970-01-01T00:00:00Z"
-                : line)
-            .ToArray();
-        File.WriteAllLines(leasePath, lines);
-    }
 }

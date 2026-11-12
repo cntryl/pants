@@ -35,8 +35,8 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
 
             Assert.Equal(2, failingHandler.SstPutAttempts);
             Assert.Equal(inputNames, await LayoutNamesAsync(database));
-            using (var failedIntent = JsonDocument.Parse(
-                       await File.ReadAllTextAsync(Path.Combine(cache.Path, "intent_log.json"))))
+            using (var failedIntent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+                   await File.ReadAllBytesAsync(Path.Combine(cache.Path, "intent_log.json"))).Entries))
             {
                 var publication = Assert.Single(failedIntent.RootElement.EnumerateArray())
                     .GetProperty("CompactionPublish");
@@ -49,8 +49,8 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
             Assert.Equal(remoteInputNames.Length + 1, remoteAfterFailure.Length);
         }
 
-        using (var localIntentAfterClose = JsonDocument.Parse(
-                   await File.ReadAllTextAsync(Path.Combine(cache.Path, "intent_log.json"))))
+        using (var localIntentAfterClose = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+                   await File.ReadAllBytesAsync(Path.Combine(cache.Path, "intent_log.json"))).Entries))
         {
             Assert.NotEmpty(localIntentAfterClose.RootElement.EnumerateArray());
         }
@@ -61,13 +61,16 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
         Assert.Equal(1, recovery.IntentLogReplayRuns);
         Assert.Equal(1, recovery.IntentLogEntriesReplayed);
 
-        using (var localIntent = JsonDocument.Parse(
-                   await File.ReadAllTextAsync(Path.Combine(cache.Path, "intent_log.json"))))
+        using (var localIntent = IntentLogCodec.ToDocument(IntentLogCodec.Read(
+                   await File.ReadAllBytesAsync(Path.Combine(cache.Path, "intent_log.json"))).Entries))
         {
             Assert.Empty(localIntent.RootElement.EnumerateArray());
         }
 
-        using (var remoteIntent = JsonDocument.Parse(azure.GetObjectText("intent_log.json")))
+        using var pointer = MetadataFrameCodec.Decode(azure.GetObjectBytes("/metadata/committed-pointer.v1"), 4);
+        var intentObjectKey = pointer.RootElement.GetProperty("committed").GetProperty("objects").EnumerateArray()
+            .Single(static entry => entry.GetProperty("file_name").GetString() == "intent_log.json").GetProperty("object_key").GetString()!;
+        using (var remoteIntent = IntentLogCodec.ToDocument(IntentLogCodec.Read(azure.GetObjectBytes(intentObjectKey)).Entries))
         {
             Assert.Empty(remoteIntent.RootElement.EnumerateArray());
         }
@@ -104,6 +107,8 @@ public sealed class ProviderCloudPartialCompactionPublicationTests
                     transaction.Put(Key((flush * EntriesPerFlush) + entry), CreateValue());
                 }
 
+                // Overlap only empty keyspace so this fixture requires a physical rewrite.
+                transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
                 await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
             }
 

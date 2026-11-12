@@ -1,8 +1,18 @@
+using System.Text.Json.Serialization;
+using Cntryl.Pants.Storage.Internal.Wal;
+
 namespace Cntryl.Pants.Cloud.Internal;
 
+[JsonConverter(typeof(ProviderWalCatalogConverter))]
 sealed record ProviderWalCatalog
 {
-    public uint FormatVersion { get; init; } = 1;
+    public uint FormatVersion { get; init; } = 3;
+
+    public WalChainLink Anchor { get; init; } = WalChainLink.Genesis;
+
+    public ulong SequenceFloor { get; init; }
+
+    public ulong RetiredBy { get; init; }
 
     public ulong FencingEpoch { get; init; }
 

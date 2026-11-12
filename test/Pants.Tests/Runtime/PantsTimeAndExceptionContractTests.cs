@@ -3,22 +3,24 @@ namespace Cntryl.Pants.Runtime;
 public sealed class PantsTimeAndExceptionContractTests
 {
     [Fact]
-    public void ShouldSaturateUnixTimestampBoundaryConversions()
+    public void ShouldKeepClockMillisecondsDistinctFromSaturatedExpirationProjection()
     {
-        Assert.Equal(ulong.MaxValue, UnixTimestamp.FromDateTimeOffset(DateTimeOffset.MaxValue));
+        var maximumClock = checked((ulong)DateTimeOffset.MaxValue.ToUnixTimeMilliseconds());
+        Assert.Equal(maximumClock, UnixTimestamp.FromDateTimeOffset(DateTimeOffset.MaxValue));
         Assert.Equal(0UL, UnixTimestamp.FromDateTimeOffset(DateTimeOffset.MinValue));
         Assert.Equal(0UL, UnixTimestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch));
         Assert.Equal(
             DateTimeOffset.MaxValue,
             UnixTimestamp.ToDateTimeOffsetSaturating(ulong.MaxValue));
         Assert.Equal(
-            ulong.MaxValue,
+            maximumClock,
             UnixTimestamp.FromDateTimeOffset(
                 UnixTimestamp.ToDateTimeOffsetSaturating(ulong.MaxValue)));
+        Assert.False(UnixTimestamp.IsExpired(ulong.MaxValue, DateTimeOffset.MaxValue));
     }
 
     [Fact]
-    public void ShouldSaturateTtlOverflowAndExpireAtInclusiveBoundary()
+    public void ShouldRepresentTtlBeyondTheCalendarRangeAndExpireAtInclusiveMillisecond()
     {
         var nearMaximum = DateTimeOffset.MaxValue.AddTicks(-1);
 
@@ -26,7 +28,8 @@ public sealed class PantsTimeAndExceptionContractTests
             nearMaximum,
             TimeSpan.MaxValue);
 
-        Assert.Equal(ulong.MaxValue, expiration);
+        Assert.Equal(checked((ulong)nearMaximum.ToUnixTimeMilliseconds() +
+                             (ulong)(TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond) * 1_000), expiration);
         Assert.True(UnixTimestamp.IsExpired(
             1_000,
             DateTimeOffset.UnixEpoch.AddMilliseconds(1_000)));
@@ -36,7 +39,7 @@ public sealed class PantsTimeAndExceptionContractTests
     }
 
     [Fact]
-    public void ShouldMapEveryErrorCodeToItsExceptionSubtypeAndPreserveInnerException()
+    public void ShouldMapContextFreeFailuresToTheirExceptionSubtypeAndPreserveInnerException()
     {
         var expectedTypes = new Dictionary<PantsErrorCode, Type>
         {
@@ -64,19 +67,21 @@ public sealed class PantsTimeAndExceptionContractTests
             [PantsErrorCode.ResourceLimit] = typeof(PantsResourceLimitException),
             [PantsErrorCode.CommitOutcomeUnknown] = typeof(PantsCommitOutcomeUnknownException)
         };
-        var codes = Enum.GetValues<PantsErrorCode>();
-        Assert.Equal(codes.Order(), expectedTypes.Keys.Order());
-
-        foreach (var code in codes)
+        // The unflushed-data signal requires real family/byte context and is constructed by
+        // safe drop; the context-free factory must never invent a discard licence.
+        foreach (var (code, expectedType) in expectedTypes)
         {
             var inner = new InvalidOperationException(code.ToString());
 
             var exception = PantsException.Create(code, "mapped", inner);
 
-            Assert.Equal(expectedTypes[code], exception.GetType());
+            Assert.Equal(expectedType, exception.GetType());
             Assert.Equal(code, exception.Code);
             Assert.Same(inner, exception.InnerException);
+            Assert.False(exception.LicensesUnflushedDiscard);
         }
+        Assert.False(PantsException.Create(PantsErrorCode.UnflushedDataPresent, "missing drop context")
+            .LicensesUnflushedDiscard);
     }
 
     [Fact]

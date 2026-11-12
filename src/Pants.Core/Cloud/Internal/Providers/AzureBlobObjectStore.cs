@@ -321,7 +321,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         {
             new("restype", "container"),
             new("comp", "list"),
-            new("prefix", fullPrefix)
+            new("prefix", fullPrefix),
+            new("maxresults", CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture))
         };
         if (continuationToken is not null)
         {

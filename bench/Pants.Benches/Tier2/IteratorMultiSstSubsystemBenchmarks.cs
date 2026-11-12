@@ -30,7 +30,7 @@ public class IteratorMultiSstSubsystemBenchmarks : Tier2Benchmark
         {
             entries.Add(
                 Tier2Data.Key(run * KeysPerRun + index),
-                new CellState(Tier2Data.Value(64), index, null));
+                new CellState(Tier2Data.Value(64), (ulong)index, null));
         }
 
         return entries;

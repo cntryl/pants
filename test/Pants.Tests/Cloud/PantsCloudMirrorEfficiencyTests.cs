@@ -53,11 +53,12 @@ public sealed class PantsCloudMirrorEfficiencyTests
         var remoteSst = Assert.Single(Directory.GetFiles(
             Path.Combine(directory.Path, "cloud_store", "sst"),
             "*.sst"));
-        var remoteManifest = Path.Combine(
-            directory.Path,
-            "cloud_store",
-            "metadata",
-            "manifest.snapshot.json");
+        var cloudRoot = Path.Combine(directory.Path, "cloud_store");
+        using var pointer = MetadataFrameCodec.Decode(File.ReadAllBytes(Path.Combine(cloudRoot, CloudMetadataAuthority.PointerKey)), 4);
+        var manifestObjectKey = pointer.RootElement.GetProperty("committed").GetProperty("objects").EnumerateArray()
+            .Single(static reference => reference.GetProperty("file_name").GetString() == "manifest.snapshot.json")
+            .GetProperty("object_key").GetString()!;
+        var remoteManifest = Path.Combine(cloudRoot, manifestObjectKey);
         var sentinel = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(remoteSst, sentinel);
         File.SetLastWriteTimeUtc(remoteManifest, sentinel);

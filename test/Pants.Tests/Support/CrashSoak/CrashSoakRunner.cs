@@ -142,6 +142,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
         {
             var observed = new Dictionary<string, string>(StringComparer.Ordinal);
             var scanned = new List<KeyValuePair<string, string>>();
+            ulong verifiedSequence;
             await using (var reader = await database.Transactions.BeginAsync(
                              database.ColumnFamilies.DefaultFamily,
                              PantsTransactionMode.ReadOnly))
@@ -161,16 +162,17 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                         TestBytes.ToText(entry.Key),
                         TestBytes.ToText(entry.Value)));
                 }
+                verifiedSequence = await reader.CommitWithSequenceAsync(
+                    scenario.Backend == CrashSoakBackend.Local ? PantsWriteOptions.Sync : PantsWriteOptions.CloudAsync);
             }
 
             if (scenario.Backend != CrashSoakBackend.Local)
             {
-                // The next cycle may lose its cache, so make the state just verified cloud-durable:
-                // an empty CloudStrict commit seals and publishes everything recovery replayed.
-                await using var confirmation = await database.Transactions.BeginAsync(
-                    database.ColumnFamilies.DefaultFamily,
-                    PantsTransactionMode.ReadWrite);
-                await confirmation.CommitAsync(PantsWriteOptions.CloudStrict);
+                // The next cycle may lose its cache; confirm the exact read-verified cut explicitly.
+                if (!await database.Cloud!.WaitForDurableAsync(verifiedSequence, TestTimeouts.Expected))
+                {
+                    throw new PantsTimeoutException($"Cloud durability did not cover verified sequence {verifiedSequence}.");
+                }
             }
 
             await database.ShutdownAsync(TestTimeouts.Expected);

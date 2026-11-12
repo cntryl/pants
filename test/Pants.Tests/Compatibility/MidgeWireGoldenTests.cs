@@ -1,5 +1,4 @@
 using System.Text;
-using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Compatibility;
 
@@ -16,124 +15,55 @@ public sealed class MidgeWireGoldenTests
     }
 
     [Theory]
-    [InlineData("wal-tlv-put-v1.bin", (byte)0)]
-    [InlineData("wal-tlv-insert-v1.bin", (byte)1)]
-    [InlineData("wal-tlv-delete-v1.bin", (byte)2)]
-    [InlineData("wal-tlv-delete-range-v1.bin", (byte)3)]
-    public void ShouldDecodeMutationGivenPinnedMidgeWalTlvGolden(
-        string fixtureName,
-        byte expectedOperationCode)
+    [InlineData("wal-tlv-put-v1.bin")]
+    [InlineData("wal-tlv-insert-v1.bin")]
+    [InlineData("wal-tlv-delete-v1.bin")]
+    [InlineData("wal-tlv-delete-range-v1.bin")]
+    [InlineData("wal-tlv-empty-value-v1.bin")]
+    [InlineData("wal-txn-batch-v1.bin")]
+    public void ShouldRejectPinnedLegacyWalPayloadAsIncompatible(string fixtureName)
     {
-        var expectedOperation = (WalOperation)expectedOperationCode;
         var bytes = ReadFixture(fixtureName);
-        var record = WalCodec.DecodeRecord(bytes);
 
-        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
-        Assert.Equal(expectedOperation, record.Operation);
-        Assert.NotEmpty(record.Key);
-        Assert.True(record.Sequence > 0);
-        Assert.True(record.WriterEpoch > 0);
-        if (expectedOperation is WalOperation.Put or WalOperation.Insert)
-        {
-            _ = Assert.IsType<byte[]>(record.Value);
-        }
-        else
-        {
-            Assert.Null(record.Value);
-        }
-
-        if (expectedOperation == WalOperation.DeleteRange)
-        {
-            Assert.NotEmpty(Assert.IsType<byte[]>(record.RangeEnd));
-        }
-        else
-        {
-            Assert.Null(record.RangeEnd);
-        }
+        Assert.Throws<PantsCompatibilityException>(() => WalCodec.DecodeRecord(bytes));
     }
 
     [Fact]
-    public void ShouldPreserveTtlGivenPinnedMidgePutTlvGolden()
-    {
-        var record = WalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
-
-        Assert.True(record.Expiration is > 0);
-    }
-
-    [Fact]
-    public void ShouldPreservePresentEmptyValueGivenPinnedMidgeWalTlvGolden()
-    {
-        var bytes = ReadFixture("wal-tlv-empty-value-v1.bin");
-        var record = WalCodec.DecodeRecord(bytes);
-
-        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
-        Assert.Equal(WalOperation.Put, record.Operation);
-        Assert.Empty(Assert.IsType<byte[]>(record.Value));
-    }
-
-    [Fact]
-    public void ShouldDecodeFrameGivenPinnedMidgeWalFrameGolden()
+    public void ShouldRejectPinnedLegacyWalFrameAsIncompatible()
     {
         var bytes = ReadFixture("wal-frame-put-v1.bin");
-        var records = new List<WalRecord>();
 
-        WalFrameReader.Visit(
-            bytes,
-            (record, _) => records.Add(record));
-
-        var record = Assert.Single(records);
-        var expected = WalCodec.DecodeRecord(ReadFixture("wal-tlv-put-v1.bin"));
-        Assert.Equal(expected.ColumnFamilyId, record.ColumnFamilyId);
-        Assert.Equal(expected.Operation, record.Operation);
-        Assert.Equal(expected.Key, record.Key);
-        Assert.Equal(expected.Value, record.Value);
-        Assert.Equal(expected.Sequence, record.Sequence);
-        Assert.Equal(expected.Expiration, record.Expiration);
-        Assert.Equal(expected.RangeEnd, record.RangeEnd);
-        Assert.Equal(expected.TransactionId, record.TransactionId);
-        Assert.Equal(expected.WriterEpoch, record.WriterEpoch);
-
-        using var directory = new TemporaryDirectory();
-        var path = Path.Combine(directory.Path, "wal-frame-put-v1.bin");
-        using (var handle = File.OpenHandle(
-                   path,
-                   FileMode.CreateNew,
-                   FileAccess.Write))
-        {
-            WalCodec.AppendFrame(handle, 0, WalCodec.EncodeRecord(record));
-        }
-
-        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Throws<PantsCompatibilityException>(() => WalFrameReader.Visit(bytes, static (_, _) => { }));
     }
 
-    [Fact]
-    public void ShouldDecodeAtomicBatchGivenPinnedMidgeWalGolden()
+    [Theory]
+    [InlineData(2, 6UL, "one")]
+    [InlineData(3, 9UL, "two")]
+    [InlineData(4, 12UL, "three")]
+    [InlineData(5, 15UL, null)]
+    public void ShouldDecodeUnmodifiedMidgeV2WalSegment(
+        int segmentId, ulong expectedSequence, string? expectedValue)
     {
-        var bytes = ReadFixture("wal-txn-batch-v1.bin");
-        var record = WalCodec.DecodeRecord(bytes);
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
+            "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "wal", $"{segmentId:D20}.wal");
+        var bytes = File.ReadAllBytes(path);
+        var records = new List<WalRecord>();
 
-        var mutations = WalCodec.DecodeTransactionBatch(
-            record,
-            out var commitSequence,
-            out var writerEpoch);
+        WalFrameReader.Visit(bytes, (record, _) => records.Add(record));
 
-        Assert.Equal(bytes, WalCodec.EncodeRecord(record));
-        Assert.Equal(WalOperation.TransactionBatch, record.Operation);
-        Assert.Equal(record.Sequence, commitSequence);
-        Assert.Equal(record.WriterEpoch, writerEpoch);
-        Assert.Collection(
-            mutations,
-            mutation =>
-            {
-                Assert.Equal(WalOperation.Put, mutation.Operation);
-                _ = Assert.IsType<byte[]>(mutation.Value);
-                Assert.True(mutation.Expiration is > 0);
-            },
-            mutation =>
-            {
-                Assert.Equal(WalOperation.DeleteRange, mutation.Operation);
-                Assert.NotEmpty(Assert.IsType<byte[]>(mutation.RangeEnd));
-            });
+        var batch = Assert.Single(records);
+        Assert.Equal(WalOperation.TransactionBatch, batch.Operation);
+        Assert.Equal(expectedSequence, batch.Sequence);
+        Assert.Equal(1UL, batch.WriterEpoch);
+        var mutations = WalCodec.DecodeTransactionBatch(batch, out var commitSequence, out var writerEpoch);
+        var mutation = Assert.Single(mutations);
+        Assert.Equal(expectedSequence, commitSequence);
+        Assert.Equal(1UL, writerEpoch);
+        Assert.Equal(2U, mutation.ColumnFamilyId);
+        Assert.Equal("deleted"u8.ToArray(), mutation.Key);
+        Assert.Equal(expectedValue is null ? WalOperation.Delete : WalOperation.Put, mutation.Operation);
+        Assert.Equal(expectedValue is null ? null : Encoding.UTF8.GetBytes(expectedValue), mutation.Value);
+        Assert.Equal(expectedSequence - 1, mutation.Sequence);
     }
 
     [Theory]

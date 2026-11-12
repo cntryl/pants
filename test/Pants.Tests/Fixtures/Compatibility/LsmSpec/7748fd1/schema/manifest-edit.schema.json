@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cntryl/lsm-spec/schema/manifest-edit.schema.json",
+  "title": "ManifestJournalPayload",
+  "description": "Decoded JSON projection of a FORMAT 9 kind-2 binary manifest journal payload. See format/metadata.md and format/manifest.md \u00a7\u00a74.1\u20134.4.",
+  "$defs": {
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "sstName": {
+      "$ref": "manifest.schema.json#/$defs/sstName"
+    },
+    "edit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "AddSst"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AddSst": {
+              "$ref": "manifest.schema.json#/$defs/fileMeta"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "RemoveSst"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "RemoveSst": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/sstName"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "CreateColumnFamily"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "CreateColumnFamily": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "created_at"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "name": {
+                  "type": "string",
+                  "not": {
+                    "const": "default"
+                  }
+                },
+                "created_at": {
+                  "$ref": "#/$defs/u64"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "DropColumnFamilyAt"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "DropColumnFamilyAt": {
+              "type": "object",
+              "required": [
+                "id",
+                "drop_sequence",
+                "dropped_sst_names"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "drop_sequence": {
+                  "$ref": "#/$defs/u64"
+                },
+                "dropped_sst_names": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/sstName"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "ReclaimColumnFamily"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "ReclaimColumnFamily": {
+              "type": "object",
+              "required": [
+                "id",
+                "names"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                "names": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/sstName"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "BumpNextSstSeq"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "BumpNextSstSeq": {
+              "type": "object",
+              "required": [
+                "cf_id",
+                "next_seq"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "cf_id": {
+                  "$ref": "#/$defs/u32"
+                },
+                "next_seq": {
+                  "$ref": "#/$defs/u64"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "AdvanceFlushFrontier"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AdvanceFlushFrontier": {
+              "type": "object",
+              "required": [
+                "cf_id",
+                "freeze_sequence"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "cf_id": {
+                  "$ref": "#/$defs/u32"
+                },
+                "freeze_sequence": {
+                  "$ref": "#/$defs/u64"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "Batch"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "Batch": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/edit"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "CompleteSstDelete"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "CompleteSstDelete": {
+              "type": "object",
+              "required": [
+                "file"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "$ref": "manifest.schema.json#/$defs/fileMeta"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "MoveSsts"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "MoveSsts": {
+              "type": "object",
+              "required": [
+                "captured",
+                "target_level"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "captured": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "manifest.schema.json#/$defs/fileMeta"
+                  }
+                },
+                "target_level": {
+                  "$ref": "#/$defs/u32"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "title": "EditEnvelope",
+      "type": "object",
+      "required": [
+        "edit_id",
+        "edit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "edit_id": {
+          "$ref": "#/$defs/u64"
+        },
+        "edit": {
+          "$ref": "#/$defs/edit"
+        }
+      }
+    },
+    {
+      "title": "FsyncMarker",
+      "type": "object",
+      "required": [
+        "last_persisted_sequence",
+        "ts_millis"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "last_persisted_sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "ts_millis": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    }
+  ],
+  "$comment": "A reader must reject legacy bare edit enums. The framing record_type must match the edit variant; this cross-field constraint is checked by the journal reader, not this payload schema."
+}

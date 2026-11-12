@@ -6,9 +6,15 @@ sealed class RunLoopFaultFailpointHandler : IFailpointHandler
         TaskCreationOptions.RunContinuationsAsynchronously);
 
     int _armed;
+    int _armOnMetrics;
 
     public void Hit(Failpoint failpoint)
     {
+        if (failpoint == Failpoint.BeforeRuntimeMetricsResponse &&
+            Interlocked.Exchange(ref _armOnMetrics, 0) != 0)
+        {
+            Arm();
+        }
         if (failpoint != Failpoint.AfterRuntimeCommandExecution ||
             Volatile.Read(ref _armed) == 0)
         {
@@ -23,6 +29,8 @@ sealed class RunLoopFaultFailpointHandler : IFailpointHandler
         await _faulted.Task.WaitAsync(timeout);
 
     public void Arm() => Volatile.Write(ref _armed, 1);
+
+    public void ArmOnRuntimeMetricsResponse() => Volatile.Write(ref _armOnMetrics, 1);
 }
 
 sealed class GatedShutdownBoundaryFailpointHandler : IFailpointHandler, IDisposable

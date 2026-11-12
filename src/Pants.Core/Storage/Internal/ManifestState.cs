@@ -7,6 +7,8 @@ sealed class ManifestState
 {
     public ulong LastPersistedSequence { get; set; }
 
+    public Dictionary<string, FileMeta> RetiredSsts { get; set; } = new(StringComparer.Ordinal);
+
     public List<FileMeta> Files { get; set; } = [];
 
     public List<ColumnFamilyMeta> ColumnFamilies { get; set; } = [];
@@ -48,6 +50,7 @@ sealed class ManifestState
     public ManifestState Clone() => new()
     {
         LastPersistedSequence = LastPersistedSequence,
+        RetiredSsts = RetiredSsts.ToDictionary(static pair => pair.Key, static pair => pair.Value.Clone(), StringComparer.Ordinal),
         Files = [.. Files.Select(static file => file.Clone())],
         ColumnFamilies = [.. ColumnFamilies.Select(static family => family.Clone())],
         CloudCheckpoint = CloudCheckpoint,
@@ -65,6 +68,7 @@ sealed class ManifestState
     public void CopyFrom(ManifestState source)
     {
         LastPersistedSequence = source.LastPersistedSequence;
+        RetiredSsts = source.RetiredSsts;
         Files = source.Files;
         ColumnFamilies = source.ColumnFamilies;
         CloudCheckpoint = source.CloudCheckpoint;

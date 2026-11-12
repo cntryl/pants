@@ -7,5 +7,5 @@ public sealed record PantsStorageFileLayout(
     long SizeBytes,
     ReadOnlyMemory<byte>? SmallestKey,
     ReadOnlyMemory<byte>? LargestKey,
-    long? SmallestSequence,
-    long? LargestSequence);
+    ulong? SmallestSequence,
+    ulong? LargestSequence);

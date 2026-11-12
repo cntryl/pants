@@ -63,8 +63,9 @@ public sealed class CloudProviderEngineQualificationTests
             Equals(activity.GetTagItem("pants.cloud_io.method"), "GET") &&
             Equals(activity.GetTagItem("pants.cloud_io.range"), true));
 
-        Assert.InRange(headCount, 1, 32);
-        Assert.InRange(rangedGetCount, 1, 32);
+        // FORMAT 9 verifies the pointer, immutable closure, and conditional claim readbacks.
+        Assert.InRange(headCount, 1, 192);
+        Assert.InRange(rangedGetCount, 1, 192);
     }
 
     [Fact]
@@ -80,7 +81,7 @@ public sealed class CloudProviderEngineQualificationTests
 
         Assert.True(handler.ContainsObject("s3.example.test", "/wal/epochs/"));
         Assert.True(handler.ContainsObject("s3.example.test", "/sst/"));
-        Assert.True(handler.ContainsObject("s3.example.test", "/metadata/manifest"));
+        Assert.True(handler.ContainsObject("s3.example.test", "/metadata/committed-pointer.v1"));
     }
 
     [Fact]
@@ -169,7 +170,7 @@ public sealed class CloudProviderEngineQualificationTests
 
         Assert.True(handler.ContainsObject("gcs.example.test", "/wal/epochs/"));
         Assert.True(handler.ContainsObject("gcs.example.test", "/sst/"));
-        Assert.True(handler.ContainsObject("gcs.example.test", "/metadata/manifest"));
+        Assert.True(handler.ContainsObject("gcs.example.test", "/metadata/committed-pointer.v1"));
     }
 
     [Fact]
@@ -208,7 +209,7 @@ public sealed class CloudProviderEngineQualificationTests
 
         Assert.True(handler.ContainsObject("wal.example.test", "/wal/epochs/"));
         Assert.True(handler.ContainsObject("sst.example.test", "/sst/"));
-        Assert.True(handler.ContainsObject("control.example.test", "/metadata/manifest"));
+        Assert.True(handler.ContainsObject("control.example.test", "/metadata/committed-pointer.v1"));
         Assert.False(handler.ContainsObject("control.example.test", "/wal/epochs/"));
     }
 
@@ -225,7 +226,7 @@ public sealed class CloudProviderEngineQualificationTests
 
         Assert.True(handler.ContainsObject("data.example.test", "/wal/epochs/"));
         Assert.True(handler.ContainsObject("control.example.test", "/sst/"));
-        Assert.True(handler.ContainsObject("control.example.test", "/metadata/manifest"));
+        Assert.True(handler.ContainsObject("control.example.test", "/metadata/committed-pointer.v1"));
         Assert.False(handler.ContainsObject("data.example.test", "/sst/"));
     }
 

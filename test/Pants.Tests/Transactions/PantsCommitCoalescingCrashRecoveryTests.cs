@@ -158,7 +158,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(
                 () => commit.WaitAsync(TestTimeouts.Expected));
             Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
-            Assert.Equal(PantsErrorSeverity.Fatal, failure.Severity);
+            Assert.Equal(PantsErrorSeverity.OutcomeUnknown, failure.Severity);
             Assert.NotNull(failure.InnerException);
         }
 
@@ -209,7 +209,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             var failure = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
                 rejected.CommitAsync(PantsWriteOptions.Sync).AsTask());
             Assert.Equal(PantsErrorCode.CommitOutcomeUnknown, failure.Code);
-            Assert.Equal(PantsErrorSeverity.Fatal, failure.Severity);
+            Assert.Equal(PantsErrorSeverity.OutcomeUnknown, failure.Severity);
             Assert.NotNull(failure.InnerException);
         }
 

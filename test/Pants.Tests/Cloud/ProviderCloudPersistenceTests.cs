@@ -36,7 +36,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             new TestCloudObjectStore(),
             lease);
         var segments = Enumerable.Range(1, 3)
-            .Select(index => new SealedWalSegment(
+            .Select(index => TestWalSegment.Create(
                 checked((ulong)index),
                 epoch,
                 checked((ulong)index),
@@ -116,6 +116,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var payload = new byte[128 * 1024];
+        var segment = TestWalSegment.Create(1, epoch, 1, "1.wal", payload);
         var walStore = new CountingCloudObjectStore();
         var budget = new ResourceBudget(2 * 1024 * 1024);
         await using var persistence = new ProviderCloudPersistence(
@@ -127,10 +128,10 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             walPublicationAdmission: new WalPublicationAdmission(budget));
 
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
+            [segment],
             CancellationToken.None);
 
-        Assert.Equal(ImmutablePublicationEnvelope.For(payload.Length), budget.Peak);
+        Assert.Equal(ImmutablePublicationEnvelope.For(segment.Bytes.Length), budget.Peak);
         Assert.Equal(0, budget.Current);
         Assert.True(walStore.GetCount >= 1, "The uploaded segment should be read back before authority changes.");
     }
@@ -148,8 +149,9 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var payload = new byte[128 * 1024];
+        var segment = TestWalSegment.Create(1, epoch, 1, "1.wal", payload);
         var walStore = new CountingCloudObjectStore();
-        var budget = new ResourceBudget(ImmutablePublicationEnvelope.For(payload.Length) - 1);
+        var budget = new ResourceBudget(ImmutablePublicationEnvelope.For(segment.Bytes.Length) - 1);
         await using var persistence = new ProviderCloudPersistence(
             cache.Path,
             walStore,
@@ -160,7 +162,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
             persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(1, epoch, 1, "1.wal", payload)],
+                [segment],
                 CancellationToken.None).AsTask());
 
         Assert.Equal(0, walStore.PutCount);
@@ -188,18 +190,18 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             lease);
 
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+            [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
             CancellationToken.None);
 
         await Assert.ThrowsAsync<PantsCorruptionException>(() => persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(3, epoch, 3, "3.wal", [3])],
+            [TestWalSegment.Create(3, epoch, 3, "3.wal", [3])],
             CancellationToken.None).AsTask());
 
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(2, epoch, 2, "2.wal", [2])],
+            [TestWalSegment.Create(2, epoch, 2, "2.wal", [2])],
             CancellationToken.None);
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(3, epoch, 3, "3.wal", [3])],
+            [TestWalSegment.Create(3, epoch, 3, "3.wal", [3])],
             CancellationToken.None);
 
         var catalogObject = await walStore.GetAsync(
@@ -235,10 +237,10 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             maximumRetainedWalSegments: 1);
 
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+            [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
             CancellationToken.None);
         await Assert.ThrowsAsync<PantsNoSpaceException>(() => persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(2, epoch, 2, "2.wal", [2])],
+            [TestWalSegment.Create(2, epoch, 2, "2.wal", [2])],
             CancellationToken.None).AsTask());
 
         var catalogObject = await walStore.GetAsync(
@@ -275,7 +277,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             localWalCacheId: "cache-a");
         Assert.True(await firstPersistence.FenceWalCatalogAsync(CancellationToken.None));
         await firstPersistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, firstEpoch, 1, "1.wal", [1])],
+            [TestWalSegment.Create(1, firstEpoch, 1, "1.wal", [1])],
             CancellationToken.None);
 
         clock.UtcNow += TimeSpan.FromSeconds(11);
@@ -295,7 +297,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             localWalCacheId: "cache-a");
         Assert.True(await sameCachePersistence.FenceWalCatalogAsync(CancellationToken.None));
         await sameCachePersistence.PublishWalBatchAsync(
-            [new SealedWalSegment(2, firstEpoch, 2, "2.wal", [2])],
+            [TestWalSegment.Create(2, firstEpoch, 2, "2.wal", [2])],
             CancellationToken.None);
 
         clock.UtcNow += TimeSpan.FromSeconds(11);
@@ -318,10 +320,11 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         Assert.False(await differentCachePersistence.FenceWalCatalogAsync(CancellationToken.None));
 
         await Assert.ThrowsAsync<PantsFencedException>(() => differentCachePersistence.PublishWalBatchAsync(
-            [new SealedWalSegment(3, firstEpoch, 3, "3.wal", [3])],
+            [TestWalSegment.Create(3, firstEpoch, 3, "3.wal", [3])],
             CancellationToken.None).AsTask());
         await differentCachePersistence.PublishWalBatchAsync(
-            [new SealedWalSegment(3, differentCacheEpoch, 3, "3.wal", [33])],
+            [TestWalSegment.Create(3, differentCacheEpoch, 3, "3.wal", [33],
+                TestWalSegment.Create(2, firstEpoch, 2, "2.wal", [2]).Facts.Link)],
             CancellationToken.None);
 
         var catalogObject = await walStore.GetAsync(
@@ -330,7 +333,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         var catalog = ProviderCloudPersistence.DecodeCatalogForFloor(
             Assert.IsType<CloudObject>(catalogObject).Data.Span);
         Assert.Equal([1UL, 2UL, 3UL], catalog.Segments.Keys);
-        Assert.Equal(differentCacheEpoch, catalog.MinimumLocalWalWriterEpoch);
+        Assert.Equal(differentCacheEpoch, catalog.FencingEpoch);
     }
 
     [Fact]
@@ -350,15 +353,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         var existingSegments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
         for (ulong segmentId = 1; segmentId <= 40; segmentId++)
         {
-            existingSegments.Add(segmentId, new ProviderPublishedWalSegment
-            {
-                SegmentId = segmentId,
-                WriterEpoch = epoch,
-                MaximumSequence = segmentId,
-                SizeBytes = 1,
-                ContentCrc32C = 0,
-                ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, segmentId)
-            });
+            existingSegments.Add(segmentId, TestWalSegment.Publish(TestWalSegment.Create(segmentId, epoch, segmentId, $"{segmentId}.wal", [unchecked((byte)segmentId)])));
         }
 
         var initialCatalogBytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -367,7 +362,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         walStore.Seed(PantsCloudObjectLayout.WalCatalogObjectKey, initialCatalogBytes);
         walStore.Seed(PantsCloudObjectLayout.WalCatalogMirrorObjectKey, initialCatalogBytes);
         var readWorkspaceBytes = checked((long)initialCatalogBytes.Length * 2 * 16);
-        var budget = new ResourceBudget(readWorkspaceBytes + 400 * 1024);
+        var budget = new ResourceBudget(readWorkspaceBytes + 500 * 1024);
         var persistence = new ProviderCloudPersistence(
             cache.Path,
             walStore,
@@ -380,27 +375,27 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 WalRetirementSettings.DefaultPageBytes,
                 WalRetirementSettings.DefaultQuantum,
                 TimeProvider.System));
-        using var maintenancePressure = budget.Reserve(200 * 1024);
+        using var maintenancePressure = budget.Reserve(300 * 1024);
 
         await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
             persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(41, epoch, 41, "41.wal", [1])],
+                [TestWalSegment.Create(41, epoch, 41, "41.wal", [1])],
                 CancellationToken.None).AsTask());
 
         Assert.NotNull(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 41)));
         Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey));
         Assert.Equal(initialCatalogBytes, walStore.GetData(PantsCloudObjectLayout.WalCatalogMirrorObjectKey));
-        Assert.Equal(200 * 1024, budget.Current);
+        Assert.Equal(300 * 1024, budget.Current);
         Assert.InRange(budget.Peak, 0, budget.Limit);
 
         maintenancePressure.Dispose();
         await persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(41, epoch, 41, "41.wal", [1])],
+            [TestWalSegment.Create(41, epoch, 41, "41.wal", [1])],
             CancellationToken.None);
 
         using var publishedCatalog = JsonDocument.Parse(
             Assert.IsType<byte[]>(walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey)));
-        Assert.Equal(41, publishedCatalog.RootElement.GetProperty("segments").EnumerateObject().Count());
+        Assert.Equal(41, publishedCatalog.RootElement.GetProperty("segments").EnumerateArray().Count());
         Assert.Equal(0, budget.Current);
         Assert.InRange(budget.Peak, 0, budget.Limit);
     }
@@ -438,7 +433,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await Assert.ThrowsAsync<PantsFencedException>(() =>
             persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+                [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
                 CancellationToken.None).AsTask());
 
         Assert.False(lease.IsHealthy);
@@ -478,7 +473,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             await releasePut.Task.WaitAsync(cancellationToken);
         };
         var publication = persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+                [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
                 CancellationToken.None)
             .AsTask();
         await putStarted.Task;
@@ -535,8 +530,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         var publication = persistence.PublishWalBatchAsync(
                 [
-                    new SealedWalSegment(1, epoch, 1, "1.wal", [1]),
-                    new SealedWalSegment(2, epoch, 2, "2.wal", [2])
+                    TestWalSegment.Create(1, epoch, 1, "1.wal", [1]),
+                    TestWalSegment.Create(2, epoch, 2, "2.wal", [2])
                 ],
                 CancellationToken.None)
             .AsTask();
@@ -610,7 +605,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         };
 
         await Assert.ThrowsAsync<PantsFencedException>(() => persistence.PublishWalBatchAsync(
-            [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+            [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
             CancellationToken.None).AsTask());
 
         Assert.False(lease.IsHealthy);
@@ -618,10 +613,10 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         Assert.NotNull(walStore.GetData(PantsCloudObjectLayout.WalSegmentObjectKey(epoch, 1)));
         using var catalog = JsonDocument.Parse(
             Assert.IsType<byte[]>(walStore.GetData(PantsCloudObjectLayout.WalCatalogObjectKey)));
-        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateObject());
+        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateArray());
         using var catalogMirror = JsonDocument.Parse(
             Assert.IsType<byte[]>(walStore.GetData(PantsCloudObjectLayout.WalCatalogMirrorObjectKey)));
-        Assert.Empty(catalogMirror.RootElement.GetProperty("segments").EnumerateObject());
+        Assert.Empty(catalogMirror.RootElement.GetProperty("segments").EnumerateArray());
     }
 
     [Fact]
@@ -646,7 +641,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await persistence.PublishWalBatchAsync(
             Enumerable.Range(1, 3)
-                .Select(index => new SealedWalSegment(
+                .Select(index => TestWalSegment.Create(
                     checked((ulong)index),
                     epoch,
                     checked((ulong)index),
@@ -681,8 +676,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => persistence.PublishWalBatchAsync(
             [
-                new SealedWalSegment(1, epoch, 1, "1.wal", [1]),
-                new SealedWalSegment(2, epoch + 1, 2, "2.wal", [2])
+                TestWalSegment.Create(1, epoch, 1, "1.wal", [1]),
+                TestWalSegment.Create(2, epoch + 1, 2, "2.wal", [2])
             ],
             CancellationToken.None).AsTask());
 
@@ -690,7 +685,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task ShouldHydrateSegmentGivenCatalogEntryHasSegmentIdZero()
+    public async Task ShouldRejectCatalogSegmentGivenSegmentIdZero()
     {
         using var cache = new TemporaryDirectory();
         var walStore = new SnapshotConsistencyCloudObjectStore();
@@ -715,32 +710,15 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 }
             }
         };
-        walStore.Seed(
-            PantsCloudObjectLayout.WalCatalogObjectKey,
-            JsonSerializer.SerializeToUtf8Bytes(catalog, CatalogJsonOptions));
-
-        var result = await ProviderCloudPersistence.HydrateLocalCacheAsync(
-            cache.Path,
-            walStore,
-            sstStore,
-            controlStore,
-            PantsRecoveryPolicy.Strict,
-            static _ => ValueTask.CompletedTask,
-            CancellationToken.None);
-
-        Assert.False(result.RequiresSalvage);
-        Assert.True(result.PublishedWalSegments.ContainsKey(0));
-        Assert.True(File.Exists(Path.Combine(
-            cache.Path,
-            "wal",
-            "00000000000000000000.wal")));
+        await Assert.ThrowsAsync<PantsCorruptionException>(() => Task.Run(() => JsonSerializer.SerializeToUtf8Bytes(catalog, CatalogJsonOptions)));
     }
 
     [Fact]
     public async Task ShouldSkipControlPublicationGivenRemoteBytesAlreadyMatch()
     {
         using var cache = new TemporaryDirectory();
-        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "format"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "midge-format-version=9\n"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(cache.Path, "manifest.snapshot.json"), ManifestCodec.Encode(ManifestState.CreateInitial(), CatalogJsonOptions));
         var leaseStore = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         using var lease = new CloudLeaseCoordinator(
@@ -750,7 +728,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             TimeSpan.FromSeconds(10),
             TimeSpan.Zero);
         _ = await lease.AcquireAsync(CancellationToken.None);
-        var controlStore = new TestCloudObjectStore();
+        var controlStore = new CountingCloudObjectStore();
         var persistence = new ProviderCloudPersistence(
             cache.Path,
             new TestCloudObjectStore(),
@@ -769,7 +747,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
     public async Task ShouldNotMirrorControlMetadataAfterSuccessorTakesLeaseDuringPreCasRead()
     {
         using var cache = new TemporaryDirectory();
-        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "format"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(cache.Path, "FORMAT"), "midge-format-version=9\n"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(cache.Path, "manifest.snapshot.json"), ManifestCodec.Encode(ManifestState.CreateInitial(), CatalogJsonOptions));
         var leaseStore = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
         var losses = 0;
@@ -790,7 +769,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             lease);
         var getStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseGet = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var metadataKey = PantsCloudObjectLayout.MetadataPrefix + "FORMAT";
+        var metadataKey = CloudMetadataAuthority.PointerKey;
         controlStore.BeforeGetAsync = async (objectKey, _, cancellationToken) =>
         {
             if (StringComparer.Ordinal.Equals(objectKey, metadataKey))
@@ -812,7 +791,8 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await Assert.ThrowsAsync<PantsFencedException>(() => mirror);
 
-        Assert.Null(controlStore.GetData(metadataKey));
+        using var pointer = MetadataFrameCodec.Decode(Assert.IsType<byte[]>(controlStore.GetData(metadataKey)), 4);
+        Assert.Equal(JsonValueKind.Null, pointer.RootElement.GetProperty("committed").ValueKind);
         Assert.False(lease.IsHealthy);
         Assert.Equal(1, losses);
     }
@@ -1058,7 +1038,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             "writer",
             TimeSpan.FromSeconds(10),
             TimeSpan.Zero);
-        _ = await lease.AcquireAsync(CancellationToken.None);
+        _ = await lease.AcquireAsync(1, CancellationToken.None);
         var controlStore = new TestCloudObjectStore();
         var initial = RegistryWithCreate("initial-operation", 1, "initial");
         Assert.True(await controlStore.PutAsync(
@@ -1551,7 +1531,15 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
         await using (var resumed = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
             var metrics = await resumed.Diagnostics.GetRuntimeMetricsAsync();
-            Assert.True(metrics.WalCloudDurableSequence >= metrics.CurrentSequence);
+            await using (var read = await resumed.Transactions.BeginAsync(
+                             resumed.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly))
+            {
+                Assert.Equal("value"u8.ToArray(), (await read.GetAsync("key"u8.ToArray()))?.ToArray());
+                var appliedCut = Assert.Single((await resumed.Diagnostics.GetStorageLayoutAsync()).ActiveSnapshots)
+                    .Sequence;
+                Assert.True(metrics.WalCloudDurableSequence >= appliedCut);
+            }
+
             Assert.True(handler.ContainsObjectPath("/wal/epochs/"));
             await resumed.ShutdownAsync(TestTimeouts.Expected);
         }
@@ -1814,20 +1802,25 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
             dependencies);
         await CommitCloudStrictAsync(database, "first"u8.ToArray());
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
-        var remoteManifest = JsonNode.Parse(
-            handler.GetObjectText("/metadata/manifest.snapshot.json"))!.AsObject();
-        remoteManifest["last_persisted_sequence"] = 1_000_000UL;
-        handler.ReplaceObjectText(
-            "/metadata/manifest.snapshot.json",
-            remoteManifest.ToJsonString());
+        using var pointer = MetadataFrameCodec.Decode(handler.GetObjectBytes("/metadata/committed-pointer.v1"), 4);
+        var pointerNode = JsonNode.Parse(pointer.RootElement.GetRawText())!.AsObject();
+        var committed = pointerNode["committed"]!.AsObject();
+        var manifestReference = committed["objects"]!.AsArray().Single(item => item!["file_name"]!.GetValue<string>() == "manifest.snapshot.json")!.AsObject();
+        var objectKey = manifestReference["object_key"]!.GetValue<string>();
+        var manifest = CloudManifestReader.DecodeManifest(handler.GetObjectBytes(objectKey));
+        manifest.LastPersistedSequence = 1_000_000;
+        manifest.EditCheckpointId = 1_000_000;
+        var updated = ManifestCodec.Encode(manifest, CatalogJsonOptions);
+        handler.ReplaceObjectBytes(objectKey, updated);
+        manifestReference["len"] = updated.Length;
+        manifestReference["crc32c"] = DiskFormat.Crc32C(updated);
+        committed["manifest_horizon"] = manifest.EditCheckpointId;
+        handler.ReplaceObjectBytes("/metadata/committed-pointer.v1", MetadataFrameCodec.Encode(4, System.Text.Encoding.UTF8.GetBytes(pointerNode.ToJsonString())));
 
         await Assert.ThrowsAsync<PantsFencedException>(() => CommitCloudStrictAsync(database, "second"u8.ToArray()));
 
-        using var readback = JsonDocument.Parse(
-            handler.GetObjectText("/metadata/manifest.snapshot.json"));
-        Assert.Equal(
-            1_000_000UL,
-            readback.RootElement.GetProperty("last_persisted_sequence").GetUInt64());
+        using var readback = MetadataFrameCodec.Decode(handler.GetObjectBytes("/metadata/committed-pointer.v1"), 4);
+        Assert.Equal(1_000_000UL, readback.RootElement.GetProperty("committed").GetProperty("manifest_horizon").GetUInt64());
     }
 
     static PantsCloudStorageLocation CreateAzureLocation() =>
@@ -1839,7 +1832,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
                 new PantsAzureCredentialSource.SasToken("sig=test")),
             "database");
 
-    static async Task<long> PrepareFreshCacheSequenceFrontierAsync(
+    static async Task<ulong> PrepareFreshCacheSequenceFrontierAsync(
         string cachePath,
         PantsCloudStorageLocation location,
         RuntimeDependencies dependencies)
@@ -1853,7 +1846,7 @@ public sealed class ProviderCloudPersistenceTests(ITestOutputHelper output)
 
         await using var takeover = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         await takeover.Maintenance.FlushAsync(takeover.ColumnFamilies.DefaultFamily);
-        var flushedThrough = (await takeover.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
+        var flushedThrough = (await takeover.Diagnostics.GetStorageLayoutAsync()).ManifestLastPersistedSequence;
         await takeover.ShutdownAsync(TestTimeouts.Expected);
         return flushedThrough;
     }

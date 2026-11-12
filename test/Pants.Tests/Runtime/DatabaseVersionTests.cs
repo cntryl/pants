@@ -92,11 +92,11 @@ public sealed class DatabaseVersionTests
         var builder = ImmutableSortedDictionary.CreateBuilder<byte[], CellState>(ByteArrayComparer.Instance);
         for (var index = 0; index < keyCount; index++)
         {
-            builder.Add(Key(index), new CellState([1], index + 1, null));
+            builder.Add(Key(index), new CellState([1], (ulong)index + 1, null));
         }
 
         state.FamilyData[family] = builder.ToImmutable();
-        state.Sequence = keyCount;
+        state.Sequence = (ulong)keyCount;
         return state;
     }
 

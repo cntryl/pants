@@ -1,0 +1,6 @@
+lease_version: 4
+fencing_epoch: 1
+holder: 38574@Machine.local
+owner: d4d74024-588e-468b-9c3b-7a3eda1eeba2
+acquired: 2026-11-04T15:19:31.969+00:00
+expires: 2026-11-04T15:19:16.968+00:00

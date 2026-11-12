@@ -4,7 +4,7 @@ namespace Cntryl.Pants.Cloud.Internal.WalRetirement;
 ///     The provider versions of the two published manifest objects (null when absent). Equal
 ///     identities mean the published manifest has not changed between observations.
 /// </summary>
-readonly record struct PublishedManifestIdentity(string? SnapshotVersion, string? ManifestVersion)
+readonly record struct PublishedManifestIdentity(string? SnapshotVersion, string? ManifestVersion, ulong Generation = 0)
 {
     public bool IsEmpty => SnapshotVersion is null && ManifestVersion is null;
 }

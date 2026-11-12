@@ -17,7 +17,7 @@ public sealed class PantsCoreCorrectnessContractTests
     }
 
     [Fact]
-    public async Task ShouldReportNoPinnedSstsWhenSnapshotRetainsNoObsoleteFiles()
+    public async Task ShouldReportUniquePinnedSstsImmediatelyAndReleaseThemWithTheLastSnapshot()
     {
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
@@ -38,7 +38,14 @@ public sealed class PantsCoreCorrectnessContractTests
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
 
         Assert.True(metrics.SstCount > 0);
-        Assert.Equal(0, metrics.PinnedSsts);
+        Assert.Equal(metrics.SstCount, metrics.PinnedSsts);
+        await using var second = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+        Assert.Equal(metrics.PinnedSsts, (await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts);
+        await snapshot.DisposeAsync();
+        Assert.Equal(metrics.PinnedSsts, (await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts);
+        await second.DisposeAsync();
+        Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).PinnedSsts);
     }
 
     [Fact]

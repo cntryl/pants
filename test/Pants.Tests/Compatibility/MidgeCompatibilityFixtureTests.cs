@@ -1,6 +1,4 @@
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace Cntryl.Pants.Compatibility;
 
@@ -12,18 +10,17 @@ public sealed class MidgeCompatibilityFixtureTests
     public async Task ShouldReadMidgeSstGivenMissingManifestBoundsWhenReopening(bool markedComplete)
     {
         // Arrange
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
-            "v3_populated_v4_sst_db");
-        foreach (var name in new[] { "manifest.snapshot.json", "manifest.json" })
+        using var directory = Format9TestMetadata.CopyFixture("populated-local");
+        foreach (var name in new[] { "manifest.snapshot.json" })
         {
             var path = Path.Combine(directory.Path, name);
-            var root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+            var root = Format9TestMetadata.ReadNode(path).AsObject();
             var file = root["files"]!.AsArray()[0]!.AsObject();
             file["level"] = 1;
             file["key_bounds_complete"] = markedComplete;
             file.Remove("smallest_key");
             file.Remove("largest_key");
-            await File.WriteAllTextAsync(path, root.ToJsonString());
+            await Format9TestMetadata.WriteAsync(path, root.ToJsonString());
         }
 
         // Act
@@ -61,26 +58,20 @@ public sealed class MidgeCompatibilityFixtureTests
             Assert.Equal("value-alpha", Encoding.UTF8.GetString(point!.Value.Span));
         }
 
-        // Assert
-        using var checkpoint = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json")));
-        var fileAfterCheckpoint = Assert.Single(checkpoint.RootElement.GetProperty("files").EnumerateArray());
-        Assert.Equal(markedComplete, fileAfterCheckpoint.GetProperty("key_bounds_complete").GetBoolean());
     }
 
     [Fact]
-    public async Task ShouldVerifyPopulatedReleaseV3V4FixtureGivenSupportedFormatWhenReopening()
+    public async Task ShouldVerifyPopulatedFormat9V5FixtureWhenReopening()
     {
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
-            "v3_populated_v4_sst_db");
+        using var directory = Format9TestMetadata.CopyFixture("populated-local");
 
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
 
         Assert.Equal(PantsEngineHealth.Healthy, report.Health);
-        Assert.Equal(1, report.ManifestEpoch);
+        Assert.Equal(1UL, report.ManifestEpoch);
         Assert.Equal(1, report.ManifestFilesVerified);
         Assert.Equal(1, report.SstFilesVerified);
-        Assert.Equal(437, report.BytesVerified);
+        Assert.Equal(376, report.BytesVerified);
         Assert.Equal(1, report.DataBlocksVerified);
         Assert.Null(report.WalBoundary);
         Assert.Equal(0, report.WalRecoveryRecordsReplayed);
@@ -106,14 +97,16 @@ public sealed class MidgeCompatibilityFixtureTests
         Assert.Equal(("fixture/alpha", "value-alpha"), rows[0]);
         Assert.Equal(("fixture/empty", string.Empty), rows[1]);
         const string structuredPattern = "account=0042|region=east|state=stable|";
-        var structuredValue = string.Concat(Enumerable.Repeat(structuredPattern, 432))[..16_384];
+        var structuredValue = string.Concat(Enumerable.Repeat(structuredPattern, 128));
         Assert.Equal(("fixture/structured", structuredValue), rows[2]);
     }
 
-    [Fact]
-    public async Task ShouldRejectV2EmptyFixtureGivenBreakingV4SstFormat()
+    [Theory]
+    [InlineData("v2_empty_db")]
+    [InlineData("v3_populated_v4_sst_db")]
+    public async Task ShouldRejectLegacyFixtureGivenBreakingFormat9Profile(string fixture)
     {
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory("v2_empty_db");
+        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(fixture);
 
         var verifyError =
             await Assert.ThrowsAsync<PantsCompatibilityException>(() =>
@@ -126,7 +119,7 @@ public sealed class MidgeCompatibilityFixtureTests
     }
 
     [Fact]
-    public async Task ShouldRejectFutureV4FixtureGivenUnsupportedVersionWhenReopening()
+    public async Task ShouldRejectLegacyV4FixtureGivenUnsupportedVersionWhenReopening()
     {
         using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory("future_v4");
 

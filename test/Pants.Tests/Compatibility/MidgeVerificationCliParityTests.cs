@@ -12,11 +12,12 @@ public sealed class MidgeVerificationCliParityTests
     [Fact]
     public async Task ShouldEmitV1CorruptionErrorJsonGivenFutureFormatWhenPantsVerifyRuns()
     {
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory("future_v4");
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=10\n");
         var output = await RunVerifyAsync("verify", "--json", directory.Path);
         var expected = LoadErrorGolden(
             "corruption_error_v1.json",
-            "The path does not contain a valid Midge FORMAT v3 marker.");
+            "The path does not contain a valid Midge FORMAT v9 marker.");
 
         Assert.Equal(4, output.ExitCode);
         AssertJsonEqual(expected, output.StandardOutput);
@@ -46,13 +47,14 @@ public sealed class MidgeVerificationCliParityTests
     [Fact]
     public async Task ShouldEmitV1JsonGivenPopulatedSupportedFixtureWhenPantsVerifyRuns()
     {
-        using var directory = MidgeCompatibilityFixture.CopyToTemporaryDirectory(
-            "v3_populated_v4_sst_db");
+        using var directory = Format9TestMetadata.CopyFixture("populated-local");
 
         var output = await RunVerifyAsync("verify", "--json", directory.Path);
 
         Assert.Equal(0, output.ExitCode);
-        AssertJsonEqual(LoadGolden("healthy_v1.json"), output.StandardOutput);
+        var expected = LoadGolden("healthy_v1.json");
+        expected["bytes_verified"] = 376;
+        AssertJsonEqual(expected, output.StandardOutput);
         Assert.Empty(output.StandardError);
     }
 
@@ -94,7 +96,7 @@ public sealed class MidgeVerificationCliParityTests
         var before = await File.ReadAllBytesAsync(formatPath);
         var expected = LoadErrorGolden(
             "corruption_error_v1.json",
-            "The path does not contain a valid Midge FORMAT v3 marker.");
+            "The path does not contain a valid Midge FORMAT v9 marker.");
 
         var output = await RunVerifyAsync("verify", "--json", directory.Path);
 

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Cntryl.Pants.Compatibility;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -52,37 +53,22 @@ public sealed class ManifestJournalSalvageTests
 
     static byte[] EncodeJournalRecord(byte recordType, string json)
     {
-        var payload = Encoding.UTF8.GetBytes(json);
+        var payload = MetadataFrameCodec.Encode(2, Encoding.UTF8.GetBytes(json));
         var record = new byte[1 + sizeof(uint) + payload.Length + sizeof(uint)];
         record[0] = recordType;
         BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(1), (uint)payload.Length);
         payload.CopyTo(record.AsSpan(5));
-        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(5 + payload.Length), Crc32(payload));
+        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(5 + payload.Length), DiskFormat.Crc32C(payload));
         return record;
-    }
-
-    static uint Crc32(ReadOnlySpan<byte> bytes)
-    {
-        var crc = uint.MaxValue;
-        foreach (var value in bytes)
-        {
-            crc ^= value;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb8_8320;
-            }
-        }
-
-        return ~crc;
     }
 
     static async Task WriteEmptyFixtureAsync(string path)
     {
         await File.WriteAllTextAsync(
             Path.Combine(path, "FORMAT"),
-            "midge-format-version=3\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(path, "manifest.json"),
+            "midge-format-version=9\n");
+        await Format9TestMetadata.WriteAsync(
+            Path.Combine(path, "manifest.snapshot.json"),
             """
             {
               "last_persisted_sequence": 0,

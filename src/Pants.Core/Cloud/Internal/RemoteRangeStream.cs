@@ -9,7 +9,8 @@ sealed class RemoteRangeStream(
     string objectKey,
     long length,
     int pageBytes,
-    CancellationToken cancellationToken) : Stream
+    CancellationToken cancellationToken,
+    RecoveryWorkSink? recoveryWork = null) : Stream
 {
     byte[]? _page;
     long _pageStart;
@@ -96,5 +97,9 @@ sealed class RemoteRangeStream(
 
         _page = range.Data.ToArray();
         _pageStart = start;
+        if (size > 0)
+        {
+            recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", size, 0, 0));
+        }
     }
 }

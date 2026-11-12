@@ -12,7 +12,7 @@ public sealed class PantsBestEffortDurabilityTests
 
         await CommitAsync(database, PantsWriteOptions.BestEffort, ("key-1", "value-1"), ("key-2", "value-2"));
 
-        Assert.Equal(0, new FileInfo(Path.Combine(directory.Path, "wal", "wal.log")).Length);
+        Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(WalTestFiles.ActivePath(directory.Path)).Length);
         Assert.Equal("value-1", await ReadAsync(database, "key-1"));
         Assert.Equal("value-2", await ReadAsync(database, "key-2"));
     }

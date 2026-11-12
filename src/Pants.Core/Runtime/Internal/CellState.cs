@@ -2,7 +2,7 @@ namespace Cntryl.Pants.Runtime.Internal;
 
 sealed class CellState
 {
-    public CellState(byte[]? value, long writeSequence, DateTimeOffset? expiresAtUtc)
+    public CellState(byte[]? value, ulong writeSequence, DateTimeOffset? expiresAtUtc)
         : this(
             value,
             writeSequence,
@@ -12,7 +12,7 @@ sealed class CellState
     {
     }
 
-    CellState(byte[]? value, long writeSequence, ulong? expirationUnixMilliseconds)
+    CellState(byte[]? value, ulong writeSequence, ulong? expirationUnixMilliseconds)
     {
         Value = value;
         WriteSequence = writeSequence;
@@ -21,7 +21,7 @@ sealed class CellState
 
     public byte[]? Value { get; }
 
-    public long WriteSequence { get; }
+    public ulong WriteSequence { get; }
 
     public ulong? ExpirationUnixMilliseconds { get; }
 
@@ -30,7 +30,7 @@ sealed class CellState
 
     internal static CellState FromUnixMilliseconds(
         byte[]? value,
-        long writeSequence,
+        ulong writeSequence,
         ulong? expirationUnixMilliseconds) =>
         new(value, writeSequence, expirationUnixMilliseconds);
 }

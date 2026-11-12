@@ -97,7 +97,11 @@ public sealed class WalRecoveryStateMachineTests
             WalCodec.EncodeTransactionMutation(
                 CreatePut("epoch-seven", "one", 2),
                 9,
-                7),
+                7));
+        VisitAtEpoch(
+            recovery,
+            applied,
+            8,
             WalCodec.EncodeTransactionMarker(
                 WalOperation.TransactionBegin,
                 9,
@@ -110,9 +114,10 @@ public sealed class WalRecoveryStateMachineTests
 
         Assert.Empty(applied);
 
-        Visit(
+        VisitAtEpoch(
             recovery,
             applied,
+            8,
             WalCodec.EncodeTransactionMarker(
                 WalOperation.TransactionCommit,
                 9,
@@ -262,7 +267,13 @@ public sealed class WalRecoveryStateMachineTests
         List<(WalMutation Mutation, ulong CommitSequence)> applied,
         params byte[][] payloads)
     {
-        var bytes = Frame(payloads);
+        VisitAtEpoch(recovery, applied, 7, payloads);
+    }
+
+    static void VisitAtEpoch(WalRecoveryStateMachine recovery,
+        List<(WalMutation Mutation, ulong CommitSequence)> applied, ulong epoch, params byte[][] payloads)
+    {
+        var bytes = Frame(payloads, epoch);
         WalFrameReader.Visit(
             bytes,
             (record, _) => recovery.Accept(
@@ -270,9 +281,11 @@ public sealed class WalRecoveryStateMachineTests
                 (mutation, commitSequence) => applied.Add((mutation, commitSequence))));
     }
 
-    static byte[] Frame(IEnumerable<byte[]> payloads)
+    static byte[] Frame(IReadOnlyList<byte[]> payloads, ulong epoch)
     {
         using var stream = new MemoryStream();
+        var firstSequence = payloads.Min(static payload => WalCodec.GetSequenceStart(WalCodec.DecodeRecord(payload)));
+        stream.Write(WalSegmentCodec.EncodeHeader(new WalOpenFacts(1, epoch, firstSequence, WalChainLink.Genesis), Guid.Parse("00000000-0000-0000-0000-000000000001")));
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));

@@ -5,6 +5,7 @@ using Xunit.Sdk;
 
 namespace Cntryl.Pants.Cloud;
 
+[Collection(CrashProcessTestGroup.Name)]
 public sealed class PantsCloudEventualFlushTests
 {
     [Fact]
@@ -24,7 +25,7 @@ public sealed class PantsCloudEventualFlushTests
         }
 
         var beforeThreshold = await database.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.Equal(1, beforeThreshold.WalCurrentSegmentId);
+        Assert.Equal(1UL, beforeThreshold.WalCurrentSegmentId);
         Assert.Equal(3, beforeThreshold.WalPendingWrites);
 
         await CommitAsync(
@@ -259,10 +260,9 @@ public sealed class PantsCloudEventualFlushTests
                 candidate.PendingCloudUploads == 0 &&
                 candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
 
-        Assert.Empty(Directory.EnumerateFiles(
-            Path.Combine(directory.Path, "wal"),
-            "*.wal",
-            SearchOption.TopDirectoryOnly));
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Single(ledger.Members);
+        Assert.Equal(WalSegmentCodec.HeaderSize, new FileInfo(ledger.ActivePath).Length);
         Assert.NotEmpty(Directory.EnumerateFiles(
             Path.Combine(directory.Path, "cloud_store", "wal"),
             "*.wal",
@@ -382,57 +382,33 @@ public sealed class PantsCloudEventualFlushTests
     {
         using var directory = new TemporaryDirectory();
         using var replacement = new TemporaryDirectory();
-        var failpoints = new RetryingCloudWalUploadFailpointHandler();
         var policy = CreatePolicy(
             128,
             1,
             TimeSpan.FromHours(1));
-        await using var database = await PantsDatabase.OpenForTestingAsync(
-            CreateOptions(directory.Path, policy),
-            new RuntimeDependencies(failpoints));
-
-        try
+        using (var child = await PantsCloudCrashRecoveryTests.StartFailedStrictCrashChildAsync(directory.Path))
         {
-            await Assert.ThrowsAnyAsync<PantsException>(() => CommitAsync(
-                database,
-                database.ColumnFamilies.DefaultFamily,
-                "strict-upload-failure",
-                PantsWriteOptions.CloudStrict).AsTask());
-            using var failureTimeout = new CancellationTokenSource(TestTimeouts.Expected);
-            await failpoints.WaitForFailureAsync(failureTimeout.Token);
-
-            await using var reader = await database.Transactions.BeginAsync(
-                database.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadOnly);
-            var value = await reader.GetAsync("strict-upload-failure"u8.ToArray());
-            Assert.Equal(
-                "value",
-                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(value)));
-            Assert.Empty(Directory.EnumerateFiles(
-                Path.Combine(directory.Path, "cloud_store", "wal"),
-                "*.wal",
-                SearchOption.AllDirectories));
-
-            CopyDirectory(
-                Path.Combine(directory.Path, "cloud_store"),
-                Path.Combine(replacement.Path, "cloud_store"));
-            await using var replacementDatabase = await PantsDatabase.OpenAsync(
-                CreateOptions(replacement.Path, policy));
-            await using var replacementReader = await replacementDatabase.Transactions.BeginAsync(
-                replacementDatabase.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadOnly);
-            Assert.Null(await replacementReader.GetAsync("strict-upload-failure"u8.ToArray()));
-        }
-        finally
-        {
-            failpoints.AllowSuccess();
+            await PantsCloudCrashRecoveryTests.TerminateCrashChildAsync(child.Process, directory.Path);
         }
 
-        var published = await WaitForMetricsAsync(
-            database,
-            static candidate =>
-                candidate.WalCloudDurableSequence >= candidate.CurrentSequence);
-        Assert.True(published.WalCloudDurableSequence >= published.CurrentSequence);
+        // The child proved the failed write readable locally, then died with every upload still
+        // rejected. Copy only its expired shared authority; no graceful drain may publish data.
+        Assert.Empty(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "cloud_store", "wal"),
+            "*.wal",
+            SearchOption.AllDirectories));
+        CopyDirectory(
+            Path.Combine(directory.Path, "cloud_store"),
+            Path.Combine(replacement.Path, "cloud_store"));
+        await using var replacementDatabase = await PantsDatabase.OpenAsync(
+            CreateOptions(replacement.Path, policy));
+        await using var replacementReader = await replacementDatabase.Transactions.BeginAsync(
+            replacementDatabase.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Null(await replacementReader.GetAsync("strict-upload-failure"u8.ToArray()));
+        var recovered = await replacementDatabase.Diagnostics.GetRuntimeMetricsAsync();
+        Assert.Equal(0UL, recovered.CurrentSequence);
+        Assert.Equal(0UL, recovered.WalCloudDurableSequence);
     }
 
     [Fact]

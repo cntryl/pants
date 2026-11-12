@@ -55,7 +55,8 @@ public sealed class LsmSpecSchemaFixtureTests
         var indexPaths = new[]
         {
             Path.Combine(FixtureRoot, "conformance", "fixtures", "format8-schemas", "fixtures.json"),
-            Path.Combine(FixtureRoot, "conformance", "fixtures", "format8-manifest", "fixtures.json")
+            Path.Combine(FixtureRoot, "conformance", "fixtures", "format8-manifest", "fixtures.json"),
+            Path.Combine(FixtureRoot, "..", "7748fd1", "conformance", "fixtures", "format9", "fixtures.json")
         };
 
         foreach (var indexPath in indexPaths)

@@ -7,6 +7,7 @@ sealed class RuntimeTelemetry
 {
     readonly ConcurrentDictionary<ulong, long> _cloudWalAcknowledgementStarts = new();
     readonly Dictionary<long, DateTimeOffset> _activeSnapshotStartTimes = [];
+    readonly Dictionary<long, DatabaseVersion> _activeSnapshotVersions = [];
     readonly object _snapshotLifetimeGate = new();
     readonly HashSet<long> _longLivedSnapshotWarnings = [];
     readonly TimeProvider _timeProvider;
@@ -80,7 +81,7 @@ sealed class RuntimeTelemetry
     long _walFsyncCount;
     long _walFsyncNanosecondsMaximum;
     long _walFsyncNanosecondsTotal;
-    long _walLastSyncedSequence;
+    ulong _walLastSyncedSequence;
     long _walRecoveryBytesReplayed;
     long _walRecoveryRecordsReplayed;
     long _writeConflictsPoint;
@@ -121,7 +122,7 @@ sealed class RuntimeTelemetry
 
     public long WalFsyncNanosecondsMaximum => Volatile.Read(ref _walFsyncNanosecondsMaximum);
 
-    public long WalLastSyncedSequence => Volatile.Read(ref _walLastSyncedSequence);
+    public ulong WalLastSyncedSequence => Volatile.Read(ref _walLastSyncedSequence);
 
     public long DurabilityWaitersFannedOut => Volatile.Read(ref _durabilityWaitersFannedOut);
 
@@ -230,16 +231,37 @@ sealed class RuntimeTelemetry
         }
     }
 
+    public int PinnedSstCount
+    {
+        get
+        {
+            lock (_snapshotLifetimeGate)
+            {
+                return _activeSnapshotVersions.Values
+                    .SelectMany(static version => version.VisibleFiles.Values)
+                    .SelectMany(static files => files)
+                    .Select(static file => file.Name)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+            }
+        }
+    }
+
     public long LongLivedSnapshotWarnings => Volatile.Read(ref _longLivedSnapshotWarningCount);
 
     public void RecordTransactionBegin(
         long snapshotId,
         DateTimeOffset startedAtUtc,
-        PantsTransactionMode mode)
+        PantsTransactionMode mode,
+        DatabaseVersion? snapshot = null)
     {
         lock (_snapshotLifetimeGate)
         {
             _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+            if (snapshot is not null)
+            {
+                _activeSnapshotVersions.Add(snapshotId, snapshot);
+            }
         }
 
         Interlocked.Increment(ref _snapshotsRegistered);
@@ -251,11 +273,15 @@ sealed class RuntimeTelemetry
         }
     }
 
-    public void RecordSnapshotRegister(long snapshotId, DateTimeOffset startedAtUtc)
+    public void RecordSnapshotRegister(long snapshotId, DateTimeOffset startedAtUtc, DatabaseVersion? snapshot = null)
     {
         lock (_snapshotLifetimeGate)
         {
             _activeSnapshotStartTimes.Add(snapshotId, startedAtUtc);
+            if (snapshot is not null)
+            {
+                _activeSnapshotVersions.Add(snapshotId, snapshot);
+            }
         }
 
         Interlocked.Increment(ref _snapshotsRegistered);
@@ -269,6 +295,7 @@ sealed class RuntimeTelemetry
         lock (_snapshotLifetimeGate)
         {
             _activeSnapshotStartTimes.Remove(snapshotId);
+            _activeSnapshotVersions.Remove(snapshotId);
             _longLivedSnapshotWarnings.Remove(snapshotId);
         }
 
@@ -390,7 +417,9 @@ sealed class RuntimeTelemetry
         int dataBlocksRead,
         int readerCacheHits,
         int readerCacheMisses,
-        int rangeTombstoneScans)
+        int rangeTombstoneScans,
+        int blockCacheHits = 0,
+        int blockCacheMisses = 0)
     {
         Interlocked.Add(ref _candidateSstFilesChecked, candidateSsts);
         Interlocked.Add(ref _candidateBlocksChecked, candidateBlocks);
@@ -398,6 +427,8 @@ sealed class RuntimeTelemetry
         Interlocked.Add(ref _sstReaderCacheHits, readerCacheHits);
         Interlocked.Add(ref _sstReaderCacheMisses, readerCacheMisses);
         Interlocked.Add(ref _rangeTombstoneScans, rangeTombstoneScans);
+        Interlocked.Add(ref _sstBlockCacheHits, blockCacheHits);
+        Interlocked.Add(ref _sstBlockCacheMisses, blockCacheMisses);
     }
 
     public void RecordCompaction(long bytesRewritten)
@@ -425,7 +456,7 @@ sealed class RuntimeTelemetry
     public void RecordDurabilityWaitersFannedOut(int waiterCount) =>
         Interlocked.Add(ref _durabilityWaitersFannedOut, waiterCount);
 
-    public void RecordWalFsyncBoundary(TimeSpan elapsed, long sequence)
+    public void RecordWalFsyncBoundary(TimeSpan elapsed, ulong sequence)
     {
         var nanoseconds = ToNanoseconds(elapsed);
         Interlocked.Increment(ref _walFsyncCount);
@@ -661,6 +692,21 @@ sealed class RuntimeTelemetry
 
     static long SaturatingAdd(long left, long right) =>
         left > long.MaxValue - right ? long.MaxValue : left + right;
+
+    static void SetMaximum(ref ulong target, ulong value)
+    {
+        var current = Volatile.Read(ref target);
+        while (current < value)
+        {
+            var observed = Interlocked.CompareExchange(ref target, value, current);
+            if (observed == current)
+            {
+                return;
+            }
+
+            current = observed;
+        }
+    }
 
     static void SetMaximum(ref long target, long value)
     {

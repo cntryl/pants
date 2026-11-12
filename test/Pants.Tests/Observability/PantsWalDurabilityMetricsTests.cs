@@ -141,8 +141,8 @@ public sealed class PantsWalDurabilityMetricsTests
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(operationCount + 2, metrics.WalPendingWrites);
-        Assert.Equal(0, metrics.WalLastSyncedSequence);
-        Assert.Equal(0, metrics.WalLocalDurableSequence);
+        Assert.Equal(0UL, metrics.WalLastSyncedSequence);
+        Assert.Equal(0UL, metrics.WalLocalDurableSequence);
     }
 
     [Fact]
@@ -152,8 +152,8 @@ public sealed class PantsWalDurabilityMetricsTests
         var options = PantsOpenOptions.Local(directory.Path)
             .WithBackgroundCompaction(false)
             .WithWalBufferSize(1);
-        long committedSequence;
-        long currentSegment;
+        ulong committedSequence;
+        ulong currentSegment;
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             await CommitAsync(database, "recovered", PantsWriteOptions.Sync);
@@ -164,13 +164,15 @@ public sealed class PantsWalDurabilityMetricsTests
             Assert.Equal(1, committed.WalFsyncCount);
         }
 
+        var openingFloor = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal")).ReservedThrough;
         await using var reopened = await PantsDatabase.OpenAsync(options);
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
-        Assert.Equal(committedSequence, metrics.CurrentSequence);
-        Assert.Equal(currentSegment, metrics.WalCurrentSegmentId);
+        Assert.Equal(openingFloor, metrics.CurrentSequence);
+        Assert.True(metrics.CurrentSequence >= committedSequence);
+        Assert.True(metrics.WalCurrentSegmentId > currentSegment);
         Assert.Equal(0, metrics.WalPendingWrites);
-        Assert.Equal(0, metrics.WalLastSyncedSequence);
-        Assert.Equal(committedSequence, metrics.WalLocalDurableSequence);
+        Assert.Equal(0UL, metrics.WalLastSyncedSequence);
+        Assert.Equal(openingFloor, metrics.WalLocalDurableSequence);
     }
 
     [Fact]

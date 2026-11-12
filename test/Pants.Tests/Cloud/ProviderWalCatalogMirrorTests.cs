@@ -107,17 +107,12 @@ public sealed class ProviderWalCatalogMirrorTests
             TimeSpan.Zero);
         var epoch = await lease.AcquireAsync(CancellationToken.None);
         var segments = new SortedDictionary<ulong, ProviderPublishedWalSegment>();
+        var previous = WalChainLink.Genesis;
         for (ulong segmentId = 1; segmentId <= 400; segmentId++)
         {
-            segments.Add(segmentId, new ProviderPublishedWalSegment
-            {
-                SegmentId = segmentId,
-                WriterEpoch = epoch,
-                MaximumSequence = segmentId,
-                SizeBytes = 1,
-                ContentCrc32C = 0,
-                ObjectKey = PantsCloudObjectLayout.WalSegmentObjectKey(epoch, segmentId)
-            });
+            var sealedSegment = TestWalSegment.Create(segmentId, epoch, segmentId, $"{segmentId}.wal", [unchecked((byte)segmentId)], previous);
+            segments.Add(segmentId, TestWalSegment.Publish(sealedSegment));
+            previous = sealedSegment.Facts.Link;
         }
 
         var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -577,7 +572,7 @@ public sealed class ProviderWalCatalogMirrorTests
                 new TestCloudObjectStore(),
                 lease);
             await persistence.PublishWalBatchAsync(
-                [new SealedWalSegment(1, epoch, 1, "1.wal", [1])],
+                [TestWalSegment.Create(1, epoch, 1, "1.wal", [1])],
                 CancellationToken.None);
         }
     }

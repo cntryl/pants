@@ -2,6 +2,8 @@ namespace Cntryl.Pants.Transactions.Internal;
 
 sealed class CommitPayload : IDisposable
 {
+    readonly ITransactionOperationSource _source;
+    bool _prepared;
     public CommitPayload(
         long transactionId,
         PantsTransactionMode mode,
@@ -17,6 +19,7 @@ sealed class CommitPayload : IDisposable
         SnapshotTime = snapshotTime;
         StartSnapshot = startSnapshot;
         Operations = operations;
+        _source = operations;
         Asserts = asserts;
     }
 
@@ -30,15 +33,24 @@ sealed class CommitPayload : IDisposable
 
     public DatabaseVersion StartSnapshot { get; }
 
-    public ITransactionOperationSource Operations { get; }
+    public ITransactionOperationSource Operations { get; private set; }
 
     public Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> Asserts { get; }
 
     public bool IsSpilled => Operations.IsSpilled;
 
+    public void PrepareOperations(DateTimeOffset commitTime)
+    {
+        if (!_prepared)
+        {
+            Operations = new PreparedTransactionOperationSource(_source, commitTime);
+            _prepared = true;
+        }
+    }
+
     public void Dispose()
     {
-        if (Operations is IDisposable disposable)
+        if (_source is IDisposable disposable)
         {
             disposable.Dispose();
         }

@@ -8,19 +8,30 @@ static class SequenceSpace
     ///     Computes the commit sequence of a transaction with <paramref name="operationCount" />
     ///     operations that follows <paramref name="current" />, without mutating any state.
     /// </summary>
-    public static long CommitSequenceAfter(ulong current, ulong operationCount)
+    public static ulong CommitSequenceAfter(ulong current, ulong operationCount)
     {
-        if (current >= long.MaxValue ||
-            operationCount >= long.MaxValue ||
-            current + operationCount + 1 >= long.MaxValue)
+        // A transaction consumes begin and commit boundaries as well as its mutations.
+        // u64::MAX is the persisted dropped-family frontier, never a live sequence.
+        if (operationCount > ulong.MaxValue - 2 ||
+            current >= ulong.MaxValue - operationCount - 2)
         {
             throw new PantsResourceLimitException(ExhaustedMessage);
         }
 
-        return (long)(current + operationCount + 1) + 1;
+        return current + operationCount + 2;
     }
 
-    public static long NextMemorySequence(long current) => current == long.MaxValue
+    public static ulong EpochReservationThrough(ulong current, ulong block)
+    {
+        if (current > ulong.MaxValue - block)
+        {
+            throw new PantsResourceLimitException(ExhaustedMessage);
+        }
+
+        return current + block;
+    }
+
+    public static ulong FirstAfter(ulong current) => current == ulong.MaxValue
         ? throw new PantsResourceLimitException(ExhaustedMessage)
         : current + 1;
 }

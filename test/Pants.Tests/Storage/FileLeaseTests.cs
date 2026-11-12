@@ -152,25 +152,11 @@ public sealed class FileLeaseTests
         {
         }
 
-        var wal = WalCodec.EncodeRecord(new WalRecord(
-            0,
-            WalOperation.Put,
-            "key"u8.ToArray(),
-            "value"u8.ToArray(),
-            7,
-            null,
-            null,
-            null,
-            9));
-        using (var frame = new MemoryStream())
-        {
-            DiskFormat.WriteUInt32(frame, checked((uint)wal.Length));
-            DiskFormat.WriteUInt32(frame, DiskFormat.Crc32C(wal));
-            frame.Write(wal);
-            await File.WriteAllBytesAsync(
-                Path.Combine(directory.Path, "wal", "wal.log"),
-                frame.ToArray());
-        }
+        var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        var open = ledger.Active.Open with { Id = ledger.NextSegmentId, Epoch = 9 };
+        var replacement = Path.Combine(directory.Path, "wal", $"{open.Id:00000000000000000000}.wal");
+        await File.WriteAllBytesAsync(replacement, WalSegmentCodec.EncodeHeader(open, ledger.Holder));
+        ledger.Reopen(open);
 
         File.Delete(Path.Combine(directory.Path, ".midge_leader"));
 

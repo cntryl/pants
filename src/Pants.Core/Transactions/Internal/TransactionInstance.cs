@@ -122,10 +122,10 @@ sealed class TransactionInstance : IPantsTransaction
             EntryAdmission.ValidateRangeDelete(startInclusive.Length, endExclusive.Length);
             var startCopy = startInclusive.ToArray();
             var endCopy = endExclusive.ToArray();
-            if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) > 0)
+            if (ByteArrayComparer.Instance.Compare(startCopy, endCopy) >= 0)
             {
                 throw PantsException.InvalidArgument(
-                    "DeleteRange requires startInclusive <= endExclusive.");
+                    "DeleteRange requires startInclusive < endExclusive.");
             }
 
             StageIntent(new TransactionIntentOperation(
@@ -165,37 +165,41 @@ sealed class TransactionInstance : IPantsTransaction
 
     public async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default)
-    {
-        var observation = new PointReadObservation(false);
-        var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
-            .ConfigureAwait(false);
-        if (observation.ReachedSsts)
-        {
-            await _database.ReportPointReadAsync(observation, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        CancellationToken cancellationToken = default) =>
+        (await ReadPointWithAuthorityAsync(key, false, cancellationToken).ConfigureAwait(false)).Value;
 
-        return CopyValue(value);
-    }
-
-    public async ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
+    public ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default)
-    {
-        var observation = new PointReadObservation(true);
-        var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
-            .ConfigureAwait(false);
-        if (!observation.ReachedSsts)
-        {
-            return new PantsPointReadResult(
-                CopyValue(value),
-                new PantsPointReadTrace(0, []));
-        }
+        CancellationToken cancellationToken = default) =>
+        ReadPointWithAuthorityAsync(key, true, cancellationToken);
 
-        await _database.ReportPointReadAsync(observation, cancellationToken)
-            .ConfigureAwait(false);
-        return new PantsPointReadResult(CopyValue(value), observation.Trace);
+    async ValueTask<PantsPointReadResult> ReadPointWithAuthorityAsync(
+        ReadOnlyMemory<byte> key,
+        bool collectDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        _database.EnsureReadAuthority();
+        try
+        {
+            var observation = new PointReadObservation(collectDiagnostics);
+            var (_, value, _) = await PreparePointReadAsync(key, observation, cancellationToken)
+                .ConfigureAwait(false);
+            if (observation.ReachedSsts)
+            {
+                await _database.ReportPointReadAsync(observation, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return new PantsPointReadResult(CopyValue(value), observation.ReachedSsts && collectDiagnostics
+                ? observation.Trace
+                : new PantsPointReadTrace(0, []));
+        }
+        finally
+        {
+            // Authority can expire during I/O, including a read that failed because a successor
+            // deleted an old file. Discard both stale results and stale storage errors.
+            _database.EnsureReadAuthority();
+        }
     }
 
     public async ValueTask<IPantsScan> ScanAsync(
@@ -208,8 +212,7 @@ sealed class TransactionInstance : IPantsTransaction
         TransactionIntentReadView intents;
         lock (_gate)
         {
-            EnsureActive();
-            _database.EnsureOpen();
+            EnsureReadable();
             intents = CreateIntentReadView();
         }
 
@@ -228,12 +231,11 @@ sealed class TransactionInstance : IPantsTransaction
 
         try
         {
-            return new ScanInstance(
+            var scan = new ScanInstance(
                 async scanCancellationToken =>
                 {
                     IScanReadValidator? validator = null;
                     TransactionScanEnumerator? entries = null;
-                    IDisposable? sstFanInReservation = null;
                     IReadOnlyList<AsyncSstScanSource> sstSources = [];
                     try
                     {
@@ -249,13 +251,8 @@ sealed class TransactionInstance : IPantsTransaction
                                 bounds.Direction,
                                 bounds.StartInclusive,
                                 bounds.EndExclusive,
+                                bounds.CacheFill,
                                 scanCancellationToken).ConfigureAwait(false);
-                        var fanInBytes = TransactionScanEnumerator.EstimateSstFanInMetadataBytes(sstSources);
-                        if (fanInBytes != 0)
-                        {
-                            sstFanInReservation = _database.ReserveScanMemory(fanInBytes);
-                        }
-
                         validator = _database.CreateScanReadValidator(sstSources);
                         entries = new TransactionScanEnumerator(
                             _startSnapshot,
@@ -264,16 +261,13 @@ sealed class TransactionInstance : IPantsTransaction
                             intents,
                             bounds,
                             sstSources,
-                            sstFanInReservation,
                             scanCancellationToken);
-                        sstFanInReservation = null;
                         return validator is null
                             ? entries
                             : new ValidatingScanEnumerator(entries, validator);
                     }
                     catch
                     {
-                        sstFanInReservation?.Dispose();
                         if (entries is not null)
                         {
                             await entries.DisposeAsync().ConfigureAwait(false);
@@ -291,7 +285,10 @@ sealed class TransactionInstance : IPantsTransaction
                     }
                 },
                 query,
-                ReleaseScanAsync);
+                ReleaseScanAsync,
+                _database.EnsureReadAuthority);
+            _database.EnsureReadAuthority();
+            return scan;
         }
         catch
         {
@@ -315,6 +312,11 @@ sealed class TransactionInstance : IPantsTransaction
 
     public async ValueTask CommitAsync(
         PantsWriteOptions options,
+        CancellationToken cancellationToken = default) =>
+        _ = await CommitWithSequenceAsync(options, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<ulong> CommitWithSequenceAsync(
+        PantsWriteOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -333,19 +335,20 @@ sealed class TransactionInstance : IPantsTransaction
                 !_database.IsSupported(options.Durability))
             {
                 throw PantsException.Create(
-                    PantsErrorCode.NotSupported,
+                    PantsErrorCode.InvalidArgument,
                     $"Durability '{options.Durability}' is not supported by this storage backend.");
             }
 
             if (_coordinatorRegistered)
             {
-                await _database.CommitTransactionAsync(this, options, cancellationToken)
+                return await _database.CommitTransactionAsync(this, options, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
             {
                 await _database.RecordReadOnlyTransactionCommitAsync(_transactionId)
                     .ConfigureAwait(false);
+                return _startSnapshot.Sequence;
             }
         }
         catch (PantsCommitOutcomeUnknownException)
@@ -454,7 +457,7 @@ sealed class TransactionInstance : IPantsTransaction
                 spillStore,
                 _intentLog,
                 _nextOrdinal,
-                _database.Clock.UtcNow,
+                null,
                 true);
             operations.Validate();
             var assertions = new Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>>(
@@ -516,7 +519,7 @@ sealed class TransactionInstance : IPantsTransaction
         CancellationToken cancellationToken)
     {
         IReadOnlyList<FileMeta> candidates;
-        long? coveringRangeSequence;
+        ulong? coveringRangeSequence;
         lock (_gate)
         {
             var lookup = LookupLatestIntent(key);
@@ -544,7 +547,7 @@ sealed class TransactionInstance : IPantsTransaction
                 .Where(tombstone =>
                     ByteArrayComparer.Instance.Compare(key, tombstone.Start) >= 0 &&
                     ByteArrayComparer.Instance.Compare(key, tombstone.EndExclusive) < 0)
-                .Select(static tombstone => (long?)tombstone.WriteSequence)
+                .Select(static tombstone => (ulong?)tombstone.WriteSequence)
                 .Max();
         }
 
@@ -557,7 +560,7 @@ sealed class TransactionInstance : IPantsTransaction
                     cancellationToken)
                 .ConfigureAwait(false);
         if (coveringRangeSequence is { } rangeSequence &&
-            (entry is null || rangeSequence > checked((long)entry.Sequence)))
+            (entry is null || rangeSequence > entry.Sequence))
         {
             return (null, false);
         }
@@ -579,8 +582,7 @@ sealed class TransactionInstance : IPantsTransaction
         byte[] keyCopy;
         lock (_gate)
         {
-            EnsureActive();
-            _database.EnsureOpen();
+            EnsureReadable();
             keyCopy = key.ToArray();
         }
 
@@ -709,14 +711,24 @@ sealed class TransactionInstance : IPantsTransaction
 
     void EnsureActive()
     {
+        EnsureNotCompleted();
+        _database.EnsureOpen();
+    }
+
+    void EnsureReadable()
+    {
+        EnsureNotCompleted();
+        _database.EnsureReadAuthority();
+    }
+
+    void EnsureNotCompleted()
+    {
         if (_state != 0)
         {
             throw PantsException.Create(
                 PantsErrorCode.InvalidArgument,
                 "The transaction has already completed.");
         }
-
-        _database.EnsureOpen();
     }
 
     void EnsureWritable()

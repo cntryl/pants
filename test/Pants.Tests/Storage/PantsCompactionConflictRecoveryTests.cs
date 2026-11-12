@@ -20,7 +20,7 @@ public sealed class PantsCompactionConflictRecoveryTests
         {
             LastPersistedSequence = 7,
             NextSstSeqs = new Dictionary<uint, ulong> { [0] = 3 },
-            ColumnFamilies = [new ColumnFamilyMeta { Id = 0, Name = "default" }]
+            FlushedThrough = new Dictionary<uint, ulong> { [0] = 7 }
         };
         var inputs = new Dictionary<string, byte[]>();
         for (var index = 1; index <= 2; index++)
@@ -50,9 +50,9 @@ public sealed class PantsCompactionConflictRecoveryTests
             });
         }
 
-        await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=3\n");
-        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.json"),
-            JsonSerializer.Serialize(manifest, JsonOptions));
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=9\n");
+        await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json"),
+            ManifestCodec.Encode(manifest, JsonOptions));
         var options = PantsOpenOptions.Local(directory.Path).WithCompaction(
             new PantsCompactionConfiguration(L0FileCountTrigger: 2, TargetSstSizeBytes: 1024,
                 BackgroundEnabled: false));

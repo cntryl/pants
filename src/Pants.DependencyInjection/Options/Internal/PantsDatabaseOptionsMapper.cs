@@ -37,14 +37,17 @@ static class PantsDatabaseOptionsMapper
                 options.MemtableFlushThresholdBytes,
                 options.TransactionMemoryPoolBytes,
                 options.WalBufferSizeBytes),
-            new PantsLeaseConfiguration(
-                options.LeaseTimeToLive,
-                options.LeaseClockSkewTolerance,
-                options.MinimumEpoch),
-            CreateCompaction(options.Compaction),
-            options.RecoveryPolicy,
-            CreateCloudWritePolicy(options.CloudWritePolicy))
-            .WithBackgroundCompaction(options.BackgroundCompaction);
+            compaction: CreateCompaction(options.Compaction),
+            recoveryPolicy: options.RecoveryPolicy,
+            cloudWritePolicy: CreateCloudWritePolicy(options.CloudWritePolicy))
+            .WithLeaseTimeToLive(options.LeaseTimeToLive)
+            .WithMinimumEpoch(options.MinimumEpoch)
+            .WithBackgroundCompaction(options.BackgroundCompaction)
+            .WithWriteBackpressure(options.WriteBackpressure);
+        if (options.LeaseClockSkewTolerance is { } tolerance)
+        {
+            result = result.WithLeaseClockSkewTolerance(tolerance);
+        }
         PantsOpenOptionsValidator.Validate(result);
         return result;
     }

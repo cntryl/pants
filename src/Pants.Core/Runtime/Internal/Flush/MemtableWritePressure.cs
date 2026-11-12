@@ -15,10 +15,9 @@ static class MemtableWritePressure
         RuntimePlan options,
         RuntimeState state,
         IEnumerable<ColumnFamilyIdentity> identities) =>
-        options.Storage is not PantsStorageConfiguration.InMemory &&
-        (GetTotalBytes(state) >= GetHardLimitBytes(options) ||
-         identities.Any(identity =>
-             IsQueueFull(state, identity) || HasCriticalL0Debt(options, state, identity)));
+        GetTotalBytes(state) >= GetHardLimitBytes(options) ||
+        identities.Any(identity =>
+            IsQueueFull(state, identity) || HasCriticalL0Debt(options, state, identity));
 
     /// <summary>
     ///     The ceiling on level-0 slots a single column family may hold: the files compaction is
@@ -44,13 +43,15 @@ static class MemtableWritePressure
         RuntimeState state,
         ColumnFamilyIdentity identity)
     {
-        var active = state.ActiveMemtableBytes.GetValueOrDefault(identity) > 0;
+        var activeBytes = state.ActiveMemtableBytes.GetValueOrDefault(identity);
         var slotUsage = GetL0SlotUsage(state, identity);
         var ceiling = GetL0HardCeiling(options);
 
-        // A filling active generation already owns its slot and must be allowed to finish. Once
-        // it is frozen, that slot moves to the immutable queue and the next generation is blocked.
-        return slotUsage > ceiling || (slotUsage == ceiling && !active);
+        // A below-threshold active generation may finish its reserved slot. Once it reaches the
+        // trigger, a failed freeze must not license another write into the occupied last slot.
+        return slotUsage > ceiling ||
+               (slotUsage == ceiling &&
+                (activeBytes == 0 || activeBytes >= options.MemtableFlushThresholdBytes));
     }
 
     public static long GetL0SlotUsage(RuntimeState state, ColumnFamilyIdentity identity)
@@ -66,17 +67,7 @@ static class MemtableWritePressure
     public static bool HasAnyCriticalL0Debt(RuntimePlan options, RuntimeState state)
     {
         var ceiling = GetL0HardCeiling(options);
-        foreach (var (columnFamilyId, published) in state.PublishedL0FileCounts)
-        {
-            var queued = state.ImmutableMemtableFlushes.Values.Count(flush =>
-                flush.Frozen.ColumnFamily.Id == columnFamilyId);
-            if (published + queued >= ceiling)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return state.ActiveMemtableBytes.Keys.Any(identity => GetL0SlotUsage(state, identity) >= ceiling);
     }
 
     public static bool IsQueueFull(

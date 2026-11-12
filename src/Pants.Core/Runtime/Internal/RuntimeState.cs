@@ -15,8 +15,14 @@ sealed class RuntimeState
     public long DirectReadOnlyTransactionCounter;
     TaskCompletionSource _writePressureChanged = CreateWritePressureCompletion();
 
-    public RuntimeState(IPantsClock clock, RuntimeTelemetry telemetry)
+    public RuntimeState(IPantsClock clock, RuntimeTelemetry telemetry,
+        MetadataAccountingOwner? metadataAccounting = null,
+        MetadataMedium metadataMedium = MetadataMedium.Persistent,
+        MetadataOrigin ordinaryFlushOrigin = MetadataOrigin.OrdinaryLocalFlush)
     {
+        MetadataAccounting = metadataAccounting ?? new MetadataAccountingOwner();
+        MetadataMedium = metadataMedium;
+        OrdinaryFlushOrigin = ordinaryFlushOrigin;
         Clock = clock;
         _telemetry = telemetry;
         FamilyGeneration = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -46,7 +52,15 @@ sealed class RuntimeState
 
     public IPantsClock Clock { get; }
 
-    public long Sequence { get; set; }
+    public MetadataAccountingOwner MetadataAccounting { get; }
+
+    public MetadataMedium MetadataMedium { get; }
+
+    public MetadataOrigin OrdinaryFlushOrigin { get; }
+
+    public ulong Sequence { get; set; }
+
+    public WriteAdmission? WriteAdmission { get; set; }
 
     public long TransactionCounter { get; set; }
 
@@ -173,7 +187,7 @@ sealed class RuntimeState
             return;
         }
 
-        var frontier = checked((long)flush.FrontierSequence);
+        var frontier = flush.FrontierSequence;
         var updated = current;
         foreach (var operation in flush.Operations)
         {

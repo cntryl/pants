@@ -16,7 +16,7 @@ public sealed class PantsCheckpointAccountingParityTests
             .WithMemtableLimits(8 * 1024 * 1024);
         PantsRuntimeMetrics retainedMetrics;
         (
-            long CurrentSequence,
+            ulong CurrentSequence,
             int SstCount,
             long SstBytes,
             long SstBytesWrittenTotal,

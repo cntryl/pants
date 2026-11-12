@@ -54,6 +54,13 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
         PantsCloudObjectWriteCondition condition,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists one bounded page of object keys beginning with <paramref name="prefix" />.</summary>
+    /// <remarks>
+    /// Implementations must return no more than 32 keys and no more than 64 KiB
+    /// of aggregate UTF-8 key bytes. Continuation tokens are opaque and must be
+    /// no more than 4 KiB of UTF-8 data. Return the token needed to fetch the
+    /// next page when results remain; do not fetch later pages as part of this call.
+    /// </remarks>
     ValueTask<PantsCloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,

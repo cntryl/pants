@@ -7,11 +7,6 @@ static class UnixTimestamp
 
     internal static ulong FromDateTimeOffset(DateTimeOffset value)
     {
-        if (value.UtcTicks == DateTimeOffset.MaxValue.UtcTicks)
-        {
-            return ulong.MaxValue;
-        }
-
         var unixMilliseconds = value.ToUnixTimeMilliseconds();
         return unixMilliseconds <= 0
             ? 0
@@ -30,11 +25,6 @@ static class UnixTimestamp
         if (timeToLive is null or { Ticks: 0 })
         {
             return null;
-        }
-
-        if (timeToLive.Value.Ticks > DateTimeOffset.MaxValue.UtcTicks - commitTime.UtcTicks)
-        {
-            return ulong.MaxValue;
         }
 
         var seconds = checked((ulong)(timeToLive.Value.Ticks / TimeSpan.TicksPerSecond));

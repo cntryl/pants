@@ -496,7 +496,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         var failpoints = new ThrowingTransactionCommitBoundaryFailpointHandler(spilledBoundary);
         var options = PantsOpenOptions
             .SimulatedCloud(directory.Path, "pants-tests", "spill-sequence-hole/")
-            .WithMemoryBudget(PantsMemoryBudget.FromBytes(128 * 1_024))
+            .WithMemoryBudget(PantsMemoryBudget.FromBytes(256 * 1_024))
             .WithMemtableLimits(24 * 1_024)
             .WithTransactionMemoryPool(1_024)
             .WithBackgroundCompaction(false);
@@ -525,7 +525,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             cloudWalPath,
             "publication-catalog.v1.json")));
 
-        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateObject());
+        Assert.Empty(catalog.RootElement.GetProperty("segments").EnumerateArray());
         Assert.Empty(Directory.GetFiles(cloudWalPath, "*.wal", SearchOption.AllDirectories));
     }
 

@@ -15,6 +15,7 @@ public sealed class PantsOpenOptions
             configuration.RuntimeResponseTimeout,
             configuration.ShutdownTimeout)
         {
+            OpenTimeout = configuration.OpenTimeout,
             LongLivedSnapshotWarningThreshold = configuration.LongLivedSnapshotWarningThreshold
         };
         Memory = new PantsMemoryConfiguration(
@@ -26,7 +27,7 @@ public sealed class PantsOpenOptions
             configuration.WalBufferSizeBytes);
         Lease = new PantsLeaseConfiguration(
             configuration.LeaseTimeToLive,
-            configuration.LeaseClockSkewTolerance,
+            configuration.LeaseClockSkewTolerance ?? configuration.LeaseTimeToLive / 2,
             configuration.MinimumEpoch,
             configuration.LeaseLossCallback);
         Compaction = (configuration.Compaction ?? new PantsCompactionConfiguration()) with
@@ -47,6 +48,8 @@ public sealed class PantsOpenOptions
     public PantsRecoveryPolicy RecoveryPolicy => _configuration.RecoveryPolicy;
 
     public PantsCloudWritePolicy CloudWritePolicy => _configuration.CloudWritePolicy;
+
+    public PantsWriteBackpressureConfiguration WriteBackpressure => _configuration.WriteBackpressure;
 
     public PantsCompactionConfiguration Compaction { get; }
 
@@ -71,11 +74,13 @@ public sealed class PantsOpenOptions
         PantsCompactionConfiguration? compaction = null,
         PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict,
         PantsCloudWritePolicy? cloudWritePolicy = null,
-        IPantsClock? ttlClock = null)
+        IPantsClock? ttlClock = null,
+        PantsWriteBackpressureConfiguration? writeBackpressure = null)
     {
         ArgumentNullException.ThrowIfNull(storage);
         runtime ??= PantsRuntimeConfiguration.Default;
         memory ??= PantsMemoryConfiguration.Default;
+        var configuredLease = lease;
         lease ??= PantsLeaseConfiguration.Default;
         var defaults = Configuration.Default(storage);
         return new PantsOpenOptions(defaults with
@@ -84,6 +89,7 @@ public sealed class PantsOpenOptions
             WorkloadProfile = runtime.WorkloadProfile,
             StorageTimeout = runtime.StorageTimeout,
             RuntimeResponseTimeout = runtime.RuntimeResponseTimeout,
+            OpenTimeout = runtime.OpenTimeout,
             LongLivedSnapshotWarningThreshold = runtime.LongLivedSnapshotWarningThreshold,
             ShutdownTimeout = runtime.ShutdownTimeout,
             MemoryBudget = memory.Budget,
@@ -93,14 +99,15 @@ public sealed class PantsOpenOptions
             TransactionMemoryPoolBytes = memory.TransactionMemoryPoolBytes,
             WalBufferSizeBytes = memory.WalBufferSizeBytes,
             LeaseTimeToLive = lease.TimeToLive,
-            LeaseClockSkewTolerance = lease.ClockSkewTolerance,
+            LeaseClockSkewTolerance = configuredLease?.ClockSkewTolerance,
             MinimumEpoch = lease.MinimumEpoch,
             LeaseLossCallback = lease.LossCallback,
             Compaction = compaction,
             BackgroundCompaction = compaction?.BackgroundEnabled ?? defaults.BackgroundCompaction,
             RecoveryPolicy = recoveryPolicy,
             CloudWritePolicy = cloudWritePolicy ?? defaults.CloudWritePolicy,
-            TtlClock = ttlClock ?? defaults.TtlClock
+            TtlClock = ttlClock ?? defaults.TtlClock,
+            WriteBackpressure = writeBackpressure ?? defaults.WriteBackpressure
         });
     }
 
@@ -149,11 +156,21 @@ public sealed class PantsOpenOptions
             CloudWritePolicy = policy ?? throw new ArgumentNullException(nameof(policy))
         });
 
+    public PantsOpenOptions WithWriteBackpressure(PantsWriteBackpressureConfiguration configuration) =>
+        With(_configuration with
+        {
+            WriteBackpressure = configuration ?? throw new ArgumentNullException(nameof(configuration))
+        });
+
     public PantsOpenOptions WithStorageTimeout(TimeSpan timeout) =>
         With(_configuration with { StorageTimeout = timeout });
 
     public PantsOpenOptions WithRuntimeResponseTimeout(TimeSpan timeout) =>
         With(_configuration with { RuntimeResponseTimeout = timeout });
+
+    /// <summary>Sets the aggregate startup budget, or null for unbounded startup.</summary>
+    public PantsOpenOptions WithOpenTimeout(TimeSpan? timeout) =>
+        With(_configuration with { OpenTimeout = timeout });
 
     public PantsOpenOptions WithShutdownTimeout(TimeSpan timeout) =>
         With(_configuration with { ShutdownTimeout = timeout });
@@ -301,6 +318,14 @@ public sealed class PantsOpenOptions
             throw PantsException.InvalidArgument("Storage timeout must be at least one millisecond.");
         }
 
+        if (Runtime.OpenTimeout is { } openTimeout &&
+            (openTimeout < TimeSpan.FromMilliseconds(1) ||
+             openTimeout.TotalSeconds * TimeProvider.System.TimestampFrequency >
+             long.MaxValue - (double)TimeProvider.System.GetTimestamp()))
+        {
+            throw PantsException.InvalidArgument("Open timeout must be at least one millisecond and representable by a monotonic deadline.");
+        }
+
         if (Runtime.RuntimeResponseTimeout is { } explicitResponseTimeout &&
             (explicitResponseTimeout < TimeSpan.FromMilliseconds(1) ||
              explicitResponseTimeout <= Runtime.StorageTimeout))
@@ -326,6 +351,13 @@ public sealed class PantsOpenOptions
         {
             throw PantsException.InvalidArgument(
                 $"LeaseTimeToLive ({Lease.TimeToLive:c}) must be greater than zero.");
+        }
+
+        if (Storage is PantsStorageConfiguration.Cloud or PantsStorageConfiguration.SimulatedCloud &&
+            (Int128)Lease.TimeToLive.Ticks * 2 <= (Int128)TimeSpan.FromSeconds(11).Ticks * 3)
+        {
+            throw PantsException.InvalidArgument(
+                "Cloud LeaseTimeToLive must leave more than the eleven-second provider renewal margin at two thirds of its duration.");
         }
 
         if (Lease.ClockSkewTolerance < TimeSpan.Zero ||
@@ -450,7 +482,7 @@ public sealed class PantsOpenOptions
         long? TransactionMemoryPoolBytes,
         int? WalBufferSizeBytes,
         TimeSpan LeaseTimeToLive,
-        TimeSpan LeaseClockSkewTolerance,
+        TimeSpan? LeaseClockSkewTolerance,
         Action? LeaseLossCallback,
         IPantsClock TtlClock,
         PantsCompactionConfiguration? Compaction,
@@ -458,6 +490,10 @@ public sealed class PantsOpenOptions
         int FlushAfterWalRecords,
         ulong MinimumEpoch)
     {
+        public TimeSpan? OpenTimeout { get; init; }
+
+        public PantsWriteBackpressureConfiguration WriteBackpressure { get; init; } = new();
+
         public static Configuration Default(PantsStorageConfiguration storage) => new(
             storage,
             PantsPerformanceGoal.Latency,
@@ -476,7 +512,7 @@ public sealed class PantsOpenOptions
             null,
             null,
             TimeSpan.FromSeconds(30),
-            TimeSpan.FromSeconds(15),
+            null,
             null,
             SystemPantsClock.Instance,
             null,

@@ -318,6 +318,7 @@ public sealed class AzureBlobObjectStoreTests
         Assert.Equal(2, handler.Requests.Count);
         Assert.Contains("restype=container", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains("comp=list", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
+        Assert.Contains("maxresults=32", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains("prefix=database%2Fsst%2F", handler.Requests[0].Uri.Query, StringComparison.Ordinal);
         Assert.Contains("marker=opaque%2B%2F%20marker", handler.Requests[1].Uri.Query, StringComparison.Ordinal);
     }

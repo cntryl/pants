@@ -48,8 +48,9 @@ partly visible, that a full scan returns exactly the keys and values that point 
 that no key outside the workload appears. When a commit returns `PantsCommitOutcomeUnknownException`,
 the child records no authoritative outcome and dies immediately; the parent reopens and reconciles
 that transaction before the next cycle. The verified state becomes the next cycle's floor; for
-cloud backends the verifier first commits an empty `CloudStrict` transaction so that floor is
-cloud-durable.
+cloud backends the verifier obtains its read-only transaction's exact start sequence through
+`CommitWithSequenceAsync` and confirms it with `WaitForDurableAsync` before accepting that floor.
+A pure empty `CloudStrict` transaction does not provide a publication barrier.
 
 ## Smoke run
 

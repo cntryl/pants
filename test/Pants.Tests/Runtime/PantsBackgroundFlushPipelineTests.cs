@@ -109,7 +109,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var writableFamily = await database.ColumnFamilies.CreateAsync("compaction-responsive-write");
         for (var generation = 0; generation < 2; generation++)
         {
-            await CommitAsync(
+            await CommitCompactionInputAsync(
                 database,
                 compactedFamily,
                 TestBytes.FromString($"key-{generation:D2}"),
@@ -171,7 +171,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var compactedFamily = database.ColumnFamilies.DefaultFamily;
         for (var generation = 0; generation < 2; generation++)
         {
-            await CommitAsync(
+            await CommitCompactionInputAsync(
                 database,
                 compactedFamily,
                 TestBytes.FromString($"shutdown-key-{generation:D2}"),
@@ -507,8 +507,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                 database.Maintenance.FlushAsync(family).AsTask());
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
             var failed = await database.Diagnostics.GetRuntimeMetricsAsync();
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
 
             Assert.Equal(PantsErrorCode.Corruption, error.Code);
             Assert.Equal(PantsEngineHealth.Degraded, failed.Health);
@@ -577,8 +576,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.DoesNotContain(
                 (await database.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files),
                 file => file.ColumnFamilyId == family.Id);
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             Assert.Equal(0, intent.RootElement.GetArrayLength());
         }
         finally
@@ -747,7 +745,7 @@ public sealed class PantsBackgroundFlushPipelineTests
 
         Assert.Equal(1, recovered.FlushEnqueuedTotal);
         Assert.Equal(1, recovered.FlushBuildCount);
-        Assert.Equal(2, recovered.FlushPublishCount);
+        Assert.Equal(1, recovered.FlushPublishCount);
         Assert.True(recovered.FlushRetriesTotal >= 1);
     }
 
@@ -1419,7 +1417,7 @@ public sealed class PantsBackgroundFlushPipelineTests
     }
 
     [Fact]
-    public async Task ShouldDeferDropUntilImmutableFlushPipelineCompletes()
+    public async Task ShouldRefuseDropUntilImmutableFlushPipelineCompletes()
     {
         using var directory = new TemporaryDirectory();
         using var failpoint = new FlushPipelineFailpointHandler(
@@ -1439,13 +1437,14 @@ public sealed class PantsBackgroundFlushPipelineTests
             var drop = database.ColumnFamilies.DropAsync(family).AsTask();
             var blocked = await database.Diagnostics.GetRuntimeMetricsAsync().AsTask().WaitAsync(TestTimeouts.Expected);
 
-            Assert.False(drop.IsCompleted);
+            var refused = await Assert.ThrowsAsync<PantsBusyException>(() => drop.WaitAsync(TestTimeouts.Expected));
+            Assert.False(refused.LicensesUnflushedDiscard);
             Assert.Equal(1, blocked.FlushInFlight);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.Release();
             await flush.WaitAsync(TestTimeouts.Expected);
-            await drop.WaitAsync(TestTimeouts.Expected);
+            await database.ColumnFamilies.DropAsync(family);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, finished.FlushInFlight);
@@ -1573,11 +1572,13 @@ public sealed class PantsBackgroundFlushPipelineTests
                 .AsTask()
                 .WaitAsync(TestTimeouts.Expected);
 
-            Assert.False(drop.IsCompleted);
+            var refused = await Assert.ThrowsAsync<PantsBusyException>(() => drop.WaitAsync(TestTimeouts.Expected));
+            Assert.False(refused.LicensesUnflushedDiscard);
             Assert.Equal(1, blocked.ImmutableMemtables);
 
             failpoint.ReleaseFlushPublication();
-            await drop.WaitAsync(TestTimeouts.Expected);
+            await database.Maintenance.FlushAsync(family);
+            await database.ColumnFamilies.DropDiscardingUnflushedAsync(family);
 
             var finished = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, finished.ImmutableMemtables);
@@ -1600,7 +1601,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             Failpoint.BeforeCompactionAdmission);
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(true)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, TargetSstSizeBytes: 80));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -1632,8 +1633,9 @@ public sealed class PantsBackgroundFlushPipelineTests
             Assert.DoesNotContain(
                 (await database.Diagnostics.GetStorageLayoutAsync()).Levels,
                 static level => level.Level == 0);
-            await Assert.ThrowsAsync<PantsBusyException>(() =>
+            var unflushed = await Assert.ThrowsAsync<PantsUnflushedDataPresentException>(() =>
                 database.ColumnFamilies.DropAsync(family).AsTask());
+            Assert.True(unflushed.LicensesUnflushedDiscard);
             await database.ColumnFamilies.DropDiscardingUnflushedAsync(family)
                 .AsTask()
                 .WaitAsync(TestTimeouts.Expected);
@@ -1653,22 +1655,24 @@ public sealed class PantsBackgroundFlushPipelineTests
             true);
         await using var database = await OpenAsync(directory.Path, failpoint);
         var family = await database.ColumnFamilies.CreateAsync("published-retry-intent");
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "intent_log.json"),
+        await WriteIntentsAsync(
+            directory.Path,
             """
             [
               {
                 "CompactionPlanned": {
-                  "input_files": ["000000_00_00000000000000000099.sst"]
+                  "input_files": ["000000_00_00000000000000000099.sst"],
+                  "output_level": 1
                 }
               },
               {
-                "FuturePublication": {
-                  "opaque": true
+                "CloudUploadComplete": {
+                  "resource": "unrelated",
+                  "seqno": 7
                 }
               },
               {
-                "FlushPublish": "uncertain"
+                "WalSynced": { "segment_id": 99, "seqno": 7 }
               }
             ]
             """);
@@ -1685,13 +1689,12 @@ public sealed class PantsBackgroundFlushPipelineTests
 
         await database.Maintenance.FlushAsync(family).AsTask().WaitAsync(TestTimeouts.Expected);
 
-        using var intent = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        using var intent = await ReadIntentAsync(directory.Path);
         var retained = intent.RootElement.EnumerateArray().ToArray();
         Assert.Equal(3, retained.Length);
         Assert.Contains(retained, static entry => entry.TryGetProperty("CompactionPlanned", out _));
-        Assert.Contains(retained, static entry => entry.TryGetProperty("FuturePublication", out _));
-        Assert.Contains(retained, static entry => entry.TryGetProperty("FlushPublish", out _));
+        Assert.Contains(retained, static entry => entry.TryGetProperty("CloudUploadComplete", out _));
+        Assert.Contains(retained, static entry => entry.TryGetProperty("WalSynced", out _));
     }
 
     [Fact]
@@ -1794,7 +1797,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new DeferredCompactionRaceFailpointHandler();
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(true)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, TargetSstSizeBytes: 80));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
@@ -1856,7 +1859,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         };
         var options = CreateOptions(directory.Path)
             .WithBackgroundCompaction(true)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, TargetSstSizeBytes: 80));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint, verifier));
@@ -1916,7 +1919,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             return CreateAuthoritativeVerificationReport();
         };
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, TargetSstSizeBytes: 80, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint, verifier));
@@ -2122,18 +2125,20 @@ public sealed class PantsBackgroundFlushPipelineTests
             await database.Maintenance.FlushAsync(family);
         }
 
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "intent_log.json"),
+        await WriteIntentsAsync(
+            directory.Path,
             """
             [
               {
                 "CompactionPlanned": {
-                  "input_files": ["000000_00_00000000000000000099.sst"]
+                  "input_files": ["000000_00_00000000000000000099.sst"],
+                  "output_level": 1
                 }
               },
               {
-                "FuturePublication": {
-                  "opaque": true
+                "CloudUploadComplete": {
+                  "resource": "unrelated",
+                  "seqno": 7
                 }
               }
             ]
@@ -2141,12 +2146,11 @@ public sealed class PantsBackgroundFlushPipelineTests
 
         await database.Maintenance.CompactAllAsync();
 
-        using var intent = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+        using var intent = await ReadIntentAsync(directory.Path);
         var retained = intent.RootElement.EnumerateArray().ToArray();
         Assert.Equal(2, retained.Length);
         Assert.Contains(retained, static entry => entry.TryGetProperty("CompactionPlanned", out _));
-        Assert.Contains(retained, static entry => entry.TryGetProperty("FuturePublication", out _));
+        Assert.Contains(retained, static entry => entry.TryGetProperty("CloudUploadComplete", out _));
     }
 
     [Fact]
@@ -2164,7 +2168,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         {
             for (var index = 0; index < 2; index++)
             {
-                await CommitBestEffortAsync(
+                await CommitCompactionInputBestEffortAsync(
                     database,
                     database.ColumnFamilies.DefaultFamily,
                     TestBytes.FromString($"key-{index}"),
@@ -2184,8 +2188,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
             var file = Assert.Single(layout.Levels.SelectMany(static level => level.Files));
             publishedName = file.Name;
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
             Assert.Equal(PantsEngineHealth.Degraded, layout.Health);
             Assert.True(file.Level > 0);
@@ -2198,7 +2201,7 @@ public sealed class PantsBackgroundFlushPipelineTests
                     .Select(static name => name.GetString()!)
                     .Order(StringComparer.Ordinal));
             Assert.Equal(file.Name, publication.GetProperty("added")[0].GetProperty("name").GetString());
-            Assert.All(inputNames, name => Assert.False(File.Exists(
+            Assert.All(inputNames, name => Assert.True(File.Exists(
                 Path.Combine(directory.Path, "sst", name))));
             Assert.NotEqual(0, new FileInfo(Path.Combine(directory.Path, "manifest.journal")).Length);
             var fenced = await Assert.ThrowsAsync<PantsBusyException>(() =>
@@ -2216,8 +2219,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             (await reopened.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files));
         Assert.Equal(publishedName, recoveredFile.Name);
         Assert.True(recoveredFile.Level > 0);
-        using (var intent = JsonDocument.Parse(
-                   await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "intent_log.json"))))
+        using (var intent = await ReadIntentAsync(recoveryDirectory.Path))
         {
             Assert.Empty(intent.RootElement.EnumerateArray());
         }
@@ -2251,7 +2253,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         {
             for (var index = 0; index < 2; index++)
             {
-                await CommitAsync(
+                await CommitCompactionInputAsync(
                     database,
                     database.ColumnFamilies.DefaultFamily,
                     TestBytes.FromString($"key-{index}"),
@@ -2260,8 +2262,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             }
 
             await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             var publication = Assert.Single(intent.RootElement.EnumerateArray())
                 .GetProperty("CompactionPublish");
             Assert.Equal("OutputDurable", publication.GetProperty("phase").GetString());
@@ -2291,8 +2292,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         Assert.True(File.Exists(outputPath));
         Assert.All(inputNames, name => Assert.True(File.Exists(
             Path.Combine(recoveryDirectory.Path, "sst", name))));
-        using var retainedIntent = JsonDocument.Parse(
-            await File.ReadAllBytesAsync(Path.Combine(recoveryDirectory.Path, "intent_log.json")));
+        using var retainedIntent = await ReadIntentAsync(recoveryDirectory.Path);
         Assert.NotEmpty(retainedIntent.RootElement.EnumerateArray());
     }
 
@@ -2312,7 +2312,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         {
             for (var index = 0; index < 2; index++)
             {
-                await CommitAsync(
+                await CommitCompactionInputAsync(
                     database,
                     database.ColumnFamilies.DefaultFamily,
                     TestBytes.FromString($"key-{index}"),
@@ -2322,15 +2322,14 @@ public sealed class PantsBackgroundFlushPipelineTests
 
             await Assert.ThrowsAnyAsync<PantsException>(() => database.Maintenance.CompactAllAsync().AsTask());
 
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             var publication = Assert.Single(intent.RootElement.EnumerateArray())
                 .GetProperty("CompactionPublish");
             var supersededOutput = publication.GetProperty("added")[0]
                 .GetProperty("name")
                 .GetString()!;
 
-            await CommitBestEffortAsync(
+            await CommitCompactionInputBestEffortAsync(
                 database,
                 database.ColumnFamilies.DefaultFamily,
                 "key-2"u8.ToArray(),
@@ -2339,8 +2338,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             await database.Maintenance.CompactAllAsync();
 
             Assert.False(File.Exists(Path.Combine(directory.Path, "sst", supersededOutput)));
-            using var cleared = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var cleared = await ReadIntentAsync(directory.Path);
             Assert.Empty(cleared.RootElement.EnumerateArray());
         }
 
@@ -2363,14 +2361,14 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new FlushPipelineFailpointHandler(
             Failpoint.BeforeCompactionDirectorySync);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
         var family = await database.ColumnFamilies.CreateAsync("compaction-directory-sync");
         for (var generation = 0; generation < 2; generation++)
         {
-            await CommitAsync(
+            await CommitCompactionInputAsync(
                 database,
                 family,
                 TestBytes.FromString($"key-{generation}"),
@@ -2382,15 +2380,13 @@ public sealed class PantsBackgroundFlushPipelineTests
         {
             var compaction = database.Maintenance.CompactAllAsync().AsTask();
             await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
-            using (var intent = JsonDocument.Parse(
-                       await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json"))))
+            using (var intent = await ReadIntentAsync(directory.Path))
             {
                 Assert.Empty(intent.RootElement.EnumerateArray());
             }
 
-            using var manifest = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(
-                    Path.Combine(directory.Path, "manifest.snapshot.json")));
+            using var manifest = MetadataFrameCodec.Decode(
+                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json")), 1);
             Assert.Equal(
                 2,
                 manifest.RootElement.GetProperty("files")
@@ -2413,7 +2409,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var failpoint = new FlushPipelineFailpointHandler(
             Failpoint.AfterCompactionManifestPublish);
         var options = CreateOptions(directory.Path)
-            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 1, BackgroundEnabled: false));
+            .WithCompaction(new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(
@@ -2422,7 +2418,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         var family = await database.ColumnFamilies.CreateAsync("compaction-recovery-evidence");
         for (var generation = 0; generation < 2; generation++)
         {
-            await CommitAsync(
+            await CommitCompactionInputAsync(
                 database,
                 family,
                 TestBytes.FromString($"key-{generation}"),
@@ -2438,8 +2434,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             failpoint.Release();
 
             await Assert.ThrowsAsync<PantsFencedException>(() => compaction);
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             Assert.Contains(
                 intent.RootElement.EnumerateArray(),
                 static entry => entry.TryGetProperty("CompactionPublish", out _));
@@ -2597,8 +2592,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             var layout = await database.Diagnostics.GetStorageLayoutAsync();
             var file = Assert.Single(layout.Levels.SelectMany(static level => level.Files));
             publishedName = file.Name;
-            using var intent = JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "intent_log.json")));
+            using var intent = await ReadIntentAsync(directory.Path);
             Assert.Equal(PantsEngineHealth.Degraded, metrics.Health);
             Assert.Equal(PantsEngineHealth.Degraded, layout.Health);
             Assert.Equal(0, metrics.ImmutableMemtables);
@@ -2676,7 +2670,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         using var directory = new TemporaryDirectory();
         var failpoint = new ArmableFailpointHandler();
         var options = CreateOptions(directory.Path);
-        var committedSequence = 0L;
+        var committedSequence = 0UL;
         await using (var database = await PantsDatabase.OpenForTestingAsync(
                          options,
                          new RuntimeDependencies(failpoint)))
@@ -2858,16 +2852,36 @@ public sealed class PantsBackgroundFlushPipelineTests
         Assert.Equal("old"u8.ToArray(), (await oldSnapshot.GetAsync("range-b"u8.ToArray()))?.ToArray());
     }
 
+    static ValueTask CommitCompactionInputAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily family,
+        ReadOnlyMemory<byte> key,
+        ReadOnlyMemory<byte> value) =>
+        CommitAsync(database, family, key, value, true);
+
+    static ValueTask CommitCompactionInputBestEffortAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily family,
+        ReadOnlyMemory<byte> key,
+        ReadOnlyMemory<byte> value) =>
+        CommitBestEffortAsync(database, family, key, value, true);
+
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte> value)
+        ReadOnlyMemory<byte> value,
+        bool forceRewrite = false)
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
+        if (forceRewrite)
+        {
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+        }
+
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
 
@@ -2875,12 +2889,18 @@ public sealed class PantsBackgroundFlushPipelineTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte> value)
+        ReadOnlyMemory<byte> value,
+        bool forceRewrite = false)
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
         transaction.Put(key, value);
+        if (forceRewrite)
+        {
+            transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
+        }
+
         await transaction.CommitAsync(PantsWriteOptions.BestEffort);
     }
 
@@ -2906,6 +2926,21 @@ public sealed class PantsBackgroundFlushPipelineTests
 
             await Task.Yield();
         }
+    }
+
+    static async Task<JsonDocument> ReadIntentAsync(string path)
+    {
+        var state = IntentLogCodec.Read(await File.ReadAllBytesAsync(Path.Combine(path, "intent_log.json")));
+        return IntentLogCodec.ToDocument(state.Entries);
+    }
+
+    static Task WriteIntentsAsync(string path, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var entries = document.RootElement.EnumerateArray()
+            .Select(entry => IntentEntry.FromJson(JsonSerializer.SerializeToUtf8Bytes(entry))).ToList();
+        return File.WriteAllBytesAsync(Path.Combine(path, "intent_log.json"),
+            IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), entries));
     }
 
     static void FenceWriterLease(string path)

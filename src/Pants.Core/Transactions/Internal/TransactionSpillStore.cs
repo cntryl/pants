@@ -190,13 +190,15 @@ sealed class TransactionSpillStore : IDisposable
         TransactionSpillRun run,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        PantsScanDirection direction) =>
+        PantsScanDirection direction,
+        TransactionMemoryPool? memoryPool = null) =>
         new TransactionSpillRunKeyCursor(
             this,
             run,
             startInclusive,
             endExclusive,
-            direction);
+            direction,
+            memoryPool);
 
     internal Stream OpenRunReadStream(TransactionSpillRun run) =>
         _readStreamFactory?.Invoke(run.Path) ?? new FileStream(
@@ -442,6 +444,33 @@ sealed class TransactionSpillStore : IDisposable
         }
 
         return offsets;
+    }
+
+    internal static ulong ReadPreviousSparseOffset(Stream stream, TransactionSpillRunHeader header, ulong before)
+    {
+        ulong? selected = null;
+        var cursor = header.SparseIndexOffset;
+        byte[]? previousKey = null;
+        ulong? previousOffset = null;
+        for (var index = 0; index < header.SparseCount; index++)
+        {
+            stream.Position = checked((long)cursor);
+            var payload = ReadFrame(stream);
+            cursor = checked((ulong)stream.Position);
+            var (key, offset) = ParseSparseEntry(
+                payload, header.OrdinalTableOffset, previousKey, previousOffset, index);
+            if (offset < before)
+            {
+                selected = offset;
+            }
+            previousKey = key;
+            previousOffset = offset;
+        }
+        if (cursor != header.FileLength || selected is null)
+        {
+            throw new PantsCorruptionException("Transaction spill sparse index has an invalid reverse extent.");
+        }
+        return selected.Value;
     }
 
     static (byte[] Key, ulong Offset) ParseSparseEntry(

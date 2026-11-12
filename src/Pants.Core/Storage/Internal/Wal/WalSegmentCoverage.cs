@@ -7,7 +7,7 @@ namespace Cntryl.Pants.Storage.Internal.Wal;
 static class WalSegmentCoverage
 {
     /// <param name="flushedThrough">Durable commit-sequence frontier per column family.</param>
-    /// <param name="activeFamilyIds">Families that still exist; mutations of others are covered.</param>
+    /// <param name="activeFamilyIds">Current runtime families; only durable frontiers prove coverage.</param>
     /// <param name="scratchDirectory">Where large open transactions spool while being evaluated.</param>
     public static WalSegmentCoverageResult Evaluate(
         ReadOnlySpan<byte> segmentBytes,
@@ -32,8 +32,8 @@ static class WalSegmentCoverage
                     record,
                     (mutation, commitSequence) =>
                     {
-                        if (activeFamilyIds.Contains(mutation.ColumnFamilyId) &&
-                            commitSequence > flushedThrough.GetValueOrDefault(mutation.ColumnFamilyId))
+                        if (!flushedThrough.TryGetValue(mutation.ColumnFamilyId, out var frontier) ||
+                            commitSequence > frontier)
                         {
                             covered = false;
                             firstUncoveredFamilyId = firstUncoveredFamilyId is { } first

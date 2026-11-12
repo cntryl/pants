@@ -13,7 +13,8 @@ public sealed class DecoderFuzzTests
     {
         DecoderFuzzHarness.Explore(
             "WalCodec.DecodeRecord",
-            LoadSeeds("wal-tlv-*.bin", "wal-frame-*.bin"),
+            [.. LoadSeeds("wal-tlv-*.bin", "wal-frame-*.bin"),
+                WalCodec.EncodeRecord(new WalRecord(0, WalOperation.Put, "key"u8.ToArray(), "value"u8.ToArray(), 1, null, null, null, 1))],
             static bytes => WalCodec.DecodeRecord(bytes));
     }
 
@@ -22,7 +23,7 @@ public sealed class DecoderFuzzTests
     {
         DecoderFuzzHarness.Explore(
             "WalCodec.DecodeTransactionBatch",
-            LoadSeeds("wal-txn-batch-*.bin"),
+            [.. LoadSeeds("wal-txn-batch-*.bin"), CurrentBatch()],
             static bytes => WalCodec.DecodeTransactionBatch(bytes, out _, out _));
     }
 
@@ -31,7 +32,7 @@ public sealed class DecoderFuzzTests
     {
         DecoderFuzzHarness.Explore(
             "SstCodec.DecodeDataBlock",
-            LoadSeeds("sst-block-*.bin"),
+            [.. LoadSeeds("sst-block-*.bin"), CurrentDataBlock()],
             static bytes => SstCodec.DecodeDataBlock(bytes));
     }
 
@@ -51,8 +52,8 @@ public sealed class DecoderFuzzTests
     [Fact]
     public void ShouldRejectDeclaredCountBombsBeforeAllocating()
     {
-        var seeds = LoadSeeds("wal-txn-batch-*.bin");
-        var bomb = seeds[0].ToArray();
+        var record = WalCodec.DecodeRecord(CurrentBatch(), segmentEpoch: 1);
+        var bomb = record.Value!.ToArray();
 
         // The operation count sits after the batch magic, version, transaction id, begin and commit
         // sequences.
@@ -61,9 +62,21 @@ public sealed class DecoderFuzzTests
             int.MaxValue);
 
         var error = Assert.ThrowsAny<PantsException>(() =>
-            WalCodec.DecodeTransactionBatch(bomb, out _, out _));
+            WalCodec.DecodeTransactionBatch(record with { Value = bomb }, out _, out _));
         Assert.IsAssignableFrom<PantsIOException>(error);
     }
+
+    static byte[] CurrentDataBlock()
+    {
+        var bytes = SstCodec.Encode(
+            [new SstEntry("key"u8.ToArray(), "value"u8.ToArray(), 1, null, false)],
+            [], PantsPerformanceGoal.Latency);
+        var size = BinaryPrimitives.ReadUInt32LittleEndian(bytes) + 4UL;
+        return SstCodec.ReadBlock(bytes, new SstBlockHandle(0, size));
+    }
+
+    static byte[] CurrentBatch() => WalCodec.EncodeTransactionBatch(1, 1, 1,
+        [new WalMutation(0, WalOperation.Put, "key"u8.ToArray(), "value"u8.ToArray(), 2, null, null)]);
 
     static List<byte[]> LoadSeeds(params string[] patterns)
     {

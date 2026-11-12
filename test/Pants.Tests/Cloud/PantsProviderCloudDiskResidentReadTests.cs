@@ -274,6 +274,8 @@ public sealed class PantsProviderCloudDiskResidentReadTests
                     database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
                 writer.Put(Key(batch), Value(batch));
+                // Overlap only empty keyspace so this fixture requires a physical rewrite.
+                writer.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
                 await writer.CommitAsync(PantsWriteOptions.CloudStrict);
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }

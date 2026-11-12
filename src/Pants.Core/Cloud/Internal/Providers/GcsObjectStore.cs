@@ -520,7 +520,7 @@ sealed class GcsObjectStore : CloudObjectStore
             $"{_endpoint.AbsoluteUri.TrimEnd('/')}/storage/v1/b/" +
             $"{Uri.EscapeDataString(_configuration.Bucket)}/o")
         {
-            Query = CreateListQuery("prefix", fullPrefix, "pageToken", continuationToken)
+            Query = CreateListQuery("prefix", fullPrefix, "pageToken", continuationToken, "maxResults")
         };
         return builder.Uri;
     }
@@ -539,7 +539,7 @@ sealed class GcsObjectStore : CloudObjectStore
             $"{_endpoint.AbsoluteUri.TrimEnd('/')}/" +
             Uri.EscapeDataString(_configuration.Bucket))
         {
-            Query = CreateListQuery("prefix", fullPrefix, "marker", continuationToken)
+            Query = CreateListQuery("prefix", fullPrefix, "marker", continuationToken, "max-keys")
         };
         return builder.Uri;
     }
@@ -548,13 +548,18 @@ sealed class GcsObjectStore : CloudObjectStore
         string prefixName,
         string prefix,
         string tokenName,
-        string? continuationToken)
+        string? continuationToken,
+        string pageSizeName)
     {
         var query = $"{Uri.EscapeDataString(prefixName)}={Uri.EscapeDataString(prefix)}";
-        return continuationToken is null
-            ? query
-            : $"{query}&{Uri.EscapeDataString(tokenName)}=" +
-              Uri.EscapeDataString(continuationToken);
+        if (continuationToken is not null)
+        {
+            query += $"&{Uri.EscapeDataString(tokenName)}=" +
+                     Uri.EscapeDataString(continuationToken);
+        }
+
+        return $"{query}&{Uri.EscapeDataString(pageSizeName)}=" +
+               CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture);
     }
 
     static void ApplyXmlCondition(

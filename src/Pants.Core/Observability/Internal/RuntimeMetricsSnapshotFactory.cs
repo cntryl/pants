@@ -10,7 +10,7 @@ sealed class RuntimeMetricsSnapshotFactory(
     CloudWalSealController? cloudWalSealController,
     CloudMemtableSegmentTracker? cloudMemtableSegments,
     HybridCacheManager? hybridCache,
-    ResourceBudget scanMemoryBudget,
+    ResourceBudget readMetadataBudget,
     RuntimeResponseRegistry runtimeResponses,
     WalRetirementDiagnostics walRetirementDiagnostics)
 {
@@ -18,7 +18,7 @@ sealed class RuntimeMetricsSnapshotFactory(
 
     public PantsRuntimeMetrics Create(
         RuntimeState state,
-        long walCloudDurableSequence)
+        ulong walCloudDurableSequence)
     {
         var hybridMetrics = hybridCache is not null && diskStore is not null
             ? hybridCache.GetMetrics(diskStore)
@@ -43,7 +43,7 @@ sealed class RuntimeMetricsSnapshotFactory(
     public PantsRuntimeMetrics RefreshPublished(
         PantsRuntimeMetrics snapshot,
         RuntimeState state,
-        long walCloudDurableSequence)
+        ulong walCloudDurableSequence)
     {
         if (state.Health != PantsEngineHealth.Healthy)
         {
@@ -55,14 +55,14 @@ sealed class RuntimeMetricsSnapshotFactory(
             state.ActiveSnapshots.Select(static snapshot =>
                 new KeyValuePair<long, DateTimeOffset>(snapshot.SnapshotId, snapshot.StartedAtUtc)),
             state.Clock.UtcNow);
-        var writeStalled = MemtableWritePressure.IsStalled(options, state);
+        var writeStalled = MemtableWritePressure.IsStalled(options, state) || state.WriteAdmission?.HardPending == true;
         var writeStallTiming = telemetry.ObserveWriteStall(writeStalled);
         return snapshot with
         {
             Health = EngineHealthClassifier.Classify(
                 (PantsEngineHealth)Volatile.Read(ref _storageHealth),
                 writeStalled),
-            CurrentSequence = state.Sequence,
+            CurrentSequence = Math.Max(state.Sequence, diskStore?.CommitSequenceFloor ?? 0),
             ManifestLastPersistedSequence = diskStore?.LastPersistedSequence ?? 0,
             ManifestNextWalSequence = diskStore?.NextWalSequence ?? 1,
             ActiveMemtables = state.FamilyData.Count,
@@ -80,9 +80,12 @@ sealed class RuntimeMetricsSnapshotFactory(
             CompactionBufferUsedBytes = compactionWorker.BufferBudget.Current,
             CompactionBufferPeakBytes = compactionWorker.BufferBudget.Peak,
             CompactionBufferCapacityBytes = compactionWorker.BufferBudget.Limit,
-            ScanBufferUsedBytes = scanMemoryBudget.Current,
-            ScanBufferPeakBytes = scanMemoryBudget.Peak,
-            ScanBufferCapacityBytes = scanMemoryBudget.Limit,
+            ReadMetadataUsedBytes = readMetadataBudget.Current,
+            ReadMetadataPeakBytes = readMetadataBudget.Peak,
+            ReadMetadataCapacityBytes = readMetadataBudget.Limit,
+            ScanBufferUsedBytes = 0,
+            ScanBufferPeakBytes = 0,
+            ScanBufferCapacityBytes = 0,
             WalBytesWrittenTotal = diskStore?.WalBytesWrittenTotal ?? 0,
             SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? 0,
             MemtableSizeLimitBytes = options.MemtableSizeLimitBytes,
@@ -91,7 +94,11 @@ sealed class RuntimeMetricsSnapshotFactory(
                 cloudMemtableSegments?.MaximumGap(
                     diskStore?.CurrentWalSegmentId ?? 0) ?? 0)),
             WriteStalled = writeStalled,
-            WalCurrentSegmentId = checked((long)(diskStore?.CurrentWalSegmentId ?? 0)),
+            WriteSlowdownCount = state.WriteAdmission?.SlowdownCount ?? 0,
+            WriteSlowdownNanosecondsTotal = state.WriteAdmission?.SlowdownNanoseconds ?? 0,
+            BackgroundRateLimitedBytes = state.WriteAdmission?.Limiter?.LimitedBytes ?? 0,
+            EstimatedPendingCompactionBytes = state.WriteAdmission?.PendingBytes ?? 0,
+            WalCurrentSegmentId = diskStore?.CurrentWalSegmentId ?? 0,
             WalPendingWrites = cloudWalSealController?.PendingWrites ??
                                diskStore?.WalPendingWrites ??
                                0,
@@ -110,7 +117,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             ActiveSnapshots = activeSnapshots,
             LongLivedSnapshots = snapshotMetrics.LongLivedSnapshots,
             LongLivedSnapshotWarningsTotal = telemetry.LongLivedSnapshotWarnings,
-            PinnedSsts = diskStore?.SnapshotPinnedObsoleteFileCount ?? 0,
+            PinnedSsts = telemetry.PinnedSstCount,
             OldestSnapshotAgeSeconds = snapshotMetrics.OldestSnapshotAgeSeconds,
             SstCount = diskStore?.SstCount ?? 0,
             SstBytes = diskStore?.SstBytes ?? 0,
@@ -195,8 +202,9 @@ sealed class RuntimeMetricsSnapshotFactory(
     public PantsRuntimeMetrics RefreshLive(
         PantsRuntimeMetrics snapshot,
         int activeCompactionRequests,
-        long walCloudDurableSequence,
-        DateTimeOffset now)
+        ulong walCloudDurableSequence,
+        DateTimeOffset now,
+        WriteAdmission? writeAdmission)
     {
         var activeSnapshotTimes = telemetry.ActiveSnapshotStartTimes;
         var snapshotMetrics = ObserveSnapshots(activeSnapshotTimes, now);
@@ -221,11 +229,18 @@ sealed class RuntimeMetricsSnapshotFactory(
             CompactionBufferUsedBytes = compactionWorker.BufferBudget.Current,
             CompactionBufferPeakBytes = compactionWorker.BufferBudget.Peak,
             CompactionBufferCapacityBytes = compactionWorker.BufferBudget.Limit,
-            ScanBufferUsedBytes = scanMemoryBudget.Current,
-            ScanBufferPeakBytes = scanMemoryBudget.Peak,
-            ScanBufferCapacityBytes = scanMemoryBudget.Limit,
+            ReadMetadataUsedBytes = readMetadataBudget.Current,
+            ReadMetadataPeakBytes = readMetadataBudget.Peak,
+            ReadMetadataCapacityBytes = readMetadataBudget.Limit,
+            ScanBufferUsedBytes = 0,
+            ScanBufferPeakBytes = 0,
+            ScanBufferCapacityBytes = 0,
             WalBytesWrittenTotal = diskStore?.WalBytesWrittenTotal ?? snapshot.WalBytesWrittenTotal,
             SstBytesWrittenTotal = diskStore?.SstBytesWrittenTotal ?? snapshot.SstBytesWrittenTotal,
+            WriteSlowdownCount = writeAdmission?.SlowdownCount ?? snapshot.WriteSlowdownCount,
+            WriteSlowdownNanosecondsTotal = writeAdmission?.SlowdownNanoseconds ?? snapshot.WriteSlowdownNanosecondsTotal,
+            BackgroundRateLimitedBytes = writeAdmission?.Limiter?.LimitedBytes ?? snapshot.BackgroundRateLimitedBytes,
+            EstimatedPendingCompactionBytes = writeAdmission?.PendingBytes ?? snapshot.EstimatedPendingCompactionBytes,
             WalCloudDurableSequence = walCloudDurableSequence,
             WalRetainedBytes = diskStore?.WalRetainedBytes ?? snapshot.WalRetainedBytes,
             WalRetainedSegments = diskStore?.WalRetainedSegments ?? snapshot.WalRetainedSegments,
@@ -234,6 +249,7 @@ sealed class RuntimeMetricsSnapshotFactory(
             WalRetirementBlockedCause = walRetirementDiagnostics.BlockedCause,
             PendingCloudUploads = telemetry.PendingCloudUploads,
             ActiveSnapshots = activeSnapshotTimes.Length,
+            PinnedSsts = telemetry.PinnedSstCount,
             LongLivedSnapshots = snapshotMetrics.LongLivedSnapshots,
             LongLivedSnapshotWarningsTotal = telemetry.LongLivedSnapshotWarnings,
             OldestSnapshotAgeSeconds = snapshotMetrics.OldestSnapshotAgeSeconds,

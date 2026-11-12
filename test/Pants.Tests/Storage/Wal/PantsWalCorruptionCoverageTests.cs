@@ -7,7 +7,8 @@ public sealed class PantsWalCorruptionCoverageTests
 {
     [Theory]
     [InlineData((byte)'X', (byte)'W', (byte)1)]
-    [InlineData((byte)'M', (byte)'W', (byte)2)]
+    [InlineData((byte)'M', (byte)'W', (byte)1)]
+    [InlineData((byte)'M', (byte)'W', (byte)3)]
     public void ShouldRejectRecordAndCrcValidFrameGivenInvalidEnvelopePrefix(
         byte firstMagic,
         byte secondMagic,
@@ -19,8 +20,16 @@ public sealed class PantsWalCorruptionCoverageTests
         payload[2] = version;
         var frame = BuildFrame(payload);
 
-        Assert.Throws<StorageException>(() => WalCodec.DecodeRecord(payload));
-        Assert.Throws<StorageException>(() => WalFrameReader.Visit(frame, static (_, _) => { }));
+        if (firstMagic == (byte)'M' && secondMagic == (byte)'W')
+        {
+            Assert.Throws<PantsCompatibilityException>(() => WalCodec.DecodeRecord(payload));
+            Assert.Throws<PantsCompatibilityException>(() => WalFrameReader.Visit(frame, static (_, _) => { }));
+        }
+        else
+        {
+            Assert.Throws<StorageException>(() => WalCodec.DecodeRecord(payload));
+            Assert.Throws<StorageException>(() => WalFrameReader.Visit(frame, static (_, _) => { }));
+        }
     }
 
     [Theory]
@@ -28,7 +37,6 @@ public sealed class PantsWalCorruptionCoverageTests
     [InlineData((byte)2)]
     [InlineData((byte)3)]
     [InlineData((byte)4)]
-    [InlineData((byte)10)]
     public void ShouldRejectRecordGivenRequiredTlvIsMissing(byte omittedTag)
     {
         var payload = BuildRawRecord(omittedTag);
@@ -36,6 +44,15 @@ public sealed class PantsWalCorruptionCoverageTests
 
         Assert.Throws<StorageException>(() => WalCodec.DecodeRecord(payload));
         Assert.Throws<StorageException>(() => WalFrameReader.Visit(frame, static (_, _) => { }));
+    }
+
+    [Fact]
+    public void ShouldUseSegmentEpochGivenPayloadOmitsLegacyEpochTag()
+    {
+        var payload = BuildRawRecord(10);
+        var record = WalCodec.DecodeRecord(payload, 42);
+        Assert.Equal(42UL, record.WriterEpoch);
+        Assert.Equal("value"u8.ToArray(), record.Value);
     }
 
     [Theory]
@@ -135,7 +152,7 @@ public sealed class PantsWalCorruptionCoverageTests
     {
         using var payload = new MemoryStream();
         payload.Write("MW"u8);
-        payload.WriteByte(1);
+        payload.WriteByte(2);
         WriteTlvUnlessOmitted(payload, omittedTag, 1, [(byte)WalOperation.Put]);
         WriteTlvUInt32UnlessOmitted(payload, omittedTag, 2, 1);
         WriteTlvUInt64UnlessOmitted(payload, omittedTag, 3, 5);
@@ -174,15 +191,33 @@ public sealed class PantsWalCorruptionCoverageTests
             batch.WriteByte(0);
             DiskFormat.WriteUInt32(batch, 1);
             batch.WriteByte((byte)'k');
-            batch.WriteByte(0);
-            batch.WriteByte(0);
+            if (operation is WalOperation.Put or WalOperation.Insert)
+            {
+                batch.WriteByte(1);
+                DiskFormat.WriteUInt32(batch, 0);
+            }
+            else
+            {
+                batch.WriteByte(0);
+            }
+
+            if (operation == WalOperation.DeleteRange)
+            {
+                batch.WriteByte(1);
+                DiskFormat.WriteUInt32(batch, 1);
+                batch.WriteByte((byte)'z');
+            }
+            else
+            {
+                batch.WriteByte(0);
+            }
         }
 
         return batch.ToArray();
     }
 
     static WalRecord BuildBatchRecord(byte[] value, ulong commitSequence) => new(
-        0,
+        1,
         WalOperation.TransactionBatch,
         "txn"u8.ToArray(),
         value,

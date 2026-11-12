@@ -9,6 +9,8 @@ sealed class TrieIndex
         _entries = entries;
     }
 
+    public long EstimatedMetadataBytes => checked(64L + _entries.Sum(static entry => entry.Key.Length + 48L));
+
     public static byte[] Encode(IReadOnlyList<byte[]> blockFirstKeys)
     {
         ArgumentNullException.ThrowIfNull(blockFirstKeys);
@@ -40,7 +42,8 @@ sealed class TrieIndex
 
     public static TrieIndex Decode(
         ReadOnlySpan<byte> bytes,
-        IReadOnlyList<byte[]> blockFirstKeys)
+        IReadOnlyList<byte[]> blockFirstKeys,
+        SstMetadataAllocation? allocation = null)
     {
         var cursor = 0;
         var nodeCount = ReadInt32(bytes, ref cursor, "node count");
@@ -101,7 +104,7 @@ sealed class TrieIndex
         var entries = new List<KeyValuePair<byte[], int>>(blockFirstKeys.Count);
         var inboundEdges = new int[nodeCount];
         ValidateGraph(nodes, inboundEdges);
-        CollectEntries(nodes, entries, blockFirstKeys.Count);
+        CollectEntries(nodes, entries, blockFirstKeys.Count, allocation);
 
         entries.Sort(static (left, right) => ByteArrayComparer.Instance.Compare(left.Key, right.Key));
         foreach (var entry in entries)
@@ -141,7 +144,8 @@ sealed class TrieIndex
     static void CollectEntries(
         TrieNode[] nodes,
         List<KeyValuePair<byte[], int>> entries,
-        int blockCount)
+        int blockCount,
+        SstMetadataAllocation? allocation)
     {
         var visited = new bool[nodes.Length];
         var pending = new Stack<(int NodeIndex, byte[] Prefix)>();
@@ -155,7 +159,9 @@ sealed class TrieIndex
 
             visited[current.NodeIndex] = true;
             var node = nodes[current.NodeIndex];
-            var key = new byte[checked(current.Prefix.Length + node.KeyDelta.Length)];
+            var keyLength = checked(current.Prefix.Length + node.KeyDelta.Length);
+            allocation?.Reserve(checked(24L + keyLength));
+            var key = new byte[keyLength];
             current.Prefix.CopyTo(key, 0);
             node.KeyDelta.CopyTo(key, current.Prefix.Length);
             if (node.BlockId is { } blockId)

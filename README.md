@@ -1,6 +1,6 @@
 # Pants
 
-Pants is an embedded transactional database for .NET 10. It provides an idiomatic async API, snapshot reads, atomic
+Pants is an embedded transactional database for .NET 11. It provides an idiomatic async API, snapshot reads, atomic
 writes, column families, range scans, time-to-live values, and local or cloud-backed persistence.
 
 Pants is a good fit when an application needs to own its data without running a separate database service.
@@ -316,7 +316,7 @@ application diagnostics.
 
 ## Requirements
 
-- .NET 10 or later
+- .NET 11 or later
 - one application writer per local database path
 - asynchronous disposal of databases, transactions, and scans
 

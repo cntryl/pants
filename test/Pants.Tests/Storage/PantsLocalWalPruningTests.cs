@@ -24,9 +24,9 @@ public sealed class PantsLocalWalPruningTests
         using var store = LocalDiskStore.Open(
             directory.Path,
             state,
-            maxWalRetentionBytes: 256,
+            maxWalRetentionBytes: 384,
             maxWalRetentionSegments: 8);
-        Assert.Equal(256, store.WalRetentionByteLimitBytes);
+        Assert.Equal(384, store.WalRetentionByteLimitBytes);
 
         using (var first = CreateCommitPayload(state, 1, DefaultFamily, "first"))
         {
@@ -35,7 +35,7 @@ public sealed class PantsLocalWalPruningTests
 
         var firstSequence = state.Sequence;
         var retainedBytes = store.WalRetainedBytes;
-        Assert.InRange(retainedBytes, 1, 256);
+        Assert.InRange(retainedBytes, 1, 384);
 
         using var next = CreateCommitPayload(state, 2, DefaultFamily, "second");
         _ = Assert.Throws<PantsNoSpaceException>(() =>
@@ -66,7 +66,7 @@ public sealed class PantsLocalWalPruningTests
 
         var firstSequence = state.Sequence;
         _ = store.RotateActiveLocalWal();
-        Assert.Equal(0, store.ActiveWalBytes);
+        Assert.Equal(WalSegmentCodec.HeaderSize, store.ActiveWalBytes);
         Assert.Equal(1, store.WalRetainedSegments);
 
         using var next = CreateCommitPayload(state, 2, DefaultFamily, "second");
@@ -160,14 +160,11 @@ public sealed class PantsLocalWalPruningTests
         {
             await PutAsync(database, database.ColumnFamilies.DefaultFamily, "persisted", 16);
             var retiredBytes = await File.ReadAllBytesAsync(
-                Path.Combine(directory.Path, "wal", "wal.log"));
+                WalTestFiles.ActivePath(directory.Path));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
-            using var manifest = System.Text.Json.JsonDocument.Parse(
-                await File.ReadAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json")));
-            Assert.Equal(
-                2UL,
-                manifest.RootElement.GetProperty("wal_history_start").GetUInt64());
+            var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+            Assert.Equal(2UL, ledger.Members[0].Open.Id);
 
             await File.WriteAllBytesAsync(
                 Path.Combine(directory.Path, "wal", "00000000000000000001.wal"),
@@ -250,8 +247,8 @@ public sealed class PantsLocalWalPruningTests
 
     static ulong ReadFlushFrontier(string root, uint familyId)
     {
-        using var manifest = JsonDocument.Parse(
-            File.ReadAllBytes(Path.Combine(root, "manifest.snapshot.json")));
+        using var manifest = MetadataFrameCodec.Decode(
+            File.ReadAllBytes(Path.Combine(root, "manifest.snapshot.json")), 1);
         return manifest.RootElement.GetProperty("flushed_through")
             .EnumerateArray()
             .Single(row => row.GetProperty("cf_id").GetUInt32() == familyId)

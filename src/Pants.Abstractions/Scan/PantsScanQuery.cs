@@ -11,4 +11,11 @@ public sealed record PantsScanQuery
     public PantsScanDirection Direction { get; init; }
 
     public int? Limit { get; init; }
+
+    /// <summary>
+    ///     Controls insertion of scanned SST blocks into the shared block cache. By default,
+    ///     scans with an explicit limit of at most 64 rows fill the cache; other scans bypass
+    ///     insertion. Both policies can read blocks already in the cache.
+    /// </summary>
+    public PantsCacheFill? CacheFill { get; init; }
 }

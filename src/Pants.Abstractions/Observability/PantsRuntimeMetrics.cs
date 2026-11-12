@@ -3,9 +3,9 @@ namespace Cntryl.Pants.Observability;
 public sealed record PantsRuntimeMetrics
 {
     public PantsEngineHealth Health { get; init; } = PantsEngineHealth.Healthy;
-    public long CurrentSequence { get; init; }
-    public long ManifestLastPersistedSequence { get; init; }
-    public long ManifestNextWalSequence { get; init; }
+    public ulong CurrentSequence { get; init; }
+    public ulong ManifestLastPersistedSequence { get; init; }
+    public ulong ManifestNextWalSequence { get; init; }
     public int ActiveMemtables { get; init; }
     public int ImmutableMemtables { get; init; }
     public long TotalMemtableBytes { get; init; }
@@ -24,6 +24,10 @@ public sealed record PantsRuntimeMetrics
     public long CompactionBufferUsedBytes { get; init; }
     public long CompactionBufferPeakBytes { get; init; }
     public long CompactionBufferCapacityBytes { get; init; }
+    /// <summary>Shared reader metadata and transient read reservations; a quarter of the read allowance.</summary>
+    public long ReadMetadataUsedBytes { get; init; }
+    public long ReadMetadataPeakBytes { get; init; }
+    public long ReadMetadataCapacityBytes { get; init; }
     public long ScanBufferUsedBytes { get; init; }
     public long ScanBufferPeakBytes { get; init; }
     public long ScanBufferCapacityBytes { get; init; }
@@ -33,11 +37,16 @@ public sealed record PantsRuntimeMetrics
     public long MemtableFlushThresholdBytes { get; init; }
     public long MaximumMemtableWalSegmentGap { get; init; }
     public bool WriteStalled { get; init; }
-    public long WalCurrentSegmentId { get; init; }
+
+    public long WriteSlowdownCount { get; init; }
+    public long WriteSlowdownNanosecondsTotal { get; init; }
+    public ulong BackgroundRateLimitedBytes { get; init; }
+    public ulong EstimatedPendingCompactionBytes { get; init; }
+    public ulong WalCurrentSegmentId { get; init; }
     public int WalPendingWrites { get; init; }
-    public long WalLastSyncedSequence { get; init; }
-    public long WalLocalDurableSequence { get; init; }
-    public long WalCloudDurableSequence { get; init; }
+    public ulong WalLastSyncedSequence { get; init; }
+    public ulong WalLocalDurableSequence { get; init; }
+    public ulong WalCloudDurableSequence { get; init; }
     public long WalRetainedBytes { get; init; }
     public int WalRetainedSegments { get; init; }
     public long WalRetentionByteLimitBytes { get; init; }
@@ -92,7 +101,14 @@ public sealed record PantsRuntimeMetrics
     public long FlushBuildCount { get; init; }
     public long FlushBuildNanosecondsTotal { get; init; }
     public long FlushBuildNanosecondsMaximum { get; init; }
+    /// <summary>Successful flush publications; failed immutable worker attempts are excluded.</summary>
     public long FlushPublishCount { get; init; }
+    /// <summary>
+    ///     Local immutable-flush time spans the first publication attempt through matching runtime
+    ///     installation, including metadata work and retry waits. The initial SST build precedes
+    ///     this clock. Synchronous
+    ///     flushes report the completed storage-worker time.
+    /// </summary>
     public long FlushPublishNanosecondsTotal { get; init; }
     public long FlushPublishNanosecondsMaximum { get; init; }
     public long FlushFailuresTotal { get; init; }

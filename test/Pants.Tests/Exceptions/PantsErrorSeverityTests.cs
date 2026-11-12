@@ -12,7 +12,7 @@ public sealed class PantsErrorSeverityTests
         {
             PantsErrorCode.NotFound or PantsErrorCode.InvalidArgument or PantsErrorCode.NotSupported or
                 PantsErrorCode.InvalidPath or PantsErrorCode.MemoryModeViolation or
-                PantsErrorCode.WriteConflict => PantsErrorSeverity.Caller,
+                PantsErrorCode.WriteConflict or PantsErrorCode.UnflushedDataPresent => PantsErrorSeverity.Caller,
             PantsErrorCode.Io or PantsErrorCode.LeaseHeld or PantsErrorCode.LeaseUnavailable or
                 PantsErrorCode.Aborted => PantsErrorSeverity.Transient,
             PantsErrorCode.NoSpace or PantsErrorCode.WriteStall or PantsErrorCode.Busy or
@@ -21,13 +21,16 @@ public sealed class PantsErrorSeverityTests
                 PantsErrorCode.LeaseIndeterminate => PantsErrorSeverity.Fenced,
             PantsErrorCode.Internal or PantsErrorCode.ResourceLimit => PantsErrorSeverity.Defect,
             PantsErrorCode.Corruption or PantsErrorCode.RecoveryFailed or
-                PantsErrorCode.CompatibilityError or
-                PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.Fatal,
+                PantsErrorCode.CompatibilityError => PantsErrorSeverity.Fatal,
+            PantsErrorCode.CommitOutcomeUnknown => PantsErrorSeverity.OutcomeUnknown,
             _ => throw new InvalidOperationException($"Unclassified error code {code}.")
         };
 
         Assert.Equal(expected, code.GetSeverity());
-        Assert.Equal(expected, PantsException.Create(code, "x").Severity);
+        var exception = code == PantsErrorCode.UnflushedDataPresent
+            ? new PantsUnflushedDataPresentException(7, 3)
+            : PantsException.Create(code, "x");
+        Assert.Equal(expected, exception.Severity);
     }
 
     [Theory]
@@ -46,9 +49,9 @@ public sealed class PantsErrorSeverityTests
         Assert.Equal(PantsErrorSeverity.Fatal, code.GetSeverity());
 
     [Fact]
-    public void ShouldClassifyUnknownCommitOutcomeAsFatalUntilReconciled() =>
+    public void ShouldClassifyUnknownCommitOutcomeSeparatelyUntilReconciled() =>
         Assert.Equal(
-            PantsErrorSeverity.Fatal,
+            PantsErrorSeverity.OutcomeUnknown,
             PantsErrorCode.CommitOutcomeUnknown.GetSeverity());
 
     [Theory]

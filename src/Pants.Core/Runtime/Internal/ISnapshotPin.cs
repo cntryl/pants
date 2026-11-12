@@ -4,7 +4,7 @@ interface ISnapshotPin
 {
     long SnapshotId { get; }
 
-    long BeginSequence { get; }
+    ulong BeginSequence { get; }
 
     DateTimeOffset StartedAtUtc { get; }
 

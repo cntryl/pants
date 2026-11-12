@@ -79,9 +79,7 @@ public sealed class PantsWalLogicalByteMetricsTests
         {
         }
 
-        await File.WriteAllBytesAsync(
-            Path.Combine(directory.Path, "wal", "wal.log"),
-            Frame(records));
+        WalTestFiles.ReplaceActiveRecords(directory.Path, records);
 
         var verification = await PantsDatabase.VerifyPathAsync(directory.Path);
         Assert.Equal(expectedRecords, verification.WalRecoveryRecordsReplayed);
@@ -110,16 +108,4 @@ public sealed class PantsWalLogicalByteMetricsTests
             null,
             1));
 
-    static byte[] Frame(IEnumerable<byte[]> payloads)
-    {
-        using var stream = new MemoryStream();
-        foreach (var payload in payloads)
-        {
-            DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
-            DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
-            stream.Write(payload);
-        }
-
-        return stream.ToArray();
-    }
 }

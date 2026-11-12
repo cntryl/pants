@@ -224,10 +224,10 @@ static class CommitValidator
             cancellationToken).ConfigureAwait(false);
         var currentRangeSequence = state.RangeTombstones[family]
             .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
-            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Select(static tombstone => (ulong?)tombstone.WriteSequence)
             .Max();
         if (currentRangeSequence is { } rangeSequence &&
-            (diskEntry is null || rangeSequence > checked((long)diskEntry.Sequence)))
+            (diskEntry is null || rangeSequence > diskEntry.Sequence))
         {
             return false;
         }
@@ -243,7 +243,7 @@ static class CommitValidator
     ///     <see cref="RuntimeState.ReleaseFlushedGeneration" />). Returns the durable sequence at
     ///     which the key last changed (put or delete), or <c>null</c> if it has no durable record.
     /// </summary>
-    static async ValueTask<long?> ResolveDiskWriteSequenceAsync(
+    static async ValueTask<ulong?> ResolveDiskWriteSequenceAsync(
         IStorageReadStore? diskStore,
         ColumnFamilyIdentity family,
         byte[] key,
@@ -259,7 +259,7 @@ static class CommitValidator
                 key,
                 cancellationToken)
             .ConfigureAwait(false);
-        return sequence is { } value ? checked((long)value) : null;
+        return sequence;
     }
 
     static async ValueTask<SstEntry?> ResolveDiskEntryAsync(
@@ -318,7 +318,7 @@ static class CommitValidator
             ? null
             : CellState.FromUnixMilliseconds(
                 entry.IsDelete ? null : entry.Value,
-                checked((long)entry.Sequence),
+                entry.Sequence,
                 entry.Expiration);
     }
 
@@ -342,7 +342,7 @@ static class CommitValidator
             cancellationToken).ConfigureAwait(false);
         var coveringRangeSequence = startSnapshot.RangeTombstones[family]
             .Where(tombstone => IsInRange(key, tombstone.Start, tombstone.EndExclusive))
-            .Select(static tombstone => (long?)tombstone.WriteSequence)
+            .Select(static tombstone => (ulong?)tombstone.WriteSequence)
             .Max();
         return coveringRangeSequence is { } rangeSequence &&
                (diskCell is null || rangeSequence > diskCell.WriteSequence)
@@ -366,7 +366,7 @@ static class CommitValidator
         ColumnFamilyIdentity family,
         byte[] start,
         byte[] end,
-        long afterSequence,
+        ulong afterSequence,
         ResourceBudget? scanMemoryBudget,
         CancellationToken cancellationToken)
     {

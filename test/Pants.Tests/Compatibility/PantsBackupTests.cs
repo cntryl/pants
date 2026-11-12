@@ -28,7 +28,9 @@ public sealed class PantsBackupTests
 
             Assert.Equal(PantsBackupStorageKind.Local, manifest.StorageKind);
             Assert.True(manifest.DurabilityFrontier > 0);
-            Assert.Contains(manifest.Objects, item => item.Path == "wal/wal.log");
+            Assert.Contains(manifest.Objects, item => item.Path == "wal/LEDGER");
+            Assert.Contains(manifest.Objects, item => item.Path ==
+                "wal/" + Path.GetFileName(WalTestFiles.ActivePath(sourcePath)));
         }
 
         await PantsDatabase.RestoreBackupAsync(artifactPath, PantsOpenOptions.Local(restoredPath));
@@ -193,14 +195,18 @@ public sealed class PantsBackupTests
             source.ColumnFamilies.DefaultFamily,
             "key"u8.ToArray(),
             "value"u8.ToArray());
-        var walBefore = await File.ReadAllBytesAsync(Path.Combine(sourcePath, "wal", "wal.log"));
+        var walPath = WalTestFiles.ActivePath(sourcePath);
+        var walBefore = await File.ReadAllBytesAsync(walPath);
+        var ledgerPath = Path.Combine(sourcePath, "wal", "LEDGER");
+        var ledgerBefore = await File.ReadAllBytesAsync(ledgerPath);
 
         await Assert.ThrowsAsync<PantsInvalidArgumentException>(() =>
             source.BackupAsync(
                 Path.Combine(sourcePath, "nested", "backup"),
                 TimeSpan.FromSeconds(10)).AsTask());
 
-        Assert.Equal(walBefore, await File.ReadAllBytesAsync(Path.Combine(sourcePath, "wal", "wal.log")));
+        Assert.Equal(walBefore, await File.ReadAllBytesAsync(walPath));
+        Assert.Equal(ledgerBefore, await File.ReadAllBytesAsync(ledgerPath));
         Assert.False(Directory.Exists(Path.Combine(sourcePath, "nested")));
     }
 
@@ -383,7 +389,9 @@ public sealed class PantsBackupTests
         Assert.DoesNotContain(manifest.Objects, item => item.Path.EndsWith(
             "00000000000000000099.wal",
             StringComparison.Ordinal));
-        Assert.Contains(manifest.Objects, item => item.Path == "wal/wal.log");
+        Assert.Contains(manifest.Objects, item => item.Path == "wal/LEDGER");
+        Assert.Contains(manifest.Objects, item => item.Path ==
+            "wal/" + Path.GetFileName(WalTestFiles.ActivePath(sourcePath)));
     }
 
     [Fact]

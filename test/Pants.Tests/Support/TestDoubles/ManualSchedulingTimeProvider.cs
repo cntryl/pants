@@ -10,6 +10,15 @@ sealed class ManualSchedulingTimeProvider : TimeProvider
     readonly List<ManualTimer> _timers = [];
     long _timestamp;
 
+    public bool HasTimerDueIn(TimeSpan delay)
+    {
+        lock (_gate)
+        {
+            var due = checked(_timestamp + delay.Ticks);
+            return _timers.Any(timer => timer.DueTimestamp == due);
+        }
+    }
+
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
     public override long GetTimestamp()

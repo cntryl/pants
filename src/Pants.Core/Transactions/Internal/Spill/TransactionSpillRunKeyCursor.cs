@@ -7,6 +7,10 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     readonly ulong _dataEnd;
     readonly byte[]? _endExclusive;
     readonly bool _reverse;
+    readonly TransactionMemoryPool? _memoryPool;
+    readonly TransactionSpillRunHeader? _streamingHeader;
+    long _chunkMetadataCharge;
+    ulong _nextReverseEnd;
     readonly ulong[] _reverseFrameOffsets;
     readonly IReadOnlyList<ulong> _reverseOffsets;
     readonly TransactionSpillRun _run;
@@ -24,8 +28,10 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         TransactionSpillRun run,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        PantsScanDirection direction)
+        PantsScanDirection direction,
+        TransactionMemoryPool? memoryPool = null)
     {
+        _memoryPool = memoryPool;
         _store = store;
         _run = run;
         _startInclusive = startInclusive?.ToArray();
@@ -39,11 +45,22 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
             _exhausted = header.RecordCount == 0;
             if (_reverse)
             {
-                _reverseOffsets = TransactionSpillStore.ReadSparseOffsets(stream, header);
+                var chunkMetadataCharge = checked(header.SparseCount * sizeof(ulong) + 64L);
+                if (memoryPool is null || memoryPool.TryReserve(chunkMetadataCharge))
+                {
+                    _chunkMetadataCharge = memoryPool is null ? 0 : chunkMetadataCharge;
+                    _reverseOffsets = TransactionSpillStore.ReadSparseOffsets(stream, header);
+                }
+                else
+                {
+                    _reverseOffsets = [];
+                    _streamingHeader = header;
+                }
+                _nextReverseEnd = header.OrdinalTableOffset;
                 _reverseFrameOffsets = new ulong[Math.Min(
                     TransactionSpillStore.SparseIndexStride,
                     run.RecordCount)];
-                _nextReverseChunk = _reverseOffsets.Count;
+                _nextReverseChunk = header.SparseCount;
                 _cursor = TransactionSpillStore.RunHeaderLength;
             }
             else
@@ -58,6 +75,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         }
         catch (Exception exception)
         {
+            ReleaseChunkMetadata();
             throw TransactionSpillStore.MapReadException(exception);
         }
     }
@@ -96,7 +114,22 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
 
     public void Reset() => throw new NotSupportedException();
 
-    public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            ReleaseChunkMetadata();
+        }
+    }
+
+    void ReleaseChunkMetadata()
+    {
+        var charge = Interlocked.Exchange(ref _chunkMetadataCharge, 0);
+        if (charge != 0)
+        {
+            _memoryPool!.Release(charge);
+        }
+    }
 
     byte[]? NextForwardKey()
     {
@@ -170,10 +203,20 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         }
 
         var chunkIndex = --_nextReverseChunk;
-        var chunkStart = _reverseOffsets[chunkIndex];
-        var chunkEnd = chunkIndex + 1 < _reverseOffsets.Count
-            ? _reverseOffsets[chunkIndex + 1]
-            : _dataEnd;
+        ulong chunkStart;
+        ulong chunkEnd;
+        if (_streamingHeader is { } header)
+        {
+            chunkEnd = _nextReverseEnd;
+            using var stream = _store.OpenRunReadStream(_run);
+            chunkStart = TransactionSpillStore.ReadPreviousSparseOffset(stream, header, chunkEnd);
+            _nextReverseEnd = chunkStart;
+        }
+        else
+        {
+            chunkStart = _reverseOffsets[chunkIndex];
+            chunkEnd = chunkIndex + 1 < _reverseOffsets.Count ? _reverseOffsets[chunkIndex + 1] : _dataEnd;
+        }
         var cursor = chunkStart;
         var frameCount = 0;
         using (var stream = _store.OpenRunReadStream(_run))

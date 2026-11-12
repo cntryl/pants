@@ -58,7 +58,8 @@ public sealed class MidgeLocalWalRetentionParityTests
             var defaultFamily = database.ColumnFamilies.DefaultFamily;
             var idleFamily = await database.ColumnFamilies.CreateAsync("idle");
             await PutAsync(database, defaultFamily, "k");
-            var syncedWalPrefix = File.ReadAllBytes(Path.Combine(livePath, "wal", "wal.log"));
+            var syncedWalPrefix = File.ReadAllBytes(WalTestFiles.ActivePath(livePath));
+            var syncedLedger = File.ReadAllBytes(Path.Combine(livePath, "wal", "LEDGER"));
 
             await using (var transaction = await database.Transactions.BeginAsync(
                              defaultFamily,
@@ -78,7 +79,7 @@ public sealed class MidgeLocalWalRetentionParityTests
             await AssertKeyAbsentAsync(database, defaultFamily);
 
             CopyCrashImage(livePath, powerLossImagePath);
-            TruncateWalSegmentToSyncedPrefix(powerLossImagePath, syncedWalPrefix);
+            RestoreSyncedWalImage(powerLossImagePath, syncedWalPrefix, syncedLedger);
             ExpireWriterLease(powerLossImagePath);
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
@@ -329,18 +330,15 @@ public sealed class MidgeLocalWalRetentionParityTests
 
     static ulong[] SealedWalSegmentIds(string path) =>
         Directory.EnumerateFiles(Path.Combine(path, "wal"), "*.wal")
+            .Where(file => !StringComparer.Ordinal.Equals(file, WalTestFiles.ActivePath(path)))
             .Select(file => ulong.Parse(
                 Path.GetFileNameWithoutExtension(file),
                 CultureInfo.InvariantCulture))
             .Order()
             .ToArray();
 
-    static ulong ReadWalHistoryStart(string path)
-    {
-        using var manifest = JsonDocument.Parse(
-            File.ReadAllBytes(Path.Combine(path, "manifest.snapshot.json")));
-        return manifest.RootElement.GetProperty("wal_history_start").GetUInt64();
-    }
+    static ulong ReadWalHistoryStart(string path) =>
+        WalLedgerStore.LoadExisting(Path.Combine(path, "wal")).Members[0].Open.Id;
 
     static async Task AssertDoesNotResurrectAsync(DeleteKind deleteKind, bool crashImage)
     {
@@ -558,9 +556,7 @@ public sealed class MidgeLocalWalRetentionParityTests
         Assert.NotNull(await reader.GetAsync(TestBytes.FromString(key)));
     }
 
-    static int CountSealedWalSegments(string path) =>
-        Directory.EnumerateFiles(Path.Combine(path, "wal"), "*.wal")
-            .Count();
+    static int CountSealedWalSegments(string path) => SealedWalSegmentIds(path).Length;
 
     static void CopyCrashImage(string source, string destination)
     {
@@ -592,23 +588,25 @@ public sealed class MidgeLocalWalRetentionParityTests
         }
     }
 
-    static void TruncateWalSegmentToSyncedPrefix(string databasePath, byte[] syncedPrefix)
+    static void RestoreSyncedWalImage(string databasePath, byte[] syncedPrefix, byte[] syncedLedger)
     {
-        var walPath = Assert.Single(Directory.EnumerateFiles(
-            Path.Combine(databasePath, "wal"),
-            "*.wal"));
+        var directory = Path.Combine(databasePath, "wal");
+        var segmentId = WalSegmentCodec.DecodeHeader(syncedPrefix).Open.Id;
+        var walPath = Path.Combine(directory, $"{segmentId:00000000000000000000}.wal");
         var currentBytes = File.ReadAllBytes(walPath);
-        Assert.True(
-            currentBytes.Length > syncedPrefix.Length,
-            $"The sealed WAL must contain an unsynced tail beyond {syncedPrefix.Length} bytes.");
+        Assert.True(currentBytes.Length > syncedPrefix.Length);
         Assert.Equal(syncedPrefix, currentBytes.AsSpan(0, syncedPrefix.Length).ToArray());
-        using var wal = new FileStream(
-            walPath,
-            FileMode.Open,
-            FileAccess.Write,
-            FileShare.Read);
-        wal.SetLength(syncedPrefix.Length);
-        wal.Flush(true);
+        // Retain the acknowledged ledger image with its data prefix; newer directory entries
+        // and the later seal were not part of this captured durability boundary.
+        File.WriteAllBytes(walPath, syncedPrefix);
+        File.WriteAllBytes(Path.Combine(directory, "LEDGER"), syncedLedger);
+        foreach (var file in Directory.GetFiles(directory, "*.wal"))
+        {
+            if (ulong.Parse(Path.GetFileNameWithoutExtension(file), CultureInfo.InvariantCulture) > segmentId)
+            {
+                File.Delete(file);
+            }
+        }
     }
 
     static void ExpireWriterLease(string path)

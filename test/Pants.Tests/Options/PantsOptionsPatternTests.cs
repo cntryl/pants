@@ -41,7 +41,7 @@ public sealed class PantsOptionsPatternTests
         services.AddPants().BindConfiguration("Pants");
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         var settings = serviceProvider.GetRequiredService<IOptions<PantsDatabaseOptions>>().Value;
         var database = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
@@ -95,7 +95,7 @@ public sealed class PantsOptionsPatternTests
         services.AddPants().BindConfiguration("Pants");
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         var database = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
             .GetDatabaseAsync();
@@ -105,7 +105,7 @@ public sealed class PantsOptionsPatternTests
     }
 
     [Fact]
-    public void AddPantsValidatesBoundConfigurationAtStartup()
+    public async Task AddPantsValidatesBoundConfigurationAtStartup()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -118,22 +118,22 @@ public sealed class PantsOptionsPatternTests
         services.AddPants().BindConfiguration("Pants");
         using var serviceProvider = services.BuildServiceProvider();
 
-        var exception = Assert.Throws<OptionsValidationException>(() =>
-            serviceProvider.GetRequiredService<IStartupValidator>().Validate());
+        var exception = await Assert.ThrowsAsync<OptionsValidationException>(() =>
+            serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync());
 
         Assert.Contains("local storage path", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void AddPantsRejectsFlushThresholdWithoutSizeLimitAtStartup()
+    public async Task AddPantsRejectsFlushThresholdWithoutSizeLimitAtStartup()
     {
         var services = new ServiceCollection();
         services.AddPants().Configure(options =>
             options.MemtableFlushThresholdBytes = 8 * 1024 * 1024);
         using var serviceProvider = services.BuildServiceProvider();
 
-        var exception = Assert.Throws<OptionsValidationException>(() =>
-            serviceProvider.GetRequiredService<IStartupValidator>().Validate());
+        var exception = await Assert.ThrowsAsync<OptionsValidationException>(() =>
+            serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync());
 
         Assert.Contains(
             "A memtable flush threshold requires a memtable size limit.",
@@ -158,7 +158,7 @@ public sealed class PantsOptionsPatternTests
         services.AddKeyedPants("secondary").BindConfiguration("Pants:Secondary");
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         var namedOptions = serviceProvider.GetRequiredService<IOptionsMonitor<PantsDatabaseOptions>>();
         var primary = await serviceProvider
             .GetRequiredKeyedService<IPantsDatabaseProvider>("primary")
@@ -200,7 +200,7 @@ public sealed class PantsOptionsPatternTests
         services.AddPants().BindConfiguration("Pants");
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         _ = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
             .GetDatabaseAsync();
@@ -208,7 +208,7 @@ public sealed class PantsOptionsPatternTests
         var storage = Assert.IsType<PantsStorageConfiguration.Cloud>(databaseFactory.Options!.Storage);
         Assert.Same(storage.Topology.Wal, storage.Topology.Sst);
         Assert.Same(storage.Topology.Wal, storage.Topology.Control);
-        Assert.Equal("catalog/", storage.Topology.Wal.Prefix);
+        Assert.Equal("catalog", storage.Topology.Wal.Prefix);
         var provider = Assert.IsType<PantsAwsS3Provider>(
             storage.Topology.Wal.Provider);
         Assert.Equal("catalog-production", provider.Bucket);
@@ -250,7 +250,7 @@ public sealed class PantsOptionsPatternTests
         });
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         _ = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
             .GetDatabaseAsync();
@@ -314,7 +314,7 @@ public sealed class PantsOptionsPatternTests
         });
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         await using var database = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
             .GetDatabaseAsync();
@@ -444,7 +444,7 @@ public sealed class PantsOptionsPatternTests
         });
 
         await using var serviceProvider = services.BuildServiceProvider();
-        serviceProvider.GetRequiredService<IStartupValidator>().Validate();
+        await serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync();
         _ = await serviceProvider
             .GetRequiredService<IPantsDatabaseProvider>()
             .GetDatabaseAsync();
@@ -463,7 +463,7 @@ public sealed class PantsOptionsPatternTests
     }
 
     [Fact]
-    public void AddPantsRejectsCredentialKindsFromAnotherProviderAtStartup()
+    public async Task AddPantsRejectsCredentialKindsFromAnotherProviderAtStartup()
     {
         var services = new ServiceCollection();
         services.AddPants().Configure(options =>
@@ -493,14 +493,14 @@ public sealed class PantsOptionsPatternTests
         });
         using var serviceProvider = services.BuildServiceProvider();
 
-        var exception = Assert.Throws<OptionsValidationException>(() =>
-            serviceProvider.GetRequiredService<IStartupValidator>().Validate());
+        var exception = await Assert.ThrowsAsync<OptionsValidationException>(() =>
+            serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync());
 
         Assert.Contains("cannot be used with Azure Blob", exception.Message);
     }
 
     [Fact]
-    public void AddPantsRejectsGcsHmacCredentialsWithJsonApiAtStartup()
+    public async Task AddPantsRejectsGcsHmacCredentialsWithJsonApiAtStartup()
     {
         var services = new ServiceCollection();
         services.AddPants().Configure(options =>
@@ -529,8 +529,8 @@ public sealed class PantsOptionsPatternTests
         });
         using var serviceProvider = services.BuildServiceProvider();
 
-        var exception = Assert.Throws<OptionsValidationException>(() =>
-            serviceProvider.GetRequiredService<IStartupValidator>().Validate());
+        var exception = await Assert.ThrowsAsync<OptionsValidationException>(() =>
+            serviceProvider.GetRequiredService<IAsyncStartupValidator>().ValidateAsync());
 
         Assert.Contains("HMAC credentials require the XML API style", exception.Message);
     }

@@ -3,18 +3,12 @@ namespace Cntryl.Pants.Storage;
 public sealed class PantsSstDeleteValueTests
 {
     [Fact]
-    public void ShouldPreserveValueBytesGivenDeleteEntryCarriesReservedValue()
+    public void ShouldRejectValueBytesGivenDeleteEntryCarriesValue()
     {
-        var expectedValue = "reserved-value"u8.ToArray();
-        var bytes = SstCodec.Encode(
-            [new SstEntry("key"u8.ToArray(), expectedValue, 7, null, true)],
+        Assert.Throws<PantsCorruptionException>(() => SstCodec.Encode(
+            [new SstEntry("key"u8.ToArray(), "reserved-value"u8.ToArray(), 7, null, true)],
             [],
-            PantsPerformanceGoal.Latency);
-
-        var decoded = Assert.Single(SstCodec.Decode(bytes).Entries);
-
-        Assert.True(decoded.IsDelete);
-        Assert.Equal(expectedValue, decoded.Value);
+            PantsPerformanceGoal.Latency));
     }
 
     [Fact]
