@@ -16,11 +16,11 @@
       },
       "Corvus.Text.Json.Validator": {
         "type": "Direct",
-        "requested": "[5.7.9, )",
-        "resolved": "5.7.9",
-        "contentHash": "Vb0uwjJV1Vui3o98sneNGmgjkHZxs0mgfyLyqhuQ40uI9SHe563lycLJ8K5/HhMWWKEqZGyPVtL2lQt/mhEL9w==",
+        "requested": "[5.8.11, )",
+        "resolved": "5.8.11",
+        "contentHash": "dZHUP7dWJMmviCGpeD9Hl6rti5pSnQuAPUcrta434myaLqslxQfznGdBc6eqEXIo16hofyJ3xvRHxlbgNsO9Ew==",
         "dependencies": {
-          "Corvus.Text.Json": "5.7.9"
+          "Corvus.Text.Json": "5.8.11"
         }
       },
       "coverlet.collector": {
@@ -78,11 +78,17 @@
         "resolved": "2.9.1",
         "contentHash": "OE0sl1/sQ37bjVsPKKtwQlWDgqaxWgtme3xZz7JssWUzg5JpMIyHgCTY9MVMxOg48fJ1AgGT3tgdH5m/kQ5xhA=="
       },
+      "Corvus.Regex.Ecma262": {
+        "type": "Transitive",
+        "resolved": "1.0.15",
+        "contentHash": "wDC21MqsPI9L8PBs3dst8kebfY0rxE9KFiacCuk2Zwju6q3+DO49JFnQ61SwBBJgVUh2xSx2L6NQ4C6LXL6Vrg=="
+      },
       "Corvus.Text.Json": {
         "type": "Transitive",
-        "resolved": "5.7.9",
-        "contentHash": "ShQwHlRoLw5EoihaqsOcNcQGdBVVp48YGnz1ExqWm6nz7P63InHmBOcB7qBVRXYpwOOg9D5r7/4UsJZ2Bcg+7A==",
+        "resolved": "5.8.11",
+        "contentHash": "ZMEISriHVKN+F0beABLR55SCFDScFrCNQLD571n0PrhvsPPE0Sh5mtLpPOSDrgYA3uEQQ5895i+IxItDcUkiOA==",
         "dependencies": {
+          "Corvus.Regex.Ecma262": "1.0.15",
           "NodaTime": "3.3.1"
         }
       },
