@@ -2599,6 +2599,7 @@ sealed class LocalDiskStore :
                 manifest,
                 state,
                 manifestLoad.PreserveUnownedSsts || recoveryMetadata.PreserveUnownedSsts,
+                recoveryMetadata.IntentsRetained,
                 failpointHandler,
                 lease);
             var retainedStartupResiduePaths = GetRetainedStartupResiduePaths(root);
@@ -2771,6 +2772,7 @@ sealed class LocalDiskStore :
         ManifestState manifest,
         RuntimeState state,
         bool preserveUnownedSsts,
+        bool intentsRetained,
         IFailpointHandler failpoints,
         FileLease lease)
     {
@@ -2809,14 +2811,22 @@ sealed class LocalDiskStore :
             failpoints,
             lease);
 
-        if (preserveUnownedSsts)
-        {
-            return;
-        }
-
         var owned = manifest.Files
             .Select(static file => file.Name)
             .ToHashSet(StringComparer.Ordinal);
+        if (preserveUnownedSsts)
+        {
+            // Salvage cannot prove these files are orphans. Renaming them to the salvage-retained
+            // convention keeps them for operator inspection and hides them from later orphan sweeps.
+            // Retained intent entries still reference their outputs by name, so those stay in place.
+            if (!intentsRetained)
+            {
+                QuarantineUnownedSsts(sstDirectory, owned, state, failpoints, lease);
+            }
+
+            return;
+        }
+
         DeleteStartupResidue(
             Directory.EnumerateFiles(sstDirectory, "*.sst", SearchOption.TopDirectoryOnly)
                 .Where(path => !owned.Contains(Path.GetFileName(path))),
@@ -2825,6 +2835,41 @@ sealed class LocalDiskStore :
             StartupCleanupFailureDisposition.Degrade,
             failpoints,
             lease);
+    }
+
+    static void QuarantineUnownedSsts(
+        string sstDirectory,
+        HashSet<string> owned,
+        RuntimeState state,
+        IFailpointHandler failpoints,
+        FileLease lease)
+    {
+        lease.EnsureValid();
+        var moved = false;
+        try
+        {
+            var candidates = Directory.EnumerateFiles(sstDirectory, "*.sst", SearchOption.TopDirectoryOnly)
+                .Where(path => !owned.Contains(Path.GetFileName(path)))
+                .ToArray();
+            foreach (var path in candidates)
+            {
+                lease.EnsureValid();
+                failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
+                lease.EnsureValid();
+                RetainCorruptFile(path);
+                moved = true;
+            }
+
+            if (moved)
+            {
+                AtomicStagedFile.FlushDirectory(sstDirectory);
+                lease.EnsureValid();
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            HandleStartupCleanupFailure(state, StartupCleanupFailureDisposition.Degrade);
+        }
     }
 
     static string[] GetRetainedStartupResiduePaths(string root)
@@ -7875,9 +7920,11 @@ sealed class LocalDiskStore :
                     recoveryPolicy,
                     state,
                     remoteSstsAuthoritative);
+                var intentsRetained = !clearRecoveredIntents && document.RootElement.GetArrayLength() != 0;
                 return new RecoveryMetadataResult(
                     clearRecoveredIntents,
-                    journalSalvaged || (!clearRecoveredIntents && document.RootElement.GetArrayLength() != 0));
+                    journalSalvaged || intentsRetained,
+                    intentsRetained);
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {
@@ -7888,7 +7935,7 @@ sealed class LocalDiskStore :
                     recoveryPolicy,
                     state,
                     exception);
-                return new RecoveryMetadataResult(false, true);
+                return new RecoveryMetadataResult(false, true, false);
             }
         }
     }
@@ -9036,5 +9083,5 @@ sealed class LocalDiskStore :
         bool PreserveUnownedSsts,
         bool LegacyFlushFrontiers);
 
-    sealed record RecoveryMetadataResult(bool ClearRecoveredIntents, bool PreserveUnownedSsts);
+    sealed record RecoveryMetadataResult(bool ClearRecoveredIntents, bool PreserveUnownedSsts, bool IntentsRetained);
 }
