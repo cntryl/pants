@@ -66,6 +66,11 @@ static class SstCodec
     const ulong BloomSeedOne = 0x9E37_79B1_85EB_CA87;
     const ulong BloomSeedTwo = 0xC2B2_AE3D_27D4_EB4F;
 
+    // Midge 0.5.2 (#1032): each false positive costs a data-block read, so per-block
+    // blooms spend about 14.4 bits per key for 0.1% instead of 9.6 for 1%. Readers
+    // are driven by the persisted bit count and probe count, so both sizes stay readable.
+    const double DataBlockBloomFalsePositiveRate = 0.001;
+
     internal static void ValidateDataBlockSize(SstBlockHandle handle)
     {
         if (handle.Size > MaximumEncodedDataBlockBytes)
@@ -1221,17 +1226,8 @@ static class SstCodec
 
     static byte[] EncodeBloom(IReadOnlyList<byte[]> keys)
     {
-        var estimatedKeys = Math.Max(1, keys.Count);
-        var numberOfBits = Math.Max(
-            64,
-            checked((int)Math.Ceiling(
-                -estimatedKeys * Math.Log(0.01) / Math.Pow(Math.Log(2), 2))));
-        var hashFunctions = checked((byte)Math.Clamp(
-            (int)Math.Round(
-                (double)numberOfBits / estimatedKeys * Math.Log(2),
-                MidpointRounding.AwayFromZero),
-            1,
-            8));
+        var numberOfBits = BloomSizing.CalculateBitSize(keys.Count, DataBlockBloomFalsePositiveRate);
+        var hashFunctions = BloomSizing.CalculateHashFunctions(numberOfBits, keys.Count);
         var bits = new byte[(numberOfBits + 7) / 8];
         foreach (var key in keys)
         {
