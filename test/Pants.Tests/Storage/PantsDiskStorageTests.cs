@@ -950,6 +950,48 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
+    public async Task ShouldReopenHealthyAndReadKeyGivenManifestFilesRestoredAfterFailClosedSalvage()
+    {
+        using var directory = new TemporaryDirectory();
+        string sstPath;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await PutAndFlushAsync(database, "durable-key");
+            sstPath = Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
+        }
+
+        var manifestNames = new[] { "manifest.snapshot.json", "manifest.json", "manifest.journal" };
+        var backups = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var name in manifestNames)
+        {
+            var path = Path.Combine(directory.Path, name);
+            if (File.Exists(path))
+            {
+                backups[name] = await File.ReadAllBytesAsync(path);
+            }
+        }
+
+        Assert.Contains("manifest.snapshot.json", backups.Keys);
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.json"), "{corrupt");
+
+        await Assert.ThrowsAnyAsync<PantsException>(() => OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
+        Assert.True(File.Exists(sstPath));
+
+        foreach (var (name, bytes) in backups)
+        {
+            await File.WriteAllBytesAsync(Path.Combine(directory.Path, name), bytes);
+        }
+
+        await using var reopened = await OpenAsync(directory.Path);
+        Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("durable-key-value", TestBytes.ToText((await reader.GetAsync(TestBytes.FromString("durable-key")))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldKeepIntactSstOnDiskGivenSalvagedManifestDoesNotReferenceIt()
     {
         using var directory = new TemporaryDirectory();
