@@ -17,6 +17,7 @@ readonly record struct CompactionPublicationResult(
     bool PersistenceAnomaly);
 
 delegate ValueTask<CompactionWorkSnapshot?> CompactionWorkSnapshotProvider(
+    IReadOnlySet<uint> excludedFamilies,
     CancellationToken cancellationToken);
 
 delegate ValueTask<CompactionPublicationResult> CompactionPublicationDispatcher(

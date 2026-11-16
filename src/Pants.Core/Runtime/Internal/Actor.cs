@@ -2159,10 +2159,11 @@ sealed class Actor : IAsyncDisposable
                                 RecordScheduledCompactionFamily(snapshot);
                                 var completion = await _compactionRuntime.ScheduleDrainDebtAsync(
                                         snapshot,
-                                        nextToken => CaptureNextCompactionWorkSnapshotAsync(
+                                        (excluded, nextToken) => CaptureNextCompactionWorkSnapshotAsync(
                                             true,
                                             true,
                                             preferredWorkBytes,
+                                            excluded,
                                             nextToken),
                                         PublishCompactionOnActorAsync,
                                         _cloudCompactionOutputPublisher,
@@ -5400,10 +5401,11 @@ sealed class Actor : IAsyncDisposable
             RecordScheduledCompactionFamily(snapshot);
             var completion = await _compactionRuntime.ScheduleCompactAsync(
                     snapshot,
-                    token => CaptureNextCompactionWorkSnapshotAsync(
+                    (excluded, token) => CaptureNextCompactionWorkSnapshotAsync(
                         force,
                         false,
                         preferredWorkBytes,
+                        excluded,
                         token),
                     PublishCompactionOnActorAsync,
                     force,
@@ -5460,6 +5462,7 @@ sealed class Actor : IAsyncDisposable
         bool force,
         bool drainDebt,
         long? preferredWorkBytes,
+        IReadOnlySet<uint> excludedFamilies,
         CancellationToken cancellationToken) =>
         SendAsync(
             state =>
@@ -5476,7 +5479,8 @@ sealed class Actor : IAsyncDisposable
                     drainDebt,
                     preferredWorkBytes,
                     GetCriticalL0Families(state),
-                    _lastScheduledCompactionColumnFamilyId);
+                    _lastScheduledCompactionColumnFamilyId,
+                    excludedFamilies);
                 RecordScheduledCompactionFamily(snapshot);
                 return ValueTask.FromResult<CompactionWorkSnapshot?>(snapshot);
             },

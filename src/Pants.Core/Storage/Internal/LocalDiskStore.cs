@@ -793,6 +793,8 @@ sealed class LocalDiskStore :
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
+    static readonly IReadOnlySet<uint> EmptyFamilySet = new HashSet<uint>();
+
     public int CountCompactionInputs(RuntimeState state, bool force)
     {
         return CaptureCompactionWorkSnapshot(state, force, false)
@@ -805,76 +807,27 @@ sealed class LocalDiskStore :
         bool drainDebt = false,
         long? preferredWorkBytes = null,
         IReadOnlySet<uint>? criticalL0Families = null,
-        uint? lastScheduledColumnFamilyId = null)
+        uint? lastScheduledColumnFamilyId = null,
+        IReadOnlySet<uint>? excludedFamilies = null)
     {
         var manifest = Volatile.Read(ref _manifestReadSnapshot);
         var snapshotHorizon = state.ActiveSnapshots
             .Select(static snapshot => snapshot.BeginSequence)
             .Cast<ulong?>()
             .Min();
-        var criticalPlans = Array.Empty<CompactionPlan>();
-        if (criticalL0Families is not null)
-        {
-            foreach (var familyId in CompactionFamilyRoundRobin.OrderFamilies(
-                         _familyIds.Values,
-                         lastScheduledColumnFamilyId))
-            {
-                var repairPlan = LeveledCompactionPlanner.PickRepair(
-                    manifest.Files,
-                    familyId,
-                    _compaction);
-                if (repairPlan is null)
-                {
-                    continue;
-                }
-
-                criticalPlans = [repairPlan];
-                break;
-            }
-        }
-
-        if (criticalPlans.Length == 0 && criticalL0Families is not null)
-        {
-            foreach (var familyId in CompactionFamilyRoundRobin.OrderCriticalFamilies(
-                         _familyIds.Values,
-                         criticalL0Families,
-                         lastScheduledColumnFamilyId))
-            {
-                var plan = LeveledCompactionPlanner.PickCriticalL0(
-                    manifest.Files,
-                    familyId,
-                    _compaction,
-                    snapshotHorizon,
-                    preferredWorkBytes);
-                if (plan is null)
-                {
-                    continue;
-                }
-
-                criticalPlans = [plan];
-                break;
-            }
-        }
-        var plans = criticalPlans.Length != 0
-            ? criticalPlans
-            : _familyIds.Values
-                .Select(familyId => drainDebt
-                ? LeveledCompactionPlanner.PickDebtDrain(
-                    manifest.Files,
-                    familyId,
-                    _compaction,
-                    snapshotHorizon,
-                    preferredWorkBytes)
-                : LeveledCompactionPlanner.Pick(
-                    manifest.Files,
-                    familyId,
-                    _compaction,
-                    snapshotHorizon,
-                    force,
-                    preferredWorkBytes))
-                .Where(static plan => plan is not null)
-                .Cast<CompactionPlan>()
-                .ToArray();
+        var plan = CompactionTurnSelector.Select(
+            manifest.Files,
+            _familyIds.Values,
+            criticalL0Families ?? EmptyFamilySet,
+            lastScheduledColumnFamilyId,
+            _compaction,
+            snapshotHorizon,
+            preferredWorkBytes,
+            drainDebt
+                ? CompactionTurnMode.DrainDebt
+                : force ? CompactionTurnMode.Force : CompactionTurnMode.Ordinary,
+            excludedFamilies);
+        var plans = plan is null ? [] : new[] { plan };
         var reclaimableFamilies = manifest.ColumnFamilies
             .Where(static family => family.DeletedAt is not null && !family.Reclaimed)
             .ToArray();
@@ -899,7 +852,7 @@ sealed class LocalDiskStore :
 
         return CompactAsync(
             CaptureCompactionWorkSnapshot(state, force),
-            token => ValueTask.FromResult<CompactionWorkSnapshot?>(
+            (_, _) => ValueTask.FromResult<CompactionWorkSnapshot?>(
                 CaptureCompactionWorkSnapshot(state, force)),
             static (publish, token) =>
             {
@@ -5211,7 +5164,7 @@ sealed class LocalDiskStore :
         bool continueCompacting = false) =>
         CompactAsync(
                 CaptureCompactionWorkSnapshot(state, force),
-                _ => ValueTask.FromResult<CompactionWorkSnapshot?>(
+                (_, _) => ValueTask.FromResult<CompactionWorkSnapshot?>(
                     CaptureCompactionWorkSnapshot(state, force)),
                 static (publish, cancellationToken) =>
                 {
@@ -5239,7 +5192,7 @@ sealed class LocalDiskStore :
         Flush(state);
         return CompactAsync(
             CaptureCompactionWorkSnapshot(state, force),
-            token => ValueTask.FromResult<CompactionWorkSnapshot?>(
+            (_, _) => ValueTask.FromResult<CompactionWorkSnapshot?>(
                 CaptureCompactionWorkSnapshot(state, force)),
             static (publish, token) =>
             {
@@ -5273,6 +5226,8 @@ sealed class LocalDiskStore :
         var outputBytes = 0L;
         var publicationCount = 0;
         var planStale = false;
+        var isolation = new CompactionFailureIsolation();
+        var failedFamilies = isolation.FailedFamilies;
         while (true)
         {
             // Each round holds the maintenance gate alone and releases it before the next round,
@@ -5282,16 +5237,29 @@ sealed class LocalDiskStore :
                        ? null
                        : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
             {
-                var round = await CompactRoundAsync(
-                        snapshot,
-                        outputPublisher,
-                        publicationCompleted,
-                        memory,
-                        prepareInputs,
-                        staging,
-                        publicationDispatcher,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                var round = default(CompactionRoundResult);
+                var roundSnapshot = snapshot;
+                try
+                {
+                    round = await CompactRoundAsync(
+                            roundSnapshot,
+                            outputPublisher,
+                            publicationCompleted,
+                            memory,
+                            prepareInputs,
+                            staging,
+                            publicationDispatcher,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    !cancellationToken.IsCancellationRequested &&
+                    isolation.TryIsolate(roundSnapshot, exception))
+                {
+                    // The failed family is excluded from later snapshots; a default round has no
+                    // more work, which sends the drain to re-verify against the healthy families.
+                }
+
                 outputBytes = checked(outputBytes + round.OutputBytes);
                 publicationCount = checked(publicationCount + (round.PublishedCompaction ? 1 : 0));
                 if (round.PersistenceAnomaly)
@@ -5313,7 +5281,7 @@ sealed class LocalDiskStore :
 
             if (shouldVerifyNoMoreWork)
             {
-                snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+                snapshot = await snapshotProvider(failedFamilies, cancellationToken).ConfigureAwait(false) ??
                           throw new OperationCanceledException(cancellationToken);
                 if (snapshot.Plans.Count == 0 && snapshot.ReclaimableFamilies.Count == 0)
                 {
@@ -5323,7 +5291,7 @@ sealed class LocalDiskStore :
                 continue;
             }
 
-            snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+            snapshot = await snapshotProvider(failedFamilies, cancellationToken).ConfigureAwait(false) ??
                       throw new OperationCanceledException(cancellationToken);
         }
 
@@ -5333,7 +5301,8 @@ sealed class LocalDiskStore :
             foreach (var familyId in snapshot.Manifest.Files
                          .Select(static file => file.ColumnFamilyId)
                          .Concat(snapshot.Plans.Select(static plan => plan.ColumnFamilyId))
-                         .Distinct())
+                         .Distinct()
+                         .Where(familyId => !failedFamilies.Contains(familyId)))
             {
                 if (!CompactionDebt.IsClear(manifest.Files, familyId, _compaction))
                 {
@@ -5343,6 +5312,7 @@ sealed class LocalDiskStore :
             }
         }
 
+        isolation.ThrowIfFailed();
         return new CompactionResult(outputBytes, publicationCount, false, planStale);
     }
 
@@ -5362,22 +5332,37 @@ sealed class LocalDiskStore :
         var outputBytes = 0L;
         var publicationCount = 0;
         var planStale = false;
+        var isolation = new CompactionFailureIsolation();
+        var failedFamilies = isolation.FailedFamilies;
         while (true)
         {
+            var isolatedFailure = false;
             using (memory is null
                        ? null
                        : await memory.Gate.EnterAsync(cancellationToken).ConfigureAwait(false))
             {
-                var round = await CompactRoundAsync(
-                        snapshot,
-                        outputPublisher,
-                        publicationCompleted,
-                        memory,
-                        prepareInputs,
-                        staging,
-                        publicationDispatcher,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                var round = default(CompactionRoundResult);
+                var roundSnapshot = snapshot;
+                try
+                {
+                    round = await CompactRoundAsync(
+                            roundSnapshot,
+                            outputPublisher,
+                            publicationCompleted,
+                            memory,
+                            prepareInputs,
+                            staging,
+                            publicationDispatcher,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    !cancellationToken.IsCancellationRequested &&
+                    isolation.TryIsolate(roundSnapshot, exception))
+                {
+                    isolatedFailure = true;
+                }
+
                 outputBytes = checked(outputBytes + round.OutputBytes);
                 publicationCount = checked(publicationCount + (round.PublishedCompaction ? 1 : 0));
                 if (round.PersistenceAnomaly)
@@ -5391,16 +5376,17 @@ sealed class LocalDiskStore :
                     break;
                 }
 
-                if (!force || !round.HasMoreCompactionWork)
+                if (!force || (!isolatedFailure && !round.HasMoreCompactionWork))
                 {
                     break;
                 }
             }
 
-            snapshot = await snapshotProvider(cancellationToken).ConfigureAwait(false) ??
+            snapshot = await snapshotProvider(failedFamilies, cancellationToken).ConfigureAwait(false) ??
                       throw new OperationCanceledException(cancellationToken);
         }
 
+        isolation.ThrowIfFailed();
         return new CompactionResult(outputBytes, publicationCount, false, planStale);
     }
 
