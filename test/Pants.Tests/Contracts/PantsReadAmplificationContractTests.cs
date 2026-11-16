@@ -56,25 +56,24 @@ public sealed class PantsReadAmplificationContractTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         for (var generation = 0; generation < 11; generation++)
         {
-            await FlushGenerationAsync(database, generation);
+            await FlushBookendedGenerationAsync(database, generation);
         }
 
+        // Every file spans the key but none holds it, so no source decides the read early.
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        var value = await reader.GetAsync("hot-key"u8.ToArray());
-        Assert.NotNull(value);
-        Assert.Equal("value-10", TestBytes.ToText(value.Value));
+        Assert.Null(await reader.GetAsync("hot-key-m"u8.ToArray()));
 
         var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(1, metrics.ReadsTotal);
         Assert.Equal(11, metrics.SstsTouchedTotal);
         Assert.Equal(11, metrics.L0SstsTouchedTotal);
-        Assert.Equal(22, metrics.BlocksReadTotal);
+        Assert.Equal(11, metrics.BlocksReadTotal);
         Assert.Equal(1, metrics.SstBudgetViolationRate);
-        Assert.Equal(1, metrics.BlockBudgetViolationRate);
+        Assert.Equal(0, metrics.BlockBudgetViolationRate);
         Assert.Equal(1, metrics.SstBudgetViolationsTotal);
-        Assert.Equal(1, metrics.BlockBudgetViolationsTotal);
+        Assert.Equal(0, metrics.BlockBudgetViolationsTotal);
         Assert.Equal(0, metrics.CompactionTriggersTotal);
     }
 
@@ -86,14 +85,13 @@ public sealed class PantsReadAmplificationContractTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
         for (var generation = 0; generation < 3; generation++)
         {
-            await FlushGenerationAsync(database, generation);
+            await FlushBookendedGenerationAsync(database, generation);
         }
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        Assert.Equal("value-02", TestBytes.ToText(
-            Assert.IsType<ReadOnlyMemory<byte>>(await reader.GetAsync("hot-key"u8.ToArray()))));
+        Assert.Null(await reader.GetAsync("hot-key-m"u8.ToArray()));
 
         var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(1, metrics.ReadsTotal);
@@ -115,6 +113,7 @@ public sealed class PantsReadAmplificationContractTests
             await FlushGenerationAsync(database, generation);
         }
 
+        // The newest L0 file decides every read, so each read touches exactly one SST.
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
@@ -125,10 +124,10 @@ public sealed class PantsReadAmplificationContractTests
 
         var metrics = await database.Diagnostics.GetReadAmplificationMetricsAsync();
         Assert.Equal(10, metrics.ReadsTotal);
-        Assert.Equal(20, metrics.SstsTouchedTotal);
-        Assert.Equal(20, metrics.L0SstsTouchedTotal);
-        Assert.Equal(2, metrics.AverageSstsPerRead);
-        Assert.Equal(2, metrics.AverageL0SstsPerRead);
+        Assert.Equal(10, metrics.SstsTouchedTotal);
+        Assert.Equal(10, metrics.L0SstsTouchedTotal);
+        Assert.Equal(1, metrics.AverageSstsPerRead);
+        Assert.Equal(1, metrics.AverageL0SstsPerRead);
     }
 
     [Fact]
@@ -141,13 +140,13 @@ public sealed class PantsReadAmplificationContractTests
                 .WithWorkloadProfile(PantsWorkloadProfile.WriteHeavy));
         for (var generation = 0; generation < 6; generation++)
         {
-            await FlushGenerationAsync(database, generation);
+            await FlushBookendedGenerationAsync(database, generation);
         }
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        Assert.NotNull(await reader.GetAsync("hot-key"u8.ToArray()));
+        Assert.Null(await reader.GetAsync("hot-key-m"u8.ToArray()));
 
         var amplification =
             await database.Diagnostics.GetReadAmplificationMetricsAsync();
@@ -179,6 +178,22 @@ public sealed class PantsReadAmplificationContractTests
         }
 
         throw new TimeoutException("Read-amplification compaction did not complete.");
+    }
+
+    /// <summary>
+    ///     Flushes a file whose key range spans <c>hot-key-m</c> without holding it, so a read of
+    ///     that key cannot be decided by any single source and visits every candidate file.
+    /// </summary>
+    static async Task FlushBookendedGenerationAsync(IPantsDatabase database, int generation)
+    {
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        var value = TestBytes.FromString($"value-{generation:D2}");
+        transaction.Put("hot-key-a"u8.ToArray(), value);
+        transaction.Put("hot-key-z"u8.ToArray(), value);
+        await transaction.CommitAsync(PantsWriteOptions.Buffered);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static async Task FlushGenerationAsync(IPantsDatabase database, int generation)

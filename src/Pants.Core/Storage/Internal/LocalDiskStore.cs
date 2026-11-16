@@ -1517,8 +1517,24 @@ sealed class LocalDiskStore :
         var tombstonesSeen = new List<RangeTombstone>();
         SstEntry? best = null;
         var versionsSeen = new Dictionary<ulong, SstEntry>();
-        foreach (var candidate in candidatesNewestFirst)
+        var candidates = PointReadGroups.InLevelOrder(candidatesNewestFirst);
+        var coveredByRangeTombstone = false;
+        var groupEnd = 0;
+        for (var candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
         {
+            if (candidateIndex == groupEnd)
+            {
+                // A version or a covering range tombstone decides the key: every older group
+                // holds only older versions of it.
+                if (best is not null || coveredByRangeTombstone)
+                {
+                    break;
+                }
+
+                groupEnd = PointReadGroups.GroupEnd(candidates, candidateIndex);
+            }
+
+            var candidate = candidates[candidateIndex];
             var tier = IsSstLocalForReadView(candidate)
                 ? PantsSstReadTier.Local
                 : PantsSstReadTier.HydratedFromCloud;
@@ -1527,6 +1543,7 @@ sealed class LocalDiskStore :
                 .ConfigureAwait(false);
             await using var reader = opened.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
+            coveredByRangeTombstone |= SstRangeTombstoneMask.CoversKey(reader.RangeTombstones, keyCopy);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
@@ -1935,9 +1952,12 @@ sealed class LocalDiskStore :
     }
 
     /// <summary>
-    ///     Resolves a key's newest visible SST entry by comparing write sequences across
-    ///     <paramref name="candidatesNewestFirst" /> — file publication order alone is insufficient
-    ///     because a newer compaction output can contain an older value than an untouched L0 file.
+    ///     Resolves a key's newest visible SST entry by walking
+    ///     <paramref name="candidatesNewestFirst" /> in level order and stopping at the first
+    ///     <see cref="PointReadGroups">group</see> that holds a version of the key or a range
+    ///     tombstone covering it. Write sequences are compared within a group — file publication
+    ///     order alone is insufficient because a newer compaction output can contain an older value
+    ///     than an untouched L0 file.
     ///     This is the real value-supplying counterpart to
     ///     <see cref="RecordPointReadCore" />'s telemetry-only bloom/block-read simulation. Safe to
     ///     call concurrently with the actor's mailbox: it only reads the (lock-free,
@@ -1959,8 +1979,24 @@ sealed class LocalDiskStore :
         var tombstonesSeen = new List<RangeTombstone>();
         SstEntry? best = null;
         var versionsSeen = new Dictionary<ulong, SstEntry>();
-        foreach (var candidate in candidatesNewestFirst)
+        var candidates = PointReadGroups.InLevelOrder(candidatesNewestFirst);
+        var coveredByRangeTombstone = false;
+        var groupEnd = 0;
+        for (var candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
         {
+            if (candidateIndex == groupEnd)
+            {
+                // A version or a covering range tombstone decides the key: every older group
+                // holds only older versions of it.
+                if (best is not null || coveredByRangeTombstone)
+                {
+                    break;
+                }
+
+                groupEnd = PointReadGroups.GroupEnd(candidates, candidateIndex);
+            }
+
+            var candidate = candidates[candidateIndex];
             var path = Path.Combine(_sstDirectory, candidate.Name);
             using var readerLease = _readerCache.GetOrAdd(
                 SstFileIdentity.Of(candidate),
@@ -1968,6 +2004,7 @@ sealed class LocalDiskStore :
                 out var readerCacheHit);
             var reader = readerLease.Reader;
             tombstonesSeen.AddRange(reader.RangeTombstones);
+            coveredByRangeTombstone |= SstRangeTombstoneMask.CoversKey(reader.RangeTombstones, keyCopy);
             var decision = reader.GetPointReadDecision(keyCopy);
             if (decision.Rejected || decision.CandidateBlockIndex < 0)
             {
