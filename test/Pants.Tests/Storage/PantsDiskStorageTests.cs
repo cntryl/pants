@@ -955,27 +955,46 @@ public sealed class PantsDiskStorageTests
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
         {
-            await using var transaction = await database.Transactions.BeginAsync(
-                database.ColumnFamilies.DefaultFamily,
-                PantsTransactionMode.ReadWrite);
-            transaction.Put("recoverable"u8.ToArray(), "value"u8.ToArray());
-            await transaction.CommitAsync(PantsWriteOptions.Sync);
+            for (var index = 0; index < 2; index++)
+            {
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
+                    PantsTransactionMode.ReadWrite);
+                transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString($"value-{index}"));
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
+            }
         }
 
         var walPath = WalTestFiles.ActivePath(directory.Path);
         var wal = await File.ReadAllBytesAsync(walPath);
-        wal[^1] ^= 0xFF;
+        var firstPayloadLength = checked((int)BitConverter.ToUInt32(wal, WalSegmentCodec.HeaderSize));
+        var secondFrameOffset = WalSegmentCodec.HeaderSize + 8 + firstPayloadLength;
+        wal[secondFrameOffset + 4] ^= 0xff;
         await File.WriteAllBytesAsync(walPath, wal);
+
+        var firstStrict = await Assert.ThrowsAnyAsync<PantsException>(() =>
+            OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+        Assert.Equal(PantsErrorCode.RecoveryFailed, firstStrict.Code);
 
         await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
         {
             Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+            await using var salvageReader = await salvaged.Transactions.BeginAsync(
+                salvaged.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.Equal("value-0", TestBytes.ToText((await salvageReader.GetAsync("key-0"u8.ToArray()))!.Value));
         }
 
         var retainedBefore = Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*");
+        Assert.NotEmpty(retainedBefore);
         await using var strict = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict);
+        await using var reader = await strict.Transactions.BeginAsync(
+            strict.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
 
         Assert.Equal(PantsEngineHealth.Healthy, (await strict.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        Assert.Equal("value-0", TestBytes.ToText((await reader.GetAsync("key-0"u8.ToArray()))!.Value));
+        Assert.Null(await reader.GetAsync("key-1"u8.ToArray()));
         Assert.Equal(
             retainedBefore,
             Directory.GetFiles(Path.Combine(directory.Path, "wal"), "*.salvage-retained*"));
