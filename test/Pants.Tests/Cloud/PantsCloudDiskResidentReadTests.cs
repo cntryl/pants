@@ -335,7 +335,7 @@ public sealed class PantsCloudDiskResidentReadTests
         await using var database = await PantsDatabase.OpenAsync(options);
         for (var generation = 0; generation < 6; generation++)
         {
-            await CommitAndFlushAsync(database, "hot-key", $"value-{generation}");
+            await CommitBookendedAndFlushAsync(database, $"value-{generation}");
         }
 
         await using (var writer = await database.Transactions.BeginAsync(
@@ -351,10 +351,8 @@ public sealed class PantsCloudDiskResidentReadTests
                          database.ColumnFamilies.DefaultFamily,
                          PantsTransactionMode.ReadOnly))
         {
-            Assert.Equal(
-                "value-5",
-                TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
-                    await trigger.GetAsync("hot-key"u8.ToArray()))));
+            // No file holds this key, so the read visits every L0 file and triggers compaction.
+            Assert.Null(await trigger.GetAsync("hot-key-m"u8.ToArray()));
         }
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -536,6 +534,21 @@ public sealed class PantsCloudDiskResidentReadTests
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         Assert.NotEmpty(CloudSsts(path));
+    }
+
+    /// <summary>
+    ///     Flushes one file whose key range spans <c>hot-key-m</c> without holding it, so a read of
+    ///     that key visits every L0 file.
+    /// </summary>
+    static async Task CommitBookendedAndFlushAsync(IPantsDatabase database, string value)
+    {
+        await using var writer = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        writer.Put("hot-key-a"u8.ToArray(), TestBytes.FromString(value));
+        writer.Put("hot-key-z"u8.ToArray(), TestBytes.FromString(value));
+        await writer.CommitAsync(PantsWriteOptions.CloudStrict);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static async Task CommitAndFlushAsync(

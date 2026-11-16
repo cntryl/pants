@@ -70,11 +70,11 @@ public sealed class PantsPointReadDiagnosticsTests
         var warm = await reader.GetWithDiagnosticsAsync("alpha"u8.ToArray());
 
         // The trace comes from the same pass that resolves the value, so the first read of a
-        // key reports the cold reader and block caches it actually hit.
+        // key reports the cold reader and block caches it actually hit. The newer flush decides
+        // the key, so the older one is never opened.
         Assert.Equal("second", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(cold.Value)));
         Assert.Equal(1, cold.Trace.KeyRangeRejects);
-        Assert.Equal(2, cold.Trace.Ssts.Count);
-        Assert.Equal(2, cold.Trace.Ssts.Select(static sst => sst.Name).Distinct().Count());
+        Assert.Single(cold.Trace.Ssts);
         Assert.All(cold.Trace.Ssts, static sst =>
         {
             Assert.EndsWith(".sst", sst.Name, StringComparison.Ordinal);
@@ -105,11 +105,11 @@ public sealed class PantsPointReadDiagnosticsTests
         });
 
         var aggregate = await database.Diagnostics.GetReadPathDiagnosticsAsync();
-        Assert.Equal(2, aggregate.SstReaderCacheMisses);
-        Assert.Equal(2, aggregate.SstReaderCacheHits);
-        Assert.Equal(2, aggregate.SstBlockCacheMisses);
-        Assert.Equal(2, aggregate.SstBlockCacheHits);
-        Assert.Equal(2, aggregate.DataBlocksRead);
+        Assert.Equal(1, aggregate.SstReaderCacheMisses);
+        Assert.Equal(1, aggregate.SstReaderCacheHits);
+        Assert.Equal(1, aggregate.SstBlockCacheMisses);
+        Assert.Equal(1, aggregate.SstBlockCacheHits);
+        Assert.Equal(1, aggregate.DataBlocksRead);
     }
 
     [Fact]

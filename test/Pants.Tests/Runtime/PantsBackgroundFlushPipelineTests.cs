@@ -1984,11 +1984,7 @@ public sealed class PantsBackgroundFlushPipelineTests
             new RuntimeDependencies(storageVerifier: verifier));
         for (var generation = 0; generation < 6; generation++)
         {
-            await CommitAsync(
-                database,
-                database.ColumnFamilies.DefaultFamily,
-                "hot-key"u8.ToArray(),
-                TestBytes.FromString($"value-{generation:D2}"));
+            await CommitBookendedGenerationAsync(database, generation);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
@@ -2000,7 +1996,9 @@ public sealed class PantsBackgroundFlushPipelineTests
             await using var read = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
-            Assert.NotNull(await read.GetAsync("hot-key"u8.ToArray()));
+            // No single file holds this key, so the read visits every L0 file and triggers
+            // read-amplification compaction.
+            Assert.Null(await read.GetAsync("hot-key-m"u8.ToArray()));
 
             Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).CompactionsRun);
 
@@ -2029,11 +2027,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         await using var database = await PantsDatabase.OpenAsync(options);
         for (var generation = 0; generation < 6; generation++)
         {
-            await CommitAsync(
-                database,
-                database.ColumnFamilies.DefaultFamily,
-                "hot-key"u8.ToArray(),
-                TestBytes.FromString($"value-{generation:D2}"));
+            await CommitBookendedGenerationAsync(database, generation);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
@@ -2048,7 +2042,7 @@ public sealed class PantsBackgroundFlushPipelineTests
         await using var read = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
-        Assert.NotNull(await read.GetAsync("hot-key"u8.ToArray()));
+        Assert.Null(await read.GetAsync("hot-key-m"u8.ToArray()));
         Assert.Equal(
             "unflushed",
             TestBytes.ToText((await read.GetAsync("racing-active"u8.ToArray()))!.Value));
@@ -2865,6 +2859,17 @@ public sealed class PantsBackgroundFlushPipelineTests
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value) =>
         CommitBestEffortAsync(database, family, key, value, true);
+
+    /// <summary>
+    ///     Commits a generation whose key range spans <c>hot-key-m</c> without holding it, so a read
+    ///     of that key visits every L0 file it lands in. Callers flush after each generation.
+    /// </summary>
+    static async ValueTask CommitBookendedGenerationAsync(IPantsDatabase database, int generation)
+    {
+        var value = TestBytes.FromString($"value-{generation:D2}");
+        await CommitAsync(database, database.ColumnFamilies.DefaultFamily, "hot-key-a"u8.ToArray(), value);
+        await CommitAsync(database, database.ColumnFamilies.DefaultFamily, "hot-key-z"u8.ToArray(), value);
+    }
 
     static async ValueTask CommitAsync(
         IPantsDatabase database,

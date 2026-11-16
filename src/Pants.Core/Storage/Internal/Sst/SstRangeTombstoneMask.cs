@@ -27,4 +27,19 @@ static class SstRangeTombstoneMask
 
         return false;
     }
+
+    /// <summary>Whether any tombstone spans <paramref name="key" />, whatever its sequence.</summary>
+    public static bool CoversKey(IReadOnlyList<RangeTombstone> tombstones, ReadOnlySpan<byte> key)
+    {
+        foreach (var tombstone in tombstones)
+        {
+            if (key.SequenceCompareTo(tombstone.Start) >= 0 &&
+                key.SequenceCompareTo(tombstone.End) < 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
