@@ -377,7 +377,7 @@ static class WalCodec
             throw;
         }
         catch (Exception exception) when (
-            exception is ArgumentException or InvalidOperationException or OverflowException or ZstdSharp.ZstdException)
+            exception is ArgumentException or InvalidOperationException or OverflowException or InvalidDataException)
         {
             throw new StorageException("WAL value decompression failed.", exception);
         }

@@ -62,8 +62,8 @@ contracts:
 - WAL, SST, manifest, and cloud payloads retain exact persisted bytes for checksums, retries, and
   authoritative readback.
 - provider request signing and credential/token data remain request-scoped and are not pooled.
-- compression remains on the pinned .NET 10-compatible implementation; native .NET 11 Zstd work is
-  tracked separately by issue #18.
+- Zstd compression uses the BCL `System.IO.Compression` Zstandard types (issue #18); LZ4 remains on
+  `K4os.Compression.LZ4`, which has no BCL equivalent.
 
 Candidates for generalized pooling or unsafe zero-copy APIs were rejected because the system rows
 did not provide evidence that their additional lifetime complexity would pay for itself. No new
