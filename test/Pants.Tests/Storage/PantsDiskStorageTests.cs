@@ -950,6 +950,100 @@ public sealed class PantsDiskStorageTests
     }
 
     [Fact]
+    public async Task ShouldKeepIntactSstOnDiskGivenSalvagedManifestDoesNotReferenceIt()
+    {
+        using var directory = new TemporaryDirectory();
+        var snapshotPath = Path.Combine(directory.Path, "manifest.snapshot.json");
+        byte[] olderSnapshot;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await PutAndFlushAsync(database, "first");
+            olderSnapshot = await File.ReadAllBytesAsync(snapshotPath);
+            await PutAndFlushAsync(database, "second");
+        }
+
+        var sstPaths = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
+        Assert.Equal(2, sstPaths.Length);
+        await File.WriteAllBytesAsync(snapshotPath, olderSnapshot);
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.journal"), "not-a-valid-manifest-journal");
+
+        await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
+        {
+            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        }
+
+        Assert.All(sstPaths, path => Assert.True(File.Exists(path), path));
+    }
+
+    static async Task PutAndFlushAsync(IPantsDatabase database, string key)
+    {
+        await using var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(TestBytes.FromString(key), TestBytes.FromString($"{key}-value"));
+        await transaction.CommitAsync(PantsWriteOptions.Sync);
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+    }
+
+    [Fact]
+    public async Task ShouldPersistSequenceFloorAboveDiscardedTailGivenSalvagedWalPrefix()
+    {
+        using var directory = new TemporaryDirectory();
+        ulong discardedHighWater;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            for (var index = 0; index < 4; index++)
+            {
+                await using var transaction = await database.Transactions.BeginAsync(
+                    database.ColumnFamilies.DefaultFamily,
+                    PantsTransactionMode.ReadWrite);
+                transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString($"value-{index}"));
+                await transaction.CommitAsync(PantsWriteOptions.Sync);
+            }
+
+            discardedHighWater = (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
+        }
+
+        var walPath = WalTestFiles.ActivePath(directory.Path);
+        var wal = await File.ReadAllBytesAsync(walPath);
+        var offset = WalSegmentCodec.HeaderSize;
+        for (var frame = 0; frame < 2; frame++)
+        {
+            offset += 8 + checked((int)BitConverter.ToUInt32(wal, offset));
+        }
+
+        wal[offset + 4] ^= 0xff;
+        await File.WriteAllBytesAsync(walPath, wal);
+
+        await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
+        {
+            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+            Assert.True(
+                (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence >= discardedHighWater);
+            await using var transaction = await salvaged.Transactions.BeginAsync(
+                salvaged.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadWrite);
+            transaction.Put("after"u8.ToArray(), "after-value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+            Assert.True(
+                (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence > discardedHighWater,
+                "A commit after salvage reused a sequence allocated by the discarded WAL tail.");
+        }
+
+        await using var strict = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict);
+        await using var reader = await strict.Transactions.BeginAsync(
+            strict.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+
+        Assert.True((await strict.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence > discardedHighWater);
+        Assert.Equal("value-0", TestBytes.ToText((await reader.GetAsync("key-0"u8.ToArray()))!.Value));
+        Assert.Equal("value-1", TestBytes.ToText((await reader.GetAsync("key-1"u8.ToArray()))!.Value));
+        Assert.Null(await reader.GetAsync("key-2"u8.ToArray()));
+        Assert.Null(await reader.GetAsync("key-3"u8.ToArray()));
+        Assert.Equal("after-value", TestBytes.ToText((await reader.GetAsync("after"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldReopenStrictAndHealthyAfterWalSalvageRepair()
     {
         using var directory = new TemporaryDirectory();
