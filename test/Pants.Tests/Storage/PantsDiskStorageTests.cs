@@ -972,7 +972,50 @@ public sealed class PantsDiskStorageTests
             Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
         }
 
-        Assert.All(sstPaths, path => Assert.True(File.Exists(path), path));
+        Assert.All(sstPaths, path => Assert.True(
+            File.Exists(path) || File.Exists($"{path}.salvage-retained"),
+            path));
+    }
+
+    [Theory]
+    [InlineData(PantsRecoveryPolicy.Salvage)]
+    [InlineData(PantsRecoveryPolicy.Strict)]
+    public async Task ShouldKeepQuarantinedSstOnLaterOpensGivenSalvagedManifestDidNotReferenceIt(
+        PantsRecoveryPolicy laterPolicy)
+    {
+        using var directory = new TemporaryDirectory();
+        var snapshotPath = Path.Combine(directory.Path, "manifest.snapshot.json");
+        byte[] olderSnapshot;
+        await using (var database = await OpenAsync(directory.Path))
+        {
+            await PutAndFlushAsync(database, "first");
+            olderSnapshot = await File.ReadAllBytesAsync(snapshotPath);
+            await PutAndFlushAsync(database, "second");
+        }
+
+        await File.WriteAllBytesAsync(snapshotPath, olderSnapshot);
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.journal"), "not-a-valid-manifest-journal");
+        await using (var salvaged = await OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage))
+        {
+            Assert.Equal(PantsEngineHealth.SalvageMode, (await salvaged.Diagnostics.GetRuntimeMetricsAsync()).Health);
+        }
+
+        var sstDirectory = Path.Combine(directory.Path, "sst");
+        var quarantined = Directory.GetFiles(sstDirectory, "*.salvage-retained*");
+        Assert.Single(quarantined);
+        var quarantinedBytes = await File.ReadAllBytesAsync(quarantined[0]);
+
+        for (var reopen = 0; reopen < 2; reopen++)
+        {
+            await using var database = await OpenWithRecoveryAsync(directory.Path, laterPolicy);
+            await using var transaction = await database.Transactions.BeginAsync(
+                database.ColumnFamilies.DefaultFamily,
+                PantsTransactionMode.ReadOnly);
+            Assert.NotNull(await transaction.GetAsync(TestBytes.FromString("first")));
+        }
+
+        Assert.Equal(quarantined, Directory.GetFiles(sstDirectory, "*.salvage-retained*"));
+        Assert.Equal(quarantinedBytes, await File.ReadAllBytesAsync(quarantined[0]));
     }
 
     static async Task PutAndFlushAsync(IPantsDatabase database, string key)
