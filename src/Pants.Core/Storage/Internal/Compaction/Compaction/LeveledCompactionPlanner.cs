@@ -24,6 +24,57 @@ static class LeveledCompactionPlanner
             preferredWorkBytes);
 
     /// <summary>
+    ///     Picks only the deepest overfull inner-level work for a family (priority 2 of a compaction
+    ///     turn), plus structural repair. L0 is never planned. An inner level is also picked once it
+    ///     holds <paramref name="innerForceFloor" /> files, even below its size target.
+    /// </summary>
+    public static CompactionPlan? PickInnerLevel(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration,
+        ulong? snapshotHorizon,
+        int innerForceFloor,
+        long? preferredWorkBytes = null) =>
+        PickCore(
+            files,
+            columnFamilyId,
+            configuration,
+            snapshotHorizon,
+            l0ForceFloor: int.MaxValue,
+            innerForceFloor,
+            prioritizeL0: false,
+            preferredWorkBytes,
+            PlanScope.InnerLevels);
+
+    /// <summary>
+    ///     Picks only L0 work for a family (priority 3 of a compaction turn). L0 qualifies once it
+    ///     reaches its size or file-count trigger, or holds <paramref name="l0ForceFloor" /> files.
+    /// </summary>
+    public static CompactionPlan? PickSoftL0(
+        IReadOnlyList<FileMeta> files,
+        uint columnFamilyId,
+        PantsCompactionConfiguration configuration,
+        ulong? snapshotHorizon,
+        int l0ForceFloor) =>
+        PickCore(
+            files,
+            columnFamilyId,
+            configuration,
+            snapshotHorizon,
+            l0ForceFloor,
+            innerForceFloor: int.MaxValue,
+            prioritizeL0: false,
+            preferredWorkBytes: null,
+            PlanScope.L0Only);
+
+    enum PlanScope
+    {
+        All,
+        InnerLevels,
+        L0Only
+    }
+
+    /// <summary>
     ///     Picks the next step of a manual debt drain. Any L0 file is drained, and inner levels are
     ///     compacted only while overfull, so under-target levels are never rewritten.
     /// </summary>
@@ -75,7 +126,8 @@ static class LeveledCompactionPlanner
         int l0ForceFloor,
         int innerForceFloor,
         bool prioritizeL0,
-        long? preferredWorkBytes)
+        long? preferredWorkBytes,
+        PlanScope scope = PlanScope.All)
     {
         ValidateConfiguration(configuration);
         if (preferredWorkBytes is <= 0)
@@ -117,7 +169,12 @@ static class LeveledCompactionPlanner
                 null);
         }
 
-        var l0Plan = PickL0Plan();
+        var l0Plan = scope == PlanScope.InnerLevels ? null : PickL0Plan();
+        if (scope == PlanScope.L0Only)
+        {
+            return l0Plan;
+        }
+
         if (prioritizeL0 && l0Plan is not null)
         {
             return l0Plan;

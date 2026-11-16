@@ -7,6 +7,7 @@ sealed class CompactionRuntimeService(
     CompactionMemory memory)
     : ChannelRuntimeService<CompactionRuntimeRequest, CompactionResult>(capacity)
 {
+    static readonly IReadOnlySet<uint> EmptyFamilies = new HashSet<uint>();
     readonly object _operationGate = new();
     int _compactingSsts;
     int _scheduledOperations;
@@ -115,7 +116,7 @@ sealed class CompactionRuntimeService(
 
         try
         {
-            var snapshot = await request.SnapshotProvider(operationCancellation.Token)
+            var snapshot = await request.SnapshotProvider(EmptyFamilies, operationCancellation.Token)
                     .ConfigureAwait(false) ??
                 throw new OperationCanceledException(operationCancellation.Token);
             operationCancellation.Token.ThrowIfCancellationRequested();
