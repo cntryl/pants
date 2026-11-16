@@ -17,6 +17,7 @@ sealed class DatabaseInstance :
     readonly Lock _shutdownGate = new();
     int _lifecycleState;
     Task? _shutdownTask;
+    Task? _runtimeReleaseTask;
 
     DatabaseInstance(
         PantsOpenOptions options,
@@ -211,7 +212,50 @@ sealed class DatabaseInstance :
             return;
         }
 
-        await ShutdownAsync(Options.Runtime.ShutdownTimeout).ConfigureAwait(false);
+        try
+        {
+            await ShutdownAsync(Options.Runtime.ShutdownTimeout).ConfigureAwait(false);
+        }
+        catch (Exception) when (IsShutdownTerminallyFailed())
+        {
+            // A terminal shutdown failure stays terminal (new work rejected, error replayed), but
+            // the caller's disposal must still release the lock, disk handles and workers. Only
+            // handles are released; no data is deleted.
+            await ReleaseRuntimeAfterFailedShutdownAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    bool IsShutdownTerminallyFailed()
+    {
+        lock (_shutdownGate)
+        {
+            return _shutdownTask is { IsFaulted: true };
+        }
+    }
+
+    Task ReleaseRuntimeAfterFailedShutdownAsync()
+    {
+        lock (_shutdownGate)
+        {
+            return _runtimeReleaseTask ??= ReleaseCoreAsync();
+        }
+
+        async Task ReleaseCoreAsync()
+        {
+            try
+            {
+                await _runtime.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The original shutdown error is the one surfaced; secondary failures are dropped.
+            }
+            finally
+            {
+                Volatile.Write(ref _lifecycleState, 2);
+            }
+        }
     }
 
     public ValueTask<PantsRuntimeMetrics> GetRuntimeMetricsAsync(

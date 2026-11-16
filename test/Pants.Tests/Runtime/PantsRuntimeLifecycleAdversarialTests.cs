@@ -117,6 +117,42 @@ public sealed class PantsRuntimeLifecycleAdversarialTests
     }
 
     [Fact]
+    public async Task ShouldReleaseDirectoryGivenDisposeAfterPermanentShutdownFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        var failpoint = new RetryingShutdownBoundaryFailpointHandler();
+        var options = PantsOpenOptions.Local(directory.Path);
+        var database = await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoint));
+        await using (var transaction = await database.Transactions.BeginAsync(
+                         database.ColumnFamilies.DefaultFamily,
+                         PantsTransactionMode.ReadWrite))
+        {
+            transaction.Put("before-failure"u8.ToArray(), "value"u8.ToArray());
+            await transaction.CommitAsync(PantsWriteOptions.Sync);
+        }
+
+        await Assert.ThrowsAsync<PantsIOException>(() =>
+            database.ShutdownAsync(TestTimeouts.Expected).AsTask());
+
+        try
+        {
+            await database.DisposeAsync().AsTask().WaitAsync(TestTimeouts.Expected);
+        }
+        catch (PantsIOException)
+        {
+            // Disposal may replay the terminal shutdown error; it must still release resources.
+        }
+
+        await using var reopened = await PantsDatabase.OpenAsync(options);
+        await using var reader = await reopened.Transactions.BeginAsync(
+            reopened.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadOnly);
+        Assert.Equal("value", TestBytes.ToText((await reader.GetAsync("before-failure"u8.ToArray()))!.Value));
+    }
+
+    [Fact]
     public async Task ShouldShareOneShutdownExecutionRegardlessOfResponseTimeout()
     {
         using var directory = new TemporaryDirectory();
