@@ -95,6 +95,43 @@ public sealed class PantsControlEnqueueDeadlineTests
             family => family.Name == "never-admitted");
     }
 
+    [Fact]
+    public async Task ShouldReportDefiniteTimeoutWhenShutdownCannotEnqueueOnFullRuntimeQueue()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoint = new RuntimeMetricsResponseFailpointHandler();
+        var time = new ManualSchedulingTimeProvider();
+        var database = await OpenSaturableAsync(directory.Path, failpoint, time);
+        try
+        {
+            var saturation = await SaturateRuntimeQueueAsync(database, failpoint);
+            var shutdown = Task.Run(() => database.ShutdownAsync(TestTimeouts.Expected).AsTask());
+
+            try
+            {
+                var completed = await AdvanceUntilCompletedAsync(time, shutdown);
+
+                Assert.True(
+                    completed,
+                    "Shutdown was still waiting to enqueue on the full runtime queue after its runtime deadline expired.");
+                var exception = await Assert.ThrowsAsync<PantsTimeoutException>(() => shutdown);
+                Assert.DoesNotContain("outcome is unknown", exception.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                failpoint.Release();
+                await ObserveAsync(shutdown, saturation);
+            }
+
+            // The timed-out attempt is retryable: the runtime never admitted it, so a retry completes shutdown.
+            await database.ShutdownAsync(TestTimeouts.Expected);
+        }
+        finally
+        {
+            await database.DisposeAsync();
+        }
+    }
+
     static async Task<IPantsDatabase> OpenSaturableAsync(
         string path,
         RuntimeMetricsResponseFailpointHandler failpoint,
