@@ -3168,7 +3168,20 @@ sealed class Actor : IAsyncDisposable
         Interlocked.Increment(ref _queuedCommands);
         try
         {
-            await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            if (!enforceRuntimeResponseTimeout)
+            {
+                // Runtime-owned continuations and requests that carry their own deadline token
+                // keep waiting for a slot; abandoning them here would drop work already done.
+                await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            }
+            else if (!await DeadlineBoundedAdmission.TryWriteAsync(
+                         _commands.Writer, command, deadline, _runtimeTimeProvider, cancellationToken)
+                     .ConfigureAwait(false))
+            {
+                _telemetry.RecordCommandRejected();
+                throw CreateRuntimeAdmissionTimeout(requestKind, requestId, deadline.Budget);
+            }
+
             admitted = true;
             try
             {
@@ -3382,6 +3395,15 @@ sealed class Actor : IAsyncDisposable
 
         return requestId;
     }
+
+    static PantsTimeoutException CreateRuntimeAdmissionTimeout(
+        string requestKind,
+        long requestId,
+        TimeSpan budget) =>
+        new(
+            $"Runtime request '{requestKind}' with request ID {requestId} could not be queued within " +
+            $"its runtime deadline of {budget:c} because the runtime command queue stayed full; " +
+            "the request was never admitted and nothing was applied.");
 
     PantsException CreateRuntimeResponseTimeout(
         string requestKind,
