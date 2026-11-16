@@ -271,6 +271,7 @@ sealed class Actor : IAsyncDisposable
                 throw;
             }
         }, cancellationToken, enforceRuntimeResponseTimeout: false,
+            awaitAdmissionIndefinitely: true,
             suppliedDeadline: deadline).ConfigureAwait(false);
     }
 
@@ -2178,7 +2179,8 @@ sealed class Actor : IAsyncDisposable
                             }
                         },
                         token,
-                        enforceRuntimeResponseTimeout: false)
+                        enforceRuntimeResponseTimeout: false,
+                        awaitAdmissionIndefinitely: true)
                         .ConfigureAwait(false);
 
                     if (scheduled is null)
@@ -2201,7 +2203,8 @@ sealed class Actor : IAsyncDisposable
                                     return true;
                                 },
                                 token,
-                                enforceRuntimeResponseTimeout: false)
+                                enforceRuntimeResponseTimeout: false,
+                                awaitAdmissionIndefinitely: true)
                             .ConfigureAwait(false);
                     }
 
@@ -2689,7 +2692,8 @@ sealed class Actor : IAsyncDisposable
                         return files;
                     },
                     cancellationToken,
-                    enforceRuntimeResponseTimeout: false)
+                    enforceRuntimeResponseTimeout: false,
+                    awaitAdmissionIndefinitely: true)
                 .ConfigureAwait(false);
             capturedAt = DateTimeOffset.UtcNow;
         }
@@ -3046,7 +3050,8 @@ sealed class Actor : IAsyncDisposable
                             return ValueTask.FromResult(true);
                         },
                         CancellationToken.None,
-                        enforceRuntimeResponseTimeout: false)
+                        enforceRuntimeResponseTimeout: false,
+                        awaitAdmissionIndefinitely: true)
                     .ConfigureAwait(false);
             }
             catch (Exception)
@@ -3127,14 +3132,24 @@ sealed class Actor : IAsyncDisposable
         CancellationToken cancellationToken,
         Action<T>? abandonedResponse = null,
         bool enforceRuntimeResponseTimeout = true,
+        bool awaitAdmissionIndefinitely = false,
         [CallerMemberName] string requestKind = "RuntimeCommand") =>
         SendWithinDeadlineAsync(
             (state, _) => operation(state),
             cancellationToken,
             abandonedResponse,
             enforceRuntimeResponseTimeout,
-            requestKind);
+            requestKind,
+            awaitAdmissionIndefinitely: awaitAdmissionIndefinitely);
 
+    /// <param name="enforceRuntimeResponseTimeout">
+    ///     Whether the response wait is bounded by the runtime deadline (and abandoned on expiry).
+    /// </param>
+    /// <param name="awaitAdmissionIndefinitely">
+    ///     Whether the enqueue may wait for a queue slot past the runtime deadline. Only runtime-owned
+    ///     continuations whose work is already in progress opt in; every caller-facing request is
+    ///     bounded, and an expiry before admission is a definite timeout.
+    /// </param>
     async ValueTask<T> SendWithinDeadlineAsync<T>(
         Func<RuntimeState, OperationDeadline, ValueTask<T>> operation,
         CancellationToken cancellationToken,
@@ -3142,7 +3157,8 @@ sealed class Actor : IAsyncDisposable
         bool enforceRuntimeResponseTimeout = true,
         [CallerMemberName] string requestKind = "RuntimeCommand",
         bool outcomeMayCommit = false,
-        OperationDeadline? suppliedDeadline = null)
+        OperationDeadline? suppliedDeadline = null,
+        bool awaitAdmissionIndefinitely = false)
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
@@ -3168,7 +3184,20 @@ sealed class Actor : IAsyncDisposable
         Interlocked.Increment(ref _queuedCommands);
         try
         {
-            await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            if (awaitAdmissionIndefinitely)
+            {
+                // Runtime-owned continuations keep waiting for a slot; abandoning them here would
+                // drop work already done.
+                await _commands.Writer.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            }
+            else if (!await DeadlineBoundedAdmission.TryWriteAsync(
+                         _commands.Writer, command, deadline, _runtimeTimeProvider, cancellationToken)
+                     .ConfigureAwait(false))
+            {
+                _telemetry.RecordCommandRejected();
+                throw CreateRuntimeAdmissionTimeout(requestKind, requestId, deadline.Budget);
+            }
+
             admitted = true;
             try
             {
@@ -3382,6 +3411,15 @@ sealed class Actor : IAsyncDisposable
 
         return requestId;
     }
+
+    static PantsTimeoutException CreateRuntimeAdmissionTimeout(
+        string requestKind,
+        long requestId,
+        TimeSpan budget) =>
+        new(
+            $"Runtime request '{requestKind}' with request ID {requestId} could not be queued within " +
+            $"its runtime deadline of {budget:c} because the runtime command queue stayed full; " +
+            "the request was never admitted and nothing was applied.");
 
     PantsException CreateRuntimeResponseTimeout(
         string requestKind,
@@ -5443,7 +5481,8 @@ sealed class Actor : IAsyncDisposable
                 return ValueTask.FromResult<CompactionWorkSnapshot?>(snapshot);
             },
             cancellationToken,
-            enforceRuntimeResponseTimeout: false);
+            enforceRuntimeResponseTimeout: false,
+            awaitAdmissionIndefinitely: true);
 
     HashSet<uint> GetCriticalL0Families(RuntimeState state) => state.ActiveMemtableBytes.Keys
         .Where(family => MemtableWritePressure.HasCriticalL0Debt(_options, state, family))
@@ -5485,7 +5524,8 @@ sealed class Actor : IAsyncDisposable
                 return ValueTask.FromResult(result);
             },
             CancellationToken.None,
-            enforceRuntimeResponseTimeout: false);
+            enforceRuntimeResponseTimeout: false,
+            awaitAdmissionIndefinitely: true);
 
     async Task ObserveBackgroundCompactionAsync(
         Task<CompactionResult> completion,
@@ -5528,7 +5568,8 @@ sealed class Actor : IAsyncDisposable
                     return _backgroundCompactionPending || _readAmplificationCompactionPending;
                 },
                 CancellationToken.None,
-                enforceRuntimeResponseTimeout: false).ConfigureAwait(false);
+                enforceRuntimeResponseTimeout: false,
+                awaitAdmissionIndefinitely: true).ConfigureAwait(false);
             if (shouldRearm)
             {
                 await RearmDeferredCompactionAsync().ConfigureAwait(false);
@@ -5562,7 +5603,8 @@ sealed class Actor : IAsyncDisposable
                         return ValueTask.FromResult(true);
                     },
                     CancellationToken.None,
-                    enforceRuntimeResponseTimeout: false).ConfigureAwait(false);
+                    enforceRuntimeResponseTimeout: false,
+                    awaitAdmissionIndefinitely: true).ConfigureAwait(false);
             }
             catch (PantsAbortedException)
             {
@@ -5931,7 +5973,8 @@ sealed class Actor : IAsyncDisposable
                         return true;
                     },
                     cancellationToken,
-                    enforceRuntimeResponseTimeout: false)
+                    enforceRuntimeResponseTimeout: false,
+                    awaitAdmissionIndefinitely: true)
                 .ConfigureAwait(false);
             return protection;
         }
