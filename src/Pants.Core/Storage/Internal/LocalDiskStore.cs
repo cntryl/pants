@@ -7809,6 +7809,9 @@ sealed class LocalDiskStore :
         RecoveryWorkSink? recoveryWork)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
+        // A salvaged journal leaves the loaded manifest partial, so SSTs it no longer names have
+        // indeterminate authority and must not be deleted as unowned residue.
+        var journalSalvaged = false;
         using (startupPhases.Measure(StartupPhase.ManifestJournal))
         {
             byte[] journalBytes;
@@ -7829,6 +7832,7 @@ sealed class LocalDiskStore :
                     exception);
                 journalBytes = [];
                 durableByteLength = 0;
+                journalSalvaged = true;
             }
 
             if (durableByteLength < journalBytes.Length)
@@ -7871,8 +7875,9 @@ sealed class LocalDiskStore :
                     recoveryPolicy,
                     state,
                     remoteSstsAuthoritative);
-                return new RecoveryMetadataResult(clearRecoveredIntents, !clearRecoveredIntents &&
-                                                                         document.RootElement.GetArrayLength() != 0);
+                return new RecoveryMetadataResult(
+                    clearRecoveredIntents,
+                    journalSalvaged || (!clearRecoveredIntents && document.RootElement.GetArrayLength() != 0));
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {
