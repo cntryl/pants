@@ -1226,18 +1226,8 @@ static class SstCodec
 
     static byte[] EncodeBloom(IReadOnlyList<byte[]> keys)
     {
-        var estimatedKeys = Math.Max(1, keys.Count);
-        var numberOfBits = Math.Max(
-            64,
-            checked((int)Math.Ceiling(
-                -estimatedKeys * Math.Log(DataBlockBloomFalsePositiveRate) /
-                Math.Pow(Math.Log(2), 2))));
-        var hashFunctions = checked((byte)Math.Clamp(
-            (int)Math.Round(
-                (double)numberOfBits / estimatedKeys * Math.Log(2),
-                MidpointRounding.AwayFromZero),
-            1,
-            8));
+        var numberOfBits = BloomSizing.CalculateBitSize(keys.Count, DataBlockBloomFalsePositiveRate);
+        var hashFunctions = BloomSizing.CalculateHashFunctions(numberOfBits, keys.Count);
         var bits = new byte[(numberOfBits + 7) / 8];
         foreach (var key in keys)
         {
