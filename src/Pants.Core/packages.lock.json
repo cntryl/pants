@@ -14,12 +14,6 @@
         "resolved": "11.0.0",
         "contentHash": "U+Bv2qCYt6eONi+arSP0QIp4uTO6os6uceBsqiAwruZ+Wo2HrRhO/0tj38M9URJtS+4DhAtT3ka2TGNFYsnhyQ=="
       },
-      "ZstdSharp.Port": {
-        "type": "Direct",
-        "requested": "[0.8.8, )",
-        "resolved": "0.8.8",
-        "contentHash": "UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ=="
-      },
       "Cntryl.Pants.Abstractions": {
         "type": "Project"
       }

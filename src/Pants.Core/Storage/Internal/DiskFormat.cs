@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using K4os.Compression.LZ4;
-using ZstdSharp;
 
 namespace Cntryl.Pants.Storage.Internal;
 
@@ -93,22 +92,7 @@ static class DiskFormat
                 return decoded;
             case 2:
             case 3:
-                using (var decompressor = new Decompressor())
-                {
-                    if (maximumDecodedBytes is not null)
-                    {
-                        var destination = new byte[limit];
-                        var length = decompressor.Unwrap(bytes, destination.AsSpan());
-                        return length == destination.Length ? destination : destination.AsSpan(0, length).ToArray();
-                    }
-                    var output = decompressor.Unwrap(bytes, MaximumDecodedBlockBytes);
-                    if (output.Length > MaximumDecodedBlockBytes)
-                    {
-                        throw new StorageException("Midge Zstd payload exceeds the decompression limit.");
-                    }
-
-                    return output.ToArray();
-                }
+                return ZstdCodec.Decompress(bytes, limit);
             default:
                 throw new PantsCorruptionException(
                     $"Midge compression algorithm '{algorithm}' is unsupported.");

@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using ZstdSharp;
 
 namespace Cntryl.Pants.Storage.Internal.Sst.Compression;
 
@@ -67,7 +66,8 @@ static class SstBlockCodec
         {
             try
             {
-                length = Decompressor.GetDecompressedSize(payload);
+                length = ZstdCodec.GetContentSize(payload)
+                    ?? throw new InvalidDataException("Zstd frame omits its content size.");
             }
             catch (Exception exception)
             {
@@ -207,8 +207,7 @@ static class SstBlockCodec
         int level,
         CompressionAlgorithm algorithm)
     {
-        using var compressor = new Compressor(level);
-        return (compressor.Wrap(data.ToArray()).ToArray(), algorithm);
+        return (ZstdCodec.Compress(data, level), algorithm);
     }
 
     static byte[] AppendTrailer(byte[] payload, CompressionAlgorithm algorithm)
