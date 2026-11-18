@@ -323,5 +323,5 @@ application diagnostics.
 ## Development
 
 Run the standard repository checks with `dotnet build` and `dotnet test`. Cloud provider behavior is qualified against
-the pinned Sqrzl emulator; see
+the latest published Sqrzl emulator; see
 [Cloud provider qualification](docs/testing/cloud-provider-qualification.md) for the Compose and test commands.
