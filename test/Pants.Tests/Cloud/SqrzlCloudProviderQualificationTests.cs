@@ -420,6 +420,6 @@ public sealed class SqrzlCloudProviderQualificationTests
             "sqrzl",
             new Uri(Endpoint),
             PantsGcsApiStyle.Json,
-            new PantsGcsCredentialSource.BearerToken("admin")),
+            new PantsGcsCredentialSource.BearerToken("easy-peasy")),
         string.Empty);
 }
