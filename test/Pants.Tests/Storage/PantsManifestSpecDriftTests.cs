@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cntryl.Pants.Compatibility;
+using Cntryl.Pants.Storage.Internal;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -302,6 +303,49 @@ public sealed class PantsManifestSpecDriftTests
         Assert.NotNull(await reopened.ColumnFamilies.GetAsync("durable-family"));
         Assert.Equal(PantsEngineHealth.Healthy, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).Health);
         Assert.Empty(Directory.GetFiles(directory.Path, "manifest.journal.salvage-retained*"));
+    }
+
+    [Fact]
+    public async Task ShouldNotRepairManifestJournalAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        await WriteEmptyFixtureAsync(directory.Path);
+        var durableEdit = EncodeJournalRecord(
+            CreateColumnFamilyRecordType,
+            """{"edit_id":1,"edit":{"CreateColumnFamily":{"id":1,"name":"durable-family","created_at":1}}}""");
+        var durableMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
+        var tornMarker = EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(1));
+        var journal = durableEdit.Concat(durableMarker).Concat(tornMarker[..^2]).ToArray();
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        await File.WriteAllBytesAsync(journalPath, journal);
+        using var failpoints = new FlushPipelineFailpointHandler(
+            Failpoint.AfterRecoveryMutationAuthorityValidation);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithRecoveryPolicy(PantsRecoveryPolicy.Salvage)
+            .WithLeaseTimeToLive(TimeSpan.FromHours(2))
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        var open = Task.Run(async () => await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoints, leaseHeartbeatInterval: TimeSpan.FromHours(1))));
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: TimeSpan.FromHours(2));
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => open);
+        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        Assert.Equal(journal, await File.ReadAllBytesAsync(journalPath));
     }
 
     // Issue #50 -------------------------------------------------------------
@@ -691,6 +735,15 @@ public sealed class PantsManifestSpecDriftTests
 
     static string DurabilityMarkerJson(ulong sequence) =>
         $"{{\"last_persisted_sequence\":{sequence},\"ts_millis\":1}}";
+
+    static async Task<ulong> ReadLeaseEpochAsync(string path)
+    {
+        var text = await File.ReadAllTextAsync(Path.Combine(path, ".midge_leader"));
+        var epochLine = text.Split('\n').First(static line => line.StartsWith("epoch: ", StringComparison.Ordinal));
+        return ulong.Parse(
+            epochLine.AsSpan("epoch: ".Length),
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     static byte[] EncodeJournalRecord(byte recordType, string json)
     {

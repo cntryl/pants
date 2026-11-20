@@ -1012,6 +1012,7 @@ sealed class LocalDiskStore :
             var retainedWalSegments = _walRetainedSegments;
             var durabilityState = CaptureWalDurabilityState();
             var walAdmissionRejected = false;
+            IDisposable? leaseMutation = null;
             try
             {
                 var result = AppendCommitCore(
@@ -1022,7 +1023,8 @@ sealed class LocalDiskStore :
                     ref walAdmission,
                     ref flushHeadroomAdmission,
                     residentMutations,
-                    ref walAdmissionRejected);
+                    ref walAdmissionRejected,
+                    ref leaseMutation);
                 _walIo.CompleteTransition();
                 walAdmission?.Dispose();
                 CommitFlushHeadroom(flushHeadroomAdmission);
@@ -1034,6 +1036,19 @@ sealed class LocalDiskStore :
                 {
                     // Admission and encoding precede the first frame append. The allocated sequence stays
                     // allocated, while no mutation, WAL counter, or file length has changed.
+                    walAdmission?.Dispose();
+                    ReleaseFlushHeadroom(flushHeadroomAdmission);
+                    throw;
+                }
+
+                if (leaseMutation is null)
+                {
+                    RestoreWalAppendState(
+                        previousSequence,
+                        unflushedCommitSequence,
+                        walRecords,
+                        mutableOperationSequence,
+                        durabilityState);
                     walAdmission?.Dispose();
                     ReleaseFlushHeadroom(flushHeadroomAdmission);
                     throw;
@@ -1070,6 +1085,10 @@ sealed class LocalDiskStore :
                 }
 
                 throw;
+            }
+            finally
+            {
+                leaseMutation?.Dispose();
             }
         }
     }
@@ -1147,6 +1166,7 @@ sealed class LocalDiskStore :
             var retainedWalSegments = _walRetainedSegments;
             var durabilityState = CaptureWalDurabilityState();
             var walAdmissionRejected = false;
+            IDisposable? leaseMutation = null;
             try
             {
                 var prepared = new List<PreparedWalCommit>(commits.Count);
@@ -1195,6 +1215,7 @@ sealed class LocalDiskStore :
                     }
 
                     EnsureWalRetentionAdmission(walBytes);
+                    leaseMutation = _lease.AcquireFencedMutation();
                     _walIo.BeginTransition();
                     WalCodec.AppendFrames(
                         _walStream.SafeFileHandle,
@@ -1235,7 +1256,7 @@ sealed class LocalDiskStore :
                     beforeSync();
                     _lease.EnsureValid();
                     var syncStarted = Stopwatch.GetTimestamp();
-                    SyncWal();
+                    SyncWal(leaseMutationHeld: true);
                     var syncElapsed = Stopwatch.GetElapsedTime(syncStarted);
                     RecordWalSync(reservedSequence);
                     metrics?.RecordFsync(syncElapsed, reservedSequence);
@@ -1250,6 +1271,19 @@ sealed class LocalDiskStore :
             {
                 if (_walEncoding.Failure is not null || walAdmissionRejected)
                 {
+                    walAdmission?.Dispose();
+                    ReleaseFlushHeadroom(flushHeadroomAdmission);
+                    throw;
+                }
+
+                if (leaseMutation is null)
+                {
+                    RestoreWalAppendState(
+                        previousSequence,
+                        unflushedCommitSequence,
+                        walRecords,
+                        mutableOperationSequence,
+                        durabilityState);
                     walAdmission?.Dispose();
                     ReleaseFlushHeadroom(flushHeadroomAdmission);
                     throw;
@@ -1286,6 +1320,10 @@ sealed class LocalDiskStore :
 
                 throw;
             }
+            finally
+            {
+                leaseMutation?.Dispose();
+            }
         }
     }
 
@@ -1295,8 +1333,9 @@ sealed class LocalDiskStore :
         {
             ThrowIfDisposed();
             ThrowIfWalFenced();
+            using var leaseMutation = _lease.AcquireFencedMutation();
             var started = Stopwatch.GetTimestamp();
-            SyncWal();
+            SyncWal(leaseMutationHeld: true);
             var elapsed = Stopwatch.GetElapsedTime(started);
             RecordWalSync(_walLastAppendedSequence);
             metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
@@ -1411,7 +1450,10 @@ sealed class LocalDiskStore :
         // copy is safe even when the active writer was fenced by a later rotation failure.
         _lease.EnsureValid();
         var path = Path.Combine(_walDirectory, segment.FileName);
-        _walLedger.RetireBefore(Math.Min(checked(segment.SegmentId + 1), _walLedger.Active.Open.Id));
+        using (var leaseMutation = _lease.AcquireFencedMutation())
+        {
+            _walLedger.RetireBefore(Math.Min(checked(segment.SegmentId + 1), _walLedger.Active.Open.Id));
+        }
         _manifest.WalHistoryStart = _walLedger.Members[0].Open.Id;
         RefreshManifestReadSnapshot();
         if (File.Exists(path))
@@ -2496,30 +2538,44 @@ sealed class LocalDiskStore :
             lease.EnsureValid();
             using (startupPhases.Measure(StartupPhase.Format))
             {
-                EnsureFormat(root, bootstrapObservation);
+                using (lease.AcquireFencedMutation())
+                {
+                    EnsureFormat(root, bootstrapObservation);
+                }
             }
 
-            lease.EnsureValid();
             var walDirectory = Path.Combine(root, "wal");
-            AtomicStagedFile.CreateDirectoryDurably(
-                walDirectory,
-                () => failpointHandler.Hit(Failpoint.BeforeWalDirectorySync), bootstrapObservation);
-            _ = GetOrCreateWalCacheIdentity(root, bootstrapObservation);
+            using (lease.AcquireFencedMutation())
+            {
+                AtomicStagedFile.CreateDirectoryDurably(
+                    walDirectory,
+                    () => failpointHandler.Hit(Failpoint.BeforeWalDirectorySync), bootstrapObservation);
+                _ = GetOrCreateWalCacheIdentity(root, bootstrapObservation);
+            }
             var sstDirectory = Path.Combine(root, "sst");
-            AtomicStagedFile.CreateDirectoryDurably(sstDirectory, observation: bootstrapObservation);
-            AtomicStagedFile.CreateDirectoryDurably(Path.Combine(sstDirectory, ".flush-staging"), observation: bootstrapObservation);
+            using (lease.AcquireFencedMutation())
+            {
+                AtomicStagedFile.CreateDirectoryDurably(sstDirectory, observation: bootstrapObservation);
+                AtomicStagedFile.CreateDirectoryDurably(
+                    Path.Combine(sstDirectory, ".flush-staging"),
+                    observation: bootstrapObservation);
+            }
             var intentPath = Path.Combine(root, "intent_log.json");
             if (!File.Exists(intentPath))
             {
-                lease.EnsureValid();
-                AtomicStagedFile.Write(intentPath, [], observation: bootstrapObservation);
+                using (lease.AcquireFencedMutation())
+                {
+                    AtomicStagedFile.Write(intentPath, [], observation: bootstrapObservation);
+                }
             }
 
             var journalPath = Path.Combine(root, "manifest.journal");
             if (!File.Exists(journalPath))
             {
-                lease.EnsureValid();
-                AtomicStagedFile.Write(journalPath, [], observation: bootstrapObservation);
+                using (lease.AcquireFencedMutation())
+                {
+                    AtomicStagedFile.Write(journalPath, [], observation: bootstrapObservation);
+                }
             }
 
             lease.EnsureValid();
@@ -2530,7 +2586,7 @@ sealed class LocalDiskStore :
             ManifestLoadResult manifestLoad;
             using (startupPhases.Measure(StartupPhase.ManifestSnapshot))
             {
-                manifestLoad = LoadManifest(root, recoveryPolicy, state, recoveryWork);
+                manifestLoad = LoadManifest(root, recoveryPolicy, state, recoveryWork, lease, failpointHandler);
             }
 
             var manifest = manifestLoad.Manifest;
@@ -2544,7 +2600,8 @@ sealed class LocalDiskStore :
                 startupPhases,
                 failpointHandler,
                 remoteSstSourceFactory is not null,
-                recoveryWork);
+                recoveryWork,
+                lease);
             ValidateManifestSstNames(manifest);
             lease.EnsureValid();
             CleanStartupResidue(
@@ -2560,12 +2617,26 @@ sealed class LocalDiskStore :
             AtomicStagedFile.CreateDirectoryDurably(
                 Path.Combine(root, "sst", ".flush-staging"),
                 () => failpointHandler.Hit(Failpoint.BeforeFlushStagingDirectorySync));
-            var walLedger = WalLedgerStore.LoadOrCreate(walDirectory, lease.Epoch, remoteNextWalSegmentId,
-                remoteWalHead, Math.Max(remoteSequenceFloor, GetManifestVisibleSequenceFloor(manifest)));
+            WalLedgerStore walLedger;
+            using (lease.AcquireFencedMutation())
+            {
+                walLedger = WalLedgerStore.LoadOrCreate(walDirectory, lease.Epoch, remoteNextWalSegmentId,
+                    remoteWalHead, Math.Max(remoteSequenceFloor, GetManifestVisibleSequenceFloor(manifest)));
+            }
             if (!allowLocalWalTailRecovery && remoteWalHead is not null)
             {
-                walLedger.Rebase(remoteWalHead, lease.Epoch, remoteNextWalSegmentId,
-                    Math.Max(remoteSequenceFloor, GetManifestVisibleSequenceFloor(manifest)));
+                using (lease.AcquireFencedMutation())
+                {
+                    walLedger.Rebase(remoteWalHead, lease.Epoch, remoteNextWalSegmentId,
+                        Math.Max(remoteSequenceFloor, GetManifestVisibleSequenceFloor(manifest)));
+                }
+            }
+
+            if (recoveryPolicy == PantsRecoveryPolicy.Salvage &&
+                !File.Exists(walLedger.ActivePath) &&
+                HasRetainedCorruptFile(walLedger.ActivePath))
+            {
+                ResumeInterruptedActiveWalSalvage(walDirectory, walLedger, lease, state, failpointHandler);
             }
 
             manifest.ReservedCommitSequence = walLedger.ReservedThrough;
@@ -2798,7 +2869,6 @@ sealed class LocalDiskStore :
         FileLease lease)
     {
         lease.EnsureValid();
-        var moved = false;
         try
         {
             var candidates = Directory.EnumerateFiles(sstDirectory, "*.sst", SearchOption.TopDirectoryOnly)
@@ -2808,15 +2878,11 @@ sealed class LocalDiskStore :
             {
                 lease.EnsureValid();
                 failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
-                lease.EnsureValid();
-                RetainCorruptFile(path);
-                moved = true;
-            }
-
-            if (moved)
-            {
-                AtomicStagedFile.FlushDirectory(sstDirectory);
-                lease.EnsureValid();
+                using (lease.AcquireFencedMutation())
+                {
+                    RetainCorruptFile(path);
+                    AtomicStagedFile.FlushDirectory(sstDirectory);
+                }
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -2897,16 +2963,17 @@ sealed class LocalDiskStore :
             return;
         }
 
-        var deleted = false;
         foreach (var path in candidates)
         {
             try
             {
                 lease.EnsureValid();
                 failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
-                lease.EnsureValid();
-                File.Delete(path);
-                deleted = true;
+                using (lease.AcquireFencedMutation())
+                {
+                    File.Delete(path);
+                    AtomicStagedFile.FlushDirectory(directory);
+                }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -2914,21 +2981,6 @@ sealed class LocalDiskStore :
             }
         }
 
-        if (!deleted)
-        {
-            return;
-        }
-
-        try
-        {
-            lease.EnsureValid();
-            AtomicStagedFile.FlushDirectory(directory);
-            lease.EnsureValid();
-        }
-        catch (IOException)
-        {
-            HandleStartupCleanupFailure(state, failureDisposition);
-        }
     }
 
     static void DeleteStartupResidueDirectory(
@@ -2948,11 +3000,16 @@ sealed class LocalDiskStore :
         try
         {
             failpoints.Hit(Failpoint.BeforeStartupResidueDelete);
-            lease.EnsureValid();
-            Directory.Delete(path, true);
-            lease.EnsureValid();
-            AtomicStagedFile.FlushDirectory(parentDirectory);
-            lease.EnsureValid();
+            if (StringComparer.Ordinal.Equals(Path.GetFileName(path), ".flush-staging"))
+            {
+                failpoints.Hit(Failpoint.AfterStartupStagingAuthorityValidation);
+            }
+
+            using (lease.AcquireFencedMutation())
+            {
+                Directory.Delete(path, true);
+                AtomicStagedFile.FlushDirectory(parentDirectory);
+            }
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -3068,13 +3125,20 @@ sealed class LocalDiskStore :
             }
 
             lease.EnsureValid();
-            File.Move(activePath, sealedPath, false);
-            AtomicStagedFile.FlushDirectory(walDirectory);
+            failpoints.Hit(Failpoint.AfterPendingWalSealAuthorityValidation);
+            using (lease.AcquireFencedMutation())
+            {
+                File.Move(activePath, sealedPath, false);
+                AtomicStagedFile.FlushDirectory(walDirectory);
+            }
             _ = ReadSealedWalSegment(sealedPath, false);
         }
 
         manifest.PendingWalSegmentId = null;
-        PersistManifestCheckpoint(root, manifest, failpoints);
+        using (lease.AcquireFencedMutation())
+        {
+            PersistManifestCheckpoint(root, manifest, failpoints);
+        }
     }
 
     static void DiscardUnpublishedLocalWalTail(
@@ -3085,45 +3149,46 @@ sealed class LocalDiskStore :
         FileLease lease,
         IFailpointHandler failpoints)
     {
-        var changed = false;
-        foreach (var path in EnumerateSealedWalSegmentPaths(walDirectory))
+        var untrustedSegments = EnumerateSealedWalSegmentPaths(walDirectory)
+            .Where(path =>
         {
-            if (!TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) ||
-                authorizedWalSegmentIds.Contains(segmentId))
+            return TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) &&
+                   !authorizedWalSegmentIds.Contains(segmentId);
+        })
+            .ToArray();
+        var activePath = Path.Combine(walDirectory, "wal.log");
+        var truncateActive = File.Exists(activePath) && new FileInfo(activePath).Length != 0;
+        var clearPending = manifest.PendingWalSegmentId.HasValue;
+        if (untrustedSegments.Length == 0 && !truncateActive && !clearPending)
+        {
+            return;
+        }
+
+        lease.EnsureValid();
+        failpoints.Hit(Failpoint.AfterDiscardWalTailAuthorityValidation);
+        using (lease.AcquireFencedMutation())
+        {
+            foreach (var path in untrustedSegments)
             {
-                continue;
+                File.Delete(path);
             }
 
-            lease.EnsureValid();
-            File.Delete(path);
-            changed = true;
-        }
+            if (truncateActive)
+            {
+                using var active = new FileStream(
+                    activePath,
+                    FileMode.Open,
+                    FileAccess.Write,
+                    FileShare.Read);
+                active.SetLength(0);
+                active.Flush(true);
+            }
 
-        var activePath = Path.Combine(walDirectory, "wal.log");
-        if (File.Exists(activePath) && new FileInfo(activePath).Length != 0)
-        {
-            lease.EnsureValid();
-            using var active = new FileStream(
-                activePath,
-                FileMode.Open,
-                FileAccess.Write,
-                FileShare.Read);
-            active.SetLength(0);
-            active.Flush(true);
-            changed = true;
-        }
-
-        if (manifest.PendingWalSegmentId.HasValue)
-        {
             manifest.PendingWalSegmentId = null;
-            changed = true;
-        }
-
-        if (changed)
-        {
             AtomicStagedFile.FlushDirectory(walDirectory);
             PersistManifestCheckpoint(root, manifest, failpoints);
         }
+
     }
 
     public static string GetOrCreateWalCacheIdentity(string root, MetadataIoObservation? observation = null)
@@ -3211,23 +3276,23 @@ sealed class LocalDiskStore :
         ulong historyStart,
         FileLease lease)
     {
-        var deleted = false;
-        foreach (var path in EnumerateSealedWalSegmentPaths(walDirectory))
+        var retired = EnumerateSealedWalSegmentPaths(walDirectory)
+            .Where(path =>
+                TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) &&
+                segmentId < historyStart)
+            .ToArray();
+        if (retired.Length != 0)
         {
-            if (!TryParseSealedWalSegmentId(Path.GetFileName(path), out var segmentId) ||
-                segmentId >= historyStart)
-            {
-                continue;
-            }
-
             lease.EnsureValid();
-            File.Delete(path);
-            deleted = true;
-        }
+            using (lease.AcquireFencedMutation())
+            {
+                foreach (var path in retired)
+                {
+                    File.Delete(path);
+                }
 
-        if (deleted)
-        {
-            AtomicStagedFile.FlushDirectory(walDirectory);
+                AtomicStagedFile.FlushDirectory(walDirectory);
+            }
         }
     }
 
@@ -3510,6 +3575,7 @@ sealed class LocalDiskStore :
         ref List<FlushHeadroomClaim> flushHeadroomAdmission,
         List<WalMutation>? residentMutations,
         ref bool walAdmissionRejected,
+        ref IDisposable? leaseMutation,
         bool flushBufferedWrites = true)
     {
         ThrowIfDisposed();
@@ -3547,6 +3613,7 @@ sealed class LocalDiskStore :
         if (durability != PantsDurability.BestEffort)
         {
             _failpoints.Hit(Failpoint.BeforeWalAppend);
+            leaseMutation = _lease.AcquireFencedMutation();
             var walRecordsBeforeAppend = _walRecords;
             var appendStarted = Stopwatch.GetTimestamp();
             if (payload.IsSpilled)
@@ -3604,7 +3671,7 @@ sealed class LocalDiskStore :
             var flushStarted = Stopwatch.GetTimestamp();
             if (durability == PantsDurability.Sync)
             {
-                SyncWal();
+                SyncWal(leaseMutationHeld: true);
             }
             else
             {
@@ -3741,6 +3808,7 @@ sealed class LocalDiskStore :
             return;
         }
 
+        using var leaseMutation = _lease.AcquireFencedMutation();
         _walLedger.Reserve(nextReservation);
         _manifest.ReservedCommitSequence = nextReservation;
     }
@@ -4568,7 +4636,10 @@ sealed class LocalDiskStore :
 
             // Publish the retirement boundary before unlinking. A stale or restored file below
             // this point is no longer part of recovery history.
-            _walLedger.RetireBefore(newHistoryStart);
+            using (var leaseMutation = _lease.AcquireFencedMutation())
+            {
+                _walLedger.RetireBefore(newHistoryStart);
+            }
             _manifest.WalHistoryStart = _walLedger.Members[0].Open.Id;
             SaveManifestCheckpoint(MetadataOrigin.Administration);
 
@@ -4602,6 +4673,7 @@ sealed class LocalDiskStore :
 
         var length = new FileInfo(path).Length;
         _failpoints.Hit(Failpoint.BeforeLocalWalRetirementDelete);
+        using var leaseMutation = _lease.AcquireFencedMutation();
         File.Delete(path);
         _walRetainedBytes = checked(_walRetainedBytes - length);
         _walRetainedSegments = checked(_walRetainedSegments - 1);
@@ -4882,6 +4954,9 @@ sealed class LocalDiskStore :
             return null;
         }
 
+        _failpoints.Hit(Failpoint.AfterWalRotationAuthorityValidation);
+        using var leaseMutation = _lease.AcquireFencedMutation();
+
         if (_walPendingWrites != 0)
         {
             if (forCloudUpload)
@@ -4969,6 +5044,7 @@ sealed class LocalDiskStore :
             }
             else
             {
+                using var leaseMutation = _lease.AcquireFencedMutation();
                 var previousPath = _walPath;
                 var open = new WalOpenFacts(_walLedger.NextSegmentId, _lease.Epoch,
                     firstSequence, _walLedger.Active.Open.Prev);
@@ -4986,7 +5062,10 @@ sealed class LocalDiskStore :
             }
         }
 
-        _walLedger.Reserve(through);
+        using (var leaseMutation = _lease.AcquireFencedMutation())
+        {
+            _walLedger.Reserve(through);
+        }
         _manifest.ReservedCommitSequence = through;
         _nextSequence = last;
         _walLocalDurableSequence = Math.Max(_walLocalDurableSequence, last);
@@ -5011,7 +5090,7 @@ sealed class LocalDiskStore :
     void SyncWalForLocalRotation(WalMetricsRecorder? metrics)
     {
         var started = Stopwatch.GetTimestamp();
-        SyncWal();
+        SyncWal(leaseMutationHeld: true);
         var elapsed = Stopwatch.GetElapsedTime(started);
         RecordWalSync(_walLastAppendedSequence);
         metrics?.RecordFsync(elapsed, _walLastAppendedSequence);
@@ -6628,8 +6707,10 @@ sealed class LocalDiskStore :
         }
 
         var activeWalBytes = _walStream.Length;
+        using var leaseMutation = _lease.AcquireFencedMutation();
         _walStream.Dispose();
         RetainCorruptFile(_walPath);
+        _failpoints.Hit(Failpoint.AfterActiveWalSalvageQuarantine);
         _walLedger.Rebase(_walLedger.Anchor, _lease.Epoch, _walLedger.NextSegmentId, _nextSequence);
         _walPath = _walLedger.ActivePath;
         _manifest.WalHistoryStart = _walLedger.Active.Open.Id;
@@ -6656,8 +6737,65 @@ sealed class LocalDiskStore :
 
         if (_nextSequence > _walLedger.ReservedThrough)
         {
+            using var leaseMutation = _lease.AcquireFencedMutation();
             _walLedger.Reserve(_nextSequence);
         }
+    }
+
+    static void ResumeInterruptedActiveWalSalvage(
+        string walDirectory,
+        WalLedgerStore walLedger,
+        FileLease lease,
+        RuntimeState state,
+        IFailpointHandler failpoints)
+    {
+        using var leaseMutation = lease.AcquireFencedMutation();
+        var floor = Math.Max(walLedger.ReservedThrough, walLedger.Active.Open.Prev.LastSeq);
+        walLedger.Reserve(floor);
+
+        var previous = walLedger.Active.Open;
+        var open = new WalOpenFacts(
+            walLedger.NextSegmentId,
+            lease.Epoch,
+            SequenceSpace.FirstAfter(floor),
+            previous.Prev);
+        var activePath = Path.Combine(walDirectory, $"{open.Id:00000000000000000000}.wal");
+        var header = WalSegmentCodec.EncodeHeader(open, walLedger.Holder);
+        if (File.Exists(activePath))
+        {
+            if (new FileInfo(activePath).Length != WalSegmentCodec.HeaderSize)
+            {
+                throw new PantsCorruptionException(
+                    "An interrupted WAL salvage replacement contains unexpected records.");
+            }
+
+            var existingHeader = File.ReadAllBytes(activePath);
+            var decoded = WalSegmentCodec.DecodeHeader(existingHeader);
+            if (decoded.Holder != walLedger.Holder ||
+                decoded.Open.Id != open.Id ||
+                decoded.Open.FirstSeq != open.FirstSeq ||
+                !decoded.Open.Prev.Matches(open.Prev) ||
+                decoded.Open.Epoch < walLedger.Active.Open.Epoch ||
+                decoded.Open.Epoch > lease.Epoch)
+            {
+                throw new PantsCorruptionException(
+                    "An interrupted WAL salvage replacement has a different ledger identity.");
+            }
+
+            if (decoded.Open != open)
+            {
+                AtomicStagedFile.Write(activePath, header);
+            }
+        }
+        else
+        {
+            AtomicStagedFile.Write(activePath, header);
+        }
+
+        failpoints.Hit(Failpoint.AfterActiveWalSalvageReplacementHeader);
+
+        walLedger.Reopen(open);
+        state.MarkSalvageMode();
     }
 
     void RestoreColumnFamilies(RuntimeState state)
@@ -7006,6 +7144,9 @@ sealed class LocalDiskStore :
         {
             lock (_manifestGate)
             {
+                _lease.EnsureValid();
+                _failpoints.Hit(Failpoint.AfterIntentAuthorityValidation);
+                using var leaseMutation = _lease.AcquireFencedMutation();
                 var prior = IntentLogCodec.Read(File.Exists(_intentPath) ? File.ReadAllBytes(_intentPath) : []);
                 if (prior.ValidLength < prior.FileLength)
                 {
@@ -7375,7 +7516,9 @@ sealed class LocalDiskStore :
                 },
                 JsonOptions);
             var marker = EncodeManifestJournalRecord(9, MetadataFrameCodec.Encode(2, markerPayload));
+            _failpoints.Hit(Failpoint.AfterManifestAuthorityValidation);
             _failpoints.Hit(Failpoint.BeforeManifestJournalAppend);
+            using var leaseMutation = _lease.AcquireFencedMutation();
             PositionalFile.AppendAndFlush(
                 _manifestJournalPath,
                 [record, marker],
@@ -7414,6 +7557,7 @@ sealed class LocalDiskStore :
 
     void SaveManifestCheckpointCore(MetadataOrigin origin)
     {
+        using var leaseMutation = _lease.AcquireFencedMutation();
         EnsureLocalDdlAuthorityValid();
         RefreshManifestReadSnapshot();
         PersistManifestCheckpoint(RootPath, _manifest, _failpoints, _metadataAccounting, _metadataMedium, origin);
@@ -7461,7 +7605,10 @@ sealed class LocalDiskStore :
             return;
         }
 
-        _walLedger.RetireBefore(_walLedger.Active.Open.Id);
+        using (var leaseMutation = _lease.AcquireFencedMutation())
+        {
+            _walLedger.RetireBefore(_walLedger.Active.Open.Id);
+        }
         _manifest.WalHistoryStart = _walLedger.Active.Open.Id;
         _manifest.NextWalSeq = _walLedger.Active.Open.Id;
         RefreshManifestReadSnapshot();
@@ -7615,7 +7762,9 @@ sealed class LocalDiskStore :
         string root,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
-        RecoveryWorkSink? recoveryWork)
+        RecoveryWorkSink? recoveryWork,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var snapshot = Path.Combine(root, "manifest.snapshot.json");
         var legacy = Path.Combine(root, "manifest.json");
@@ -7669,7 +7818,8 @@ sealed class LocalDiskStore :
                 state.MarkSalvageMode();
                 using var accounting = state.MetadataAccounting.Begin(
                     MetadataOperationKind.OtherMetadata, MetadataOrigin.Recovery, state.MetadataMedium);
-                accounting.Execute(() => RetainCorruptFile(source, accounting.Observe(MetadataPayload.OtherMetadata)));
+                accounting.Execute(() => ApplyFencedRecoveryMutation(lease, failpoints, () =>
+                    RetainCorruptFile(source, accounting.Observe(MetadataPayload.OtherMetadata))));
             }
         }
 
@@ -7837,7 +7987,8 @@ sealed class LocalDiskStore :
         StartupPhaseRecorder startupPhases,
         IFailpointHandler failpoints,
         bool remoteSstsAuthoritative,
-        RecoveryWorkSink? recoveryWork)
+        RecoveryWorkSink? recoveryWork,
+        FileLease lease)
     {
         var journalPath = Path.Combine(root, "manifest.journal");
         // A salvaged journal leaves the loaded manifest partial, so SSTs it no longer names have
@@ -7860,7 +8011,9 @@ sealed class LocalDiskStore :
                     [],
                     recoveryPolicy,
                     state,
-                    exception);
+                    exception,
+                    lease,
+                    failpoints);
                 journalBytes = [];
                 durableByteLength = 0;
                 journalSalvaged = true;
@@ -7872,12 +8025,13 @@ sealed class LocalDiskStore :
                 {
                     using var accounting = state.MetadataAccounting.Begin(
                         MetadataOperationKind.OtherMetadata, MetadataOrigin.Recovery, state.MetadataMedium);
-                    accounting.Execute(() => AtomicStagedFile.Write(
-                        journalPath,
-                        journalBytes.AsSpan(0, durableByteLength),
-                        beforePublish: () => failpoints.Hit(Failpoint.BeforeManifestJournalRepairReplace),
-                        temporaryFileName: "manifest.journal.repair.tmp",
-                        observation: accounting.Observe(MetadataPayload.Journal)));
+                    accounting.Execute(() => ApplyFencedRecoveryMutation(lease, failpoints, () =>
+                        AtomicStagedFile.Write(
+                            journalPath,
+                            journalBytes.AsSpan(0, durableByteLength),
+                            beforePublish: () => failpoints.Hit(Failpoint.BeforeManifestJournalRepairReplace),
+                            temporaryFileName: "manifest.journal.repair.tmp",
+                            observation: accounting.Observe(MetadataPayload.Journal))));
                 }
                 catch (IOException)
                 {
@@ -7905,7 +8059,9 @@ sealed class LocalDiskStore :
                     document.RootElement,
                     recoveryPolicy,
                     state,
-                    remoteSstsAuthoritative);
+                    remoteSstsAuthoritative,
+                    lease,
+                    failpoints);
                 var intentsRetained = !clearRecoveredIntents && document.RootElement.GetArrayLength() != 0;
                 return new RecoveryMetadataResult(
                     clearRecoveredIntents,
@@ -7920,7 +8076,9 @@ sealed class LocalDiskStore :
                     [],
                     recoveryPolicy,
                     state,
-                    exception);
+                    exception,
+                    lease,
+                    failpoints);
                 return new RecoveryMetadataResult(false, true, false);
             }
         }
@@ -7932,7 +8090,9 @@ sealed class LocalDiskStore :
         JsonElement intentLog,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
-        bool remoteSstsAuthoritative)
+        bool remoteSstsAuthoritative,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var entryCount = intentLog.GetArrayLength();
         if (entryCount == 0)
@@ -7965,7 +8125,9 @@ sealed class LocalDiskStore :
                         variant.Value,
                         GetRequiredString(variant.Value, "phase"),
                         recoveryPolicy,
-                        state);
+                        state,
+                        lease,
+                        failpoints);
                     break;
                 case "SstAdded":
                     safeToClear &= ReplayFlushIntent(
@@ -7974,7 +8136,9 @@ sealed class LocalDiskStore :
                         variant.Value,
                         "ManifestPublished",
                         recoveryPolicy,
-                        state);
+                        state,
+                        lease,
+                        failpoints);
                     break;
                 case "CompactionPublish":
                     safeToClear &= ReplayCompactionIntent(
@@ -7984,7 +8148,9 @@ sealed class LocalDiskStore :
                         GetRequiredString(variant.Value, "phase"),
                         recoveryPolicy,
                         state,
-                        remoteSstsAuthoritative);
+                    remoteSstsAuthoritative,
+                    lease,
+                    failpoints);
                     break;
                 case "CompactionApplied":
                     safeToClear &= ReplayCompactionIntent(
@@ -7994,7 +8160,9 @@ sealed class LocalDiskStore :
                         "ManifestPublished",
                         recoveryPolicy,
                         state,
-                        remoteSstsAuthoritative);
+                        remoteSstsAuthoritative,
+                        lease,
+                        failpoints);
                     break;
                 case "MoveSstsPublish":
                     var phase = GetRequiredString(variant.Value, "phase");
@@ -8040,7 +8208,9 @@ sealed class LocalDiskStore :
         JsonElement intent,
         string phase,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var metadataElement = intent.TryGetProperty("file_meta", out var fileMetadata)
             ? fileMetadata
@@ -8061,7 +8231,9 @@ sealed class LocalDiskStore :
                 root,
                 metadata,
                 recoveryPolicy,
-                state),
+                state,
+                lease,
+                failpoints),
             "ManifestPublished" => HandleIntentRecoveryIssue(
                 "Flush intent claims publication without authoritative manifest visibility.",
                 recoveryPolicy,
@@ -8080,7 +8252,9 @@ sealed class LocalDiskStore :
         string phase,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
-        bool remoteSstsAuthoritative)
+        bool remoteSstsAuthoritative,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var removed = GetStringArray(intent, "removed");
         if (removed.Length == 0)
@@ -8124,7 +8298,8 @@ sealed class LocalDiskStore :
             allOutputsAbsent &&
             (columnFamilyInactive || allInputsPresent))
         {
-            return added.All(output => DeleteProvenUnpublishedIntentSst(root, output, recoveryPolicy, state));
+            return added.All(output => DeleteProvenUnpublishedIntentSst(
+                root, output, recoveryPolicy, state, lease, failpoints));
         }
 
         if (phase is "OutputDurable" or "ManifestPublished" &&
@@ -8140,7 +8315,9 @@ sealed class LocalDiskStore :
                 root,
                 name,
                 recoveryPolicy,
-                state));
+                state,
+                lease,
+                failpoints));
         }
 
         return HandleIntentRecoveryIssue(
@@ -8195,17 +8372,22 @@ sealed class LocalDiskStore :
         string root,
         FileMeta metadata,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var path = Path.Combine(root, "sst", metadata.Name);
-        return !File.Exists(path) || DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state);
+        return !File.Exists(path) || DeleteRecoveredSst(
+            root, metadata.Name, recoveryPolicy, state, lease, failpoints);
     }
 
     static bool DeleteUnpublishedIntentSst(
         string root,
         FileMeta metadata,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         var path = Path.Combine(root, "sst", metadata.Name);
         if (!File.Exists(path))
@@ -8214,7 +8396,7 @@ sealed class LocalDiskStore :
         }
 
         return ValidateIntentSst(root, metadata, recoveryPolicy, state) &&
-               DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state);
+               DeleteRecoveredSst(root, metadata.Name, recoveryPolicy, state, lease, failpoints);
     }
 
     static bool ValidateIntentSst(
@@ -8253,11 +8435,18 @@ sealed class LocalDiskStore :
         string root,
         string name,
         PantsRecoveryPolicy recoveryPolicy,
-        RuntimeState state)
+        RuntimeState state,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         try
         {
-            File.Delete(Path.Combine(root, "sst", ValidateSstName(name)));
+            ApplyFencedRecoveryMutation(lease, failpoints, () =>
+            {
+                var path = Path.Combine(root, "sst", ValidateSstName(name));
+                File.Delete(path);
+                AtomicStagedFile.FlushDirectory(Path.GetDirectoryName(path)!);
+            });
             return true;
         }
         catch (IOException exception)
@@ -8289,7 +8478,9 @@ sealed class LocalDiskStore :
         byte[] replacement,
         PantsRecoveryPolicy recoveryPolicy,
         RuntimeState state,
-        Exception exception)
+        Exception exception,
+        FileLease lease,
+        IFailpointHandler failpoints)
     {
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
         {
@@ -8306,11 +8497,11 @@ sealed class LocalDiskStore :
             _ => MetadataPayload.OtherMetadata
         };
         var observation = accounting.Observe(payload);
-        accounting.Execute(() =>
+        accounting.Execute(() => ApplyFencedRecoveryMutation(lease, failpoints, () =>
         {
             RetainCorruptFile(path, observation);
             AtomicStagedFile.Write(path, replacement, observation: observation);
-        });
+        }));
     }
 
     internal static void ReplayManifestMetadata(ManifestState manifest, ReadOnlySpan<byte> bytes) =>
@@ -8940,6 +9131,31 @@ sealed class LocalDiskStore :
         MetadataIoObservation.Run(observation, () => File.Move(path, retained));
     }
 
+    static void ApplyFencedRecoveryMutation(
+        FileLease lease,
+        IFailpointHandler failpoints,
+        Action mutation)
+    {
+        lease.EnsureValid();
+        failpoints.Hit(Failpoint.AfterRecoveryMutationAuthorityValidation);
+        using (lease.AcquireFencedMutation())
+        {
+            mutation();
+        }
+    }
+
+    static bool HasRetainedCorruptFile(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (directory is null || !Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        var pattern = $"{Path.GetFileName(path)}.salvage-retained*";
+        return Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly).Any();
+    }
+
     static string ValidateSstName(string name)
     {
         if (!SstFileName.IsSafe(name))
@@ -9030,10 +9246,16 @@ sealed class LocalDiskStore :
     ///     Fsyncs the active WAL. A failure fences the writer: the kernel may already have dropped
     ///     the dirty pages, so a later successful fsync would not prove they reached the disk.
     /// </summary>
-    void SyncWal()
+    void SyncWal(bool leaseMutationHeld = false)
     {
         EnsureLocalDdlAuthorityValid();
         EnsureWalEncodingHealthy();
+        if (!leaseMutationHeld)
+        {
+            _lease.EnsureValid();
+            _failpoints.Hit(Failpoint.AfterWalSyncAuthorityValidation);
+        }
+        using var leaseMutation = leaseMutationHeld ? null : _lease.AcquireFencedMutation();
         _walIo.BeginTransition();
         try
         {

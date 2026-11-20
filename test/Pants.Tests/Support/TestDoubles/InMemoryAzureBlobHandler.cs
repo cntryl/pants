@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -632,6 +633,14 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     HttpResponseMessage CreateListResponse(Uri requestUri)
     {
         var prefix = GetQueryParameter(requestUri, "prefix") ?? string.Empty;
+        var marker = GetQueryParameter(requestUri, "marker");
+        var maximumResults = int.TryParse(
+            GetQueryParameter(requestUri, "maxresults"),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var parsedMaximumResults) && parsedMaximumResults > 0
+            ? parsedMaximumResults
+            : int.MaxValue;
         string[] names;
         lock (_gate)
         {
@@ -639,9 +648,14 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 .Where(static path => path.StartsWith("/container/", StringComparison.Ordinal))
                 .Select(static path => Uri.UnescapeDataString(path["/container/".Length..]))
                 .Where(name => name.StartsWith(prefix, StringComparison.Ordinal))
+                .Where(name => marker is null || StringComparer.Ordinal.Compare(name, marker) > 0)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
         }
+
+        var hasMore = names.Length > maximumResults;
+        names = names.Take(maximumResults).ToArray();
+        var nextMarker = hasMore ? names[^1] : string.Empty;
 
         var document = new XDocument(
             new XElement(
@@ -651,7 +665,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                     names.Select(name => new XElement(
                         "Blob",
                         new XElement("Name", name)))),
-                new XElement("NextMarker")));
+                new XElement("NextMarker", nextMarker)));
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
