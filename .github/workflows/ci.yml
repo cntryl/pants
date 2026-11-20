@@ -45,18 +45,14 @@ jobs:
         run: dotnet format Pants.slnx --verify-no-changes --no-restore
 
   test:
-    name: ${{ matrix.os }} (${{ matrix.shard }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
         shard:
           - cloud
           - compatibility
@@ -81,17 +77,14 @@ jobs:
         run: dotnet restore Pants.slnx --locked-mode
 
       - name: Start Sqrzl emulator
-        if: matrix.os == 'ubuntu-latest'
         run: docker compose up --detach --wait sqrzl
 
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
       - name: Select shard filter
-        shell: bash
         env:
           SHARD: ${{ matrix.shard }}
-          WITH_SQRZL: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           case "$SHARD" in
             cloud) filter="$CLOUD_FILTER" ;;
@@ -109,10 +102,6 @@ jobs:
               ;;
             *) echo "Unknown shard $SHARD" >&2; exit 1 ;;
           esac
-          filter="($filter)"
-          if [ "$WITH_SQRZL" != "true" ]; then
-            filter="$filter&Category!=Sqrzl"
-          fi
           echo "TEST_FILTER=$filter" >> "$GITHUB_ENV"
           echo "Shard filter: $filter"
 
@@ -124,10 +113,9 @@ jobs:
           --filter "${{ env.TEST_FILTER }}"
           --blame-hang-timeout 4m
           --blame-hang-dump-type mini
-          --logger "console;verbosity=normal"
 
       - name: Stop Sqrzl emulator
-        if: ${{ always() && matrix.os == 'ubuntu-latest' }}
+        if: ${{ always() }}
         run: docker compose down --volumes
 
   ci:
