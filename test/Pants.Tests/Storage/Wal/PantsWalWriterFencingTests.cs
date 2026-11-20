@@ -1,3 +1,4 @@
+using Cntryl.Pants.Storage.Internal;
 using Cntryl.Pants.Support.Failpoints;
 using Cntryl.Pants.Support.TestDoubles;
 
@@ -11,6 +12,272 @@ namespace Cntryl.Pants.Storage.Wal;
 /// </summary>
 public sealed class PantsWalWriterFencingTests
 {
+    [Fact]
+    public async Task ShouldFenceStartupResidueDeletionAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.AfterStartupStagingAuthorityValidation);
+        var stagingDirectory = Path.Combine(directory.Path, "sst", ".flush-staging");
+        var retainedMarker = Path.Combine(stagingDirectory, "retain-on-takeover.tmp");
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithLeaseTimeToLive(TimeSpan.FromHours(2))
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        await using (var seed = await PantsDatabase.OpenForTestingAsync(
+                         options,
+                         new RuntimeDependencies(new ArmableFailpointHandler())))
+        {
+        }
+
+        Directory.CreateDirectory(stagingDirectory);
+        await File.WriteAllTextAsync(retainedMarker, "keep");
+        var open = Task.Run(async () => await PantsDatabase.OpenForTestingAsync(
+            options,
+            new RuntimeDependencies(failpoints, leaseHeartbeatInterval: TimeSpan.FromHours(1))));
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: TimeSpan.FromHours(2));
+        var successorEpoch = successorLease.Epoch;
+        Assert.True(successorEpoch > predecessorEpoch);
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => open);
+        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        Assert.True(File.Exists(retainedMarker));
+        Assert.Equal(successorEpoch, await ReadLeaseEpochAsync(directory.Path));
+    }
+
+    [Fact]
+    public async Task ShouldFencePendingWalAppendAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.BeforeWalAppend);
+        var leaseDuration = TimeSpan.FromHours(2);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithLeaseTimeToLive(leaseDuration)
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        var dependencies = new RuntimeDependencies(
+            failpoints,
+            leaseHeartbeatInterval: TimeSpan.FromHours(1));
+        var predecessor = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await using var transaction = await BeginWriteAsync(predecessor, "predecessor");
+
+        var predecessorCommit = transaction.CommitAsync(PantsWriteOptions.Sync).AsTask();
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        Assert.True(successorLease.Epoch > predecessorEpoch);
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => predecessorCommit);
+        Assert.Equal(
+            successorLease.Epoch,
+            await ReadLeaseEpochAsync(directory.Path));
+
+        Assert.Equal(PantsErrorCode.Fenced, failure!.Code);
+        var successorEpoch = successorLease.Epoch;
+        successorLease.Dispose();
+        await predecessor.DisposeAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+
+        await using var successor = await OpenAsync(directory.Path, new ArmableFailpointHandler());
+        await CommitAsync(successor, PantsWriteOptions.Sync, static tx =>
+            tx.Put(Key("successor"), Value("authoritative")));
+        Assert.Equal("authoritative", await ReadAsync(successor, "successor"));
+        Assert.Null(await ReadAsync(successor, "predecessor"));
+    }
+
+    [Fact]
+    public async Task ShouldRejectManifestJournalAppendAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.AfterManifestAuthorityValidation);
+        var leaseDuration = TimeSpan.FromHours(2);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithLeaseTimeToLive(leaseDuration)
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        var dependencies = new RuntimeDependencies(
+            failpoints,
+            leaseHeartbeatInterval: TimeSpan.FromHours(1));
+        var predecessor = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await CommitAsync(predecessor, PantsWriteOptions.Sync, static transaction =>
+            transaction.Put(Key("flush-pending"), Value("durable-in-wal")));
+
+        var journalPath = Path.Combine(directory.Path, "manifest.journal");
+        var journalLength = new FileInfo(journalPath).Length;
+        var predecessorFlush = predecessor.Maintenance.FlushAsync(
+            predecessor.ColumnFamilies.DefaultFamily).AsTask();
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        Assert.True(successorLease.Epoch > predecessorEpoch);
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => predecessorFlush);
+        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        Assert.Equal(journalLength, new FileInfo(journalPath).Length);
+
+        var successorEpoch = successorLease.Epoch;
+        successorLease.Dispose();
+        await predecessor.DisposeAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+
+        await using var reopened = await OpenAsync(directory.Path, new ArmableFailpointHandler());
+        Assert.Equal("durable-in-wal", await ReadAsync(reopened, "flush-pending"));
+        Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
+    }
+
+    [Fact]
+    public async Task ShouldRejectIntentLogAppendAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.AfterIntentAuthorityValidation);
+        var leaseDuration = TimeSpan.FromHours(2);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithLeaseTimeToLive(leaseDuration)
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        var dependencies = new RuntimeDependencies(
+            failpoints,
+            leaseHeartbeatInterval: TimeSpan.FromHours(1));
+        var predecessor = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await CommitAsync(predecessor, PantsWriteOptions.Sync, static transaction =>
+            transaction.Put(Key("intent-pending"), Value("durable-in-wal")));
+
+        var intentPath = Path.Combine(directory.Path, "intent_log.json");
+        var intentLength = new FileInfo(intentPath).Length;
+        var predecessorFlush = predecessor.Maintenance.FlushAsync(
+            predecessor.ColumnFamilies.DefaultFamily).AsTask();
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        Assert.True(successorLease.Epoch > predecessorEpoch);
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => predecessorFlush);
+        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        Assert.Equal(intentLength, new FileInfo(intentPath).Length);
+
+        var successorEpoch = successorLease.Epoch;
+        successorLease.Dispose();
+        await predecessor.DisposeAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+
+        await using var reopened = await OpenAsync(directory.Path, new ArmableFailpointHandler());
+        Assert.Equal("durable-in-wal", await ReadAsync(reopened, "intent-pending"));
+        Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).SstCount);
+    }
+
+    [Fact]
+    public async Task ShouldRejectWalRotationAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.AfterWalRotationAuthorityValidation);
+        var leaseDuration = TimeSpan.FromHours(2);
+        var options = PantsOpenOptions.Local(directory.Path)
+            .WithBackgroundCompaction(false)
+            .WithLeaseTimeToLive(leaseDuration)
+            .WithLeaseClockSkewTolerance(TimeSpan.Zero);
+        var dependencies = new RuntimeDependencies(
+            failpoints,
+            leaseHeartbeatInterval: TimeSpan.FromHours(1));
+        var predecessor = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+        var predecessorEpoch = await ReadLeaseEpochAsync(directory.Path);
+        await CommitAsync(predecessor, PantsWriteOptions.Sync, static transaction =>
+            transaction.Put(Key("rotation-pending"), Value("durable")));
+        var beforeRotation = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+
+        var predecessorFlush = predecessor.Maintenance.FlushAsync(
+            predecessor.ColumnFamilies.DefaultFamily).AsTask();
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        Assert.True(successorLease.Epoch > predecessorEpoch);
+
+        failpoints.Release();
+        var failure = await Assert.ThrowsAsync<PantsFencedException>(() => predecessorFlush);
+        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        var afterRotation = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Equal(beforeRotation.Active.Open.Id, afterRotation.Active.Open.Id);
+        Assert.Equal(beforeRotation.NextSegmentId, afterRotation.NextSegmentId);
+
+        var successorEpoch = successorLease.Epoch;
+        successorLease.Dispose();
+        await predecessor.DisposeAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+
+        await using var reopened = await OpenAsync(directory.Path, new ArmableFailpointHandler());
+        Assert.Equal("durable", await ReadAsync(reopened, "rotation-pending"));
+    }
+
     [Theory]
     [InlineData(nameof(Failpoint.MidWalAppend))]
     [InlineData(nameof(Failpoint.AfterWalAppend))]
@@ -225,6 +492,15 @@ public sealed class PantsWalWriterFencingTests
         await transaction.CommitAsync(options);
     }
 
+    static async ValueTask<IPantsTransaction> BeginWriteAsync(IPantsDatabase database, string key)
+    {
+        var transaction = await database.Transactions.BeginAsync(
+            database.ColumnFamilies.DefaultFamily,
+            PantsTransactionMode.ReadWrite);
+        transaction.Put(Key(key), Value("stale"));
+        return transaction;
+    }
+
     static async Task<string?> ReadAsync(IPantsDatabase database, string key)
     {
         await using var transaction = await database.Transactions.BeginAsync(
@@ -232,6 +508,13 @@ public sealed class PantsWalWriterFencingTests
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(Key(key));
         return value is null ? null : TestBytes.ToText(value.Value);
+    }
+
+    static async Task<ulong> ReadLeaseEpochAsync(string path)
+    {
+        var text = await File.ReadAllTextAsync(Path.Combine(path, ".midge_leader"));
+        var epochLine = text.Split('\n').First(static line => line.StartsWith("epoch: ", StringComparison.Ordinal));
+        return ulong.Parse(epochLine.AsSpan("epoch: ".Length), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     static byte[] Key(string key) => TestBytes.FromString(key);

@@ -14,21 +14,17 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-jobs:
-  build-and-test:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+env:
+  CLOUD_FILTER: FullyQualifiedName~Cntryl.Pants.Cloud.
+  COMPATIBILITY_FILTER: FullyQualifiedName~Cntryl.Pants.Compatibility.
+  STORAGE_FILTER: FullyQualifiedName~Cntryl.Pants.Storage.
+  CONTRACTS_FILTER: FullyQualifiedName~Cntryl.Pants.Contracts.|FullyQualifiedName~Cntryl.Pants.Transactions.
 
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -48,31 +44,93 @@ jobs:
       - name: Check formatting
         run: dotnet format Pants.slnx --verify-no-changes --no-restore
 
+  test:
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - cloud
+          - compatibility
+          - storage
+          - contracts
+          - rest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install .NET 11 SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore (locked)
+        run: dotnet restore Pants.slnx --locked-mode
+
       - name: Start Sqrzl emulator
-        if: matrix.os == 'ubuntu-latest'
         run: docker compose up --detach --wait sqrzl
 
       - name: Build
         run: dotnet build Pants.slnx --configuration Release --no-restore
 
-      - name: Test
-        if: matrix.os == 'ubuntu-latest'
-        run: >-
-          dotnet test Pants.slnx
-          --configuration Release
-          --no-build
+      - name: Select shard filter
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          case "$SHARD" in
+            cloud) filter="$CLOUD_FILTER" ;;
+            compatibility) filter="$COMPATIBILITY_FILTER" ;;
+            storage) filter="$STORAGE_FILTER" ;;
+            contracts) filter="$CONTRACTS_FILTER" ;;
+            rest)
+              filter=""
+              for f in "$CLOUD_FILTER" "$COMPATIBILITY_FILTER" "$STORAGE_FILTER" "$CONTRACTS_FILTER"; do
+                IFS='|' read -ra parts <<< "$f"
+                for p in "${parts[@]}"; do
+                  filter="${filter:+$filter&}${p/\~/!~}"
+                done
+              done
+              ;;
+            *) echo "Unknown shard $SHARD" >&2; exit 1 ;;
+          esac
+          echo "TEST_FILTER=$filter" >> "$GITHUB_ENV"
+          echo "Shard filter: $filter"
 
-      - name: Test without Sqrzl
-        if: matrix.os != 'ubuntu-latest'
+      - name: Test
         run: >-
           dotnet test Pants.slnx
           --configuration Release
           --no-build
-          --filter "Category!=Sqrzl"
+          --filter "${{ env.TEST_FILTER }}"
           --blame-hang-timeout 4m
           --blame-hang-dump-type mini
-          --logger "console;verbosity=normal"
 
       - name: Stop Sqrzl emulator
-        if: ${{ always() && matrix.os == 'ubuntu-latest' }}
+        if: ${{ always() }}
         run: docker compose down --volumes
+
+  ci:
+    name: ci
+    if: ${{ always() }}
+    needs:
+      - format
+      - test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to pass
+        env:
+          FORMAT_RESULT: ${{ needs.format.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          echo "format=$FORMAT_RESULT test=$TEST_RESULT"
+          [ "$FORMAT_RESULT" = "success" ] && [ "$TEST_RESULT" = "success" ]

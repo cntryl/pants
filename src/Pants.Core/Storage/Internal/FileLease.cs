@@ -461,6 +461,81 @@ sealed class FileLease : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Serializes a durable local mutation with lease takeover. The returned scope keeps the
+    ///     cross-process mutation lock until the storage effect has completed.
+    /// </summary>
+    internal IDisposable AcquireFencedMutation()
+    {
+        LeaseMutationLock? mutationLock = null;
+        Exception? readFailure = null;
+        var leaseLost = false;
+        var shouldNotifyLeaseLoss = false;
+        lock (_gate)
+        {
+            if (_disposed || !_valid || IsPastDeadline())
+            {
+                _valid = false;
+                leaseLost = true;
+                shouldNotifyLeaseLoss = !_disposed;
+            }
+            else
+            {
+                mutationLock = AcquireMutationLockForFencedMutation();
+                if (_disposed || !_valid || IsPastDeadline())
+                {
+                    _valid = false;
+                    leaseLost = true;
+                    shouldNotifyLeaseLoss = !_disposed;
+                }
+                else
+                {
+                    try
+                    {
+                        var current = ReadRecord(_leaderPath);
+                        if (current?.Epoch != Epoch || current.HolderId != _holderId)
+                        {
+                            _valid = false;
+                            leaseLost = true;
+                            shouldNotifyLeaseLoss = true;
+                        }
+                    }
+                    catch (Exception exception) when (exception is PantsException or IOException)
+                    {
+                        readFailure = exception;
+                    }
+                }
+            }
+        }
+
+        if (readFailure is not null)
+        {
+            mutationLock?.Dispose();
+            if (readFailure is PantsException pantsException)
+            {
+                throw pantsException;
+            }
+
+            throw new PantsLeaseUnavailableException(
+                "The Midge leader record could not be verified before a durable mutation.",
+                (IOException)readFailure);
+        }
+
+        if (leaseLost)
+        {
+            mutationLock?.Dispose();
+            if (shouldNotifyLeaseLoss)
+            {
+                NotifyLeaseLoss();
+            }
+
+            throw new PantsFencedException("The Midge writer lease is no longer valid.");
+        }
+
+        return mutationLock ?? throw new PantsInternalException(
+            "A local durable mutation did not acquire its lease boundary.");
+    }
+
     /// <summary>Deterministically invokes the private renewal logic for testing.</summary>
     internal bool RenewForTesting()
     {
@@ -497,18 +572,39 @@ sealed class FileLease : IDisposable
                 {
                     // The deadline counts from when renewal began, never from when IO ended.
                     var deadline = AddSaturating(started, _timeToLiveTimestamps);
-                    leaseLost = !TryRenewRecord() || _time.GetTimestamp() >= observed ||
-                                Interlocked.CompareExchange(ref _validUntilTimestamp, deadline, observed) != observed;
-                    if (leaseLost)
+                    var renewed = TryRenewRecord(observed);
+                    if (renewed is null)
                     {
-                        _valid = false;
+                        var now = _time.GetTimestamp();
+                        if (now >= observed)
+                        {
+                            _valid = false;
+                            leaseLost = true;
+                        }
+                        else
+                        {
+                            // Keep the heartbeat callback nonblocking while a durable mutation
+                            // owns the shared boundary. Retry before the original lease expires.
+                            var retry = Math.Min(ToTimestamps(_time, ReleaseRetryDelay), observed - now);
+                            Volatile.Write(ref _nextHeartbeatTimestamp, AddSaturating(now, retry));
+                            RescheduleHeartbeat(retry);
+                        }
                     }
                     else
                     {
-                        var heartbeat = AddSaturating(started, _heartbeatIntervalTimestamps);
-                        Volatile.Write(ref _nextHeartbeatTimestamp, heartbeat);
-                        RescheduleWatchdog(deadline - _time.GetTimestamp());
-                        RescheduleHeartbeat(heartbeat - _time.GetTimestamp());
+                        leaseLost = !renewed.Value || _time.GetTimestamp() >= observed ||
+                                    Interlocked.CompareExchange(ref _validUntilTimestamp, deadline, observed) != observed;
+                        if (leaseLost)
+                        {
+                            _valid = false;
+                        }
+                        else
+                        {
+                            var heartbeat = AddSaturating(started, _heartbeatIntervalTimestamps);
+                            Volatile.Write(ref _nextHeartbeatTimestamp, heartbeat);
+                            RescheduleWatchdog(deadline - _time.GetTimestamp());
+                            RescheduleHeartbeat(heartbeat - _time.GetTimestamp());
+                        }
                     }
                 }
                 catch
@@ -525,21 +621,33 @@ sealed class FileLease : IDisposable
         }
     }
 
-    bool TryRenewRecord()
+    bool? TryRenewRecord(long validityDeadline)
     {
-        using var leaseLock = AcquireMutationLock(_lockPath, _holderId, _clock);
-        var current = ReadRecord(_leaderPath);
-        if (current?.Epoch != Epoch || current.HolderId != _holderId)
+        LeaseMutationLock leaseLock;
+        try
         {
-            return false;
+            leaseLock = AcquireMutationLock(_lockPath, _holderId, _clock);
+        }
+        catch (PantsLeaseUnavailableException) when (_time.GetTimestamp() < validityDeadline)
+        {
+            return null;
         }
 
-        WriteRecord(
-            _leaderPath,
-            current with { AcquiredAt = _clock.UtcNow.ToString("O") });
-        RenewWriteInterferenceHookForTesting?.Invoke();
-        var published = ReadRecord(_leaderPath);
-        return published?.Epoch == Epoch && published.HolderId == _holderId;
+        using (leaseLock)
+        {
+            var current = ReadRecord(_leaderPath);
+            if (current?.Epoch != Epoch || current.HolderId != _holderId)
+            {
+                return false;
+            }
+
+            WriteRecord(
+                _leaderPath,
+                current with { AcquiredAt = _clock.UtcNow.ToString("O") });
+            RenewWriteInterferenceHookForTesting?.Invoke();
+            var published = ReadRecord(_leaderPath);
+            return published?.Epoch == Epoch && published.HolderId == _holderId;
+        }
     }
 
     void NotifyLeaseLoss()
@@ -573,6 +681,8 @@ sealed class FileLease : IDisposable
         StoragePathGuard.EnsureNotLink(path);
         try
         {
+            // CreateNew is the mutual-exclusion primitive. A marker left by a killed writer is
+            // removed only through explicit stale-lock recovery after ownership is proven stale.
             var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             var ownerToken = Guid.NewGuid().ToString("N");
             using var writer = new StreamWriter(stream, leaveOpen: true);
@@ -592,6 +702,21 @@ sealed class FileLease : IDisposable
             throw new PantsLeaseUnavailableException(
                 "Another Midge lease mutation is in progress.",
                 ex);
+        }
+    }
+
+    LeaseMutationLock AcquireMutationLockForFencedMutation()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return AcquireMutationLock(_lockPath, _holderId, _clock);
+            }
+            catch (PantsLeaseUnavailableException) when (attempt + 1 < ReleaseAttempts)
+            {
+                Thread.Sleep(ReleaseRetryDelay);
+            }
         }
     }
 

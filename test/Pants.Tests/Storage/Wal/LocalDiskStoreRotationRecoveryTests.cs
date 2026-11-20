@@ -11,6 +11,53 @@ public sealed class LocalDiskStoreRotationRecoveryTests
         RuntimeState.DefaultFamilyVersion);
 
     [Fact]
+    public async Task ShouldRejectBufferedWalSyncAfterLocalLeaseTakeover()
+    {
+        using var directory = new TemporaryDirectory();
+        using var failpoints = new FlushPipelineFailpointHandler(Failpoint.AfterWalSyncAuthorityValidation);
+        var state = new RuntimeState(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            new RuntimeTelemetry());
+        var leaseDuration = TimeSpan.FromHours(2);
+        using var store = LocalDiskStore.Open(
+            directory.Path,
+            state,
+            failpoints: failpoints,
+            leaseClockSkewTolerance: TimeSpan.Zero,
+            leaseHeartbeatInterval: TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        using var payload = CreateCommitPayload(state);
+        _ = store.AppendCommit(payload, state, PantsDurability.Buffered);
+        Assert.Equal(1, store.WalPendingWrites);
+        var ledgerBefore = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        var syncedSequenceBefore = store.WalLastSyncedSequence;
+        var predecessorEpoch = FileLease.ReadStartupEpochFloor(directory.Path);
+        var backgroundSync = Task.Run(store.SyncBufferedWalIfPending);
+        await failpoints.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, ".midge_leader"),
+            $"epoch: {predecessorEpoch}\nholder_id: expired-predecessor\n" +
+            $"acquired_at: {DateTimeOffset.UnixEpoch:O}\n");
+        using var successorLease = FileLease.Acquire(
+            directory.Path,
+            predecessorEpoch,
+            TimeSpan.Zero,
+            null,
+            TimeSpan.FromHours(1),
+            leaseTimeToLive: leaseDuration);
+        Assert.True(successorLease.Epoch > predecessorEpoch);
+
+        failpoints.Release();
+        await backgroundSync.WaitAsync(TestTimeouts.Expected);
+
+        Assert.Equal(1, store.WalPendingWrites);
+        Assert.Equal(syncedSequenceBefore, store.WalLastSyncedSequence);
+        var ledgerAfter = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
+        Assert.Equal(ledgerBefore.Active.DurableBytes, ledgerAfter.Active.DurableBytes);
+    }
+
+    [Fact]
     public async Task ShouldFenceWalAfterSealedSegmentGetsReplacementWriter()
     {
         using var directory = new TemporaryDirectory();

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cntryl.Pants.Storage.Internal.Lease;
 using Cntryl.Pants.Support.TestDoubles;
 
 namespace Cntryl.Pants.Storage;
@@ -104,6 +105,58 @@ public sealed class LeaseMutationLockRecoveryTests
     }
 
     [Fact]
+    public async Task ShouldRecoverTokenlessMutationLockAfterProvingLeaderRecordStale()
+    {
+        using var directory = new TemporaryDirectory();
+        var databasePath = Path.Combine(directory.Path, "db");
+        Directory.CreateDirectory(databasePath);
+        var lockPath = Path.Combine(databasePath, LockFileName);
+        await File.WriteAllBytesAsync(lockPath, []);
+        await WriteLeaderRecordAsync(databasePath, DateTimeOffset.UnixEpoch);
+
+        await Assert.ThrowsAsync<PantsLeaseUnavailableException>(
+            () => PantsDatabase.OpenAsync(CreateOptions(databasePath)).AsTask());
+
+        var recovered = await PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath);
+
+        Assert.True(recovered);
+        Assert.False(File.Exists(lockPath));
+        await using var database = await PantsDatabase.OpenAsync(CreateOptions(databasePath));
+    }
+
+    [Fact]
+    public async Task ShouldRefuseTokenlessMutationLockWhileLeaderRecordIsLive()
+    {
+        using var directory = new TemporaryDirectory();
+        var databasePath = Path.Combine(directory.Path, "db");
+        Directory.CreateDirectory(databasePath);
+        var lockPath = Path.Combine(databasePath, LockFileName);
+        await File.WriteAllBytesAsync(lockPath, []);
+        await WriteLeaderRecordAsync(databasePath, DateTimeOffset.UtcNow);
+
+        await Assert.ThrowsAsync<PantsLeaseHeldException>(
+            () => PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath).AsTask());
+
+        Assert.True(File.Exists(lockPath));
+    }
+
+    [Fact]
+    public async Task ShouldRefuseTokenlessMutationLockWhileExclusiveHandleIsLive()
+    {
+        using var directory = new TemporaryDirectory();
+        var databasePath = Path.Combine(directory.Path, "db");
+        Directory.CreateDirectory(databasePath);
+        await WriteLeaderRecordAsync(databasePath, DateTimeOffset.UnixEpoch);
+        var lockPath = Path.Combine(databasePath, LockFileName);
+        using var marker = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+
+        await Assert.ThrowsAsync<PantsLeaseHeldException>(
+            () => PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath).AsTask());
+
+        Assert.True(File.Exists(lockPath));
+    }
+
+    [Fact]
     public async Task ShouldRefuseRecoveryWhileLiveWriterLeaseIsStillValid()
     {
         using var directory = new TemporaryDirectory();
@@ -147,4 +200,9 @@ public sealed class LeaseMutationLockRecoveryTests
 
     static PantsOpenOptions CreateOptions(string path) =>
         PantsOpenOptions.Local(path).WithBackgroundCompaction(false);
+
+    static Task WriteLeaderRecordAsync(string databasePath, DateTimeOffset acquiredAt) =>
+        File.WriteAllBytesAsync(
+            Path.Combine(databasePath, ".midge_leader"),
+            LeaderRecordCodec.Encode(new LeaderRecord(1, "test-writer", acquiredAt.ToString("O"))));
 }

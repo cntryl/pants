@@ -2991,7 +2991,7 @@ sealed class Actor : IAsyncDisposable
                 // A fenced WAL can make nothing further durable, and restart recovery is the
                 // authority for what it holds. Skipping the final boundary lets shutdown release
                 // the lease and files that recovery needs instead of failing on the fence forever.
-                if (Volatile.Read(ref _commitApplyFailure) is null &&
+                if (IsPrimaryLeaseHealthy && Volatile.Read(ref _commitApplyFailure) is null &&
                     _diskStore is { IsWalFenced: false, IsLocalDdlAuthorityAmbiguous: false })
                 {
                     var cloudWalDrained = false;
@@ -3018,7 +3018,7 @@ sealed class Actor : IAsyncDisposable
                     }
                 }
 
-                if (Volatile.Read(ref _commitApplyFailure) is null &&
+                if (IsPrimaryLeaseHealthy && Volatile.Read(ref _commitApplyFailure) is null &&
                     (_cloudLease?.IsHealthy ?? true) && _diskStore is not { IsLocalDdlAuthorityAmbiguous: true })
                 {
                     await TryMirrorCloudStorageOnShutdownAsync(state).ConfigureAwait(false);

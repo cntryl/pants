@@ -186,8 +186,10 @@ public sealed class PantsTransactionSpillTests
     public async Task ShouldReportResourceLimitForUnspillableAssertionWithoutLosingSpilledWrites()
     {
         using var directory = new TemporaryDirectory();
+        // Keep the transaction pool constrained, but leave room for reading back the flushed SSTs.
         await using var database = await PantsDatabase.OpenAsync(
-            CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path)));
+            CreateConstrainedOptions(PantsOpenOptions.Local(directory.Path))
+                .WithMemoryBudget(PantsMemoryBudget.FromBytes(64 * 1024)));
         var instance = Assert.IsType<DatabaseInstance>(database);
         var baselineBytes = instance.TransactionMemoryPool.Used;
 
@@ -223,6 +225,8 @@ public sealed class PantsTransactionSpillTests
         }
 
         Assert.Equal(baselineBytes, instance.TransactionMemoryPool.Used);
+        // Both commits overflow the memtable; settle the flush so reads always use the published SSTs.
+        await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
