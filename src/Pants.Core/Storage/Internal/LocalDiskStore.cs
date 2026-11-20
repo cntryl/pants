@@ -5141,7 +5141,16 @@ sealed class LocalDiskStore :
             throw new PantsCorruptionException($"Sealed WAL name '{fileName}' is invalid.");
         }
 
-        var bytes = File.ReadAllBytes(path);
+        // Cloud sealing reads the completed segment before disposing the old writer handle.
+        // The reader must allow that existing write access in its sharing mode on Windows.
+        byte[] bytes;
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var buffer = new MemoryStream())
+        {
+            stream.CopyTo(buffer);
+            bytes = buffer.ToArray();
+        }
+
         ulong maximumSequence = 0;
         ulong? writerEpoch = null;
         try
