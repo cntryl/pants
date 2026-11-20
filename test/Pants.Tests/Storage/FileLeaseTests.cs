@@ -8,29 +8,6 @@ public sealed class FileLeaseTests
     static readonly TimeSpan LongHeartbeatInterval = TimeSpan.FromHours(1);
 
     [Fact]
-    public void ShouldReclaimUnlockedMutationMarkerLeftByCrashedProcess()
-    {
-        using var directory = new TemporaryDirectory();
-        var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
-        File.WriteAllText(
-            lockPath,
-            "holder_id=crashed-writer\nowner_token=crashed-token\ncreated_at=2040-01-01T00:00:00.0000000+00:00\n");
-        var clock = new ManualClock(new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
-
-        using var lease = FileLease.Acquire(
-            directory.Path,
-            0,
-            TimeSpan.Zero,
-            null,
-            LongHeartbeatInterval,
-            clock,
-            TimeSpan.FromMinutes(2));
-
-        Assert.Equal(1UL, lease.Epoch);
-        Assert.False(File.Exists(lockPath));
-    }
-
-    [Fact]
     public async Task ShouldUseInjectedClockForTakeoverAgeWithoutWallClockDelay()
     {
         using var directory = new TemporaryDirectory();

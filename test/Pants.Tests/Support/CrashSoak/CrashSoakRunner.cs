@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using Cntryl.Pants.Storage.Internal.Lease;
 using Cntryl.Pants.Support.TestDoubles;
 using Xunit.Sdk;
 
@@ -55,6 +56,8 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
             {
                 CrashSoakStorage.DiscardLocalCache(scenario.Backend, directory.Path);
             }
+
+            await RecoverCrashedMutationLockAsync(CrashSoakStorage.DatabasePath(directory.Path));
 
             var (observed, scanned) = await ReopenAndReadAsync(spec, model.Keys, cycles, cycle);
             var violations = model.Verify(cycle, ledger, cycle.CrashPlan.LoseLocalCache, observed, scanned);
@@ -214,6 +217,28 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                     exception);
             }
         }
+    }
+
+    static async Task RecoverCrashedMutationLockAsync(string databasePath)
+    {
+        var lockPath = Path.Combine(databasePath, ".midge_leader.lock");
+        if (!File.Exists(lockPath))
+        {
+            return;
+        }
+
+        // The child is confirmed dead. The recovery API uses wall time, so expire its record in
+        // this test fixture instead of waiting for a real lease TTL before exercising that API.
+        var leaderPath = Path.Combine(databasePath, ".midge_leader");
+        if (File.Exists(leaderPath))
+        {
+            var record = LeaderRecordCodec.Decode(await File.ReadAllBytesAsync(leaderPath));
+            await File.WriteAllBytesAsync(
+                leaderPath,
+                LeaderRecordCodec.Encode(record with { AcquiredAt = "1970-01-01T00:00:00Z" }));
+        }
+
+        await PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath);
     }
 
     static string Describe(

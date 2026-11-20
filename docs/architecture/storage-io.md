@@ -51,10 +51,14 @@ writer running against the database, through
 Pass the same `PantsLeaseConfiguration` as the writers. The call returns `true`
 when it removed the lock and `false` when none existed. It removes the lock only
 when the `.midge_leader` record is absent or older than the TTL plus clock skew,
-and only when the lock still carries the owner token it read first. It throws
-`LeaseHeld` while the record is still live or another process still holds the
-lock open, and `LeaseIndeterminate` when the
-lock has no owner token or the record cannot be proven stale.
+and no process still holds the lock open. When the marker has an owner token,
+recovery checks that it still carries the token it read first. A tokenless marker
+can remain if a process dies after creating the lock file but before persisting
+its owner token; explicit recovery can remove it after the leader record is
+proven stale. Ordinary open still refuses every existing mutation-lock marker.
+Recovery throws `LeaseHeld` while the record is still live or another process
+holds the lock open, and `LeaseIndeterminate` when the record cannot be proven
+stale.
 
 WAL frames and manifest-journal records use positional, vectored writes through
 `System.IO.RandomAccess`. SST point-read bytes are loaded through positional

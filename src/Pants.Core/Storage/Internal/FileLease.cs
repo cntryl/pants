@@ -681,11 +681,9 @@ sealed class FileLease : IDisposable
         StoragePathGuard.EnsureNotLink(path);
         try
         {
-            // A process crash releases the OS handle but can leave the namespace entry behind.
-            // Open that stale entry only when no live owner holds it, then replace its token.
-            var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            stream.SetLength(0);
-            stream.Position = 0;
+            // CreateNew is the mutual-exclusion primitive. A marker left by a killed writer is
+            // removed only through explicit stale-lock recovery after ownership is proven stale.
+            var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
             var ownerToken = Guid.NewGuid().ToString("N");
             using var writer = new StreamWriter(stream, leaveOpen: true);
             writer.Write(
