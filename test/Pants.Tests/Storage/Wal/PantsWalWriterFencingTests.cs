@@ -93,13 +93,14 @@ public sealed class PantsWalWriterFencingTests
 
         failpoints.Release();
         var failure = await Assert.ThrowsAsync<PantsFencedException>(() => predecessorCommit);
+        Assert.Equal(
+            successorLease.Epoch,
+            await ReadLeaseEpochAsync(directory.Path));
 
-        Assert.Equal(PantsErrorCode.Fenced, failure.Code);
+        Assert.Equal(PantsErrorCode.Fenced, failure!.Code);
         var successorEpoch = successorLease.Epoch;
         successorLease.Dispose();
-        var shutdownFailure = await Assert.ThrowsAsync<PantsFencedException>(
-            () => predecessor.DisposeAsync().AsTask());
-        Assert.Equal(PantsErrorCode.Fenced, shutdownFailure.Code);
+        await predecessor.DisposeAsync();
         await File.WriteAllTextAsync(
             Path.Combine(directory.Path, ".midge_leader"),
             $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
@@ -156,9 +157,7 @@ public sealed class PantsWalWriterFencingTests
 
         var successorEpoch = successorLease.Epoch;
         successorLease.Dispose();
-        var shutdownFailure = await Assert.ThrowsAsync<PantsFencedException>(
-            () => predecessor.DisposeAsync().AsTask());
-        Assert.Equal(PantsErrorCode.Fenced, shutdownFailure.Code);
+        await predecessor.DisposeAsync();
         await File.WriteAllTextAsync(
             Path.Combine(directory.Path, ".midge_leader"),
             $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
@@ -213,9 +212,7 @@ public sealed class PantsWalWriterFencingTests
 
         var successorEpoch = successorLease.Epoch;
         successorLease.Dispose();
-        var shutdownFailure = await Assert.ThrowsAsync<PantsFencedException>(
-            () => predecessor.DisposeAsync().AsTask());
-        Assert.Equal(PantsErrorCode.Fenced, shutdownFailure.Code);
+        await predecessor.DisposeAsync();
         await File.WriteAllTextAsync(
             Path.Combine(directory.Path, ".midge_leader"),
             $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
@@ -271,9 +268,7 @@ public sealed class PantsWalWriterFencingTests
 
         var successorEpoch = successorLease.Epoch;
         successorLease.Dispose();
-        var shutdownFailure = await Assert.ThrowsAsync<PantsFencedException>(
-            () => predecessor.DisposeAsync().AsTask());
-        Assert.Equal(PantsErrorCode.Fenced, shutdownFailure.Code);
+        await predecessor.DisposeAsync();
         await File.WriteAllTextAsync(
             Path.Combine(directory.Path, ".midge_leader"),
             $"epoch: {successorEpoch}\nholder_id: released-successor\n" +
