@@ -122,7 +122,8 @@ public sealed class PantsStorageVerificationHardeningTests
 
     static async Task AssertUnsafeIntentSstNameRejectedAsync(
         string unsafeName,
-        string intentEntry)
+        string intentEntry
+    )
     {
         using var directory = new TemporaryDirectory();
         await WriteEmptyFixtureAsync(directory.Path);
@@ -253,10 +254,12 @@ public sealed class PantsStorageVerificationHardeningTests
         StorageVerificationDelegate verifier = (_, _) =>
         {
             started.SetResult();
+
             if (!release.Wait(TestTimeouts.Expected, CancellationToken.None))
             {
                 throw new TimeoutException("Timed out waiting to release the verifier.");
             }
+
 
             return ValueTask.FromResult(HealthyReport());
         };
@@ -344,6 +347,7 @@ public sealed class PantsStorageVerificationHardeningTests
         var verification = database.PersistentStorage!
             .VerifyAsync(TestTimeouts.Expected)
             .AsTask();
+
         try
         {
             await started.Task.WaitAsync(TestTimeouts.Expected);
@@ -355,6 +359,7 @@ public sealed class PantsStorageVerificationHardeningTests
         {
             release.TrySetResult();
         }
+
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
         Assert.Equal("allowed", (await database.ColumnFamilies.CreateAsync("allowed")).Name);
@@ -589,6 +594,7 @@ public sealed class PantsStorageVerificationHardeningTests
         var verification = database.PersistentStorage!.VerifyAsync(TimeSpan.FromMilliseconds(25)).AsTask();
 
         var longShutdown = Task.CompletedTask;
+
         try
         {
             await started.Task.WaitAsync(TestTimeouts.Expected);
@@ -603,17 +609,21 @@ public sealed class PantsStorageVerificationHardeningTests
             release.TrySetResult();
         }
 
+
         await longShutdown;
     }
 
     static async Task<IPantsColumnFamily> CreateColumnFamilyEventuallyAsync(
         IPantsDatabase database,
-        string name)
+        string name
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
+
             try
             {
                 return await database.ColumnFamilies.CreateAsync(name, timeout.Token);
@@ -628,9 +638,11 @@ public sealed class PantsStorageVerificationHardeningTests
     static async Task<IPantsDatabase> OpenEventuallyAsync(string path)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
+
             try
             {
                 return await PantsDatabase.OpenAsync(
@@ -683,7 +695,8 @@ public sealed class PantsStorageVerificationHardeningTests
 
     static async Task WriteSingleSstFixtureAsync(
         string path,
-        Action<FileMeta>? configure = null)
+        Action<FileMeta>? configure = null
+    )
     {
         var key = "key"u8.ToArray();
         var bytes = SstCodec.Encode(

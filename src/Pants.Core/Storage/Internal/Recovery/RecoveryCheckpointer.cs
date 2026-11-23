@@ -30,7 +30,8 @@ sealed class RecoveryCheckpointer
         long transactionMemoryLimitBytes,
         long? diskCapacityBytes,
         bool allowCheckpointCapacityOvershoot,
-        StorageBudgetLedger? ledger)
+        StorageBudgetLedger? ledger
+    )
     {
         TargetBytes = targetBytes;
         _transactionMemoryLimitBytes = transactionMemoryLimitBytes;
@@ -57,7 +58,8 @@ sealed class RecoveryCheckpointer
     public static RecoveryCheckpointer Create(
         long memtableTargetBytes,
         StorageBudgetLedger? ledger,
-        bool allowCheckpointCapacityOvershoot = false)
+        bool allowCheckpointCapacityOvershoot = false
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(memtableTargetBytes);
         var memoryLimit = memtableTargetBytes > long.MaxValue / TransactionMemoryLimitMultiple
@@ -106,6 +108,7 @@ sealed class RecoveryCheckpointer
         enumerate(mutation =>
         {
             bytes = checked(bytes + EstimateBytes(mutation));
+
             if (bytes > _transactionMemoryLimitBytes)
             {
                 throw PantsException.ResourceLimit(

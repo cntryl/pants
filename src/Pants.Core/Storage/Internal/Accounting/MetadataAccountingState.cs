@@ -45,10 +45,12 @@ sealed class MetadataAccountingState(ulong ownerId)
         lock (_gate)
         {
             _overflow |= overflow;
+
             for (var index = 0; index < counters.Length; index++)
             {
                 _overflow |= !MetadataAccountingArithmetic.Add(ref _counters[bucket][index], counters[index]);
             }
+
 
             if (finishOperation)
             {
@@ -64,6 +66,7 @@ sealed class MetadataAccountingState(ulong ownerId)
 
             Record(_checkpointLatency[bucket], counters, MetadataCounter.CheckpointAttempts, MetadataCounter.CheckpointNanoseconds);
             Record(_publicationLatency[bucket], counters, MetadataCounter.FlushCommittedCount, MetadataCounter.FullPublicationNanoseconds);
+
             if (counters[(int)MetadataCounter.FlushCommittedCount] != 0)
             {
                 var bytes = counters[(int)MetadataCounter.FlushCommittedSstBytes];
@@ -89,6 +92,7 @@ sealed class MetadataAccountingState(ulong ownerId)
         lock (_gate)
         {
             var buckets = ImmutableArray.CreateBuilder<MetadataAccountingBucket>(MetadataAccountingArithmetic.BucketCount);
+
             for (var index = 0; index < MetadataAccountingArithmetic.BucketCount; index++)
             {
                 buckets.Add(new MetadataAccountingBucket(
@@ -96,6 +100,7 @@ sealed class MetadataAccountingState(ulong ownerId)
                     [.. _counters[index]], [.. _checkpointLatency[index]],
                     [.. _publicationLatency[index]], [.. _sstSizes[index]], _active[index]));
             }
+
 
             return new MetadataAccountingSnapshot(OwnerId, buckets.MoveToImmutable(), _overflow, _late, _incomplete);
         }

@@ -162,10 +162,12 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
             _lateWalWrite = null;
             var exists = _objects.TryGetValue(late.Key, out var current);
+
             if (late.IfAbsent && exists)
             {
                 return true;
             }
+
 
             _objects[late.Key] = (late.Data, exists ? current.Version + 1 : 1);
             return true;
@@ -319,14 +321,17 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var key = request.RequestUri!.AbsolutePath;
+
         if (request.Method == HttpMethod.Put &&
             key.EndsWith("midge_primary_lease.json", StringComparison.Ordinal) &&
             Volatile.Read(ref _leaseWriteGate) is { } leaseGate)
         {
             _leaseWriteBlocked.TrySetResult();
+
             if (_leaseWriteIgnoresCancellation)
             {
                 await leaseGate.Task.ConfigureAwait(false);
@@ -338,6 +343,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             }
         }
 
+
         if (request.Method == HttpMethod.Get &&
             request.Headers.Range is not null &&
             key.Contains("/wal/epochs/", StringComparison.Ordinal))
@@ -345,6 +351,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
             if (Volatile.Read(ref _walRangeReadGate) is { } walGate)
             {
                 _walRangeReadBlocked.TrySetResult();
+
                 if (Volatile.Read(ref _throwOnWalRangeReadCancellation) != 0)
                 {
                     using var registration = cancellationToken.Register(
@@ -465,6 +472,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 var response = CreateResponse(
                     request.Headers.Range is null ? HttpStatusCode.OK : HttpStatusCode.PartialContent,
                     ApplyRange(request, value));
+
                 if (request.Headers.Range?.Ranges.SingleOrDefault() is { } requestedRange)
                 {
                     response.Content.Headers.ContentRange = new ContentRangeHeaderValue(
@@ -472,6 +480,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                         requestedRange.To ?? value.Data.Length - 1,
                         value.Data.Length);
                 }
+
 
                 return response;
             }
@@ -483,10 +492,12 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 key.EndsWith(".sst", StringComparison.Ordinal))
             {
                 Interlocked.Increment(ref _sstDeleteAttempts);
+
                 if (request.Headers.IfMatch.Count == 0)
                 {
                     Interlocked.Increment(ref _unconditionalSstDeleteAttempts);
                 }
+
 
                 if (FailSstDeletes)
                 {
@@ -502,11 +513,13 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 }
 
                 var expected = request.Headers.IfMatch.SingleOrDefault()?.Tag;
+
                 if (expected is not null &&
                     !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version)))
                 {
                     return ProviderPreconditionResponses.Azure();
                 }
+
 
                 _objects.Remove(key);
                 return new HttpResponseMessage(HttpStatusCode.Accepted);
@@ -515,6 +528,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
         var bytes = await request.Content!.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+
         if (key.Contains("/wal/epochs/", StringComparison.Ordinal) &&
             Interlocked.Exchange(ref _deferNextWalWriteEffect, 0) == 1)
         {
@@ -533,23 +547,29 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 "Injected WAL upload response loss before its deferred remote effect.");
         }
 
+
         lock (_gate)
         {
             var exists = _objects.TryGetValue(key, out var current);
+
             if (request.Headers.IfNoneMatch.Any(static value => value.Tag == "*") && exists)
             {
                 return ProviderPreconditionResponses.Azure();
             }
 
+
             var expected = request.Headers.IfMatch.SingleOrDefault()?.Tag;
+
             if (expected is not null &&
                 (!exists || !StringComparer.Ordinal.Equals(expected, FormatVersion(current.Version))))
             {
                 return ProviderPreconditionResponses.Azure();
             }
 
+
             var next = (bytes, exists ? current.Version + 1 : 1);
             _objects[key] = next;
+
             if (key.Contains("/wal/epochs/", StringComparison.Ordinal) &&
                 Interlocked.Exchange(ref _failNextWalWriteAfterPersisting, 0) == 1)
             {
@@ -558,6 +578,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                 throw new HttpRequestException(
                     "Injected WAL upload response loss after remote persistence.");
             }
+
 
             return CreateResponse(HttpStatusCode.Created, next);
         }
@@ -582,18 +603,22 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
     bool ShouldFailTargetWalSegmentWrite(string key)
     {
         var suffix = Volatile.Read(ref _targetWalSegmentFailureSuffix);
+
         if (suffix is null || !key.EndsWith(suffix, StringComparison.Ordinal))
         {
             return false;
         }
 
+
         while (true)
         {
             var remaining = Volatile.Read(ref _targetWalSegmentFailuresRemaining);
+
             if (remaining == 0)
             {
                 return false;
             }
+
 
             if (Interlocked.CompareExchange(
                     ref _targetWalSegmentFailuresRemaining,
@@ -608,7 +633,8 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     static HttpResponseMessage CreateResponse(
         HttpStatusCode status,
-        (byte[] Data, long Version) value) =>
+        (byte[] Data, long Version) value
+    ) =>
         new(status)
         {
             Content = new ByteArrayContent(value.Data),
@@ -617,13 +643,16 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
 
     static (byte[] Data, long Version) ApplyRange(
         HttpRequestMessage request,
-        (byte[] Data, long Version) value)
+        (byte[] Data, long Version) value
+    )
     {
         var range = request.Headers.Range?.Ranges.SingleOrDefault();
+
         if (range is null)
         {
             return value;
         }
+
 
         var start = checked((int)(range.From ?? 0));
         var end = checked((int)(range.To ?? value.Data.Length - 1));
@@ -681,6 +710,7 @@ sealed class InMemoryAzureBlobHandler : HttpMessageHandler
                      .Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var parts = pair.Split('=', 2);
+
             if (StringComparer.Ordinal.Equals(Uri.UnescapeDataString(parts[0]), name))
             {
                 return Uri.UnescapeDataString(parts.ElementAtOrDefault(1) ?? string.Empty);

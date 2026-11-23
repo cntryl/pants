@@ -35,6 +35,7 @@ static class ScaleLadderCrashCheck
         var standardError = child.StandardError.ReadToEndAsync();
 
         using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
         try
         {
             while (!File.Exists(readyPath))
@@ -57,6 +58,7 @@ static class ScaleLadderCrashCheck
 
         // The abrupt crash boundary: no graceful shutdown, no flush of anything still buffered
         // beyond what Sync durability already forced to the WAL.
+
         TryKillProcessTree(child);
         await child.WaitForExitAsync(CancellationToken.None);
 
@@ -72,14 +74,17 @@ static class ScaleLadderCrashCheck
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < recordCount; index++)
         {
             var value = await reader.GetAsync(KeyFor(index));
+
             if (value is null || !value.Value.Span.SequenceEqual(ValueFor(index)))
             {
                 return (false, $"Record {index} did not recover correctly after the crash.");
             }
         }
+
 
         return (true, $"{recordCount:N0} durably-committed records recovered correctly " +
                       "after an abrupt process kill.");
@@ -89,6 +94,7 @@ static class ScaleLadderCrashCheck
     {
         var options = PantsOpenOptions.Local(databasePath).WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < recordCount; index++)
         {
             await using var transaction = await database.Transactions.BeginAsync(
@@ -97,6 +103,7 @@ static class ScaleLadderCrashCheck
             transaction.Put(KeyFor(index), ValueFor(index));
             await transaction.CommitAsync(PantsWriteOptions.Sync);
         }
+
 
         await File.WriteAllTextAsync(readyMarkerPath, "ready");
 
@@ -116,12 +123,15 @@ static class ScaleLadderCrashCheck
     static async Task ExpireCrashedProcessLeaseAsync(string databasePath)
     {
         var leasePath = Path.Combine(databasePath, ".midge_leader");
+
         if (!File.Exists(leasePath))
         {
             return;
         }
 
+
         var lines = await File.ReadAllLinesAsync(leasePath);
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -131,10 +141,12 @@ static class ScaleLadderCrashCheck
         }
 
         // The edit invalidates the record checksum, so the expired copy carries none.
+
         await File.WriteAllLinesAsync(
             leasePath,
             lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(databasePath, ".midge_leader.lock");
+
         if (File.Exists(acquisitionLockPath))
         {
             File.Delete(acquisitionLockPath);

@@ -107,7 +107,8 @@ public sealed class MidgeFuzzRecoveryParityTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict) =>
+        PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict
+    ) =>
         PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path)
                 .WithRecoveryPolicy(recoveryPolicy)

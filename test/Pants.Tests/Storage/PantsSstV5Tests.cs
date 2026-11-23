@@ -12,6 +12,7 @@ public sealed class PantsSstV5Tests
             AppContext.BaseDirectory, "Fixtures", "Compatibility", "LsmSpec", "7748fd1",
             "conformance", "fixtures", "format9", "populated-local", "sst",
             "000000_00_00000000000000000001.sst");
+
         for (var attempt = 0; attempt < 2; attempt++)
         {
             using var reader = SstReader.Open(path);
@@ -89,6 +90,7 @@ public sealed class PantsSstV5Tests
     public void ShouldRejectMalformedRestartDirectory(int corruption)
     {
         var block = WithRestarts(Entry(0, 1, "k"u8.ToArray(), "v"u8.ToArray()), [0]);
+
         if (corruption == 0)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(block.Length - 4), 0);
@@ -105,6 +107,7 @@ public sealed class PantsSstV5Tests
         {
             block = WithRestarts(Entry(0, 1, "k"u8.ToArray(), "v"u8.ToArray()), [0, 4]);
         }
+
 
         Assert.Throws<PantsCorruptionException>(() => SstCodec.DecodeDataBlock(block));
     }
@@ -228,14 +231,17 @@ public sealed class PantsSstV5Tests
         SstBlockCodec.CompressWithTrailer(indexBytes, CompressionAlgorithm.None)
             .CopyTo(bytes.AsSpan(checked((int)index.Offset + 4)));
         var footer = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
+
         for (var offset = 0; offset < 64; offset += 16)
         {
             var handle = SstCodec.ReadHandle(footer, offset);
+
             if (handle.Size != 0)
             {
                 BinaryPrimitives.WriteUInt64LittleEndian(footer[offset..], checked(handle.Offset + (ulong)delta));
             }
         }
+
 
         BinaryPrimitives.WriteUInt32LittleEndian(footer[80..], DiskFormat.Crc32C(footer[..80]));
         var source = new ExpandedDataBlockSource(bytes, dataSize, delta);
@@ -268,11 +274,13 @@ public sealed class PantsSstV5Tests
         public ValueTask<byte[]> ReadExactlyAsync(long offset, int length, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if ((ulong)offset < dataSize)
             {
                 DataReadAttempts++;
                 throw new InvalidOperationException("Oversized data body must not be requested.");
             }
+
 
             return ValueTask.FromResult(metadataBytes.AsSpan(checked((int)(offset - delta)), length).ToArray());
         }
@@ -290,14 +298,17 @@ public sealed class PantsSstV5Tests
         original.AsSpan(0, offset).CopyTo(bytes);
         original.AsSpan(offset + size).CopyTo(bytes.AsSpan(offset));
         var newFooter = bytes.AsSpan(bytes.Length - DiskFormat.SstFooterSize);
+
         for (var handleOffset = 0; handleOffset < 48; handleOffset += 16)
         {
             var handle = SstCodec.ReadHandle(newFooter, handleOffset);
+
             if (handle.Offset >= bloom.Offset && handle.Size != 0)
             {
                 BinaryPrimitives.WriteUInt64LittleEndian(newFooter[handleOffset..], handle.Offset - bloom.Size);
             }
         }
+
 
         newFooter.Slice(48, 16).Clear();
         BinaryPrimitives.WriteUInt32LittleEndian(newFooter[80..], DiskFormat.Crc32C(newFooter[..80]));
@@ -319,10 +330,12 @@ public sealed class PantsSstV5Tests
     {
         using var block = new MemoryStream();
         block.Write(entries);
+
         foreach (var restart in restarts)
         {
             DiskFormat.WriteUInt32(block, restart);
         }
+
 
         DiskFormat.WriteUInt32(block, checked((uint)restarts.Length));
         return block.ToArray();

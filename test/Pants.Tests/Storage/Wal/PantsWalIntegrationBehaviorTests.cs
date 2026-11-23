@@ -11,6 +11,7 @@ public sealed class PantsWalIntegrationBehaviorTests
         await using (var database = await OpenAsync(directory.Path))
         {
             var family = await database.ColumnFamilies.CreateAsync("test");
+
             for (var index = 0; index < 50; index++)
             {
                 await CommitAsync(
@@ -20,6 +21,7 @@ public sealed class PantsWalIntegrationBehaviorTests
                         TestBytes.FromString($"wal_key_{index:0000}"),
                         "wal_value"u8.ToArray()));
             }
+
 
             await database.Maintenance.FlushAsync(family);
         }
@@ -72,6 +74,7 @@ public sealed class PantsWalIntegrationBehaviorTests
                 database,
                 family,
                 transaction => transaction.Put("put_key"u8.ToArray(), "put_value_v2"u8.ToArray()));
+
             for (var index = 0; index < 20; index++)
             {
                 await CommitAsync(
@@ -81,6 +84,7 @@ public sealed class PantsWalIntegrationBehaviorTests
                         TestBytes.FromString($"dr_{index:00}"),
                         "v"u8.ToArray()));
             }
+
 
             await CommitAsync(
                 database,
@@ -117,7 +121,8 @@ public sealed class PantsWalIntegrationBehaviorTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        Action<IPantsTransaction> stage)
+        Action<IPantsTransaction> stage
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -129,7 +134,8 @@ public sealed class PantsWalIntegrationBehaviorTests
     static async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -139,17 +145,20 @@ public sealed class PantsWalIntegrationBehaviorTests
 
     static async ValueTask<IReadOnlyList<PantsEntry>> ScanAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family)
+        IPantsColumnFamily family
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var rows = new List<PantsEntry>();
+
         await foreach (var row in scan)
         {
             rows.Add(row);
         }
+
 
         return rows;
     }

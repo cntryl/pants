@@ -33,6 +33,7 @@ public sealed class PantsCloudProviderInitializationTests
             {
                 if (startupEvent == StartupEvent.CleanupFinished) { cleaned.TrySetResult(); }
             }), cancellation.Token).AsTask();
+
         try
         {
             await pending.Started.Task.WaitAsync(TestTimeouts.Expected);
@@ -58,7 +59,8 @@ public sealed class PantsCloudProviderInitializationTests
     [InlineData(true, true)]
     public async Task ShouldForwardPreflightCancellationOrDeadlineIntoProviderInitialization(
         bool topologyOverload,
-        bool callerCancels)
+        bool callerCancels
+    )
     {
         using var cancellation = new CancellationTokenSource();
         var gate = new TaskCompletionSource<ICloudObjectStore>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -68,9 +70,11 @@ public sealed class PantsCloudProviderInitializationTests
         var preflight = topologyOverload
             ? PantsCloudStorageTopology.Shared(location).PreflightAsync(options, cancellation.Token).AsTask()
             : location.PreflightAsync(options, cancellation.Token).AsTask();
+
         try
         {
             await provider.Started.Task.WaitAsync(TestTimeouts.Expected);
+
             if (callerCancels)
             {
                 await cancellation.CancelAsync();
@@ -82,6 +86,7 @@ public sealed class PantsCloudProviderInitializationTests
                 Assert.False(report.IsReady);
                 Assert.Contains(report.Findings, finding => finding.FailureKind == PantsCloudFailureKind.Timeout);
             }
+
 
             Assert.True(provider.OpenToken.CanBeCanceled);
             Assert.True(provider.OpenToken.IsCancellationRequested);

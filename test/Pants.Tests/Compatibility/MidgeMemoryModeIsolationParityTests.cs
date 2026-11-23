@@ -26,6 +26,7 @@ public sealed class MidgeMemoryModeIsolationParityTests
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 100; index++)
         {
             var key = TestBytes.FromString($"write_test_{index:000}");
@@ -112,6 +113,7 @@ public sealed class MidgeMemoryModeIsolationParityTests
         await using var reader = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 50; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"delete_test_{index:00}")));

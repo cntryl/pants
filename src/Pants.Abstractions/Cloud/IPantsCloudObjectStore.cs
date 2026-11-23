@@ -15,7 +15,8 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
     /// </summary>
     ValueTask<PantsCloudObject?> GetAsync(
         string objectKey,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     ///     Reads a range and its version from the same object observation. The version uses the
@@ -27,7 +28,8 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         cancellationToken.ThrowIfCancellationRequested();
@@ -41,7 +43,8 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
     /// </summary>
     ValueTask<PantsCloudObjectMetadata?> HeadAsync(
         string objectKey,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Writes an object using the requested conditional mutation.</summary>
     /// <remarks>
@@ -52,7 +55,8 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
         string objectKey,
         ReadOnlyMemory<byte> data,
         PantsCloudObjectWriteCondition condition,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Lists one bounded page of object keys beginning with <paramref name="prefix" />.</summary>
     /// <remarks>
@@ -64,10 +68,12 @@ public interface IPantsCloudObjectStore : IAsyncDisposable
     ValueTask<PantsCloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<PantsCloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         PantsCloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

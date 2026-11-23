@@ -56,12 +56,15 @@ sealed class ManifestEdit(string variant, object value)
         }
 
         var variant = reader.GetString()!;
+
         if (!reader.Read())
         {
             throw MalformedShape();
         }
 
+
         object value;
+
         switch (variant)
         {
             case "AddSst":
@@ -75,6 +78,7 @@ sealed class ManifestEdit(string variant, object value)
                 value = JsonElement.ParseValue(ref reader);
                 break;
         }
+
 
         if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
         {
@@ -108,10 +112,12 @@ sealed class ManifestEdit(string variant, object value)
     static List<ManifestEdit> ReadBatch(ref Utf8JsonReader reader, JsonSerializerOptions options)
     {
         var edits = new List<ManifestEdit>();
+
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
         {
             edits.Add(Read(ref reader, options, false));
         }
+
 
         return edits;
     }
@@ -124,7 +130,8 @@ sealed class ManifestEdit(string variant, object value)
         public override ManifestEdit Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options) =>
+            JsonSerializerOptions options
+        ) =>
             ManifestEdit.Read(ref reader, options, false);
 
         public override void Write(Utf8JsonWriter writer, ManifestEdit value, JsonSerializerOptions options) =>

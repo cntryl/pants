@@ -218,10 +218,12 @@ public sealed class PantsSstEntryAdmissionTests
         using var directory = new TemporaryDirectory();
         var options = CreateOptions(directory.Path, false);
         var key = new byte[4 * 1024 * 1024];
+
         for (var index = 0; index < key.Length; index++)
         {
             key[index] = unchecked((byte)index);
         }
+
 
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
@@ -410,11 +412,13 @@ public sealed class PantsSstEntryAdmissionTests
     static int VarintLength(uint value)
     {
         var length = 1;
+
         while (value >= 0x80)
         {
             value >>= 7;
             length++;
         }
+
 
         return length;
     }
@@ -433,9 +437,11 @@ public sealed class PantsSstEntryAdmissionTests
     {
         var low = 0;
         var high = DiskFormat.MaximumDecodedBlockBytes;
+
         while (low < high)
         {
             var middle = low + (high - low + 1) / 2;
+
             try
             {
                 EntryAdmission.ValidatePointWrite(middle, null);
@@ -446,6 +452,7 @@ public sealed class PantsSstEntryAdmissionTests
                 high = middle - 1;
             }
         }
+
 
         var key = new byte[low];
         key[^1] = 1;

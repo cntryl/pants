@@ -11,7 +11,8 @@ interface ILocalCompactionStore
         CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<CompactionResult> CompactAsync(
         CompactionWorkSnapshot snapshot,
@@ -23,5 +24,6 @@ interface ILocalCompactionStore
         CompactionMemory? memory = null,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

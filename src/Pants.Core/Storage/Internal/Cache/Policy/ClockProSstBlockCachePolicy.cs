@@ -16,21 +16,25 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         {
             var existing = _slots[existingIndex];
             existing.Referenced = true;
+
             if (!existing.Hot && _hotCount < HotTarget)
             {
                 existing.Hot = true;
                 _hotCount++;
             }
 
+
             return;
         }
 
         var slotIndex = _slots.FindIndex(static slot => slot.Key is null);
+
         if (slotIndex < 0)
         {
             slotIndex = _slots.Count;
             _slots.Add(new ClockProSstBlockCacheSlot());
         }
+
 
         var slot = _slots[slotIndex];
         slot.Key = key;
@@ -48,14 +52,17 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         }
 
         var maximumScans = checked(_slots.Count * 2 + 1);
+
         for (var scan = 0; scan < maximumScans; scan++)
         {
             var slot = _slots[_hand];
             AdvanceHand();
+
             if (slot.Key is not { } candidate)
             {
                 continue;
             }
+
 
             if (slot.Referenced)
             {
@@ -72,6 +79,7 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
             RemoveSlot(candidate);
             return true;
         }
+
 
         key = default;
         return false;
@@ -97,10 +105,12 @@ sealed class ClockProSstBlockCachePolicy : ISstBlockCachePolicy
         }
 
         var slot = _slots[slotIndex];
+
         if (slot.Hot)
         {
             _hotCount--;
         }
+
 
         slot.Key = null;
         slot.Referenced = false;

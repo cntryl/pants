@@ -19,6 +19,7 @@ public sealed class LocalCommittedBytesTests
                          PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false)))
         {
             var family = database.ColumnFamilies.DefaultFamily;
+
             for (var generation = 0; generation < 4; generation++)
             {
                 for (var index = 0; index < 8; index++)
@@ -34,6 +35,7 @@ public sealed class LocalCommittedBytesTests
 
                 await database.Maintenance.FlushAsync(family);
             }
+
 
             await database.Maintenance.CompactAllAsync();
         }
@@ -76,11 +78,13 @@ public sealed class LocalCommittedBytesTests
             Path.Combine(directory.Path, "startup-residue.tmp"),
             Path.Combine(directory.Path, "sst", "orphan.sst")
         };
+
         foreach (var path in residuePaths)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path, new byte[128 + residuePaths.Length]);
         }
+
 
         var failpoints = new PersistentThrowingFlushFailpointHandler(
             Failpoint.BeforeStartupResidueDelete);
@@ -115,13 +119,16 @@ public sealed class LocalCommittedBytesTests
     static long MeasureOnDisk(string root)
     {
         var total = 0L;
+
         foreach (var pattern in new[] { ("sst", "*.sst"), ("wal", "*.wal"), ("wal", "wal.log") })
         {
             var directory = Path.Combine(root, pattern.Item1);
+
             if (!Directory.Exists(directory))
             {
                 continue;
             }
+
 
             foreach (var path in Directory.EnumerateFiles(
                          directory,
@@ -131,6 +138,7 @@ public sealed class LocalCommittedBytesTests
                 total += new FileInfo(path).Length;
             }
         }
+
 
         return total;
     }

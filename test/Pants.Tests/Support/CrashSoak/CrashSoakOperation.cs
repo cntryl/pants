@@ -23,6 +23,7 @@ sealed record CrashSoakOperation(
     {
         var touched = false;
         value = null;
+
         foreach (var mutation in Mutations)
         {
             if (!mutation.Covers(key))
@@ -33,6 +34,7 @@ sealed record CrashSoakOperation(
             touched = true;
             value = mutation.ValueAfter;
         }
+
 
         return touched;
     }

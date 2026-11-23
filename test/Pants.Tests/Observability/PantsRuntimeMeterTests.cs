@@ -162,17 +162,20 @@ public sealed class PantsRuntimeMeterTests
         IPantsDatabase database,
         string key,
         PantsWriteOptions writeOptions,
-        bool forceRewrite = false)
+        bool forceRewrite = false
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+
         if (forceRewrite)
         {
             // Keep the rows intact while requiring physical compaction rather than promotion.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(writeOptions);
     }
 }

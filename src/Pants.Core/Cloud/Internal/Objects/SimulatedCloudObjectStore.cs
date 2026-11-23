@@ -28,10 +28,12 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var path = Resolve(objectKey);
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
+
             if (!File.Exists(path))
             {
                 return ValueTask.FromResult<CloudObject?>(null);
             }
+
 
             var bytes = File.ReadAllBytes(path);
             return ValueTask.FromResult<CloudObject?>(new CloudObject(bytes, Version(bytes)));
@@ -41,7 +43,8 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
     internal CloudObject? ReadControlMetadata(
         string objectKey,
         Action<ulong> admit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -49,16 +52,19 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var path = Resolve(objectKey);
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
+
             if (!File.Exists(path))
             {
                 return null;
             }
+
 
             using var stream = File.OpenRead(path);
             var sizeBytes = stream.Length;
             admit(checked((ulong)sizeBytes));
             cancellationToken.ThrowIfCancellationRequested();
             var bytes = GC.AllocateUninitializedArray<byte>(checked((int)sizeBytes));
+
             for (var offset = 0; offset < bytes.Length;)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -66,6 +72,7 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
                 stream.ReadExactly(bytes.AsSpan(offset, length));
                 offset += length;
             }
+
             return new CloudObject(bytes, Version(bytes));
         }
     }
@@ -85,17 +92,21 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var path = Resolve(objectKey);
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
+
             if (!File.Exists(path))
             {
                 return ValueTask.FromResult<CloudObject?>(null);
             }
 
+
             using var stream = File.OpenRead(path);
             var version = Convert.ToHexString(SHA256.HashData(stream));
+
             if (expected is not null && (expected.Version != version || expected.SizeBytes != (ulong)stream.Length))
             {
                 throw new PantsCorruptionException("Simulated cloud range identity changed.");
             }
+
 
             if (offset > (ulong)stream.Length || (ulong)length > (ulong)stream.Length - offset)
             {
@@ -117,10 +128,12 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var path = Resolve(objectKey);
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
+
             if (!File.Exists(path))
             {
                 return ValueTask.FromResult<CloudObjectMetadata?>(null);
             }
+
 
             using var stream = File.OpenRead(path);
             return ValueTask.FromResult<CloudObjectMetadata?>(new CloudObjectMetadata((ulong)stream.Length, Convert.ToHexString(SHA256.HashData(stream)), File.GetLastWriteTimeUtc(path)));
@@ -136,11 +149,13 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
             var exists = File.Exists(path);
+
             if (condition is CloudObjectWriteCondition.IfAbsent && exists ||
                 condition is CloudObjectWriteCondition.IfVersion expected && (!exists || Version(File.ReadAllBytes(path)) != expected.Version))
             {
                 return ValueTask.FromResult(false);
             }
+
 
             AtomicStagedFile.Write(path, data.Span);
             return ValueTask.FromResult(true);
@@ -156,11 +171,13 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
                 .Select(path => Path.GetRelativePath(_root, path).Replace(Path.DirectorySeparatorChar, '/'))
                 .Where(key => !key.StartsWith(".midge-locks/", StringComparison.Ordinal) && key.StartsWith(prefix, StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray() : [];
             var continuationIndex = 0;
+
             if (continuationToken is not null)
             {
                 var index = Array.BinarySearch(keys, continuationToken, StringComparer.Ordinal);
                 continuationIndex = index >= 0 ? index + 1 : ~index;
             }
+
 
             var pageKeys = keys
                 .Skip(continuationIndex)
@@ -181,10 +198,12 @@ sealed class SimulatedCloudObjectStore : CloudObjectStore
             var path = Resolve(objectKey);
             using var processLock = SimulatedCloudMutationLock.Acquire(
                 _root, path, cancellationToken, _onProcessLockContention);
+
             if (!File.Exists(path))
             {
                 return ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
             }
+
 
             if (condition is CloudObjectDeleteCondition.IfVersion expected && Version(File.ReadAllBytes(path)) != expected.Version)
             {

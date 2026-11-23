@@ -21,16 +21,19 @@ public sealed class MidgeBestEffortConcurrencyParityTests
         var workers = Enumerable.Range(0, WorkerCount).Select(worker => Task.Run(async () =>
         {
             await start.Task;
+
             for (var batch = 0; batch < BatchesPerWorker; batch++)
             {
                 await using var transaction = await database.Transactions.BeginAsync(
                     family,
                     PantsTransactionMode.ReadWrite);
+
                 for (var index = 0; index < ValuesPerBatch; index++)
                 {
                     var key = $"stress_load_t{worker}_b{batch}_k{index:000}";
                     transaction.Put(TestBytes.FromString(key), TestBytes.FromString("stress_value"));
                 }
+
 
                 await transaction.CommitAsync(PantsWriteOptions.BestEffort);
             }
@@ -44,6 +47,7 @@ public sealed class MidgeBestEffortConcurrencyParityTests
         await using var snapshot = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var worker = 0; worker < WorkerCount; worker++)
         {
             for (var batch = 0; batch < BatchesPerWorker; batch++)

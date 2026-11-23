@@ -112,10 +112,12 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             Prefix = "scan:"u8.ToArray()
         });
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             rows.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
 
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
         Assert.Equal(
@@ -153,12 +155,14 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         });
         var rows = new List<(string Key, string Value)>();
         await using var enumerator = scan.GetAsyncEnumerator();
+
         while (await enumerator.MoveNextAsync())
         {
             rows.Add((
                 TestBytes.ToText(enumerator.Current.Key),
                 TestBytes.ToText(enumerator.Current.Value)));
         }
+
 
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
         Assert.True(scan.IsExhausted);
@@ -200,6 +204,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < 6; index++)
             {
                 Assert.Null(await reader.GetAsync(TestBytes.FromString($"atomic-{index:000}")));
@@ -212,20 +217,24 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         await using var reopenedReader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 6; index++)
         {
             Assert.Null(await reopenedReader.GetAsync(TestBytes.FromString($"atomic-{index:000}")));
         }
+
 
         await using var scan = await reopenedReader.ScanAsync(new PantsScanQuery
         {
             Prefix = "atomic-"u8.ToArray()
         });
         var scannedRows = 0;
+
         await foreach (var _ in scan)
         {
             scannedRows++;
         }
+
 
         Assert.Equal(0, scannedRows);
     }
@@ -412,6 +421,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         var expectedValue = Enumerable.Repeat((byte)'x', 8 * 1_024).ToArray();
+
         for (var index = 0; index < 12; index++)
         {
             Assert.Equal(
@@ -420,15 +430,18 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
                     await reader.GetAsync(TestBytes.FromString($"chunked-{index:000}"))).ToArray());
         }
 
+
         await using var scan = await reader.ScanAsync(new PantsScanQuery
         {
             Prefix = "chunked-"u8.ToArray()
         });
         var scannedRows = 0;
+
         await foreach (var _ in scan)
         {
             scannedRows++;
         }
+
 
         Assert.Equal(12, scannedRows);
     }
@@ -557,6 +570,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         var spilledCommit = CommitAfterSignalAsync(spilled, start.Task, commitDeadline.Token);
         var commits = Task.WhenAll(directCommit, spilledCommit);
         var cleanupTimedOut = false;
+
         try
         {
             start.TrySetResult();
@@ -566,6 +580,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
         {
             start.TrySetResult();
             commitDeadline.Cancel();
+
             if (!commits.IsCompleted)
             {
                 try
@@ -583,6 +598,7 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
             }
         }
 
+
         Assert.False(
             cleanupTimedOut,
             "Concurrent transaction commits did not stop within the cleanup deadline.");
@@ -594,7 +610,8 @@ public sealed class PantsTransactionSpillHardeningBehaviorTests
     static async Task CommitAfterSignalAsync(
         IPantsTransaction transaction,
         Task signal,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await signal.WaitAsync(cancellationToken);
         await transaction.CommitAsync(PantsWriteOptions.Sync, cancellationToken);

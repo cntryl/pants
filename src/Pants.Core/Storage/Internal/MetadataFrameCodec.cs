@@ -23,10 +23,12 @@ static class MetadataFrameCodec
     {
         using var stream = new MemoryStream();
         WriteValue(stream, value, null, kind, 0);
+
         if (stream.Length > MaximumPayloadBytes)
         {
             throw new PantsInvalidArgumentException("Metadata payload exceeds the FORMAT 9 limit.");
         }
+
 
         var frame = new byte[checked((int)stream.Length + FrameOverhead)];
         Magic.CopyTo(frame);
@@ -45,10 +47,12 @@ static class MetadataFrameCodec
         }
 
         var expected = BinaryPrimitives.ReadUInt32BigEndian(bytes[^4..]);
+
         if (DiskFormat.Crc32C(bytes[..^4]) != expected)
         {
             throw new PantsCorruptionException("Metadata frame checksum does not match.");
         }
+
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -56,6 +60,7 @@ static class MetadataFrameCodec
             var payload = bytes[HeaderBytes..^4];
             var cursor = 0;
             ReadValue(payload, ref cursor, writer, 0, expectedKind, null);
+
             if (cursor != payload.Length)
             {
                 throw new PantsCorruptionException("Metadata payload has trailing MessagePack values.");
@@ -69,10 +74,12 @@ static class MetadataFrameCodec
     public static bool TryGetFrameLength(ReadOnlySpan<byte> bytes, byte expectedKind, out int length)
     {
         length = 0;
+
         if (!bytes[..Math.Min(bytes.Length, Magic.Length)].SequenceEqual(Magic[..Math.Min(bytes.Length, Magic.Length)]))
         {
             throw new PantsCompatibilityException("Metadata magic is incompatible with FORMAT 9.");
         }
+
 
         if (bytes.Length < 9)
         {
@@ -90,10 +97,12 @@ static class MetadataFrameCodec
         }
 
         var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes[9..]);
+
         if (payloadLength > MaximumPayloadBytes)
         {
             throw new PantsCorruptionException("Metadata frame payload exceeds the FORMAT 9 limit.");
         }
+
 
         length = checked((int)payloadLength + FrameOverhead);
         return bytes.Length >= length;
@@ -183,6 +192,7 @@ static class MetadataFrameCodec
     static void WriteString(Stream stream, string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
+
         if (bytes.Length < 32)
         {
             stream.WriteByte((byte)(0xa0 | bytes.Length));
@@ -191,6 +201,7 @@ static class MetadataFrameCodec
         {
             WriteLength(stream, bytes.Length, 0xd9, 0xda, 0xdb);
         }
+
 
         stream.Write(bytes);
     }
@@ -253,11 +264,13 @@ static class MetadataFrameCodec
         }
 
         var tag = bytes[cursor++];
+
         if (((kind is 1 or 2 && property is "smallest_key" or "largest_key") || (kind == 5 && property is "bytes" or "Replace")) &&
             tag is not (0xc0 or 0xc4 or 0xc5 or 0xc6))
         {
             throw new PantsCorruptionException("Metadata binary field does not use MessagePack binary encoding.");
         }
+
 
         if (kind == 3 && property is "smallest_key" or "largest_key" && tag is 0xc4 or 0xc5 or 0xc6)
         {
@@ -280,26 +293,33 @@ static class MetadataFrameCodec
         if ((tag & 0xf0) == 0x80 || tag is 0xde or 0xdf)
         {
             var count = (tag & 0xf0) == 0x80 ? tag & 15 : ReadLength(bytes, ref cursor, tag == 0xde ? 2 : 4);
+
             if (count > (bytes.Length - cursor) / 2)
             {
                 throw new PantsCorruptionException("Metadata map count exceeds the remaining payload.");
             }
 
+
             writer.WriteStartObject();
             var names = new HashSet<string>(StringComparer.Ordinal);
+
             for (var index = 0; index < count; index++)
             {
                 RequireExtent(bytes, cursor, 1);
+
                 if (property == "next_sst_seqs" && bytes[cursor] > 0x7f && bytes[cursor] is not (0xcc or 0xcd or 0xce or 0xcf))
                 {
                     throw new PantsCorruptionException("SST allocator maps require unsigned integer keys on wire.");
                 }
 
+
                 var name = ReadMapKey(bytes, ref cursor);
+
                 if (property == "next_sst_seqs" && !uint.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out _))
                 {
                     throw new PantsCorruptionException("SST allocator family key exceeds the unsigned 32-bit range.");
                 }
+
 
                 if (!names.Add(name))
                 {
@@ -310,6 +330,7 @@ static class MetadataFrameCodec
                 ReadValue(bytes, ref cursor, writer, depth + 1, kind == 3 && name == "captured" ? (byte)1 : kind, name);
             }
 
+
             writer.WriteEndObject();
             return;
         }
@@ -317,16 +338,20 @@ static class MetadataFrameCodec
         if ((tag & 0xf0) == 0x90 || tag is 0xdc or 0xdd)
         {
             var count = (tag & 0xf0) == 0x90 ? tag & 15 : ReadLength(bytes, ref cursor, tag == 0xdc ? 2 : 4);
+
             if (count > bytes.Length - cursor)
             {
                 throw new PantsCorruptionException("Metadata array count exceeds the remaining payload.");
             }
 
+
             writer.WriteStartArray();
+
             for (var index = 0; index < count; index++)
             {
                 ReadValue(bytes, ref cursor, writer, depth + 1, kind, null);
             }
+
 
             writer.WriteEndArray();
             return;
@@ -388,10 +413,12 @@ static class MetadataFrameCodec
     {
         RequireExtent(bytes, cursor, 1);
         var tag = bytes[cursor++];
+
         if (tag <= 0x7f)
         {
             return tag.ToString(CultureInfo.InvariantCulture);
         }
+
 
         if (tag is >= 0xcc and <= 0xcf)
         {
@@ -411,6 +438,7 @@ static class MetadataFrameCodec
     static string ReadString(ReadOnlySpan<byte> bytes, ref int cursor, int count)
     {
         RequireExtent(bytes, cursor, count);
+
         try
         {
             var result = new UTF8Encoding(false, true).GetString(bytes.Slice(cursor, count));
@@ -433,10 +461,12 @@ static class MetadataFrameCodec
     {
         RequireExtent(bytes, cursor, size);
         ulong result = 0;
+
         for (var index = 0; index < size; index++)
         {
             result = (result << 8) | bytes[cursor++];
         }
+
 
         return result;
     }

@@ -36,9 +36,11 @@ static class BackupArtifactStore
         string sourceRoot,
         IReadOnlyList<string> sourcePaths,
         string objectsPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var files = new List<PinnedBackupFile>(sourcePaths.Count);
+
         try
         {
             foreach (var sourcePath in sourcePaths.Order(StringComparer.Ordinal))
@@ -56,9 +58,11 @@ static class BackupArtifactStore
                     FileShare.ReadWrite | FileShare.Delete,
                     BufferSize,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
+
                 try
                 {
                     var length = input.Length;
+
                     if (IsCloudLease(relative))
                     {
                         if (length > CloudObjectLeaseStore.MaximumBackupLeaseBytes)
@@ -131,22 +135,27 @@ static class BackupArtifactStore
         PantsBackupStorageKind storageKind,
         DateTimeOffset capturedAt,
         IFailpointHandler failpoints,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var objects = new List<PantsBackupObject>(pinnedFiles.Files.Count);
         var first = true;
+
         foreach (var file in pinnedFiles.Files)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (first)
             {
                 failpoints.Hit(Failpoint.BeforeBackupObjectCopy);
                 first = false;
             }
 
+
             var objectPath = GetObjectPath(target.ObjectsPath, file.RelativePath);
             AtomicStagedFile.CreateDirectoryDurably(Path.GetDirectoryName(objectPath)!);
             uint checksum;
+
             if (file.Source is null)
             {
                 checksum = file.PinnedChecksum ?? throw new PantsInternalException(
@@ -173,12 +182,14 @@ static class BackupArtifactStore
                 AtomicStagedFile.FlushDirectory(Path.GetDirectoryName(objectPath)!);
             }
 
+
             objects.Add(new PantsBackupObject(
                 file.RelativePath,
                 checked((ulong)file.SizeBytes),
                 checksum));
             failpoints.Hit(Failpoint.AfterBackupObjectCopy);
         }
+
 
         var formatVersion = ReadFormatVersion(Path.Combine(target.ObjectsPath, "FORMAT"));
         var manifest = new PantsBackupManifest(
@@ -224,7 +235,8 @@ static class BackupArtifactStore
         string artifact,
         PantsOpenOptions options,
         IFailpointHandler failpoints,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(artifact);
         ArgumentNullException.ThrowIfNull(options);
@@ -232,13 +244,16 @@ static class BackupArtifactStore
         cancellationToken.ThrowIfCancellationRequested();
 
         string artifactRoot;
+
         try
         {
             artifactRoot = StoragePathGuard.CanonicalizeRoot(artifact);
+
             if (!Directory.Exists(artifactRoot))
             {
                 throw new PantsCorruptionException("Backup artifact directory is missing.");
             }
+
 
             StoragePathGuard.EnsureTreeHasNoLinks(artifactRoot);
         }
@@ -252,6 +267,7 @@ static class BackupArtifactStore
         {
             throw new PantsCorruptionException("Backup artifact path is invalid.", exception);
         }
+
 
         var manifest = await ReadManifestAsync(artifactRoot, cancellationToken).ConfigureAwait(false);
         await ValidateObjectsAsync(artifactRoot, manifest, cancellationToken).ConfigureAwait(false);
@@ -270,15 +286,18 @@ static class BackupArtifactStore
             _ => throw new PantsNotSupportedException(
                 "Backup restore supports only local and simulated-cloud storage.")
         };
+
         if (destinationKind != manifest.StorageKind)
         {
             throw new PantsInvalidArgumentException(
                 $"Backup storage kind '{manifest.StorageKind}' cannot restore to '{destinationKind}'.");
         }
 
+
         var target = PrepareTarget(artifactRoot, destination);
         using var restoreTarget = new RestoreTarget(target);
         var first = true;
+
         foreach (var item in manifest.Objects)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -305,15 +324,18 @@ static class BackupArtifactStore
             AtomicStagedFile.CreateDirectoryDurably(Path.GetDirectoryName(destinationPath)!);
             await CopyVerifiedObjectAsync(sourcePath, destinationPath, item, cancellationToken)
                 .ConfigureAwait(false);
+
             if (IsCloudLease(item.Path))
             {
                 var expired = CloudObjectLeaseStore.CreateExpiredBackupLease(File.ReadAllBytes(destinationPath));
                 AtomicStagedFile.Write(destinationPath, expired);
             }
 
+
             AtomicStagedFile.FlushDirectory(Path.GetDirectoryName(destinationPath)!);
             failpoints.Hit(Failpoint.AfterRestoreObjectCopy);
         }
+
 
         await VerifyDatabaseAsync(restoreTarget.StagePath, destinationKind, cancellationToken)
             .ConfigureAwait(false);
@@ -328,16 +350,20 @@ static class BackupArtifactStore
 
     static async ValueTask<PantsBackupManifest> ReadManifestAsync(
         string artifactRoot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var path = Path.Combine(artifactRoot, ManifestFileName);
+
         try
         {
             var info = new FileInfo(path);
+
             if (!info.Exists || info.Length <= 0 || info.Length > MaximumManifestBytes)
             {
                 throw new PantsCorruptionException("Backup manifest is missing or exceeds its size limit.");
             }
+
 
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
             var manifest = JsonSerializer.Deserialize<PantsBackupManifest>(bytes, JsonOptions) ??
@@ -376,6 +402,7 @@ static class BackupArtifactStore
         }
 
         var seen = new HashSet<string>(GetPathComparer());
+
         foreach (var item in manifest.Objects)
         {
             if (item is null || item.SizeBytes > long.MaxValue ||
@@ -384,6 +411,7 @@ static class BackupArtifactStore
                 throw new PantsCorruptionException("Backup inventory contains an invalid or duplicate object.");
             }
         }
+
 
         if (!seen.Contains("FORMAT"))
         {
@@ -394,13 +422,16 @@ static class BackupArtifactStore
     static async ValueTask ValidateObjectsAsync(
         string artifactRoot,
         PantsBackupManifest manifest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var objectsRoot = Path.Combine(artifactRoot, ObjectsDirectoryName);
+
         if (!Directory.Exists(objectsRoot))
         {
             throw new PantsCorruptionException("Backup objects directory is missing.");
         }
+
 
         try
         {
@@ -415,23 +446,28 @@ static class BackupArtifactStore
             static item => item.Path,
             GetPathComparer());
         var actual = new HashSet<string>(GetPathComparer());
+
         foreach (var path in Directory.EnumerateFiles(objectsRoot, "*", SearchOption.AllDirectories))
         {
             var attributes = File.GetAttributes(path);
+
             if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
             {
                 throw new PantsCorruptionException("Backup contains a non-regular object.");
             }
 
+
             var relative = Path.GetRelativePath(objectsRoot, path)
                 .Replace(Path.DirectorySeparatorChar, '/')
                 .Replace(Path.AltDirectorySeparatorChar, '/');
             ValidateInventoryPath(relative);
+
             if (!actual.Add(relative))
             {
                 throw new PantsCorruptionException("Backup contains duplicate object paths.");
             }
         }
+
 
         if (actual.Count != expected.Count || actual.Any(path => !expected.ContainsKey(path)))
         {
@@ -449,13 +485,16 @@ static class BackupArtifactStore
                 FileShare.Read | FileShare.Delete,
                 BufferSize,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
+
             if (checked((ulong)input.Length) != item.SizeBytes)
             {
                 throw new PantsCorruptionException($"Backup object '{item.Path}' has an invalid length.");
             }
 
+
             var checksum = await ComputeChecksumAsync(input, input.Length, cancellationToken)
                 .ConfigureAwait(false);
+
             if (checksum != item.Crc32C)
             {
                 throw new PantsCorruptionException($"Backup object '{item.Path}' failed its checksum.");
@@ -463,6 +502,7 @@ static class BackupArtifactStore
         }
 
         var formatVersion = ReadFormatVersion(GetObjectPath(objectsRoot, "FORMAT"));
+
         if (formatVersion != manifest.DatabaseFormatVersion)
         {
             throw new PantsCorruptionException("Backup FORMAT version differs from its inventory.");
@@ -472,7 +512,8 @@ static class BackupArtifactStore
     static async ValueTask VerifyDatabaseAsync(
         string databaseRoot,
         PantsBackupStorageKind storageKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         IAsyncSstSourceFactory? sourceFactory = storageKind == PantsBackupStorageKind.CloudSimulated
             ? new SimulatedCloudSstSourceFactory(databaseRoot)
@@ -482,6 +523,7 @@ static class BackupArtifactStore
                 sourceFactory,
                 cancellationToken)
             .ConfigureAwait(false);
+
         if (report.Health != PantsEngineHealth.Healthy)
         {
             throw new PantsCorruptionException("Backup database files are not healthy.");
@@ -492,7 +534,8 @@ static class BackupArtifactStore
         string sourcePath,
         string destinationPath,
         PantsBackupObject expected,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         StoragePathGuard.EnsureNotLink(sourcePath);
         await using var input = new FileStream(
@@ -502,10 +545,12 @@ static class BackupArtifactStore
             FileShare.Read | FileShare.Delete,
             BufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+
         if (checked((ulong)input.Length) != expected.SizeBytes)
         {
             throw new PantsCorruptionException($"Backup object '{expected.Path}' changed during restore.");
         }
+
 
         await using var output = new FileStream(
             destinationPath,
@@ -516,10 +561,12 @@ static class BackupArtifactStore
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var result = await CopyExactlyAsync(input, output, input.Length, cancellationToken)
             .ConfigureAwait(false);
+
         if (result.Crc32C != expected.Crc32C)
         {
             throw new PantsCorruptionException($"Backup object '{expected.Path}' changed during restore.");
         }
+
 
         await output.FlushAsync(cancellationToken).ConfigureAwait(false);
         output.Flush(true);
@@ -529,29 +576,35 @@ static class BackupArtifactStore
         Stream source,
         Stream destination,
         long sizeBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+
         try
         {
             var remaining = sizeBytes;
             var checksum = 0U;
+
             while (remaining > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var requested = checked((int)Math.Min(buffer.Length, remaining));
                 var read = await source.ReadAsync(buffer.AsMemory(0, requested), cancellationToken)
                     .ConfigureAwait(false);
+
                 if (read == 0)
                 {
                     throw new PantsCorruptionException("A backup source object changed during capture.");
                 }
+
 
                 checksum = DiskFormat.Crc32CAppend(checksum, buffer.AsSpan(0, read));
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken)
                     .ConfigureAwait(false);
                 remaining -= read;
             }
+
 
             return (sizeBytes, checksum);
         }
@@ -564,27 +617,33 @@ static class BackupArtifactStore
     static async ValueTask<uint> ComputeChecksumAsync(
         Stream source,
         long sizeBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+
         try
         {
             var remaining = sizeBytes;
             var checksum = 0U;
+
             while (remaining > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var requested = checked((int)Math.Min(buffer.Length, remaining));
                 var read = await source.ReadAsync(buffer.AsMemory(0, requested), cancellationToken)
                     .ConfigureAwait(false);
+
                 if (read == 0)
                 {
                     throw new PantsCorruptionException("A backup object changed during verification.");
                 }
 
+
                 checksum = DiskFormat.Crc32CAppend(checksum, buffer.AsSpan(0, read));
                 remaining -= read;
             }
+
 
             return checksum;
         }
@@ -598,11 +657,13 @@ static class BackupArtifactStore
     {
         var marker = File.ReadAllText(path, Encoding.UTF8).Trim();
         const string prefix = "midge-format-version=";
+
         if (!marker.StartsWith(prefix, StringComparison.Ordinal) ||
             !uint.TryParse(marker[prefix.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var version))
         {
             throw new PantsCorruptionException("Database FORMAT marker is invalid.");
         }
+
 
         return version;
     }
@@ -642,26 +703,32 @@ static class BackupArtifactStore
     {
         var resolved = ResolvePath(destination);
         EnsureDisjoint(sourceRoot, resolved);
+
         if (PathEntryExists(resolved))
         {
             throw new PantsInvalidArgumentException($"Backup/restore target '{resolved}' already exists.");
         }
 
+
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(resolved));
         var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(resolved));
+
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(parent))
         {
             throw new PantsInvalidArgumentException("Backup/restore target must have a parent and name.");
         }
 
+
         Directory.CreateDirectory(parent);
         parent = ResolvePath(parent);
         resolved = Path.Combine(parent, name);
         EnsureDisjoint(sourceRoot, resolved);
+
         if (PathEntryExists(resolved))
         {
             throw new PantsInvalidArgumentException($"Backup/restore target '{resolved}' already exists.");
         }
+
 
         return resolved;
     }
@@ -677,13 +744,16 @@ static class BackupArtifactStore
             [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
             StringSplitOptions.RemoveEmptyEntries);
         var missingAncestor = false;
+
         for (var index = 0; index < components.Length; index++)
         {
             var component = components[index];
+
             if (component == ".")
             {
                 continue;
             }
+
 
             if (component == "..")
             {
@@ -700,6 +770,7 @@ static class BackupArtifactStore
             var candidate = Path.Combine(current, component);
             FileSystemInfo info = new DirectoryInfo(candidate);
             string? linkTarget;
+
             try
             {
                 linkTarget = info.LinkTarget;
@@ -708,6 +779,7 @@ static class BackupArtifactStore
                 exception is FileNotFoundException or DirectoryNotFoundException)
             {
                 info = new FileInfo(candidate);
+
                 try
                 {
                     linkTarget = info.LinkTarget;
@@ -719,6 +791,7 @@ static class BackupArtifactStore
                 }
             }
 
+
             if (linkTarget is not null)
             {
                 var link = info.ResolveLinkTarget(true) ??
@@ -729,6 +802,7 @@ static class BackupArtifactStore
             else if (Directory.Exists(candidate) || File.Exists(candidate))
             {
                 current = Path.GetFullPath(candidate);
+
                 if (index + 1 < components.Length && !Directory.Exists(candidate))
                 {
                     throw new PantsInvalidArgumentException(
@@ -741,6 +815,7 @@ static class BackupArtifactStore
                 missingAncestor = true;
             }
         }
+
 
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
     }
@@ -805,6 +880,7 @@ static class BackupArtifactStore
     static void PublishNoReplace(string stage, string target)
     {
         int error;
+
         if (OperatingSystem.IsWindows())
         {
             if (MoveFileExW(stage, target, 0))
@@ -813,15 +889,18 @@ static class BackupArtifactStore
             }
 
             error = Marshal.GetLastPInvokeError();
+
             if (error is 80 or 183)
             {
                 throw new PantsInvalidArgumentException($"Backup/restore target '{target}' already exists.");
             }
 
+
             throw new PantsIOException(
                 "Atomic backup/restore directory publication failed.",
                 new Win32Exception(error));
         }
+
 
         if (OperatingSystem.IsLinux())
         {
@@ -892,7 +971,8 @@ static class BackupArtifactStore
         string oldPath,
         int newDirectory,
         string newPath,
-        uint flags);
+        uint flags
+    );
 
     [DllImport("libSystem.B.dylib", EntryPoint = "renameatx_np", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
     static extern int RenameAtxNp(
@@ -900,7 +980,8 @@ static class BackupArtifactStore
         string oldPath,
         int newDirectory,
         string newPath,
-        uint flags);
+        uint flags
+    );
 
     [DllImport("kernel32.dll", EntryPoint = "MoveFileExW", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]

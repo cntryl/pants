@@ -115,6 +115,7 @@ public sealed class PantsColumnFamilyParityTests
     public async Task ShouldAcceptColumnFamilyNameAtMaximumByteLength()
     {
         var maximum = new string('x', 255);
+
         foreach (var mode in AllStorageModes)
         {
             using var directory = new TemporaryDirectory();
@@ -394,10 +395,12 @@ public sealed class PantsColumnFamilyParityTests
             using var directory = new TemporaryDirectory();
             await using var database = await OpenAsync(directory.Path, mode);
             var families = new List<IPantsColumnFamily>();
+
             for (var index = 0; index < 10; index++)
             {
                 families.Add(await database.ColumnFamilies.CreateAsync($"cf{index}"));
             }
+
 
             for (var index = 0; index < families.Count; index++)
             {
@@ -581,6 +584,7 @@ public sealed class PantsColumnFamilyParityTests
             var writer = Task.Run(async () =>
             {
                 start.SignalAndWait();
+
                 try
                 {
                     await using var transaction = await database.Transactions.BeginAsync(
@@ -903,7 +907,8 @@ public sealed class PantsColumnFamilyParityTests
         IPantsColumnFamily columnFamily,
         string key,
         string value,
-        ColumnFamilyStorageMode mode)
+        ColumnFamilyStorageMode mode
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
@@ -919,7 +924,8 @@ public sealed class PantsColumnFamilyParityTests
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
@@ -931,7 +937,8 @@ public sealed class PantsColumnFamilyParityTests
     static async Task<string?> ReadAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
@@ -961,13 +968,16 @@ public sealed class PantsColumnFamilyParityTests
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
         ColumnFamilyStorageMode mode,
-        long? memtableSizeLimitBytes = null)
+        long? memtableSizeLimitBytes = null
+    )
     {
         var options = OptionsFor(mode, path);
+
         if (memtableSizeLimitBytes is { } sizeLimitBytes)
         {
             options = options.WithMemtableLimits(sizeLimitBytes);
         }
+
 
         return PantsDatabase.OpenAsync(options);
     }

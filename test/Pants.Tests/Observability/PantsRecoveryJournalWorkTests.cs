@@ -17,6 +17,7 @@ public sealed class PantsRecoveryJournalWorkTests
         }
 
         using var journal = new MemoryStream();
+
         for (var id = 1; id <= 70; id++)
         {
             journal.Write(Encode(3, JsonSerializer.Serialize(new
@@ -26,12 +27,14 @@ public sealed class PantsRecoveryJournalWorkTests
             })));
             journal.Write(Encode(9, JsonSerializer.Serialize(new { last_persisted_sequence = id, ts_millis = 1 })));
         }
+
         File.WriteAllBytes(Path.Combine(directory.Path, "manifest.journal"), journal.ToArray());
         var completed = new List<RecoveryWorkCompleted>();
         await using (var recovered = await PantsDatabase.OpenForTestingAsync(options,
                          new RuntimeDependencies(recoveryWorkCompleted: completed.Add)))
         {
             Assert.Equal(71, (await recovered.ColumnFamilies.ListAsync()).Count);
+
             for (var id = 1; id <= 70; id++)
             {
                 var family = Assert.IsAssignableFrom<IPantsColumnFamily>(await recovered.ColumnFamilies.GetAsync($"family-{id}"));

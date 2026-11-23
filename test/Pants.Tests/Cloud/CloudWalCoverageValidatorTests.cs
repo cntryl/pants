@@ -170,7 +170,8 @@ public sealed class CloudWalCoverageValidatorTests
     static byte[] CreateWalBytes(
         WalOperation operation,
         byte[] key,
-        byte[]? rangeEnd = null)
+        byte[]? rangeEnd = null
+    )
     {
         var payload = WalCodec.EncodeTransactionBatch(
             1,
@@ -214,7 +215,8 @@ public sealed class CloudWalCoverageValidatorTests
 
     static byte[] CreateMalformedMutationPayload(
         WalOperation operation,
-        ulong? transactionId) =>
+        ulong? transactionId
+    ) =>
         WalCodec.EncodeRecord(new WalRecord(
             0,
             operation,
@@ -232,12 +234,14 @@ public sealed class CloudWalCoverageValidatorTests
     static byte[] Frame(params byte[][] payloads)
     {
         using var stream = new MemoryStream();
+
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
+
 
         return stream.ToArray();
     }

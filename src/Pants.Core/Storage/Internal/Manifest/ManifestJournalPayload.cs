@@ -16,13 +16,16 @@ static class ManifestJournalPayload
     {
         editId = null;
         var reader = new Utf8JsonReader(payload);
+
         if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
         {
             return 0;
         }
 
+
         ulong? id = null;
         var editStart = -1;
+
         while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
         {
             if (reader.ValueTextEquals("edit_id"u8))
@@ -47,6 +50,7 @@ static class ManifestJournalPayload
             }
         }
 
+
         if (id is null || editStart < 0)
         {
             throw new PantsCorruptionException("FORMAT 9 journal edits require an edit identity envelope.");
@@ -59,7 +63,8 @@ static class ManifestJournalPayload
     public static ManifestEdit ReadEdit(
         ReadOnlySpan<byte> payload,
         int editStart,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options
+    )
     {
         var reader = new Utf8JsonReader(payload[editStart..]);
         _ = reader.Read();
@@ -70,12 +75,15 @@ static class ManifestJournalPayload
     public static void Validate(ReadOnlySpan<byte> payload)
     {
         var reader = new Utf8JsonReader(payload);
+
         if (!reader.Read())
         {
             throw new JsonException("The manifest journal payload is empty.");
         }
 
+
         reader.Skip();
+
         if (reader.Read())
         {
             throw new JsonException("The manifest journal payload has trailing content.");

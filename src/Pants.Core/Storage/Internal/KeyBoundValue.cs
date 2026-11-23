@@ -18,7 +18,8 @@ readonly record struct KeyBoundValue(byte[] Bytes)
         public override KeyBoundValue Read(
             ref Utf8JsonReader reader,
             Type typeToConvert,
-            JsonSerializerOptions options) =>
+            JsonSerializerOptions options
+        ) =>
             new(KeyBoundJsonConverter.ReadBytes(ref reader));
 
         public override void Write(Utf8JsonWriter writer, KeyBoundValue value, JsonSerializerOptions options) =>

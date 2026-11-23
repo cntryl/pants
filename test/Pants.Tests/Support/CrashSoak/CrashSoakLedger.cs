@@ -11,7 +11,8 @@ sealed class CrashSoakLedger
         Dictionary<int, CrashSoakOutcome> outcomes,
         IReadOnlyList<string> errors,
         bool completed,
-        string? killReason)
+        string? killReason
+    )
     {
         _outcomes = outcomes;
         Errors = errors;
@@ -38,6 +39,7 @@ sealed class CrashSoakLedger
         var errors = new List<string>();
         var completed = false;
         string? killReason = null;
+
         foreach (var line in File.ReadLines(path))
         {
             if (line.Length == 0)
@@ -69,6 +71,7 @@ sealed class CrashSoakLedger
                     throw new InvalidDataException($"Unrecognized crash/soak ledger line '{line}'.");
             }
         }
+
 
         return new CrashSoakLedger(outcomes, errors, completed, killReason);
     }

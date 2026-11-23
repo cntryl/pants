@@ -35,7 +35,8 @@ sealed class FileLease : IDisposable
         IPantsClock clock,
         TimeProvider time,
         TimeSpan timeToLive,
-        long acquireStartedTimestamp)
+        long acquireStartedTimestamp
+    )
     {
         _leaderPath = Path.Combine(root, ".midge_leader");
         _lockPath = Path.Combine(root, ".midge_leader.lock");
@@ -50,9 +51,11 @@ sealed class FileLease : IDisposable
         Epoch = epoch;
         // Arm only after both timer handles exist, including an already-due heartbeat.
         _watchdog = time.CreateTimer(_ => OnWatchdog(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
         try
         {
             _heartbeat = time.CreateTimer(_ => OnHeartbeat(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
             try
             {
                 RescheduleWatchdog(_validUntilTimestamp - time.GetTimestamp());
@@ -137,10 +140,12 @@ sealed class FileLease : IDisposable
                 MutationLockDisposalInterferenceHookForTesting,
                 MutationLockDeleteDirectorySyncForTesting);
             var current = ReadRecord(_leaderPath);
+
             if (current?.Epoch == Epoch && current.HolderId == _holderId)
             {
                 WriteRecord(_leaderPath, current with { AcquiredAt = "1970-01-01T00:00:00Z" });
             }
+
 
             return true;
         }
@@ -188,11 +193,13 @@ sealed class FileLease : IDisposable
         TimeSpan? leaseTimeToLive = null,
         TimeProvider? timeProvider = null,
         StartupScope? startupScope = null,
-        IFailpointHandler? failpoints = null)
+        IFailpointHandler? failpoints = null
+    )
     {
         var time = timeProvider ?? TimeProvider.System;
         var acquireStarted = time.GetTimestamp();
         var effectiveTimeToLive = leaseTimeToLive ?? TimeSpan.FromSeconds(30);
+
         if (effectiveTimeToLive <= TimeSpan.Zero ||
             clockSkewTolerance < TimeSpan.Zero ||
             clockSkewTolerance > effectiveTimeToLive)
@@ -201,6 +208,7 @@ sealed class FileLease : IDisposable
                 "The file lease requires a positive TTL and non-negative clock skew " +
                 "that does not exceed that TTL.");
         }
+
 
         try
         {
@@ -237,13 +245,15 @@ sealed class FileLease : IDisposable
         TimeProvider time,
         long acquireStarted,
         StartupScope? startupScope,
-        IFailpointHandler? failpoints)
+        IFailpointHandler? failpoints
+    )
     {
         var leaderPath = Path.Combine(root, ".midge_leader");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
         var holderId = $"{Environment.ProcessId}.{Guid.NewGuid():N}@{Environment.MachineName}";
         using var leaseLock = AcquireMutationLock(lockPath, holderId, effectiveClock);
         var current = ReadRecord(leaderPath);
+
         if (current is not null)
         {
             if (!Rfc3339Timestamp.TryParse(current.AcquiredAt, out var acquiredAt))
@@ -253,6 +263,7 @@ sealed class FileLease : IDisposable
             }
 
             var age = effectiveClock.UtcNow - acquiredAt;
+
             if (age < TimeSpan.Zero)
             {
                 throw new PantsLeaseIndeterminateException(
@@ -260,7 +271,9 @@ sealed class FileLease : IDisposable
             }
 
             // format/lease.md: a record is stale once its age is at or beyond TTL + skew.
+
             var takeoverBoundary = AddSaturating(effectiveTimeToLive, clockSkewTolerance);
+
             if (age < takeoverBoundary)
             {
                 throw new PantsLeaseHeldException(
@@ -270,26 +283,32 @@ sealed class FileLease : IDisposable
             }
         }
 
+
         var previousEpoch = Math.Max(current?.Epoch ?? 0, minimumEpoch);
+
         if (previousEpoch == ulong.MaxValue)
         {
             throw new PantsLeaseEpochExhaustedException(
                 "The Midge writer lease epoch cannot be advanced.");
         }
 
+
         var epoch = previousEpoch + 1;
         var candidate = new LeaderRecord(epoch, holderId, effectiveClock.UtcNow.ToString("O"));
         startupScope?.BeginLeasePublication();
+
         try
         {
             WriteRecord(leaderPath, candidate);
             failpoints?.Hit(Failpoint.AfterLeaseAcquisitionWrite);
             var published = ReadRecord(leaderPath);
+
             if (published?.Epoch != epoch || published.HolderId != holderId)
             {
                 startupScope?.ResolveLeasePublication();
                 throw new PantsLeaseHeldException("Lost the Midge leader publication race.");
             }
+
 
             var lease = new FileLease(root, holderId, epoch, leaseLossCallback, heartbeatInterval,
                 effectiveClock, time, effectiveTimeToLive, acquireStarted);
@@ -299,6 +318,7 @@ sealed class FileLease : IDisposable
         catch (Exception exception)
         {
             startupScope?.WaitForCancellationCallbacksAsync().GetAwaiter().GetResult();
+
             if (startupScope is not null)
             {
                 try
@@ -310,6 +330,7 @@ sealed class FileLease : IDisposable
                     {
                         WriteRecord(leaderPath, currentOwner with { AcquiredAt = "1970-01-01T00:00:00Z" });
                     }
+
                     startupScope.ResolveLeasePublication();
                 }
                 catch (Exception)
@@ -317,11 +338,14 @@ sealed class FileLease : IDisposable
                     // An unconfirmed owner remains bounded by its original lease TTL.
                 }
             }
+
+
             if (startupScope is not null && exception is IOException or UnauthorizedAccessException or
                 PantsIOException or PantsTimeoutException or OperationCanceledException)
             {
                 throw new PantsLeaseIndeterminateException("The local leader publication was not confirmed.", exception);
             }
+
             throw;
         }
     }
@@ -349,25 +373,33 @@ sealed class FileLease : IDisposable
         while (!Volatile.Read(ref _disposed))
         {
             var observed = Volatile.Read(ref _validUntilTimestamp);
+
             if (observed == 0 || !_valid)
             {
                 return;
             }
+
             var remaining = observed - _time.GetTimestamp();
+
             if (remaining > 0)
             {
                 RescheduleWatchdog(remaining);
                 return;
             }
+
+
             if (Interlocked.CompareExchange(ref _validUntilTimestamp, 0, observed) != observed)
             {
                 continue;
             }
+
             _valid = false;
+
             if (!Volatile.Read(ref _disposed))
             {
                 NotifyLeaseLoss();
             }
+
             return;
         }
     }
@@ -378,13 +410,16 @@ sealed class FileLease : IDisposable
         {
             return;
         }
+
         var observed = Volatile.Read(ref _nextHeartbeatTimestamp);
         var remaining = observed - _time.GetTimestamp();
+
         if (remaining > 0)
         {
             RescheduleHeartbeat(remaining);
             return;
         }
+
         Renew(observed);
     }
 
@@ -397,10 +432,12 @@ sealed class FileLease : IDisposable
         {
             return;
         }
+
         var seconds = Math.Max(0, (double)remainingTimestamps / _time.TimestampFrequency);
         var due = seconds >= MaximumTimerDelay.TotalSeconds
             ? MaximumTimerDelay
             : TimeSpan.FromSeconds(seconds == 0 ? 0 : Math.Max(seconds, 0.001));
+
         try
         {
             timer.Change(due, Timeout.InfiniteTimeSpan);
@@ -424,6 +461,7 @@ sealed class FileLease : IDisposable
         if (IsPastDeadline())
         {
             OnWatchdog();
+
             if (!_valid || IsPastDeadline())
             {
                 throw new PantsFencedException("The Midge writer lease is no longer valid.");
@@ -441,6 +479,7 @@ sealed class FileLease : IDisposable
             try
             {
                 var current = ReadRecord(_leaderPath);
+
                 if (current?.Epoch != Epoch || current.HolderId != _holderId)
                 {
                     _valid = false;
@@ -482,6 +521,7 @@ sealed class FileLease : IDisposable
             else
             {
                 mutationLock = AcquireMutationLockForFencedMutation();
+
                 if (_disposed || !_valid || IsPastDeadline())
                 {
                     _valid = false;
@@ -493,6 +533,7 @@ sealed class FileLease : IDisposable
                     try
                     {
                         var current = ReadRecord(_leaderPath);
+
                         if (current?.Epoch != Epoch || current.HolderId != _holderId)
                         {
                             _valid = false;
@@ -511,10 +552,12 @@ sealed class FileLease : IDisposable
         if (readFailure is not null)
         {
             mutationLock?.Dispose();
+
             if (readFailure is PantsException pantsException)
             {
                 throw pantsException;
             }
+
 
             throw new PantsLeaseUnavailableException(
                 "The Midge leader record could not be verified before a durable mutation.",
@@ -524,10 +567,12 @@ sealed class FileLease : IDisposable
         if (leaseLost)
         {
             mutationLock?.Dispose();
+
             if (shouldNotifyLeaseLoss)
             {
                 NotifyLeaseLoss();
             }
+
 
             throw new PantsFencedException("The Midge writer lease is no longer valid.");
         }
@@ -552,6 +597,7 @@ sealed class FileLease : IDisposable
             {
                 return;
             }
+
             if (expectedHeartbeat is { } expected && Volatile.Read(ref _nextHeartbeatTimestamp) != expected)
             {
                 RescheduleHeartbeat(Volatile.Read(ref _nextHeartbeatTimestamp) - _time.GetTimestamp());
@@ -560,6 +606,7 @@ sealed class FileLease : IDisposable
 
             var observed = Volatile.Read(ref _validUntilTimestamp);
             var started = _time.GetTimestamp();
+
             if (observed == 0 || started >= observed)
             {
                 // A renewal that starts after the deadline cannot restore an expired lease.
@@ -573,9 +620,11 @@ sealed class FileLease : IDisposable
                     // The deadline counts from when renewal began, never from when IO ended.
                     var deadline = AddSaturating(started, _timeToLiveTimestamps);
                     var renewed = TryRenewRecord(observed);
+
                     if (renewed is null)
                     {
                         var now = _time.GetTimestamp();
+
                         if (now >= observed)
                         {
                             _valid = false;
@@ -594,6 +643,7 @@ sealed class FileLease : IDisposable
                     {
                         leaseLost = !renewed.Value || _time.GetTimestamp() >= observed ||
                                     Interlocked.CompareExchange(ref _validUntilTimestamp, deadline, observed) != observed;
+
                         if (leaseLost)
                         {
                             _valid = false;
@@ -624,6 +674,7 @@ sealed class FileLease : IDisposable
     bool? TryRenewRecord(long validityDeadline)
     {
         LeaseMutationLock leaseLock;
+
         try
         {
             leaseLock = AcquireMutationLock(_lockPath, _holderId, _clock);
@@ -633,13 +684,16 @@ sealed class FileLease : IDisposable
             return null;
         }
 
+
         using (leaseLock)
         {
             var current = ReadRecord(_leaderPath);
+
             if (current?.Epoch != Epoch || current.HolderId != _holderId)
             {
                 return false;
             }
+
 
             WriteRecord(
                 _leaderPath,
@@ -654,6 +708,7 @@ sealed class FileLease : IDisposable
     {
         Interlocked.Exchange(ref _validUntilTimestamp, 0);
         _valid = false;
+
         if (Interlocked.Exchange(ref _leaseLossNotified, 1) == 0)
         {
             try
@@ -676,9 +731,11 @@ sealed class FileLease : IDisposable
         string holderId,
         IPantsClock clock,
         Action? disposalInterferenceHook = null,
-        Action? afterDeleteDirectorySyncHook = null)
+        Action? afterDeleteDirectorySyncHook = null
+    )
     {
         StoragePathGuard.EnsureNotLink(path);
+
         try
         {
             // CreateNew is the mutual-exclusion primitive. A marker left by a killed writer is
@@ -723,14 +780,17 @@ sealed class FileLease : IDisposable
     internal static string? TryReadOwnerToken(string path)
     {
         StoragePathGuard.EnsureNotLink(path);
+
         if (!File.Exists(path))
         {
             return null;
         }
 
+
         foreach (var line in File.ReadAllLines(path))
         {
             var parts = line.Split('=', 2);
+
             if (parts.Length == 2 && parts[0] == "owner_token")
             {
                 return parts[1];
@@ -762,7 +822,8 @@ sealed class FileLease : IDisposable
             string path,
             string ownerToken,
             Action? disposalInterferenceHook,
-            Action? afterDeleteDirectorySyncHook)
+            Action? afterDeleteDirectorySyncHook
+        )
         {
             _stream = stream;
             _path = path;
@@ -775,6 +836,7 @@ sealed class FileLease : IDisposable
         {
             _stream.Dispose();
             _disposalInterferenceHook?.Invoke();
+
             try
             {
                 // Only delete if this is still the same lock instance this process created,

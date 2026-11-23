@@ -11,6 +11,7 @@ public sealed class MidgeCompatibilityFixtureTests
     {
         // Arrange
         using var directory = Format9TestMetadata.CopyFixture("populated-local");
+
         foreach (var name in new[] { "manifest.snapshot.json" })
         {
             var path = Path.Combine(directory.Path, name);
@@ -24,6 +25,7 @@ public sealed class MidgeCompatibilityFixtureTests
         }
 
         // Act
+
         await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)))
         {
             await using (var transaction = await database.Transactions.BeginAsync(
@@ -37,10 +39,12 @@ public sealed class MidgeCompatibilityFixtureTests
                     EndExclusive = "fixture/empty"u8.ToArray()
                 });
                 var rows = new List<string>();
+
                 await foreach (var entry in scan)
                 {
                     rows.Add(Encoding.UTF8.GetString(entry.Key.Span));
                 }
+
 
                 Assert.Equal("value-alpha", Encoding.UTF8.GetString(point!.Value.Span));
                 Assert.Equal(["fixture/alpha"], rows);
@@ -88,10 +92,12 @@ public sealed class MidgeCompatibilityFixtureTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             rows.Add((Encoding.UTF8.GetString(entry.Key.Span), Encoding.UTF8.GetString(entry.Value.Span)));
         }
+
 
         Assert.Equal(3, rows.Count);
         Assert.Equal(("fixture/alpha", "value-alpha"), rows[0]);

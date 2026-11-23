@@ -7,18 +7,21 @@ public sealed class PantsCloudProviderContext
         TimeSpan operationTimeout,
         HttpClient storageHttpClient,
         HttpClient credentialHttpClient,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         ArgumentNullException.ThrowIfNull(prefix);
         ArgumentNullException.ThrowIfNull(storageHttpClient);
         ArgumentNullException.ThrowIfNull(credentialHttpClient);
         ArgumentNullException.ThrowIfNull(timeProvider);
+
         if (operationTimeout < TimeSpan.FromMilliseconds(1))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(operationTimeout),
                 "The operation timeout must be at least one millisecond.");
         }
+
 
         Prefix = prefix;
         OperationTimeout = operationTimeout;

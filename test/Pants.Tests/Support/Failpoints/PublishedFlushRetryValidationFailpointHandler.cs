@@ -34,6 +34,7 @@ sealed class PublishedFlushRetryValidationFailpointHandler :
         }
 
         _retryValidationEntered.TrySetResult();
+
         if (!_release.Wait(MaximumBlockTime))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");

@@ -14,12 +14,14 @@ interface IStorageReadStore
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
         CancellationToken cancellationToken,
-        PointReadObservation? observation = null);
+        PointReadObservation? observation = null
+    );
 
     ValueTask<ulong?> GetLatestMutationSequenceAsync(
         IReadOnlyList<FileMeta> candidatesNewestFirst,
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<bool> HasMutationInRangeAsync(
         IReadOnlyList<FileMeta> candidates,
@@ -27,5 +29,6 @@ interface IStorageReadStore
         ReadOnlyMemory<byte> endExclusive,
         ulong afterSequence,
         ResourceBudget? resourceBudget,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

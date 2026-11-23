@@ -14,10 +14,12 @@ sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensu
     public async ValueTask<PublishedManifest?> ReadAsync(CancellationToken cancellationToken)
     {
         var identity = await ReadIdentityAsync(cancellationToken).ConfigureAwait(false);
+
         if (identity.IsEmpty)
         {
             return null;
         }
+
 
         if (_cached is { } cached && cached.Identity == identity)
         {
@@ -28,10 +30,12 @@ sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensu
         using var reads = new ProviderCloudControlMetadataReadSet(controlStore, _budget);
         var files = await CloudMetadataAuthority.ReadCommittedFilesAsync(controlStore, cancellationToken, readSet: reads).ConfigureAwait(false);
         ensureLeaseValid();
+
         if (files?.ContainsKey("manifest.snapshot.json") != true)
         {
             return null;
         }
+
 
         if (await ReadIdentityAsync(cancellationToken).ConfigureAwait(false) != identity)
         {
@@ -44,7 +48,8 @@ sealed class PublishedManifestReader(ICloudObjectStore controlStore, Action ensu
 
     public async ValueTask<bool> IsCurrentAsync(
         PublishedManifestIdentity identity,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         await ReadIdentityAsync(cancellationToken).ConfigureAwait(false) == identity;
 
     async ValueTask<PublishedManifestIdentity> ReadIdentityAsync(CancellationToken cancellationToken)

@@ -29,10 +29,12 @@ public class MemtableRotateSubsystemBenchmarks : Tier2Benchmark
     static int Build((byte[] Key, byte[] Value)[] entries)
     {
         var memtable = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+
         for (var index = 0; index < entries.Length; index++)
         {
             memtable[entries[index].Key] = new CellState(entries[index].Value, (ulong)index + 1, null);
         }
+
 
         return memtable.Count;
     }

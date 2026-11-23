@@ -12,11 +12,13 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
     public CloudMetadataSerializedBytes Serialize<T>(
         T value,
         JsonSerializerOptions options,
-        string resourceName = "Cloud WAL catalog")
+        string resourceName = "Cloud WAL catalog"
+    )
     {
         var fixedWorkspaceBytes = FixedWorkspaceBytes;
         var maximumSerializedBytes = (budget.Limit - fixedWorkspaceBytes) /
                                      ImmutablePublicationEnvelope.CopyFactor;
+
         if (maximumSerializedBytes <= 0)
         {
             throw new PantsResourceLimitException(
@@ -24,6 +26,7 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
                 $"{fixedWorkspaceBytes + ImmutablePublicationEnvelope.CopyFactor} " +
                 $"bytes of maintenance memory; the pool holds {budget.Limit}.");
         }
+
 
         var countingBufferBytes = checked((int)Math.Min(
             ProviderWalCatalogReadAdmission.ReadRangeBytes,
@@ -52,6 +55,7 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
         }
 
         var workspaceBytes = PublicationWorkspaceBytes(serializedBytes, fixedWorkspaceBytes);
+
         if (workspaceBytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
@@ -59,15 +63,19 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
                 $"memory; the pool holds {budget.Limit}.");
         }
 
+
         var reservation = budget.Reserve(workspaceBytes);
+
         try
         {
             var bytes = JsonSerializer.SerializeToUtf8Bytes(value, options);
+
             if (bytes.LongLength != serializedBytes)
             {
                 throw new PantsCorruptionException(
                     $"{resourceName} serialization changed length between admission and publication.");
             }
+
 
             return new CloudMetadataSerializedBytes(bytes, reservation);
         }
@@ -80,16 +88,19 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
 
     public IDisposable AdmitExisting(
         long serializedBytes,
-        string resourceName = "Cloud WAL catalog")
+        string resourceName = "Cloud WAL catalog"
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(serializedBytes);
         var workspaceBytes = PublicationWorkspaceBytes(serializedBytes, FixedWorkspaceBytes);
+
         if (workspaceBytes > budget.Limit)
         {
             throw new PantsResourceLimitException(
                 $"{resourceName} needs {workspaceBytes} bytes of maintenance memory; " +
                 $"the pool holds {budget.Limit}.");
         }
+
 
         return budget.Reserve(workspaceBytes);
     }
@@ -113,11 +124,13 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
         public void Advance(int count)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(count);
+
             if (count > _buffer.Length)
             {
                 throw new PantsResourceLimitException(
                     $"{resourceName} JSON requested more counting workspace than the maintenance budget allows.");
             }
+
 
             try
             {
@@ -152,6 +165,7 @@ sealed class CloudMetadataWriteAdmission(ResourceBudget budget)
         void ValidateSizeHint(int sizeHint)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(sizeHint);
+
             if (Math.Max(1, sizeHint) > _buffer.Length)
             {
                 throw new PantsResourceLimitException(

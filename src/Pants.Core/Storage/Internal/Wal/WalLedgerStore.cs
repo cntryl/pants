@@ -16,8 +16,14 @@ sealed class WalLedgerStore
 
     readonly string _directory;
 
-    public WalLedgerStore(string directory, Guid holder, WalChainLink anchor,
-        List<WalLedgerMember> members, ulong nextSegmentId, ulong reserved)
+    public WalLedgerStore(
+        string directory,
+        Guid holder,
+        WalChainLink anchor,
+        List<WalLedgerMember> members,
+        ulong nextSegmentId,
+        ulong reserved
+    )
     {
         _directory = directory;
         Holder = holder;
@@ -38,6 +44,7 @@ sealed class WalLedgerStore
     public static WalLedgerStore LoadOrCreate(string directory, ulong epoch, ulong minimumId = 1, WalChainLink? remoteHead = null, ulong sequenceFloor = 0)
     {
         var path = Path.Combine(directory, "LEDGER");
+
         if (!File.Exists(path))
         {
             if (remoteHead is null && (Directory.EnumerateFiles(directory, "*.wal").Any() || File.Exists(Path.Combine(directory, "wal.log"))))
@@ -55,36 +62,44 @@ sealed class WalLedgerStore
             return ledger;
         }
 
+
         return LoadExisting(directory);
     }
 
     public static WalLedgerStore LoadExisting(string directory)
     {
         var path = Path.Combine(directory, "LEDGER");
+
         if (!File.Exists(path))
         {
             throw new PantsCorruptionException("WAL history has no authoritative LEDGER.");
         }
 
+
         var bytes = File.ReadAllBytes(path);
+
         if (bytes.Length < 12 || !bytes.AsSpan(0, 8).SequenceEqual("MDGLEDGR"u8) ||
             BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(8)) != 2)
         {
             throw new PantsCompatibilityException("Unsupported WAL LEDGER header.");
         }
 
+
         WalLedgerStore? result = null;
         var cursor = 12;
+
         while (cursor < bytes.Length)
         {
             if (bytes.Length - cursor < 8)
             {
                 if (result is null) { throw new PantsCorruptionException("WAL ledger snapshot is incomplete."); }
+
                 break;
             }
 
             var length = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor));
             var checksum = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(cursor + 4));
+
             if (length > DiskFormat.WalMaximumRecordBytes || length > bytes.Length - cursor - 8)
             {
                 if (result is not null && !HasLaterFrame(bytes, cursor + 1))
@@ -95,8 +110,10 @@ sealed class WalLedgerStore
                 throw new PantsCorruptionException("WAL ledger frame length is invalid.");
             }
 
+
             var payload = bytes.AsSpan(cursor + 8, (int)length);
             var actual = DiskFormat.Crc32CAppend(DiskFormat.Crc32C(bytes.AsSpan(cursor, 4)), payload);
+
             if (actual != checksum)
             {
                 if (result is not null && !HasLaterFrame(bytes, cursor + 1))
@@ -107,25 +124,30 @@ sealed class WalLedgerStore
                 throw new PantsCorruptionException("WAL ledger checksum mismatch.");
             }
 
+
             try
             {
                 using var document = JsonDocument.Parse(payload.ToArray());
                 var root = document.RootElement;
                 ValidateUniqueProperties(root);
+
                 if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 1)
                 {
                     throw new PantsCorruptionException("WAL ledger frames require exactly one external variant tag.");
                 }
+
 
                 if (result is null)
                 {
                     var snapshot = root.GetProperty("Snapshot");
                     var names = new HashSet<string>(StringComparer.Ordinal)
                     { "holder", "anchor", "members", "next_segment_id", "seq_reserved_through" };
+
                     if (root.EnumerateObject().Count() != 1 || snapshot.EnumerateObject().Any(field => !names.Remove(field.Name)) || names.Count != 0)
                     {
                         throw new PantsCorruptionException("WAL ledger snapshot has unknown or duplicate fields.");
                     }
+
 
                     result = new WalLedgerStore(directory, snapshot.GetProperty("holder").GetGuid(),
                         snapshot.GetProperty("anchor").Deserialize<WalChainLink>(JsonOptions) ?? throw new PantsCorruptionException("WAL anchor is missing."),
@@ -147,6 +169,7 @@ sealed class WalLedgerStore
             cursor += 8 + (int)length;
         }
 
+
         return result ?? throw new PantsCorruptionException("WAL ledger has no snapshot.");
     }
 
@@ -155,6 +178,7 @@ sealed class WalLedgerStore
         if (value.ValueKind == JsonValueKind.Object)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var field in value.EnumerateObject())
             {
                 if (!names.Add(field.Name))
@@ -179,21 +203,26 @@ sealed class WalLedgerStore
         for (; cursor <= bytes.Length - 8; cursor++)
         {
             var length = BinaryPrimitives.ReadUInt32LittleEndian(bytes[cursor..]);
+
             if (length == 0 || length > DiskFormat.WalMaximumRecordBytes || length > bytes.Length - cursor - 8)
             {
                 continue;
             }
 
+
             var payload = bytes.Slice(cursor + 8, (int)length);
             var actual = DiskFormat.Crc32CAppend(DiskFormat.Crc32C(bytes.Slice(cursor, 4)), payload);
+
             if (actual != BinaryPrimitives.ReadUInt32LittleEndian(bytes[(cursor + 4)..]))
             {
                 continue;
             }
 
+
             try
             {
                 using var document = JsonDocument.Parse(payload.ToArray());
+
                 if (document.RootElement.TryGetProperty("Edit", out _))
                 {
                     return true;
@@ -224,10 +253,12 @@ sealed class WalLedgerStore
             "Rebase" => ["anchor", "open"],
             _ => throw new PantsCorruptionException($"Unsupported WAL ledger edit '{variant.Name}'.")
         };
+
         if (fields.EnumerateObject().Any(field => !allowedFields.Contains(field.Name, StringComparer.Ordinal)))
         {
             throw new PantsCorruptionException("WAL ledger edit has unknown fields.");
         }
+
 
         switch (variant.Name)
         {
@@ -337,15 +368,19 @@ sealed class WalLedgerStore
         ValidateLink(Anchor);
         var link = Anchor;
         var epoch = 0UL;
+
         for (var index = 0; index < Members.Count; index++)
         {
             var member = Members[index];
+
             if (member?.Open is not { } open)
             {
                 throw new PantsCorruptionException("WAL ledger member is missing header facts.");
             }
 
+
             ValidateLink(open.Prev);
+
             if (!open.Prev.Matches(link) || open.Id <= link.Id || open.FirstSeq <= link.LastSeq ||
                 open.Epoch < epoch || (member.Sealed is null) != (index == Members.Count - 1) ||
                 member.DurableBytes is < WalSegmentCodec.HeaderSize)
@@ -353,9 +388,11 @@ sealed class WalLedgerStore
                 throw new PantsCorruptionException("WAL ledger member chain is invalid.");
             }
 
+
             if (member.Sealed is { } facts)
             {
                 ValidateLink(facts.Link);
+
                 if (facts.Link.Id != open.Id || facts.DataLen < WalSegmentCodec.HeaderSize ||
                     member.DurableBytes > facts.DataLen || facts.MaxSeqPerCf is null ||
                     (facts.RecordCount == 0
@@ -365,7 +402,9 @@ sealed class WalLedgerStore
                     throw new PantsCorruptionException("WAL sealed facts are invalid.");
                 }
 
+
                 ulong? previousFamily = null;
+
                 foreach (var pair in facts.MaxSeqPerCf)
                 {
                     if (pair is not { Length: 2 } || pair[0] > uint.MaxValue ||
@@ -376,6 +415,7 @@ sealed class WalLedgerStore
 
                     previousFamily = pair[0];
                 }
+
 
                 link = facts.Link;
             }
@@ -445,12 +485,15 @@ sealed class WalLedgerStore
     {
         ValidateLink(facts.Link);
         ValidateLink(next.Prev);
+
         if (facts.Link.Id != Active.Open.Id || next.Id != NextSegmentId ||
             !next.Prev.Matches(facts.Link) || next.Epoch < Active.Open.Epoch || next.FirstSeq <= facts.Link.LastSeq)
         { throw new PantsCorruptionException("WAL rotation does not follow the active segment."); }
+
         Members[^1] = Active with { Sealed = facts, DurableBytes = facts.DataLen };
         Members.Add(new WalLedgerMember(next, null, 128));
         NextSegmentId = checked(next.Id + 1);
+
         if (save) { Save(); }
     }
 
@@ -472,11 +515,13 @@ sealed class WalLedgerStore
     public void RetireBefore(ulong id, bool save = true)
     {
         if (id > Active.Open.Id) { throw new PantsCorruptionException("WAL retirement passes the open segment."); }
+
         while (Members.Count > 1 && Members[0].Open.Id < id)
         {
             Anchor = Members[0].Sealed!.Link;
             Members.RemoveAt(0);
         }
+
         if (save) { Save(); }
     }
 }

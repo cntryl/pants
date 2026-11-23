@@ -54,10 +54,12 @@ public sealed class PantsSmokeBehaviorTests
             EndExclusive = "d"u8.ToArray()
         });
         var keys = new List<string>();
+
         await foreach (var entry in scan)
         {
             keys.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.Equal(["a", "c"], keys);
     }

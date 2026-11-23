@@ -51,19 +51,24 @@ sealed class ResourceBudget(long limit)
     bool TryReserve(
         long bytes,
         [NotNullWhen(true)] out IDisposable? reservation,
-        out long before)
+        out long before
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+
         while (true)
         {
             before = Interlocked.Read(ref _current);
+
             if (bytes > Limit - before)
             {
                 reservation = null;
                 return false;
             }
 
+
             var after = before + bytes;
+
             if (Interlocked.CompareExchange(ref _current, after, before) == before)
             {
                 UpdatePeak(after);
@@ -80,6 +85,7 @@ sealed class ResourceBudget(long limit)
         while (true)
         {
             var current = Interlocked.Read(ref _peak);
+
             if (candidate <= current ||
                 Interlocked.CompareExchange(ref _peak, candidate, current) == current)
             {
@@ -96,13 +102,16 @@ sealed class ResourceBudget(long limit)
         public void ShrinkTo(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+
             while (true)
             {
                 var before = Volatile.Read(ref _bytes);
+
                 if (bytes > before)
                 {
                     throw new ArgumentOutOfRangeException(nameof(bytes), "A retained claim cannot grow without admission.");
                 }
+
 
                 if (Interlocked.CompareExchange(ref _bytes, bytes, before) == before)
                 {

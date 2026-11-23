@@ -23,9 +23,11 @@ public interface IPantsDatabase : IAsyncDisposable
     ValueTask<PantsBackupManifest> BackupAsync(
         string destination,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask ShutdownAsync(
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

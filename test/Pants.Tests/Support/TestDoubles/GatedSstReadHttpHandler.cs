@@ -24,7 +24,8 @@ sealed class GatedSstReadHttpHandler : DelegatingHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (request.Method == HttpMethod.Get &&
             request.RequestUri?.AbsolutePath.Contains("/sst/", StringComparison.Ordinal) == true &&

@@ -10,11 +10,13 @@ static class MidgeBenchmarkReader
     internal static string ValidateCargoLock(byte[] cargoLockBytes, MidgeBenchmarkPin pin)
     {
         var cargoLockSha = Convert.ToHexString(SHA256.HashData(cargoLockBytes)).ToLowerInvariant();
+
         if (!cargoLockSha.Equals(pin.CargoLockSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 $"Midge Cargo.lock SHA '{cargoLockSha}' does not match the configured pin.");
         }
+
 
         var stressPackage = Encoding.UTF8.GetString(cargoLockBytes)
             .Split("[[package]]", StringSplitOptions.RemoveEmptyEntries)
@@ -22,11 +24,13 @@ static class MidgeBenchmarkReader
                 CargoLockValue(section, "name") == "cntryl-stress" &&
                 CargoLockValue(section, "version") == pin.StressToolVersion &&
                 CargoLockValue(section, "source") == "registry+https://github.com/rust-lang/crates.io-index");
+
         if (!stressPackage)
         {
             throw new InvalidDataException(
                 $"Midge Cargo.lock does not contain the configured published cntryl-stress {pin.StressToolVersion} crate.");
         }
+
 
         return cargoLockSha;
     }
@@ -46,13 +50,16 @@ static class MidgeBenchmarkReader
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
+
         if (RequiredString(root, "schema_version") != "cntryl-stress.v2")
         {
             throw new InvalidDataException("The Midge benchmark uses an unsupported stress schema.");
         }
 
+
         var environment = Required(root, "environment");
         var sourceSha = RequiredString(environment, "git_commit");
+
         if (!sourceSha.Equals(pin.SourceSha, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -60,22 +67,27 @@ static class MidgeBenchmarkReader
                 $"with SHA '{pin.SourceSha}'.");
         }
 
+
         var cpu = RequiredString(environment, "cpu_model");
         var operatingSystem = RequiredString(environment, "os");
         var runtime = RequiredString(environment, "rustc_version");
         var runProfile = RequiredString(root, "run_profile");
         var toolVersion = RequiredString(root, "tool_version");
+
         if (!toolVersion.Equals(pin.StressToolVersion, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 $"Midge stress tool version '{toolVersion}' does not match configured pin version " +
                 $"'{pin.StressToolVersion}'.");
         }
+
         var summaries = Required(root, "summaries");
+
         if (summaries.ValueKind != JsonValueKind.Array || summaries.GetArrayLength() == 0)
         {
             throw new InvalidDataException("The Midge benchmark has no summary rows.");
         }
+
 
         var measuredOperations = ReadMeasuredOperations(Required(root, "samples"));
         var results = summaries.EnumerateArray().Select(summary =>
@@ -83,10 +95,12 @@ static class MidgeBenchmarkReader
                 toolVersion)).ToArray();
         var duplicate = results.GroupBy(result => result.ScenarioId, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > 1);
+
         if (duplicate is not null)
         {
             throw new InvalidDataException($"Duplicate Midge benchmark scenario '{duplicate.Key}'.");
         }
+
 
         if (measuredOperations.Count != 0)
         {
@@ -106,22 +120,27 @@ static class MidgeBenchmarkReader
         }
 
         var totals = new Dictionary<string, (int Count, ulong Operations)>(StringComparer.Ordinal);
+
         foreach (var sample in samples.EnumerateArray())
         {
             var benchmarkId = RequiredString(sample, "benchmark_id");
             var phase = RequiredString(sample, "phase");
+
             if (phase is not "warmup" and not "measured" and not "cooldown")
             {
                 throw new InvalidDataException($"Midge benchmark sample has unsupported phase '{phase}'.");
             }
 
+
             var completedElement = Required(sample, "operations_completed");
+
             if (completedElement.ValueKind != JsonValueKind.Number ||
                 !completedElement.TryGetUInt64(out var completed))
             {
                 throw new InvalidDataException(
                     "Midge benchmark sample operations_completed must be a non-negative integer.");
             }
+
 
             if (phase != "measured")
             {
@@ -152,6 +171,7 @@ static class MidgeBenchmarkReader
             }
         }
 
+
         return totals;
     }
 
@@ -163,16 +183,20 @@ static class MidgeBenchmarkReader
         string operatingSystem,
         string runtime,
         string runProfile,
-        string toolVersion)
+        string toolVersion
+    )
     {
         var correctness = Required(summary, "correctness");
+
         if (!Required(correctness, "passed").GetBoolean())
         {
             throw new InvalidDataException(
                 $"Midge benchmark '{RequiredString(summary, "benchmark_id")}' failed correctness validation.");
         }
 
+
         var stats = Required(summary, "stats");
+
         if (stats.ValueKind != JsonValueKind.Object ||
             !stats.TryGetProperty("mean", out var meanElement) ||
             !meanElement.TryGetDouble(out var mean) || !double.IsFinite(mean))
@@ -180,6 +204,7 @@ static class MidgeBenchmarkReader
             throw new InvalidDataException(
                 $"Midge benchmark '{RequiredString(summary, "benchmark_id")}' has no finite mean.");
         }
+
 
         var parameters = Required(summary, "parameters");
         var parameterText = parameters.ValueKind == JsonValueKind.Object
@@ -192,11 +217,13 @@ static class MidgeBenchmarkReader
         ValidateFixtureMemtable(name, parameters);
         var tier = Required(summary, "tier").GetUInt32();
         var measuredElement = Required(summary, "measured_samples");
+
         if (measuredElement.ValueKind != JsonValueKind.Number || !measuredElement.TryGetInt32(out var expectedCount) ||
             expectedCount <= 0 || !measuredOperations.Remove(id, out var operations))
         {
             throw new InvalidDataException($"Midge benchmark '{id}' has no measured operation samples.");
         }
+
 
         if (operations.Count != expectedCount)
         {
@@ -227,6 +254,7 @@ static class MidgeBenchmarkReader
     static void ValidateFixtureMemtable(string benchmarkName, JsonElement parameters)
     {
         string? expectedBytes = null;
+
         if (benchmarkName.StartsWith("tier3_engine_get_", StringComparison.Ordinal) ||
             benchmarkName.StartsWith("tier4_recovery_reopen_after_", StringComparison.Ordinal))
         {
@@ -237,6 +265,7 @@ static class MidgeBenchmarkReader
         {
             expectedBytes = "4194304";
         }
+
 
         if (expectedBytes is null)
         {
@@ -254,13 +283,15 @@ static class MidgeBenchmarkReader
 
     internal static void ValidateScenarioInventory(
         IEnumerable<string> scenarioIds,
-        IReadOnlySet<string> expectedScenarioIds)
+        IReadOnlySet<string> expectedScenarioIds
+    )
     {
         var actual = scenarioIds.ToHashSet(StringComparer.Ordinal);
         var missing = expectedScenarioIds.Except(actual, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var unexpected = actual.Except(expectedScenarioIds, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+
         if (missing.Length != 0 || unexpected.Length != 0)
         {
             throw new InvalidDataException(

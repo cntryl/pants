@@ -78,9 +78,11 @@ public sealed class PantsCrashSoakTests(ITestOutputHelper output)
         var deadline = Stopwatch.StartNew();
         var next = seeds.Count == 0 ? 0 : seeds.Max() + 1;
         var runs = 0;
+
         while (seeds.Count > 0 || deadline.Elapsed < CrashSoakSettings.Duration)
         {
             var seed = seeds.Count > 0 ? seeds.Dequeue() : next++;
+
             foreach (var backend in backends)
             {
                 output.WriteLine($"seed {seed} on {backend}…");
@@ -91,6 +93,7 @@ public sealed class PantsCrashSoakTests(ITestOutputHelper output)
                 runs++;
             }
         }
+
 
         output.WriteLine($"{runs} seed runs passed in {deadline.Elapsed}.");
     }

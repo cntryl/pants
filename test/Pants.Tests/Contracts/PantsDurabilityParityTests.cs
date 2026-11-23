@@ -24,10 +24,12 @@ public sealed class PantsDurabilityParityTests
 
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
+
         for (var index = 0; index < commitCount; index++)
         {
             Assert.Equal($"value-{index:00}", await ReadAsync(reopened, $"key-{index:00}"));
         }
+
 
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.True(metrics.CurrentSequence >= commitCount * 2);
@@ -39,6 +41,7 @@ public sealed class PantsDurabilityParityTests
     {
         using var directory = new TemporaryDirectory();
         ulong previousSequence = 0;
+
         for (var cycle = 0; cycle < 5; cycle++)
         {
             await using var database = await PantsDatabase.OpenAsync(
@@ -48,23 +51,28 @@ public sealed class PantsDurabilityParityTests
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put("value"u8.ToArray(), TestBytes.FromString($"cycle-{cycle}"));
+
             if (cycle > 0)
             {
                 transaction.Delete(TestBytes.FromString($"delete-{cycle - 1}"));
             }
+
 
             transaction.Put(TestBytes.FromString($"delete-{cycle}"), "present"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Sync);
             previousSequence = (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence;
         }
 
+
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
         Assert.Equal("cycle-4", await ReadAsync(reopened, "value"));
+
         for (var cycle = 0; cycle < 4; cycle++)
         {
             Assert.Null(await ReadAsync(reopened, $"delete-{cycle}"));
         }
+
 
         Assert.Equal("present", await ReadAsync(reopened, "delete-4"));
     }
@@ -91,12 +99,14 @@ public sealed class PantsDurabilityParityTests
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Equal(
                 new string((char)('a' + index), 256),
                 await ReadAsync(reopened, $"key-{index}"));
         }
+
 
         Assert.True((await reopened.Diagnostics.GetRuntimeMetricsAsync()).WalRecoveryRecordsReplayed >= 3);
     }
@@ -142,7 +152,8 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldRecoverAnAtomicOutcomeAtEveryWalBoundary(
         string failpointName,
         bool spill,
-        int failAtHit)
+        int failAtHit
+    )
     {
         using var directory = new TemporaryDirectory();
         var failpoint = Enum.Parse<Failpoint>(failpointName);
@@ -161,10 +172,12 @@ public sealed class PantsDurabilityParityTests
                 PantsTransactionMode.ReadWrite);
             transaction.Put("first"u8.ToArray(), TestBytes.FromString(firstValue));
             transaction.Put("second"u8.ToArray(), TestBytes.FromString(secondValue));
+
             if (spill)
             {
                 Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
             }
+
 
             await Assert.ThrowsAnyAsync<PantsException>(() => transaction.CommitAsync(PantsWriteOptions.Sync).AsTask());
         }
@@ -173,6 +186,7 @@ public sealed class PantsDurabilityParityTests
         var first = await ReadAsync(reopened, "first");
         var second = await ReadAsync(reopened, "second");
         Assert.Equal(first is null, second is null);
+
         if (first is not null)
         {
             Assert.Equal(firstValue, first);
@@ -364,6 +378,7 @@ public sealed class PantsDurabilityParityTests
     public async Task ShouldRemainReadableAfterFlushCompactionShutdownAndReopenCycles()
     {
         using var directory = new TemporaryDirectory();
+
         for (var cycle = 0; cycle < 4; cycle++)
         {
             await using var database = await PantsDatabase.OpenAsync(
@@ -374,8 +389,10 @@ public sealed class PantsDurabilityParityTests
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
+
         await using var reopened = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path));
+
         for (var cycle = 0; cycle < 4; cycle++)
         {
             Assert.Equal($"value-{cycle}", await ReadAsync(reopened, $"key-{cycle}"));
@@ -420,7 +437,8 @@ public sealed class PantsDurabilityParityTests
     static async Task CommitValueAsync(
         IPantsDatabase database,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

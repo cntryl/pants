@@ -40,10 +40,12 @@ sealed class RemoteRangeStream(
     public override int Read(Span<byte> buffer)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         if (_position >= length || buffer.IsEmpty)
         {
             return 0;
         }
+
 
         EnsurePageContainsPosition();
         var pageOffset = checked((int)(_position - _pageStart));
@@ -89,14 +91,17 @@ sealed class RemoteRangeStream(
         var size = (int)Math.Min(pageBytes, length - start);
         var range = store.GetRangeAsync(objectKey, checked((ulong)start), size, cancellationToken)
             .AsTask().GetAwaiter().GetResult();
+
         if (range is null || range.Data.Length != size)
         {
             throw new PantsCorruptionException(
                 $"Published cloud WAL object '{objectKey}' did not return the requested range.");
         }
 
+
         _page = range.Data.ToArray();
         _pageStart = start;
+
         if (size > 0)
         {
             recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", size, 0, 0));

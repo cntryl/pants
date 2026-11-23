@@ -249,10 +249,12 @@ public sealed class RemoteWalReplayTests
         void WaitForCancellation()
         {
             readStarted.TrySetResult();
+
             if (!cancellationToken.WaitHandle.WaitOne(TestTimeouts.Expected))
             {
                 throw new TimeoutException("The startup deadline did not reach remote WAL replay.");
             }
+
 
             cancellationToken.ThrowIfCancellationRequested();
         }

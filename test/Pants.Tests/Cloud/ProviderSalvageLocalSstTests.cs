@@ -120,7 +120,8 @@ public sealed class ProviderSalvageLocalSstTests
         string cachePath,
         ICloudObjectStore control,
         ICloudObjectStore sst,
-        PantsRecoveryPolicy policy) =>
+        PantsRecoveryPolicy policy
+    ) =>
         ProviderCloudPersistence.HydrateLocalCacheAsync(
             cachePath,
             new CountingCloudObjectStore(),

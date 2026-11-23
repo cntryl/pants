@@ -12,7 +12,8 @@ sealed class ProviderCloudSstSourceFactory(
 
     public async ValueTask<IAsyncSstSource?> OpenAsync(
         FileMeta file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
         var metadata = await ReadMetadataAsync(objectKey, cancellationToken).ConfigureAwait(false);
@@ -38,14 +39,17 @@ sealed class ProviderCloudSstSourceFactory(
     public async ValueTask VerifyRemoteSstForEvictionAsync(
         FileMeta file,
         long localLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
+
         if (!_identityRegistry.TryGet(file.Name, out var identity))
         {
             throw new PantsRecoveryFailedException(
                 $"Cloud SST '{file.Name}' has no retained publication identity for safe eviction.");
         }
+
 
         if (localLength < 0 || checked((ulong)localLength) != identity.SizeBytes)
         {
@@ -61,11 +65,13 @@ sealed class ProviderCloudSstSourceFactory(
 
         var objectKey = PantsCloudObjectLayout.SstPrefix + file.Name;
         var metadata = await ReadMetadataAsync(objectKey, cancellationToken).ConfigureAwait(false);
+
         if (metadata is null)
         {
             throw new PantsRecoveryFailedException(
                 $"Manifest cloud SST '{file.Name}' is unavailable for eviction.");
         }
+
 
         if (metadata.SizeBytes != identity.SizeBytes)
         {
@@ -82,7 +88,8 @@ sealed class ProviderCloudSstSourceFactory(
 
     async ValueTask<CloudObjectMetadata?> ReadMetadataAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -112,23 +119,28 @@ sealed class ProviderCloudSstSourceFactory(
         public async ValueTask<byte[]> ReadExactlyAsync(
             long offset,
             int rangeLength,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             ArgumentOutOfRangeException.ThrowIfNegative(offset);
             ArgumentOutOfRangeException.ThrowIfNegative(rangeLength);
+
             if (offset > Length || rangeLength > Length - offset)
             {
                 throw new EndOfStreamException("The cloud SST range is outside the object.");
             }
 
+
             var startedAt = Stopwatch.GetTimestamp();
             telemetry.RecordRemoteRangeStarted();
             var returnedBytes = 0L;
             var failed = true;
+
             try
             {
                 CloudObject? value;
+
                 try
                 {
                     value = store is CloudObjectStore builtInStore
@@ -156,12 +168,15 @@ sealed class ProviderCloudSstSourceFactory(
                         cancellationToken);
                 }
 
+
                 returnedBytes = value?.Data.Length ?? 0;
+
                 if (value is null)
                 {
                     throw new PantsRecoveryFailedException(
                         $"Manifest-owned cloud SST '{objectKey}' is missing during a ranged read.");
                 }
+
 
                 if (!StringComparer.Ordinal.Equals(value.Version, metadata.Version))
                 {

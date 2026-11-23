@@ -85,17 +85,20 @@ public sealed class MidgeManifestCheckpointParityTests
     static async Task AssertRowsAsync(
         IPantsDatabase database,
         int rounds,
-        IPantsColumnFamily family)
+        IPantsColumnFamily family
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var rows = new List<(string Key, string Value)>();
+
         await foreach (var row in scan)
         {
             rows.Add((TestBytes.ToText(row.Key), TestBytes.ToText(row.Value)));
         }
+
 
         var expected = Enumerable.Range(0, rounds)
             .SelectMany(round => Enumerable.Range(0, RowsPerRound)

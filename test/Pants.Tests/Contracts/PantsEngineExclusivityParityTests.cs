@@ -45,6 +45,7 @@ public sealed class PantsEngineExclusivityParityTests
     public async Task ShouldSurviveRapidOpenShutdownCycles()
     {
         using var directory = new TemporaryDirectory();
+
         for (var cycle = 0; cycle < 10; cycle++)
         {
             await using var database = await PantsDatabase.OpenAsync(
@@ -109,6 +110,7 @@ public sealed class PantsEngineExclusivityParityTests
     static async Task<FileStream> AcquireLeaseMutationLockAsync(string path)
     {
         using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             try
@@ -125,6 +127,7 @@ public sealed class PantsEngineExclusivityParityTests
     static async Task<OpenResult> AttemptOpenAsync(string path, Task start)
     {
         await start;
+
         try
         {
             var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(path));

@@ -43,6 +43,7 @@ sealed class CrashChildProcess : IDisposable
             await File.ReadAllBytesAsync(Path.Combine(databasePath, ".midge_leader")));
         Assert.StartsWith($"{Environment.ProcessId}.", local.HolderId, StringComparison.Ordinal);
         CloudLeaseSnapshot? shared = null;
+
         if (simulatedCloud)
         {
             await using var objects = new SimulatedCloudObjectStore(Path.Combine(databasePath, "cloud_store"));
@@ -52,6 +53,7 @@ sealed class CrashChildProcess : IDisposable
             Assert.StartsWith($"pants-{Environment.ProcessId}-", shared.Lease.HolderId, StringComparison.Ordinal);
         }
 
+
         return new WriterLeaseSnapshot(local, shared);
     }
 
@@ -60,6 +62,7 @@ sealed class CrashChildProcess : IDisposable
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         FileStream exclusion;
+
         while (true)
         {
             try
@@ -75,12 +78,14 @@ sealed class CrashChildProcess : IDisposable
         }
 
         // Keep the stopped owner's local exclusion while checking identities and expiring records.
+
         await using (exclusion)
         {
             var leasePath = Path.Combine(databasePath, ".midge_leader");
             var local = LeaderRecordCodec.Decode(await File.ReadAllBytesAsync(leasePath));
             Assert.Equal(captured.LocalLease.Epoch, local.Epoch);
             Assert.Equal(captured.LocalLease.HolderId, local.HolderId);
+
             if (captured.SharedLease is { } capturedShared)
             {
                 await using var objects = new SimulatedCloudObjectStore(Path.Combine(databasePath, "cloud_store"));
@@ -93,6 +98,7 @@ sealed class CrashChildProcess : IDisposable
                 Assert.True(await store.TryReplaceAsync(shared.Version,
                     shared.Lease with { ExpiresAtUtc = DateTimeOffset.UnixEpoch }, CancellationToken.None));
             }
+
 
             await File.WriteAllBytesAsync(leasePath,
                 LeaderRecordCodec.Encode(local with { AcquiredAt = "1970-01-01T00:00:00Z" }));
@@ -147,13 +153,16 @@ sealed class CrashChildProcess : IDisposable
         string description,
         string databasePath,
         string readyPath,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null
+    )
     {
         string? abortedLaunch = null;
+
         while (true)
         {
             var child = Start(start, description);
             bool ready;
+
             try
             {
                 ready = await child.WaitForReadinessAsync(readyPath, timeout ?? DefaultReadinessTimeout);
@@ -164,6 +173,7 @@ sealed class CrashChildProcess : IDisposable
                 throw;
             }
 
+
             if (ready)
             {
                 return child;
@@ -171,11 +181,13 @@ sealed class CrashChildProcess : IDisposable
 
             var failure = await child.DescribeAsync();
             child.Dispose();
+
             if (abortedLaunch is null && !HasEntries(databasePath))
             {
                 abortedLaunch = failure;
                 continue;
             }
+
 
             var retried = abortedLaunch is null
                 ? string.Empty
@@ -197,12 +209,15 @@ sealed class CrashChildProcess : IDisposable
     public static async Task<CrashChildProcess> RunToExitAsync(
         ProcessStartInfo start,
         string description,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var relaunched = false;
+
         while (true)
         {
             var child = Start(start, description);
+
             try
             {
                 await child.WaitForExitAsync(timeout);
@@ -212,6 +227,7 @@ sealed class CrashChildProcess : IDisposable
                 child.Dispose();
                 throw;
             }
+
 
             if (!relaunched &&
                 child.ExitCode != 0 &&
@@ -270,6 +286,7 @@ sealed class CrashChildProcess : IDisposable
         catch (TimeoutException exception)
         {
             TryKillProcessTree();
+
             try
             {
                 await Process.WaitForExitAsync().WaitAsync(OutputDrainTimeout);
@@ -278,6 +295,7 @@ sealed class CrashChildProcess : IDisposable
             {
                 // The description below reports the child as still running.
             }
+
 
             throw new XunitException(
                 $"The {_description} did not exit within {timeout.TotalSeconds:0} seconds: " +
@@ -289,6 +307,7 @@ sealed class CrashChildProcess : IDisposable
     async Task<bool> WaitForReadinessAsync(string readyPath, TimeSpan timeout)
     {
         using var deadline = new CancellationTokenSource(timeout);
+
         while (true)
         {
             if (File.Exists(readyPath))
@@ -309,6 +328,7 @@ sealed class CrashChildProcess : IDisposable
             catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
             {
                 TryKillProcessTree();
+
                 try
                 {
                     await Process.WaitForExitAsync().WaitAsync(OutputDrainTimeout);
@@ -317,6 +337,7 @@ sealed class CrashChildProcess : IDisposable
                 {
                     // The description below reports the child as still running.
                 }
+
 
                 throw new XunitException(
                     $"The {_description} did not become ready within {timeout.TotalSeconds:0} seconds: " +

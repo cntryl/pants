@@ -50,7 +50,8 @@ sealed class ProviderWalRetirement
         WalRetirementSettings settings,
         IFailpointHandler failpoints,
         Action markPersistenceAnomaly,
-        WalRetirementDiagnostics walRetirementDiagnostics)
+        WalRetirementDiagnostics walRetirementDiagnostics
+    )
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(settings.PageBytes, 64);
         _walStore = walStore;
@@ -78,15 +79,18 @@ sealed class ProviderWalRetirement
     {
         var quantum = new WalRetirementQuantum(_settings.TimeProvider, _settings.Quantum);
         var retired = 0;
+
         for (var attempt = 0; attempt < MaximumCatalogAttempts; attempt++)
         {
             _lease.EnsureValid();
             using var turn = await PrepareAsync(quantum, cancellationToken).ConfigureAwait(false);
+
             if (turn.Proven.Count == 0)
             {
                 _walRetirementDiagnostics.SetBlockedCause(turn.BlockedCause);
                 return new WalRetirementResult(turn.Outcome, retired);
             }
+
 
             switch (await CommitAsync(turn, cancellationToken).ConfigureAwait(false))
             {
@@ -109,27 +113,34 @@ sealed class ProviderWalRetirement
             }
         }
 
+
         return new WalRetirementResult(WalRetirementOutcome.Yielded, retired);
     }
 
     async ValueTask<RetirementTurn> PrepareAsync(
         WalRetirementQuantum quantum,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         WalCatalogRead? catalogRead = null;
+
         try
         {
             var manifest = await _manifests.ReadAsync(cancellationToken).ConfigureAwait(false);
+
             if (manifest is null || manifest.Coverage.MaximumSequenceWithDurableEvidence == 0)
             {
                 return RetirementTurn.Settled;
             }
 
+
             catalogRead = await _catalog.ReadAsync(false, cancellationToken).ConfigureAwait(false);
+
             if (catalogRead.Version is null || catalogRead.Catalog is not { } catalog)
             {
                 return RetirementTurn.Settled;
             }
+
 
             if (catalog.FencingEpoch != _writerEpoch)
             {
@@ -141,6 +152,7 @@ sealed class ProviderWalRetirement
             var proven = new List<WalSegmentProof>();
             var outcome = WalRetirementOutcome.Settled;
             var blockedCause = PantsWalRetirementBlockedCause.None;
+
             foreach (var segment in catalog.Segments.Values.OrderBy(static segment => segment.SegmentId))
             {
                 // The contiguous oldest prefix only: the first segment that cannot retire ends it.
@@ -152,6 +164,7 @@ sealed class ProviderWalRetirement
 
                 WalSegmentProofState state;
                 WalSegmentProof proof;
+
                 try
                 {
                     (state, proof) = await ProveAsync(segment, manifest, quantum, cancellationToken)
@@ -164,6 +177,7 @@ sealed class ProviderWalRetirement
                     blockedCause = PantsWalRetirementBlockedCause.MaintenanceBudget;
                     break;
                 }
+
 
                 if (state == WalSegmentProofState.Covered)
                 {
@@ -186,6 +200,7 @@ sealed class ProviderWalRetirement
                 break;
             }
 
+
             var turn = new RetirementTurn(outcome, proven, blockedCause, manifest, catalogRead);
             catalogRead = null;
             return turn;
@@ -207,32 +222,38 @@ sealed class ProviderWalRetirement
         ProviderPublishedWalSegment segment,
         PublishedManifest manifest,
         WalRetirementQuantum quantum,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _lease.EnsureValid();
         var metadata = await _walStore.HeadAsync(segment.ObjectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsRecoveryFailedException(
             $"Published cloud WAL object '{segment.ObjectKey}' is missing during WAL retirement.");
+
         if (metadata.SizeBytes != segment.SizeBytes)
         {
             throw new PantsCorruptionException(
                 $"Published cloud WAL object '{segment.ObjectKey}' differs from its catalog proof.");
         }
 
+
         var proof = _progress.Resume(segment, metadata.Version, manifest.Coverage);
         var state = await _prover.ProveAsync(proof, manifest, quantum, cancellationToken)
             .ConfigureAwait(false);
+
         if (state == WalSegmentProofState.IdentityChanged)
         {
             _progress.Forget(segment.SegmentId);
         }
+
 
         return (state, proof);
     }
 
     async ValueTask<CommitResult> CommitAsync(
         RetirementTurn turn,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -256,6 +277,7 @@ sealed class ProviderWalRetirement
                 .Where(entry => !retiredIds.Contains(entry.Key))
                 .ToDictionary());
         var nextSegmentId = catalog.NextSegmentId;
+
         if (nextSegmentId == 0)
         {
             nextSegmentId = catalog.Segments.Count == 0
@@ -263,12 +285,14 @@ sealed class ProviderWalRetirement
                 : checked(catalog.Segments.Keys.Max() + 1);
         }
 
+
         nextSegmentId = Math.Max(nextSegmentId, turn.Manifest!.Manifest.WalHistoryStart);
         var walHistoryStartSegmentId = Math.Max(
             catalog.WalHistoryStartSegmentId,
             turn.Manifest!.Manifest.WalHistoryStart);
 
         CloudMetadataSerializedBytes encodedCatalog;
+
         try
         {
             encodedCatalog = _encodeCatalog(catalog with
@@ -285,6 +309,7 @@ sealed class ProviderWalRetirement
             return CommitResult.Deferred;
         }
 
+
         using var serializedCatalog = encodedCatalog;
         var bytes = serializedCatalog.Bytes;
         // From the CAS on, an outcome is no longer a clean deferral: failures surface.
@@ -294,29 +319,35 @@ sealed class ProviderWalRetirement
             bytes,
             new PantsCloudObjectWriteCondition.IfVersion(turn.CatalogRead!.Version!),
             cancellationToken).ConfigureAwait(false);
+
         if (!published)
         {
             return CommitResult.CatalogConflict;
         }
+
 
         var readback = await _walStore.GetAsync(
                            PantsCloudObjectLayout.WalCatalogObjectKey,
                            cancellationToken).ConfigureAwait(false) ??
                        throw new PantsLeaseIndeterminateException(
                            "Cloud WAL catalog retirement was acknowledged without an authoritative object.");
+
         if (!readback.Data.Span.SequenceEqual(bytes.Span))
         {
             throw new PantsCorruptionException(
                 "Cloud WAL catalog retirement read back different bytes after CAS.");
         }
 
+
         await _catalog.ConvergeMirrorAsync(bytes, readback.Version, cancellationToken).ConfigureAwait(false);
         _lease.EnsureValid();
+
         foreach (var proof in turn.Proven)
         {
             _progress.Forget(proof.Segment.SegmentId);
             await TryDeleteRetiredWalAsync(proof, cancellationToken).ConfigureAwait(false);
         }
+
 
         return CommitResult.Committed;
     }
@@ -329,17 +360,20 @@ sealed class ProviderWalRetirement
     /// <returns>False when something moved; the turn yields and later revalidates.</returns>
     async ValueTask<bool> VerifyDependenciesAsync(
         RetirementTurn turn,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var coveringFiles = turn.Proven
             .SelectMany(static proof => proof.CoveringFiles.Values)
             .DistinctBy(static file => file.Name, StringComparer.Ordinal);
+
         foreach (var file in coveringFiles)
         {
             _lease.EnsureValid();
             var remote = await _sstStore.HeadAsync(
                 PantsCloudObjectLayout.SstPrefix + file.Name,
                 cancellationToken).ConfigureAwait(false);
+
             if (remote is null)
             {
                 if (!await _manifests.IsCurrentAsync(turn.Manifest!.Identity, cancellationToken)
@@ -352,6 +386,7 @@ sealed class ProviderWalRetirement
                     $"Manifest cloud SST '{file.Name}' is missing during WAL retirement.");
             }
 
+
             if (file.SizeBytes != 0 && remote.SizeBytes != file.SizeBytes)
             {
                 throw new PantsCorruptionException(
@@ -359,11 +394,13 @@ sealed class ProviderWalRetirement
             }
         }
 
+
         foreach (var proof in turn.Proven)
         {
             _lease.EnsureValid();
             var current = await _walStore.HeadAsync(proof.Segment.ObjectKey, cancellationToken)
                 .ConfigureAwait(false);
+
             if (current is null || !StringComparer.Ordinal.Equals(current.Version, proof.Version))
             {
                 _progress.Forget(proof.Segment.SegmentId);
@@ -377,7 +414,8 @@ sealed class ProviderWalRetirement
 
     async ValueTask TryDeleteRetiredWalAsync(
         WalSegmentProof proof,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -387,6 +425,7 @@ sealed class ProviderWalRetirement
                 proof.Segment.ObjectKey,
                 new PantsCloudObjectDeleteCondition.IfVersion(proof.Version),
                 cancellationToken).ConfigureAwait(false);
+
             if (outcome != CloudObjectDeleteOutcome.Deleted)
             {
                 _markPersistenceAnomaly();

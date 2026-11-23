@@ -156,15 +156,18 @@ public sealed class MidgeTransactionStagingParityTests
         IPantsColumnFamily family,
         int start,
         int count,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
+
         for (var index = start; index < start + count; index++)
         {
             transaction.Put(CreateKey(index), CreateValue(index));
         }
+
 
         await transaction.CommitAsync(writeOptions);
     }
@@ -176,12 +179,15 @@ public sealed class MidgeTransactionStagingParityTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var entries = new List<(byte[] Key, byte[] Value)>();
+
         await foreach (var entry in scan)
         {
             entries.Add((entry.Key.ToArray(), entry.Value.ToArray()));
         }
 
+
         Assert.Equal(expectedCount, entries.Count);
+
         for (var index = 0; index < expectedCount; index++)
         {
             Assert.Equal(CreateKey(index), entries[index].Key);

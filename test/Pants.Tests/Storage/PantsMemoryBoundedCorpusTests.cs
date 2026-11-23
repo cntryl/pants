@@ -102,11 +102,13 @@ public sealed class PantsMemoryBoundedCorpusTests
     static async Task<RssResults> RunMeasurementChildAsync(
         string databasePath,
         long budgetBytes,
-        int multiplier)
+        int multiplier
+    )
     {
         var resultsPath = Path.Combine(
             Path.GetTempPath(),
             $"pants-rss-results-{Guid.NewGuid():N}.txt");
+
         try
         {
             var start = CrashChildProcess.CreateStartInfo(
@@ -142,7 +144,8 @@ public sealed class PantsMemoryBoundedCorpusTests
         string databasePath,
         long budgetBytes,
         int multiplier,
-        string resultsPath)
+        string resultsPath
+    )
     {
         var targetBytes = checked(budgetBytes * multiplier);
         var options = PantsOpenOptions.Local(databasePath)
@@ -166,6 +169,7 @@ public sealed class PantsMemoryBoundedCorpusTests
             var value = new byte[4096];
             long written = 0;
             var index = 0;
+
             while (written < targetBytes)
             {
                 await using (var transaction = await database.Transactions.BeginAsync(
@@ -180,11 +184,13 @@ public sealed class PantsMemoryBoundedCorpusTests
 
                 written += value.Length;
                 index++;
+
                 if (index % 50 == 0)
                 {
                     await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                 }
             }
+
 
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
@@ -195,16 +201,19 @@ public sealed class PantsMemoryBoundedCorpusTests
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
+
             foreach (var spotCheckIndex in new[] { 0, index / 2, index - 1 })
             {
                 var read = await reader.GetAsync(
                     Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
+
                 if (read is null)
                 {
                     throw new InvalidOperationException(
                         $"Spot-check key-{spotCheckIndex:D8} was not found after ingest.");
                 }
             }
+
 
             steadyStateRss = MeasureRssBytes();
         }
@@ -221,10 +230,12 @@ public sealed class PantsMemoryBoundedCorpusTests
                 reopened.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             var recordCount = checked((int)(budgetBytes * multiplier / 4096));
+
             foreach (var spotCheckIndex in new[] { 0, recordCount / 2, recordCount - 1 })
             {
                 var read = await reopenedReader.GetAsync(
                     Encoding.UTF8.GetBytes($"key-{spotCheckIndex:D8}"));
+
                 if (read is null || read.Value.Length != 4096)
                 {
                     throw new InvalidOperationException(

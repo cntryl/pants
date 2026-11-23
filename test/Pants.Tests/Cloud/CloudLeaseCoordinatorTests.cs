@@ -49,10 +49,12 @@ public sealed class CloudLeaseCoordinatorTests
         await lease.AcquireAsync(CancellationToken.None);
 
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (Volatile.Read(ref losses) == 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
         }
+
 
         Assert.Equal(1, Volatile.Read(ref losses));
         Assert.False(lease.IsHealthy);
@@ -843,6 +845,7 @@ public sealed class CloudLeaseCoordinatorTests
         store.AfterIndeterminateRead = failureCount =>
         {
             indeterminateReadCount = failureCount;
+
             if (failureCount == 3)
             {
                 clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
@@ -883,11 +886,13 @@ public sealed class CloudLeaseCoordinatorTests
         retryExpiry = () =>
         {
             expiryAttempts++;
+
             if (expiryAttempts == 2)
             {
                 clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(48) + TimeSpan.FromTicks(1);
                 return;
             }
+
 
             store.NextReplaceException = new PantsIOException(
                 "The provider could not conditionally expire the late renewal.");
@@ -974,10 +979,12 @@ public sealed class CloudLeaseCoordinatorTests
 
         Assert.False(lease.IsHealthy);
         clock.UtcNow = DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(1);
+
         for (var observation = 0; observation < 10; observation++)
         {
             Assert.False(lease.IsHealthy);
         }
+
 
         Assert.Equal(1, leaseLosses);
     }

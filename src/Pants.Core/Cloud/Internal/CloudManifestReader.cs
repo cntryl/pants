@@ -28,10 +28,12 @@ static class CloudManifestReader
         var snapshotPath = Path.Combine(root, "manifest.snapshot.json");
         var manifestPath = Path.Combine(root, "manifest.json");
         var path = File.Exists(snapshotPath) ? snapshotPath : manifestPath;
+
         if (!File.Exists(path))
         {
             return null;
         }
+
 
         try
         {
@@ -40,10 +42,12 @@ static class CloudManifestReader
                 ["manifest.snapshot.json"] = PositionalFile.ReadAllBytes(path)
             };
             var journal = Path.Combine(root, "manifest.journal");
+
             if (File.Exists(journal))
             {
                 files["manifest.journal"] = PositionalFile.ReadAllBytes(journal);
             }
+
 
             return DecodeMetadata(files);
         }
@@ -61,10 +65,12 @@ static class CloudManifestReader
         }
 
         var manifest = DecodeManifest(snapshot.Span);
+
         if (files.TryGetValue("manifest.journal", out var journal))
         {
             LocalDiskStore.ReplayManifestMetadata(journal.Span, manifest);
         }
+
 
         return manifest;
     }

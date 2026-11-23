@@ -22,10 +22,12 @@ sealed record CrashSoakChildSpec(
     public static CrashSoakChildSpec? FromEnvironment()
     {
         var spec = Environment.GetEnvironmentVariable(SpecVariable);
+
         if (string.IsNullOrEmpty(spec))
         {
             return null;
         }
+
 
         var fields = spec.Split(':');
         return new CrashSoakChildSpec(

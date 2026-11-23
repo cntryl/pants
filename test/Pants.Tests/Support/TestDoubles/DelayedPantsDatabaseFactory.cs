@@ -11,7 +11,8 @@ sealed class DelayedPantsDatabaseFactory : IPantsDatabaseFactory
 
     public async ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         Interlocked.Increment(ref _openCount);
         await _allowOpen.Task.WaitAsync(cancellationToken);

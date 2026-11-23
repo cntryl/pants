@@ -705,12 +705,14 @@ public sealed class PantsManifestSpecDriftTests
     {
         using var stream = new MemoryStream();
         var sequence = 0UL;
+
         foreach (var (type, json) in edits)
         {
             sequence++;
             stream.Write(EncodeJournalRecord(type, $"{{\"edit_id\":{sequence},\"edit\":{json}}}"));
             stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(sequence)));
         }
+
 
         return stream.ToArray();
     }
@@ -724,11 +726,13 @@ public sealed class PantsManifestSpecDriftTests
     static byte[] BuildEnvelopedJournal(params (ulong Id, byte Type, string Json)[] edits)
     {
         using var stream = new MemoryStream();
+
         foreach (var (id, type, json) in edits)
         {
             stream.Write(EncodeJournalRecord(type, $"{{\"edit_id\":{id},\"edit\":{json}}}"));
             stream.Write(EncodeJournalRecord(DurabilityMarkerRecordType, DurabilityMarkerJson(id)));
         }
+
 
         return stream.ToArray();
     }

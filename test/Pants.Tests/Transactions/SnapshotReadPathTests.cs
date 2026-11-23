@@ -110,15 +110,16 @@ public sealed class SnapshotReadPathTests
         ColumnFamilyIdentity family,
         byte[] smallest,
         byte[] largest,
-        ulong sstSequence = 1) => new()
-        {
-            Name = name,
-            ColumnFamilyId = family.Id,
-            SmallestKey = smallest.ToArray(),
-            LargestKey = largest.ToArray(),
-            KeyBoundsComplete = true,
-            SstSequence = sstSequence
-        };
+        ulong sstSequence = 1
+    ) => new()
+    {
+        Name = name,
+        ColumnFamilyId = family.Id,
+        SmallestKey = smallest.ToArray(),
+        LargestKey = largest.ToArray(),
+        KeyBoundsComplete = true,
+        SstSequence = sstSequence
+    };
 
     static byte[] Bytes(byte value) => [value];
 

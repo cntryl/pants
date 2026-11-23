@@ -17,10 +17,12 @@ public sealed class PantsDiskResidentDifferentialTests
     public async Task ShouldAbortAfterWritingDifferentialWalChildScenario()
     {
         var storage = Environment.GetEnvironmentVariable(CrashStorageEnvironmentVariable);
+
         if (storage is not ("local" or "simulated-cloud"))
         {
             return;
         }
+
 
         var path = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(CrashDatabasePathEnvironmentVariable));
@@ -33,6 +35,7 @@ public sealed class PantsDiskResidentDifferentialTests
         await File.WriteAllTextAsync(Path.Combine(path, CrashReadyFileName), JsonSerializer.Serialize(captured));
 
         using var process = Process.GetCurrentProcess();
+
         try
         {
             process.Kill();
@@ -60,10 +63,12 @@ public sealed class PantsDiskResidentDifferentialTests
             JsonSerializer.Deserialize<CrashChildProcess.WriterLeaseSnapshot>(
                 await File.ReadAllTextAsync(Path.Combine(directory.Path, CrashReadyFileName))));
         await CrashChildProcess.ExpireStoppedWriterLeaseAsync(directory.Path, captured);
+
         if (simulatedCloud)
         {
             RemoveLocalCache(directory.Path);
         }
+
 
         var clock = new ManualClock(DateTimeOffset.UnixEpoch.AddHours(1));
         await using var reopened = await PantsDatabase.OpenAsync(
@@ -84,6 +89,7 @@ public sealed class PantsDiskResidentDifferentialTests
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             var random = new Random(219);
+
             for (var step = 0; step < 48; step++)
             {
                 if (step != 0 && step % 7 == 0)
@@ -99,11 +105,13 @@ public sealed class PantsDiskResidentDifferentialTests
                     step,
                     simulatedCloud,
                     clock.UtcNow);
+
                 if ((step + 1) % 8 == 0)
                 {
                     await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
                     await AssertMatchesAsync(database, model);
                 }
+
 
                 if ((step + 1) % 24 == 0)
                 {
@@ -111,6 +119,7 @@ public sealed class PantsDiskResidentDifferentialTests
                     await AssertMatchesAsync(database, model);
                 }
             }
+
 
             RemoveExpired(model, clock.UtcNow);
             await using (var snapshot = await database.Transactions.BeginAsync(
@@ -154,7 +163,8 @@ public sealed class PantsDiskResidentDifferentialTests
         Random random,
         int step,
         bool simulatedCloud,
-        DateTimeOffset now)
+        DateTimeOffset now
+    )
     {
         RemoveExpired(model, now);
         var keyIndex = random.Next(KeyCount);
@@ -163,6 +173,7 @@ public sealed class PantsDiskResidentDifferentialTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         switch (random.Next(6))
         {
             case 0:
@@ -206,6 +217,7 @@ public sealed class PantsDiskResidentDifferentialTests
                 break;
         }
 
+
         await transaction.CommitAsync(
             simulatedCloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
     }
@@ -214,7 +226,8 @@ public sealed class PantsDiskResidentDifferentialTests
         IPantsDatabase database,
         string key,
         string value,
-        bool simulatedCloud)
+        bool simulatedCloud
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -226,7 +239,8 @@ public sealed class PantsDiskResidentDifferentialTests
 
     static async Task ApplyCrashMutationsAsync(
         IPantsDatabase database,
-        bool simulatedCloud)
+        bool simulatedCloud
+    )
     {
         var durability = simulatedCloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync;
         await using (var first = await database.Transactions.BeginAsync(
@@ -312,7 +326,8 @@ public sealed class PantsDiskResidentDifferentialTests
 
     static async Task AssertMatchesAsync(
         IPantsDatabase database,
-        IReadOnlyDictionary<string, ModelValue> model)
+        IReadOnlyDictionary<string, ModelValue> model
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -322,7 +337,8 @@ public sealed class PantsDiskResidentDifferentialTests
 
     static async Task AssertMatchesAsync(
         IPantsTransaction transaction,
-        IReadOnlyDictionary<string, ModelValue> model)
+        IReadOnlyDictionary<string, ModelValue> model
+    )
     {
         for (var index = 0; index < KeyCount; index++)
         {
@@ -335,12 +351,14 @@ public sealed class PantsDiskResidentDifferentialTests
 
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var actualRows = new List<KeyValuePair<string, string>>();
+
         await foreach (var entry in scan)
         {
             actualRows.Add(new KeyValuePair<string, string>(
                 TestBytes.ToText(entry.Key),
                 TestBytes.ToText(entry.Value)));
         }
+
 
         Assert.Equal(
             model.Select(static pair => new KeyValuePair<string, string>(
@@ -352,7 +370,8 @@ public sealed class PantsDiskResidentDifferentialTests
     static PantsOpenOptions CreateOptions(
         string path,
         bool simulatedCloud,
-        IPantsClock clock) =>
+        IPantsClock clock
+    ) =>
         (simulatedCloud
             ? PantsOpenOptions.SimulatedCloud(path, "pants-tests", "differential/")
             : PantsOpenOptions.Local(path))
@@ -361,7 +380,8 @@ public sealed class PantsDiskResidentDifferentialTests
 
     static void RemoveExpired(
         IDictionary<string, ModelValue> model,
-        DateTimeOffset now)
+        DateTimeOffset now
+    )
     {
         foreach (var key in model
                      .Where(pair => pair.Value.ExpiresAt is { } expiry && now >= expiry)

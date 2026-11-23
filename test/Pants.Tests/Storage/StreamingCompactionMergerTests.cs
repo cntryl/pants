@@ -586,7 +586,8 @@ public sealed class StreamingCompactionMergerTests
     static void AssertEquivalent(
         IReadOnlyList<SstContents> contents,
         CompactionPlan plan,
-        long targetSizeBytes)
+        long targetSizeBytes
+    )
     {
         var expectedMerged = CompactionMerger.Merge(contents, plan);
         var expected = CompactionOutputPartitioner.Partition(expectedMerged, targetSizeBytes);
@@ -595,12 +596,14 @@ public sealed class StreamingCompactionMergerTests
         var readers = contents
             .Select((content, index) => OpenReader(directory.Path, $"input-{index}.sst", content))
             .ToArray();
+
         try
         {
             var actual = StreamingCompactionMerger.MergeAndPartition(readers, plan, targetSizeBytes)
                 .ToArray();
 
             Assert.Equal(expected.Count, actual.Length);
+
             for (var index = 0; index < expected.Count; index++)
             {
                 AssertPartitionEqual(expected[index], actual[index]);
@@ -659,7 +662,8 @@ public sealed class StreamingCompactionMergerTests
     static CompactionPlan Plan(
         ulong? snapshotHorizon = null,
         bool pointTombstoneGcEligible = true,
-        bool rangeTombstoneGcEligible = true) => new(
+        bool rangeTombstoneGcEligible = true
+    ) => new(
         0,
         1,
         0,
@@ -695,7 +699,8 @@ public sealed class StreamingCompactionMergerTests
 
     static SstContents Build(
         (string Key, ulong Sequence, string? Value)[] entries,
-        (string Start, string End, ulong Sequence)[] tombstones)
+        (string Start, string End, ulong Sequence)[] tombstones
+    )
     {
         var sstEntries = entries
             .Select(e => new SstEntry(

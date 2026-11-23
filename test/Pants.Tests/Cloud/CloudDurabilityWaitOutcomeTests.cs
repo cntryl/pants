@@ -19,6 +19,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
                 entered.TrySetResult();
                 Assert.True(release.Wait(TestTimeouts.Expected));
             }
+
             return Volatile.Read(ref frontier);
         }, static () => { }, (_, _, _) =>
         {
@@ -27,6 +28,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         });
         var accepted = Task.Run(async () => await waits.WaitAsync(1, TestTimeouts.Expected, CancellationToken.None));
         await entered.Task.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             waits.StopForShutdown();
@@ -37,6 +39,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         {
             release.Set();
         }
+
         Assert.False(await accepted.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(1, requests);
     }
@@ -69,6 +72,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         await request.Entered.WaitAsync(TestTimeouts.Expected);
         request.Compete(earlier, cancellation);
         request.Acknowledge();
+
         if (earlier == Competitor.CallerCancellation)
         {
             var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => accepted.WaitAsync(TestTimeouts.Expected));
@@ -78,6 +82,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         {
             Assert.False(await accepted.WaitAsync(TestTimeouts.Expected));
         }
+
         Assert.False(request.PhysicalCompletion.IsCompleted);
         Assert.Equal(earlier != Competitor.Shutdown,
             await request.Waits.WaitAsync(1, TimeSpan.Zero, CancellationToken.None));
@@ -92,6 +97,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         var accepted = request.Waits.WaitAsync(1, request.Budget, CancellationToken.None).AsTask();
         await request.Entered.WaitAsync(TestTimeouts.Expected);
         var expected = new PantsInternalException("The accepted publication failed.");
+
         if (failureFirst)
         {
             request.Waits.Notify(expected);
@@ -102,7 +108,9 @@ public sealed class CloudDurabilityWaitOutcomeTests
             request.Waits.StopForShutdown();
             request.Waits.Notify(expected);
         }
+
         request.Acknowledge();
+
         if (failureFirst)
         {
             Assert.Same(expected, await Assert.ThrowsAsync<PantsInternalException>(() => accepted.WaitAsync(TestTimeouts.Expected)));
@@ -111,6 +119,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         {
             Assert.False(await accepted.WaitAsync(TestTimeouts.Expected));
         }
+
         Assert.False(request.PhysicalCompletion.IsCompleted);
     }
 
@@ -136,6 +145,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         });
         var accepted = Task.Run(async () => await waits.WaitAsync(1, TimeSpan.FromSeconds(1), cancellation.Token));
         await entered.Task.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             if (cancelCaller)
@@ -151,6 +161,8 @@ public sealed class CloudDurabilityWaitOutcomeTests
         {
             release.Set();
         }
+
+
         if (cancelCaller)
         {
             var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => accepted.WaitAsync(TestTimeouts.Expected));
@@ -160,6 +172,7 @@ public sealed class CloudDurabilityWaitOutcomeTests
         {
             Assert.False(await accepted.WaitAsync(TestTimeouts.Expected));
         }
+
         Assert.Equal(0, requests);
     }
 

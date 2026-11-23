@@ -225,17 +225,20 @@ public sealed class PantsCloudRecoveryTests
         int start,
         int count,
         string keyPrefix,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
+
         for (var index = start; index < start + count; index++)
         {
             transaction.Put(
                 TestBytes.FromString(CreateKey(keyPrefix, index)),
                 TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
     }
@@ -246,11 +249,13 @@ public sealed class PantsCloudRecoveryTests
         int start,
         int count,
         string keyPrefix,
-        Func<int, string> expectedValue)
+        Func<int, string> expectedValue
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         for (var index = start; index < start + count; index++)
         {
             var key = TestBytes.FromString(CreateKey(keyPrefix, index));

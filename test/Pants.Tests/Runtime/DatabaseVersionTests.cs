@@ -90,10 +90,12 @@ public sealed class DatabaseVersionTests
             new RuntimeTelemetry());
         var family = Assert.Single(state.FamilyData.Keys);
         var builder = ImmutableSortedDictionary.CreateBuilder<byte[], CellState>(ByteArrayComparer.Instance);
+
         for (var index = 0; index < keyCount; index++)
         {
             builder.Add(Key(index), new CellState([1], (ulong)index + 1, null));
         }
+
 
         state.FamilyData[family] = builder.ToImmutable();
         state.Sequence = (ulong)keyCount;

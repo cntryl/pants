@@ -24,10 +24,12 @@ static class DiskFormat
     public static uint Crc32CAppend(uint checksum, ReadOnlySpan<byte> bytes)
     {
         var crc = ~checksum;
+
         foreach (var value in bytes)
         {
             crc = CrcTable[(crc ^ value) & 0xff] ^ (crc >> 8);
         }
+
 
         return ~crc;
     }
@@ -49,16 +51,20 @@ static class DiskFormat
     public static bool ReadExactly(Stream stream, Span<byte> buffer)
     {
         var read = 0;
+
         while (read < buffer.Length)
         {
             var count = stream.Read(buffer[read..]);
+
             if (count == 0)
             {
                 return false;
             }
 
+
             read += count;
         }
+
 
         return true;
     }
@@ -66,6 +72,7 @@ static class DiskFormat
     public static byte[] Decompress(ReadOnlySpan<byte> bytes, byte algorithm, int? maximumDecodedBytes = null)
     {
         var limit = maximumDecodedBytes ?? MaximumDecodedBlockBytes;
+
         switch (algorithm)
         {
             case 0:
@@ -103,9 +110,11 @@ static class DiskFormat
     {
         const uint polynomial = 0x82f63b78;
         var table = new uint[256];
+
         for (uint index = 0; index < table.Length; index++)
         {
             var current = index;
+
             for (var bit = 0; bit < 8; bit++)
             {
                 current = (current & 1) != 0
@@ -113,8 +122,10 @@ static class DiskFormat
                     : current >> 1;
             }
 
+
             table[index] = current;
         }
+
 
         return table;
     }

@@ -29,7 +29,8 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         TransactionIntentReadView intents,
         ScanBounds bounds,
         IReadOnlyList<AsyncSstScanSource>? sstSources = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (!snapshot.Families.TryGetValue(family, out _snapshot!))
         {
@@ -43,10 +44,12 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         _intents = intents;
         _direction = bounds.Direction;
         var snapshotKeys = _snapshot.Keys.Where(key => bounds.Matches(key));
+
         if (bounds.Direction == PantsScanDirection.Reverse)
         {
             snapshotKeys = snapshotKeys.Reverse();
         }
+
 
         _snapshotKeys = snapshotKeys.GetEnumerator();
         _snapshotRangeTombstones = snapshot.RangeTombstones[family];
@@ -65,24 +68,29 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await InitializeAsync().ConfigureAwait(false);
+
         while (true)
         {
             AdvanceConsumedSources();
             await ActivateSourcesThroughFrontierAsync().ConfigureAwait(false);
             var key = SelectKey();
+
             if (key is null)
             {
                 Current = default;
                 return false;
             }
 
+
             await ReleaseExpiredRangeSourcesAsync(key).ConfigureAwait(false);
             var sstValue = await ResolveFromSstSourcesAsync(key).ConfigureAwait(false);
 
             byte[]? baseValue;
+
             if (_snapshotHead is not null && ByteArrayComparer.Instance.Equals(_snapshotHead, key))
             {
                 baseValue = null;
+
                 if (_snapshot.TryGetValue(key, out var cell) &&
                     cell.Value is not null &&
                     !cell.IsExpired(_snapshotTime))
@@ -90,12 +98,14 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                     baseValue = cell.Value;
                 }
 
+
                 _advanceSnapshot = true;
             }
             else
             {
                 baseValue = sstValue;
             }
+
 
             if (_intentHead is not null && ByteArrayComparer.Instance.Equals(_intentHead, key))
             {
@@ -109,10 +119,12 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 { Value: { } intentValue } => intentValue,
                 _ => baseValue
             };
+
             if (value is null)
             {
                 continue;
             }
+
 
             Current = new PantsEntry(key.ToArray(), value.ToArray());
             return true;
@@ -128,6 +140,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
 
         _snapshotKeys.Dispose();
         _intentKeys.Dispose();
+
         for (var index = 0; index < _sstSources.Length; index++)
         {
             await DisposeSourceAsync(index).ConfigureAwait(false);
@@ -151,20 +164,24 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
         while (TryGetNextInactiveSource(out var index, out var activationKey))
         {
             var frontier = SelectKey();
+
             if (frontier is not null)
             {
                 var comparison = ByteArrayComparer.Instance.Compare(activationKey, frontier);
                 var canAffectFrontier = _direction == PantsScanDirection.Forward
                     ? comparison <= 0
                     : comparison >= 0;
+
                 if (!canAffectFrontier)
                 {
                     return;
                 }
             }
 
+
             _sstActivated[index] = true;
             var source = _sstSources[index]!;
+
             if (await source.MoveNextAsync(_cancellationToken).ConfigureAwait(false))
             {
                 _sstHeads[index] = source.Current;
@@ -183,6 +200,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     {
         sourceIndex = -1;
         activationKey = null!;
+
         for (var index = 0; index < _sstSources.Length; index++)
         {
             if (_sstActivated[index] || _sstSources[index] is not { } source)
@@ -193,6 +211,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             var candidate = _direction == PantsScanDirection.Forward
                 ? source.SmallestKey
                 : source.LargestKey;
+
             if (sourceIndex < 0)
             {
                 sourceIndex = index;
@@ -200,7 +219,9 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 continue;
             }
 
+
             var comparison = ByteArrayComparer.Instance.Compare(candidate, activationKey);
+
             if ((_direction == PantsScanDirection.Forward && comparison < 0) ||
                 (_direction == PantsScanDirection.Reverse && comparison > 0))
             {
@@ -208,6 +229,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 activationKey = candidate;
             }
         }
+
 
         return sourceIndex >= 0;
     }
@@ -230,13 +252,16 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     async ValueTask<byte[]?> ResolveFromSstSourcesAsync(byte[] key)
     {
         SstEntry? best = null;
+
         for (var index = 0; index < _sstHeads.Length; index++)
         {
             var head = _sstHeads[index];
+
             if (head is null || !head.Key.AsSpan().SequenceEqual(key))
             {
                 continue;
             }
+
 
             var source = _sstSources[index]!;
             do
@@ -253,6 +278,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 else
                 {
                     _sstHeads[index] = null;
+
                     if (source.RangeTombstones.Count == 0)
                     {
                         await DisposeSourceAsync(index).ConfigureAwait(false);
@@ -262,6 +288,7 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
                 head = _sstHeads[index];
             } while (head is not null && head.Key.AsSpan().SequenceEqual(key));
         }
+
 
         if (best is null ||
             best.IsDelete ||
@@ -287,9 +314,11 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
             {
                 continue;
             }
+
             var passed = _direction == PantsScanDirection.Forward
                 ? key.AsSpan().SequenceCompareTo(source.LargestKey) > 0
                 : key.AsSpan().SequenceCompareTo(source.SmallestKey) < 0;
+
             if (passed)
             {
                 await DisposeSourceAsync(index).ConfigureAwait(false);
@@ -312,10 +341,12 @@ sealed class TransactionScanEnumerator : IAsyncEnumerator<PantsEntry>
     {
         var candidate = _snapshotHead;
         candidate = Combine(candidate, _intentHead);
+
         foreach (var head in _sstHeads)
         {
             candidate = Combine(candidate, head?.Key);
         }
+
 
         return candidate;
     }

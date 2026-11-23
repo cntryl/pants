@@ -19,6 +19,7 @@ sealed class RetentionMeasuringTransactionOperationSource(ITransactionOperationS
         {
             _visitedKeys.Add(new WeakReference<byte[]>(operation.Key));
             visitor(operation);
+
             if (checked((ulong)_visitedKeys.Count) == Count)
             {
                 GC.Collect();

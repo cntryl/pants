@@ -24,10 +24,12 @@ public class ScanSystemBenchmarks : Tier3Benchmark
         _database = await PantsDatabase.OpenAsync(
             Tier3Database.Options(_path, StorageMode).WithBackgroundCompaction(false));
         await WriteFlushAsync(0);
+
         if (Layout is Tier3ScanLayout.L0PlusL1 or Tier3ScanLayout.FullyCompacted)
         {
             await _database.Maintenance.CompactAllAsync();
         }
+
 
         var flushes = Layout switch
         {
@@ -36,10 +38,12 @@ public class ScanSystemBenchmarks : Tier3Benchmark
             Tier3ScanLayout.FullyCompacted => 3,
             _ => throw new ArgumentOutOfRangeException()
         };
+
         for (var batch = 1; batch < flushes; batch++)
         {
             await WriteFlushAsync(batch);
         }
+
 
         if (Layout == Tier3ScanLayout.FullyCompacted)
         {
@@ -67,10 +71,12 @@ public class ScanSystemBenchmarks : Tier3Benchmark
             Prefix = new byte[] { 0x7a },
             Limit = 1
         });
+
         await foreach (var entry in scan)
         {
             return entry.Key.Span[0];
         }
+
 
         return 0;
     }

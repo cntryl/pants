@@ -25,6 +25,7 @@ public sealed class Format9ManifestAdmissionTests
         var frontier = new JsonObject { ["cf_id"] = 1, ["through_sequence"] = 0UL };
         snapshot["column_families"] = new JsonArray(family);
         snapshot["flushed_through"]!.AsArray().Add(frontier);
+
         switch (fault)
         {
             case "default-name": family["name"] = "default"; break;
@@ -55,6 +56,7 @@ public sealed class Format9ManifestAdmissionTests
                 };
                 break;
         }
+
 
         await Format9TestMetadata.WriteAsync(path, snapshot.ToJsonString());
         var corrupted = await File.ReadAllBytesAsync(path);

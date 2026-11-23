@@ -26,11 +26,13 @@ public sealed class CheckpointReadbackTests
         using var directory = new TemporaryDirectory();
         var ready = Path.Combine(directory.Path, "ready");
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet");
+
         foreach (var argument in new[] { typeof(CheckpointCells).Assembly.Location, "scaleladder-crash-child",
                      Path.Combine(directory.Path, "database"), "1", ready })
         {
             start.ArgumentList.Add(argument);
         }
+
         var time = new ManualTimeProvider();
         var samples = 0;
         var observedReady = false;
@@ -38,10 +40,12 @@ public sealed class CheckpointReadbackTests
         var result = await CheckpointProcess.RunAsync(start, "held-native-writer", TimeSpan.FromSeconds(15), () =>
         {
             samples++;
+
             if (!File.Exists(ready))
             {
                 return 0UL;
             }
+
             time.Advance(observedReady ? TimeSpan.FromSeconds(61) : TimeSpan.FromSeconds(1));
             observedReady = true;
             return 1UL;

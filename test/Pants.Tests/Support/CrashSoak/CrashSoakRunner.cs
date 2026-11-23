@@ -21,10 +21,12 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
     {
         ArgumentNullException.ThrowIfNull(scenario);
         ArgumentOutOfRangeException.ThrowIfLessThan(cycles, 1);
+
         if (scenario.Backend == CrashSoakBackend.Sqrzl)
         {
             await CrashSoakSqrzl.RequireAsync();
         }
+
 
         using var directory = new TemporaryDirectory();
         var prefix = scenario.Backend == CrashSoakBackend.Local
@@ -32,6 +34,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
             : $"crash-soak/{Guid.NewGuid():N}";
         var model = new CrashSoakModel(scenario);
         var report = new CrashSoakReport(scenario);
+
         for (var index = 0; index < cycles; index++)
         {
             var started = Stopwatch.StartNew();
@@ -45,12 +48,14 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                 directory.Path,
                 prefix);
             var ledger = await RunChildAsync(spec, cycle, cycles);
+
             if (CrashSoakSettings.KeepFailures)
             {
                 CopyDirectory(
                     CrashSoakStorage.DatabasePath(directory.Path),
                     Path.Combine(directory.Path, string.Create(CultureInfo.InvariantCulture, $"killed-{index:000}")));
             }
+
 
             if (cycle.CrashPlan.LoseLocalCache)
             {
@@ -62,6 +67,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
             var (observed, scanned) = await ReopenAndReadAsync(spec, model.Keys, cycles, cycle);
             var violations = model.Verify(cycle, ledger, cycle.CrashPlan.LoseLocalCache, observed, scanned);
             violations.AddRange(ledger.Errors.Select(static error => $"the child hit an unexpected exception: {error}"));
+
             if (violations.Count > 0)
             {
                 throw new XunitException(Describe(
@@ -74,9 +80,11 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                     PreserveForInspection(directory.Path, scenario.Seed)));
             }
 
+
             model.Adopt(observed);
             report.Record(cycle, ledger, started.Elapsed);
         }
+
 
         return report;
     }
@@ -85,6 +93,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
     {
         var ledgerPath = CrashSoakStorage.LedgerPath(spec.Root, spec.Cycle);
         string? abortedLaunch = null;
+
         while (true)
         {
             var start = CrashChildProcess.CreateStartInfo(childTestClass, childTestName);
@@ -120,6 +129,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
             }
 
             var ledger = File.Exists(ledgerPath) ? CrashSoakLedger.Read(ledgerPath) : null;
+
             if (ledger?.KillReason is null)
             {
                 throw new XunitException(Describe(
@@ -132,6 +142,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                     null));
             }
 
+
             return ledger;
         }
     }
@@ -141,6 +152,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
     {
         var scenario = spec.Scenario;
         var database = await OpenAsync(spec, cycles, cycle);
+
         try
         {
             var observed = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -159,12 +171,14 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                 }
 
                 await using var scan = await reader.ScanAsync(new PantsScanQuery());
+
                 await foreach (var entry in scan)
                 {
                     scanned.Add(new KeyValuePair<string, string>(
                         TestBytes.ToText(entry.Key),
                         TestBytes.ToText(entry.Value)));
                 }
+
                 verifiedSequence = await reader.CommitWithSequenceAsync(
                     scenario.Backend == CrashSoakBackend.Local ? PantsWriteOptions.Sync : PantsWriteOptions.CloudAsync);
             }
@@ -192,6 +206,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
         var options = CrashSoakStorage.CreateOptions(spec.Scenario, spec.Root, spec.CloudPrefix);
         var dependencies = CrashSoakStorage.CreateDependencies(CrashSoakStorage.VerifierGeneration(spec.Cycle));
         var deadline = Stopwatch.StartNew();
+
         while (true)
         {
             try
@@ -222,6 +237,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
     static async Task RecoverCrashedMutationLockAsync(string databasePath)
     {
         var lockPath = Path.Combine(databasePath, ".midge_leader.lock");
+
         if (!File.Exists(lockPath))
         {
             return;
@@ -229,7 +245,9 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
 
         // The child is confirmed dead. The recovery API uses wall time, so expire its record in
         // this test fixture instead of waiting for a real lease TTL before exercising that API.
+
         var leaderPath = Path.Combine(databasePath, ".midge_leader");
+
         if (File.Exists(leaderPath))
         {
             var record = LeaderRecordCodec.Decode(await File.ReadAllBytesAsync(leaderPath));
@@ -237,6 +255,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                 leaderPath,
                 LeaderRecordCodec.Encode(record with { AcquiredAt = "1970-01-01T00:00:00Z" }));
         }
+
 
         await PantsDatabase.RecoverStaleLeaseMutationLockAsync(databasePath);
     }
@@ -248,13 +267,15 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
         string problem,
         CrashSoakLedger? ledger,
         List<string> violations,
-        string? preservedAt)
+        string? preservedAt
+    )
     {
         var message = new StringBuilder()
             .Append(CultureInfo.InvariantCulture, $"Crash/soak seed {spec.Seed} ({spec.Scenario}) failed in cycle {cycle.Index}: {problem}.")
             .AppendLine()
             .Append(CultureInfo.InvariantCulture, $"Crash plan: {cycle.CrashPlan}; child kill: {ledger?.KillReason ?? "<none recorded>"}.")
             .AppendLine();
+
         if (ledger is not null)
         {
             message
@@ -263,6 +284,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
                 .Append(CultureInfo.InvariantCulture, $"unknown={ledger.Count(CrashSoakOutcome.Unknown)}.")
                 .AppendLine();
         }
+
 
         foreach (var violation in violations.Take(25))
         {
@@ -306,6 +328,7 @@ sealed class CrashSoakRunner(Type childTestClass, string childTestName)
     static void CopyDirectory(string source, string target)
     {
         Directory.CreateDirectory(target);
+
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(target, Path.GetRelativePath(source, file));

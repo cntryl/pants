@@ -44,7 +44,10 @@ public sealed class CloudRecoveryRetirementAuthorityTests
     [InlineData(true, false, PantsRecoveryPolicy.Salvage)]
     [InlineData(true, true, PantsRecoveryPolicy.Salvage)]
     public async Task ShouldRejectMetadataOlderThanWalRetirementBeforeChangingCache(
-        bool simulated, bool uncommitted, PantsRecoveryPolicy recoveryPolicy)
+        bool simulated,
+        bool uncommitted,
+        PantsRecoveryPolicy recoveryPolicy
+    )
     {
         using var directory = new TemporaryDirectory();
         ICloudObjectStore store = simulated
@@ -53,6 +56,7 @@ public sealed class CloudRecoveryRetirementAuthorityTests
         await SeedAsync(store, uncommitted);
         var localSnapshot = Path.Combine(directory.Path, "manifest.snapshot.json");
         byte[]? original = null;
+
         if (!uncommitted)
         {
             var local = ManifestState.CreateInitial();
@@ -61,6 +65,7 @@ public sealed class CloudRecoveryRetirementAuthorityTests
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
             File.WriteAllBytes(localSnapshot, original);
         }
+
 
         if (simulated)
         {

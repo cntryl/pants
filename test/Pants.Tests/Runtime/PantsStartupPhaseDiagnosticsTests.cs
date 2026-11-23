@@ -36,12 +36,15 @@ public sealed class PantsStartupPhaseDiagnosticsTests(ITestOutputHelper output)
             StartupPhase.WalReplay,
             StartupPhase.VersionConstruction,
             StartupPhase.ServiceStartup);
+
         if (simulatedCloud)
         {
             Assert.Contains(StartupPhase.CloudControlHydration, phases);
         }
 
+
         Assert.All(measurements, measurement => Assert.True(measurement.AllocatedBytes >= 0));
+
         foreach (var measurement in measurements)
         {
             output.WriteLine(
@@ -53,6 +56,7 @@ public sealed class PantsStartupPhaseDiagnosticsTests(ITestOutputHelper output)
     static void AssertOrdered(StartupPhase[] actual, params StartupPhase[] expected)
     {
         var previous = -1;
+
         foreach (var phase in expected)
         {
             var index = Array.IndexOf(actual, phase);

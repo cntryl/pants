@@ -20,6 +20,7 @@ public sealed class PantsInsertOnlyUnreadableSstTests
     {
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+
         if (spill)
         {
             options = options
@@ -27,6 +28,7 @@ public sealed class PantsInsertOnlyUnreadableSstTests
                 .WithMemtableLimits(1_024)
                 .WithTransactionMemoryPool(1_024);
         }
+
 
         await using var database = await PantsDatabase.OpenAsync(options);
         var family = database.ColumnFamilies.DefaultFamily;

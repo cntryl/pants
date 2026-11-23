@@ -24,6 +24,7 @@ public sealed class PantsMemoryManagementContractTests
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
             transaction.Put(TestBytes.FromString($"key-{index:000}"), new byte[1024]);
+
             try
             {
                 await transaction.CommitAsync(GetWriteOptions(mode));
@@ -34,6 +35,7 @@ public sealed class PantsMemoryManagementContractTests
                 stalled = true;
                 break;
             }
+
 
             if (index % 10 == 0)
             {

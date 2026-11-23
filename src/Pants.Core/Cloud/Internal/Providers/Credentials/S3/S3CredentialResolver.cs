@@ -8,7 +8,8 @@ static class S3CredentialResolver
         bool allowAwsDefaultChain,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -34,10 +35,12 @@ static class S3CredentialResolver
     {
         var accessKey = FirstNonempty("AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY");
         var secretKey = FirstNonempty("AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY");
+
         if (accessKey is null || secretKey is null)
         {
             return null;
         }
+
 
         return new S3Credentials(
             accessKey,
@@ -72,7 +75,8 @@ static class S3CredentialResolver
     static S3Credentials? FromProfileFiles(
         string profile,
         string? credentialsPath,
-        string? configPath)
+        string? configPath
+    )
     {
         if (credentialsPath is not null &&
             ReadProfile(credentialsPath, profile, false) is { } credentials)
@@ -93,6 +97,7 @@ static class S3CredentialResolver
         }
 
         string content;
+
         try
         {
             content = File.ReadAllText(path);
@@ -106,14 +111,17 @@ static class S3CredentialResolver
             throw new PantsIOException("AWS shared profile file could not be read.", exception);
         }
 
+
         var section = isConfigFile && !StringComparer.Ordinal.Equals(profile, "default")
             ? $"profile {profile}"
             : profile;
         var fields = ReadIniSection(content, section);
+
         if (fields is null)
         {
             return null;
         }
+
 
         if (fields.ContainsKey("credential_process") ||
             fields.ContainsKey("sso_start_url") ||
@@ -127,10 +135,12 @@ static class S3CredentialResolver
                         fields.GetValueOrDefault("access_key_id");
         var secretKey = fields.GetValueOrDefault("aws_secret_access_key") ??
                         fields.GetValueOrDefault("secret_access_key");
+
         if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
         {
             return null;
         }
+
 
         return new S3Credentials(
             accessKey,
@@ -144,9 +154,11 @@ static class S3CredentialResolver
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var active = false;
         var found = false;
+
         foreach (var rawLine in content.Split('\n'))
         {
             var line = rawLine.Trim();
+
             if (line.StartsWith('[') && line.EndsWith(']'))
             {
                 active = StringComparer.Ordinal.Equals(line[1..^1].Trim(), section);
@@ -154,17 +166,20 @@ static class S3CredentialResolver
                 continue;
             }
 
+
             if (!active || line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
             {
                 continue;
             }
 
             var separator = line.IndexOf('=');
+
             if (separator > 0)
             {
                 fields[line[..separator].Trim()] = line[(separator + 1)..].Trim();
             }
         }
+
 
         return found ? fields : null;
     }

@@ -12,11 +12,13 @@ sealed class CloudMetadataPublicationReceipt(CloudControlMetadataSnapshot snapsh
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_snapshot is null, this);
+
             if (owner.Identity != accountingOwnerId)
             {
                 owner.Invalidate();
                 return;
             }
+
 
             var files = _snapshot.AuthoritativeManifest?.Files ?? [];
             owner.InstallPublishedCut(files.Select(static file =>

@@ -17,7 +17,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
 
     public async ValueTask<CloudObject?> GetAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var count = objectKey.EndsWith(
@@ -25,10 +26,12 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
             StringComparison.Ordinal)
             ? Interlocked.Increment(ref _manifestSnapshotGetCount)
             : 0;
+
         if (BeforeGetAsync is { } beforeGet)
         {
             await beforeGet(objectKey, count, cancellationToken).ConfigureAwait(false);
         }
+
 
         lock (_gate)
         {
@@ -40,7 +43,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
 
     public ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -60,15 +64,18 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var beforePut = BeforeNextPutAsync;
         BeforeNextPutAsync = null;
+
         if (beforePut is not null)
         {
             await beforePut(cancellationToken).ConfigureAwait(false);
         }
+
 
         lock (_gate)
         {
@@ -83,10 +90,12 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
                         FormatVersion(current.Version)),
                 _ => false
             };
+
             if (!accepted)
             {
                 return false;
             }
+
 
             _objects[objectKey] = (
                 data.ToArray(),
@@ -98,7 +107,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
@@ -116,7 +126,8 @@ sealed class SnapshotConsistencyCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)

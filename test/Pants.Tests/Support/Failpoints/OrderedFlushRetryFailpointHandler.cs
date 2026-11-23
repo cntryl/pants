@@ -31,20 +31,25 @@ sealed class OrderedFlushRetryFailpointHandler : IFailpointHandler, IDisposable
         }
 
         var hit = Interlocked.Increment(ref _hits);
+
         if (hit == 1)
         {
             _firstEntered.TrySetResult();
+
             if (!_releaseFirst.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException("Timed out waiting to release the first flush publication.");
             }
 
+
             throw new IOException("Injected failure for the oldest flush publication.");
         }
+
 
         if (hit == 2)
         {
             _secondEntered.TrySetResult();
+
             if (!_releaseSecond.Wait(MaximumBlockTime))
             {
                 throw new TimeoutException("Timed out waiting to release the retry publication.");

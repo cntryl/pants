@@ -134,7 +134,8 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         string keyPrefix,
         int start,
         int count,
-        Func<int, byte[]> valueFactory) =>
+        Func<int, byte[]> valueFactory
+    ) =>
         Enumerable.Range(start, count)
             .Select(index => new KeyValuePair<byte[], byte[]>(
                 TestBytes.FromString($"{keyPrefix}{index:0000}"),
@@ -146,17 +147,21 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
         IPantsColumnFamily family,
         string mode,
         IEnumerable<KeyValuePair<byte[], byte[]>> records,
-        bool flush)
+        bool flush
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadWrite);
+
         foreach (var record in records)
         {
             transaction.Put(record.Key, record.Value);
         }
 
+
         await transaction.CommitAsync(WriteOptions(mode));
+
         if (flush)
         {
             await database.Maintenance.FlushAsync(family);
@@ -166,11 +171,13 @@ public sealed class PantsTelemetryIntegrationBehaviorTests
     static async ValueTask AssertRecordsAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        IEnumerable<KeyValuePair<byte[], byte[]>> records)
+        IEnumerable<KeyValuePair<byte[], byte[]>> records
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
             PantsTransactionMode.ReadOnly);
+
         foreach (var record in records)
         {
             var value = await transaction.GetAsync(record.Key);

@@ -18,6 +18,7 @@ public sealed class PantsImmutableRetryOwnershipTests
             new RuntimeDependencies(failpoints, runtimeTimeProvider: time));
         var older = database.ColumnFamilies.DefaultFamily;
         var younger = await database.ColumnFamilies.CreateAsync("younger");
+
         try
         {
             await PutAsync(database, older, "older");

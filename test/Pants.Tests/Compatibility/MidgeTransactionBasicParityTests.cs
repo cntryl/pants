@@ -416,7 +416,8 @@ public sealed class MidgeTransactionBasicParityTests
 
     static async Task ForEachDatabaseAsync(
         string[] modes,
-        Func<string, IPantsDatabase, IPantsColumnFamily, Task> scenario)
+        Func<string, IPantsDatabase, IPantsColumnFamily, Task> scenario
+    )
     {
         foreach (var mode in modes)
         {
@@ -449,12 +450,14 @@ public sealed class MidgeTransactionBasicParityTests
 
     static ValueTask<IPantsTransaction> BeginWriteAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
 
     static ValueTask<IPantsTransaction> BeginReadAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly);
 
     static PantsWriteOptions WriteOptions(string mode) =>
@@ -464,13 +467,16 @@ public sealed class MidgeTransactionBasicParityTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string mode,
-        params (string Key, string Value)[] entries)
+        params (string Key, string Value)[] entries
+    )
     {
         await using var transaction = await BeginWriteAsync(database, family);
+
         foreach (var (key, value) in entries)
         {
             transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(WriteOptions(mode));
     }
@@ -478,7 +484,8 @@ public sealed class MidgeTransactionBasicParityTests
     static async Task<string?> ReadAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var transaction = await BeginReadAsync(database, family);
         return ReadText(await transaction.GetAsync(TestBytes.FromString(key)));
@@ -490,10 +497,12 @@ public sealed class MidgeTransactionBasicParityTests
     static async Task<List<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }

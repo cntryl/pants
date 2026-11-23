@@ -29,7 +29,8 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         byte[]? startInclusive,
         byte[]? endExclusive,
         PantsScanDirection direction,
-        TransactionMemoryPool? memoryPool = null)
+        TransactionMemoryPool? memoryPool = null
+    )
     {
         _memoryPool = memoryPool;
         _store = store;
@@ -37,15 +38,18 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         _startInclusive = startInclusive?.ToArray();
         _endExclusive = endExclusive?.ToArray();
         _reverse = direction == PantsScanDirection.Reverse;
+
         try
         {
             using var stream = store.OpenRunReadStream(run);
             var header = store.ReadRunHeader(stream, run);
             _dataEnd = header.OrdinalTableOffset;
             _exhausted = header.RecordCount == 0;
+
             if (_reverse)
             {
                 var chunkMetadataCharge = checked(header.SparseCount * sizeof(ulong) + 64L);
+
                 if (memoryPool is null || memoryPool.TryReserve(chunkMetadataCharge))
                 {
                     _chunkMetadataCharge = memoryPool is null ? 0 : chunkMetadataCharge;
@@ -56,6 +60,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
                     _reverseOffsets = [];
                     _streamingHeader = header;
                 }
+
                 _nextReverseEnd = header.OrdinalTableOffset;
                 _reverseFrameOffsets = new ulong[Math.Min(
                     TransactionSpillStore.SparseIndexStride,
@@ -87,20 +92,24 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     public bool MoveNext()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_exhausted)
         {
             return false;
         }
 
+
         try
         {
             var key = _reverse ? NextReverseKey() : NextForwardKey();
+
             if (key is null)
             {
                 _exhausted = true;
                 Current = [];
                 return false;
             }
+
 
             Current = key;
             return true;
@@ -125,6 +134,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     void ReleaseChunkMetadata()
     {
         var charge = Interlocked.Exchange(ref _chunkMetadataCharge, 0);
+
         if (charge != 0)
         {
             _memoryPool!.Release(charge);
@@ -134,11 +144,13 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
     byte[]? NextForwardKey()
     {
         using var stream = _store.OpenRunReadStream(_run);
+
         while (_cursor < _dataEnd)
         {
             stream.Position = checked((long)_cursor);
             var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(stream);
             var nextCursor = checked((ulong)stream.Position);
+
             if (nextCursor > _dataEnd || nextCursor <= _cursor)
             {
                 throw PantsException.Create(
@@ -146,12 +158,15 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
                     "Transaction spill data frame exceeds its data section.");
             }
 
+
             _cursor = nextCursor;
+
             if (_endExclusive is not null &&
                 ByteArrayComparer.Instance.Compare(key, _endExclusive) >= 0)
             {
                 return null;
             }
+
 
             if (!IsInBounds(key) ||
                 (_previousKey is not null &&
@@ -163,6 +178,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
             _previousKey = key;
             return key;
         }
+
 
         return null;
     }
@@ -177,12 +193,14 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
                 using var stream = _store.OpenRunReadStream(_run);
                 stream.Position = checked((long)offset);
                 var (_, key, _) = _store.ReadOperationPrimaryKeyFrame(stream);
+
                 if (!IsInBounds(key) ||
                     (_previousKey is not null &&
                      ByteArrayComparer.Instance.Equals(_previousKey, key)))
                 {
                     continue;
                 }
+
 
                 _previousKey = key;
                 return key;
@@ -205,6 +223,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         var chunkIndex = --_nextReverseChunk;
         ulong chunkStart;
         ulong chunkEnd;
+
         if (_streamingHeader is { } header)
         {
             chunkEnd = _nextReverseEnd;
@@ -217,6 +236,7 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
             chunkStart = _reverseOffsets[chunkIndex];
             chunkEnd = chunkIndex + 1 < _reverseOffsets.Count ? _reverseOffsets[chunkIndex + 1] : _dataEnd;
         }
+
         var cursor = chunkStart;
         var frameCount = 0;
         using (var stream = _store.OpenRunReadStream(_run))
@@ -234,12 +254,14 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
                 stream.Position = checked((long)cursor);
                 _ = _store.ReadOperationPrimaryKeyFrame(stream);
                 var nextCursor = checked((ulong)stream.Position);
+
                 if (nextCursor > chunkEnd || nextCursor <= cursor)
                 {
                     throw PantsException.Create(
                         PantsErrorCode.Corruption,
                         "Transaction spill sparse chunk does not align to operation frames.");
                 }
+
 
                 cursor = nextCursor;
             }
@@ -248,12 +270,14 @@ sealed class TransactionSpillRunKeyCursor : IEnumerator<byte[]>
         var expectedFrameCount = Math.Min(
             TransactionSpillStore.SparseIndexStride,
             _run.RecordCount - (chunkIndex * TransactionSpillStore.SparseIndexStride));
+
         if (cursor != chunkEnd || frameCount != expectedFrameCount)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill sparse chunk has an invalid operation count.");
         }
+
 
         _nextReverseFrame = frameCount;
         return true;

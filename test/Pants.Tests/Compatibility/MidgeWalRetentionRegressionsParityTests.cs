@@ -87,11 +87,13 @@ public sealed class MidgeWalRetentionRegressionsParityTests
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put("seed"u8.ToArray(), "value"u8.ToArray());
+
             if (pin is Pin.EmptyRange)
             {
                 transaction.Put("r"u8.ToArray(), "kept"u8.ToArray());
                 Assert.Throws<PantsInvalidArgumentException>(() => transaction.DeleteRange("r"u8.ToArray(), "r"u8.ToArray()));
             }
+
 
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         }
@@ -138,7 +140,8 @@ public sealed class MidgeWalRetentionRegressionsParityTests
     static async Task CommitValueAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,

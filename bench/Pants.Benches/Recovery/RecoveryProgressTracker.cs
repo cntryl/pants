@@ -73,9 +73,11 @@ sealed class RecoveryProgressTracker(TimeProvider? timeProvider = null)
         lock (_gate)
         {
             scope.Closed = true;
+
             if (ReferenceEquals(_current, scope))
             {
                 _current = scope.Previous;
+
                 while (_current is { Closed: true })
                 {
                     _current = _current.Previous;

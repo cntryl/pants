@@ -16,11 +16,13 @@ internal static class Program
     static async Task<int> Main(string[] args)
     {
         var command = PantsCliCommandLineParser.Parse(args);
+
         if (command.Failure is { } failure)
         {
             WriteError("usage", failure.Message, failure.Format);
             return 2;
         }
+
 
         if (command.IsHelp)
         {
@@ -29,6 +31,7 @@ internal static class Program
         }
 
         var outcome = await PantsDatabase.VerifyPathOutcomeAsync(command.Path!).ConfigureAwait(false);
+
         if (outcome.Report is { } report)
         {
             if (command.Format == PantsCliOutputFormat.Json)
@@ -60,6 +63,7 @@ internal static class Program
 
             return outcome.ExitCode;
         }
+
 
         WriteError(
             ToErrorKind(outcome.Kind),

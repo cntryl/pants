@@ -10,11 +10,13 @@ public sealed class PantsExternalAdopterSmokeTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false));
+
         for (var batch = 0; batch < 2; batch++)
         {
             await using var writer = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 20; index++)
             {
                 var number = batch * 20 + index;
@@ -23,9 +25,11 @@ public sealed class PantsExternalAdopterSmokeTests
                     TestBytes.FromString($"value-{number:000}"));
             }
 
+
             await writer.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
 
         await using (var deleting = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -43,10 +47,12 @@ public sealed class PantsExternalAdopterSmokeTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var keys = new List<string>();
+
         await foreach (var entry in scan)
         {
             keys.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.DoesNotContain("key-010", keys);
         Assert.DoesNotContain("key-011", keys);

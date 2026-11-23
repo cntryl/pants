@@ -11,10 +11,12 @@ public sealed class PantsScanContractTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var key in new[] { "aa0", "aa1", "aa2", "ab0", "b00" })
         {
             transaction.Put(TestBytes.FromString(key), TestBytes.FromString($"v-{key}"));
         }
+
 
         await using var scan = await transaction.ScanAsync(new PantsScanQuery
         {
@@ -25,10 +27,12 @@ public sealed class PantsScanContractTests
             Limit = 2
         });
         var keys = new List<string>();
+
         await foreach (var entry in scan)
         {
             keys.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.Equal(["aa2", "aa1"], keys);
         Assert.True(scan.IsExhausted);
@@ -123,10 +127,12 @@ public sealed class PantsScanContractTests
             Prefix = new byte[] { 0xff }
         });
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.Equal(2, entries.Count);
     }
@@ -210,25 +216,30 @@ public sealed class PantsScanContractTests
     static async Task<IReadOnlyList<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }
 
     static async Task WriteRowsAsync(
         IPantsDatabase database,
-        params (byte[] Key, byte[] Value)[] rows)
+        params (byte[] Key, byte[] Value)[] rows
+    )
     {
         await using var writer = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var row in rows)
         {
             writer.Put(row.Key, row.Value);
         }
+
 
         await writer.CommitAsync(PantsWriteOptions.Buffered);
     }

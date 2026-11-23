@@ -113,10 +113,12 @@ public sealed class PantsTransactionSpillLargeRangeTests
             EndExclusive = "y"u8.ToArray()
         });
         var keys = new List<string>();
+
         await foreach (var row in scan)
         {
             keys.Add(TestBytes.ToText(row.Key));
         }
+
 
         Assert.Equal(["a", "k2"], keys);
     }

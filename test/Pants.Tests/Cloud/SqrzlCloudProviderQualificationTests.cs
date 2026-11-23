@@ -80,6 +80,7 @@ public sealed class SqrzlCloudProviderQualificationTests
                     await using var writer = await database.Transactions.BeginAsync(
                                  database.ColumnFamilies.DefaultFamily,
                                  PantsTransactionMode.ReadWrite);
+
                     for (var entry = batchStart; entry < batchStart + 2; entry++)
                     {
                         var index = (flush * entriesPerFlush) + entry;
@@ -87,6 +88,7 @@ public sealed class SqrzlCloudProviderQualificationTests
                         new Random(index).NextBytes(value);
                         writer.Put(TestBytes.FromString($"partitioned:{index:0000}"), value);
                     }
+
 
                     await writer.CommitAsync(PantsWriteOptions.CloudStrict);
                 }
@@ -105,6 +107,7 @@ public sealed class SqrzlCloudProviderQualificationTests
         await using var reader = await recovered.Transactions.BeginAsync(
             recovered.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < flushCount * entriesPerFlush; index++)
         {
             var expected = new byte[valueBytes];
@@ -296,6 +299,7 @@ public sealed class SqrzlCloudProviderQualificationTests
             transaction.Put("accepted-key"u8.ToArray(), "accepted-value"u8.ToArray());
             var commit = transaction.CommitAsync(PantsWriteOptions.CloudStrict).AsTask();
             await failpoint.WaitUntilEnteredAsync(TimeSpan.FromSeconds(5));
+
             try
             {
                 var exception = await Assert.ThrowsAsync<PantsCommitOutcomeUnknownException>(() =>
@@ -330,16 +334,20 @@ public sealed class SqrzlCloudProviderQualificationTests
     {
         var timeout = TimeSpan.FromSeconds(10);
         using var cancellation = new CancellationTokenSource(timeout);
+
         while (!cancellation.IsCancellationRequested)
         {
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(cancellation.Token);
+
             if (metrics.RuntimeLateResponsesTotal >= 1)
             {
                 return;
             }
 
+
             await Task.Yield();
         }
+
 
         throw new TimeoutException("The accepted Sqrzl cloud obligation did not finish.");
     }
@@ -367,16 +375,20 @@ public sealed class SqrzlCloudProviderQualificationTests
     static string ResolveEndpoint()
     {
         var configuredEndpoint = Environment.GetEnvironmentVariable("SQRZL_ENDPOINT");
+
         if (!string.IsNullOrWhiteSpace(configuredEndpoint))
         {
             return configuredEndpoint.TrimEnd('/');
         }
 
+
         var configuredPort = Environment.GetEnvironmentVariable("SQRZL_API_PORT");
+
         if (string.IsNullOrWhiteSpace(configuredPort))
         {
             configuredPort = "9000";
         }
+
 
         if (!ushort.TryParse(configuredPort, out var port) || port == 0)
         {

@@ -21,6 +21,7 @@ public sealed class PantsCloudWalRetirementTests
             client,
             workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
             leaseTimeToLive: leaseTimeToLive, leaseTimeProvider: time, leaseClock: clock);
+
         try
         {
             await CommitAsync(database, "lease-held-through-worker");
@@ -40,6 +41,7 @@ public sealed class PantsCloudWalRetirementTests
             // provider. The heartbeat and remote lease must remain live for its full lifetime.
             await RenewBeyondOriginalValidityAsync(handler, time, clock);
             IPantsDatabase? competingDatabase = null;
+
             try
             {
                 competingDatabase = await OpenAsync(
@@ -51,6 +53,7 @@ public sealed class PantsCloudWalRetirementTests
             {
             }
 
+
             if (competingDatabase is not null)
             {
                 await competingDatabase.DisposeAsync();
@@ -61,6 +64,7 @@ public sealed class PantsCloudWalRetirementTests
         finally
         {
             handler.ReleaseWalRangeReads();
+
             try
             {
                 await database.DisposeAsync();
@@ -70,6 +74,7 @@ public sealed class PantsCloudWalRetirementTests
                 // The test observes the first shutdown failure; release unblocks deferred cleanup.
             }
         }
+
 
         await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
             competingCache.Path,
@@ -92,6 +97,7 @@ public sealed class PantsCloudWalRetirementTests
             client,
             workerDisposalTimeout: TimeSpan.FromMilliseconds(300),
             leaseTimeToLive: TimeSpan.FromSeconds(30), leaseTimeProvider: time, leaseClock: clock);
+
         try
         {
             await CommitAsync(database, "lease-held-through-retry");
@@ -111,6 +117,7 @@ public sealed class PantsCloudWalRetirementTests
             // shutdown result here would claim disposal succeeded while deferred cleanup is live.
             await RenewBeyondOriginalValidityAsync(handler, time, clock);
             IPantsDatabase? competingDatabase = null;
+
             try
             {
                 competingDatabase = await OpenAsync(
@@ -122,6 +129,7 @@ public sealed class PantsCloudWalRetirementTests
             {
             }
 
+
             if (competingDatabase is not null)
             {
                 await competingDatabase.DisposeAsync();
@@ -132,6 +140,7 @@ public sealed class PantsCloudWalRetirementTests
         finally
         {
             handler.ReleaseWalRangeReads();
+
             try
             {
                 await database.ShutdownAsync(TestTimeouts.Expected);
@@ -141,6 +150,7 @@ public sealed class PantsCloudWalRetirementTests
                 // Release unblocks deferred cleanup; the test reports the observed shutdown result.
             }
         }
+
 
         await using var recovered = await OpenUntilCloudLeaseReleasedAsync(
             successorCache.Path,
@@ -246,7 +256,8 @@ public sealed class PantsCloudWalRetirementTests
         TimeSpan? workerDisposalTimeout = null,
         TimeSpan? leaseTimeToLive = null,
         TimeProvider? leaseTimeProvider = null,
-        IPantsClock? leaseClock = null) =>
+        IPantsClock? leaseClock = null
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             CreateOptions(root, leaseTimeToLive),
             new RuntimeDependencies(
@@ -260,12 +271,15 @@ public sealed class PantsCloudWalRetirementTests
         HttpClient client,
         TimeSpan leaseTimeToLive,
         TimeProvider? leaseTimeProvider = null,
-        IPantsClock? leaseClock = null)
+        IPantsClock? leaseClock = null
+    )
     {
         using var deadline = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             deadline.Token.ThrowIfCancellationRequested();
+
             try
             {
                 return await OpenAsync(root, client, leaseTimeToLive: leaseTimeToLive,
@@ -278,8 +292,11 @@ public sealed class PantsCloudWalRetirementTests
         }
     }
 
-    static async Task RenewBeyondOriginalValidityAsync(InMemoryAzureBlobHandler handler,
-        ManualSchedulingTimeProvider time, ManualClock clock)
+    static async Task RenewBeyondOriginalValidityAsync(
+        InMemoryAzureBlobHandler handler,
+        ManualSchedulingTimeProvider time,
+        ManualClock clock
+    )
     {
         for (var renewal = 0; renewal < 4; renewal++)
         {

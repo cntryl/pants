@@ -28,20 +28,24 @@ sealed class SstReadResources : IDisposable
     public IDisposable EnterOpen(string name)
     {
         var bytes = CoordinationBytes(name);
+
         while (!TryEnter(bytes, out var capacity))
         {
             capacity.GetAwaiter().GetResult();
         }
+
         return ClaimOpen(bytes);
     }
 
     public async ValueTask<IDisposable> EnterOpenAsync(string name, CancellationToken cancellationToken)
     {
         var bytes = CoordinationBytes(name);
+
         while (!TryEnter(bytes, out var capacity))
         {
             await capacity.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
+
         return ClaimOpen(bytes);
     }
 
@@ -54,16 +58,20 @@ sealed class SstReadResources : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
             if (bytes > _coordinationLimit)
             {
                 throw new PantsResourceLimitException(
                     $"SST open coordination requires {bytes} bytes but its allowance is {_coordinationLimit} bytes.");
             }
+
             capacity = _capacityChanged.Task;
+
             if (_openOwners >= _maximumOpenOwners || bytes > _coordinationLimit - _coordinationBytes)
             {
                 return false;
             }
+
             _openOwners++;
             _coordinationBytes += bytes;
             return true;

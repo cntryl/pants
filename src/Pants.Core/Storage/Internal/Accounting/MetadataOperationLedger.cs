@@ -36,8 +36,13 @@ sealed class MetadataOperationLedger(MetadataAccountingState state)
         }
     }
 
-    public (ulong[] Counters, bool Overflow)? Seal(MetadataOperationKind kind, ulong elapsed,
-        bool succeeded, bool abandoned, bool overflow)
+    public (ulong[] Counters, bool Overflow)? Seal(
+        MetadataOperationKind kind,
+        ulong elapsed,
+        bool succeeded,
+        bool abandoned,
+        bool overflow
+    )
     {
         lock (_gate)
         {
@@ -50,6 +55,7 @@ sealed class MetadataOperationLedger(MetadataAccountingState state)
             _counters[(int)MetadataCounter.OperationAttempts] = 1;
             _counters[(int)MetadataCounter.OperationFailures] = succeeded ? 0UL : 1;
             _counters[(int)MetadataCounter.AbandonedOperations] = abandoned ? 1UL : 0;
+
             if (kind == MetadataOperationKind.Checkpoint)
             {
                 _counters[(int)MetadataCounter.CheckpointAttempts] = 1;
@@ -60,6 +66,7 @@ sealed class MetadataOperationLedger(MetadataAccountingState state)
                 _counters[(int)MetadataCounter.JournalAppendAttempts] = 1;
                 _counters[(int)MetadataCounter.JournalNanoseconds] = elapsed;
             }
+
 
             return ((ulong[])_counters.Clone(), _overflow || overflow);
         }

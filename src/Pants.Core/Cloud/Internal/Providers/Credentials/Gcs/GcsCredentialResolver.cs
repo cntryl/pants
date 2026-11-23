@@ -6,7 +6,8 @@ static class GcsCredentialResolver
         PantsGcsCredentialSource source,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(timeProvider);

@@ -190,6 +190,7 @@ public sealed class PantsPointReadFirstHitTests
 
         var staleFirst = older.Clone();
         var freshSecond = newer.Clone();
+
         if (sequenceRangeMissing)
         {
             freshSecond.SmallestSequence = null;
@@ -202,6 +203,7 @@ public sealed class PantsPointReadFirstHitTests
             freshSecond.SmallestSequence = older.SmallestSequence;
             freshSecond.LargestSequence = newer.LargestSequence;
         }
+
 
         return [staleFirst, freshSecond];
     }
@@ -233,7 +235,8 @@ public sealed class PantsPointReadFirstHitTests
     static async ValueTask MutateAndFlushAsync(
         IPantsDatabase database,
         StorageMode mode,
-        Action<IPantsTransaction> mutate)
+        Action<IPantsTransaction> mutate
+    )
     {
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,

@@ -60,7 +60,8 @@ public sealed class CloudRangeCapabilityTests
         public PantsCloudValidationReport Validate() => new([]);
         public ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
             PantsCloudProviderContext context,
-            CancellationToken cancellationToken = default) => ValueTask.FromResult<IPantsCloudObjectStore>(store);
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult<IPantsCloudObjectStore>(store);
     }
 
     sealed class FullReadOnlyStore : IPantsCloudObjectStore
@@ -80,12 +81,20 @@ public sealed class CloudRangeCapabilityTests
         public ValueTask<PantsCloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken = default) => ValueTask.FromResult(new PantsCloudObjectListPage(["value"], null));
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(new PantsCloudObjectListPage(["value"], null));
 
-        public ValueTask<bool> PutAsync(string objectKey, ReadOnlyMemory<byte> data, PantsCloudObjectWriteCondition condition,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            PantsCloudObjectWriteCondition condition,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
 
-        public ValueTask<PantsCloudObjectDeleteOutcome> DeleteAsync(string objectKey, PantsCloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<PantsCloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            PantsCloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
     }
 }

@@ -39,10 +39,12 @@ public sealed class AtomicStagedFileCrashTests
     public void ShouldCrashAfterStagedPayloadSyncBeforePublishInChild()
     {
         var targetPath = Environment.GetEnvironmentVariable(TargetEnvironmentVariable);
+
         if (targetPath is null)
         {
             return;
         }
+
 
         var boundaryPath = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(BoundaryEnvironmentVariable));

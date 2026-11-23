@@ -105,6 +105,7 @@ public sealed class MidgeTransactionConflictParityTests
                 });
 
             Assert.Equal(Enumerable.Range(0, 10), completed.Order());
+
             for (var index = 0; index < 10; index++)
             {
                 Assert.Equal($"value{index}", await ReadAsync(database, $"key{index}"));
@@ -420,7 +421,8 @@ public sealed class MidgeTransactionConflictParityTests
         string mode,
         int workerCount,
         Func<int, IPantsTransaction, Task> prepare,
-        TimeSpan? completionTimeout = null)
+        TimeSpan? completionTimeout = null
+    )
     {
         var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -429,6 +431,7 @@ public sealed class MidgeTransactionConflictParityTests
             .Select(async index =>
             {
                 var reportedReady = false;
+
                 try
                 {
                     await using var transaction = await BeginWriteAsync(database);
@@ -464,6 +467,7 @@ public sealed class MidgeTransactionConflictParityTests
         var timeout = completionTimeout ?? TimeSpan.FromSeconds(30);
         var allWorkers = Task.WhenAll(workers);
         int[] completed;
+
         try
         {
             completed = await allWorkers.WaitAsync(timeout);
@@ -473,6 +477,7 @@ public sealed class MidgeTransactionConflictParityTests
             ObserveWorkerCompletion(allWorkers);
             throw;
         }
+
 
         Assert.Equal(Enumerable.Range(0, workerCount), completed.Order());
         return completed;

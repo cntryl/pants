@@ -12,10 +12,12 @@ public class IteratorBenchmarks : Tier1Benchmark
     public void Setup()
     {
         _entries = new SortedDictionary<byte[], CellState>(ByteArrayComparer.Instance);
+
         for (var index = 0; index < 1_000; index++)
         {
             _entries.Add(BenchmarkData.Key(index), new CellState(BenchmarkData.Value(64), (ulong)index, null));
         }
+
 
         _middle = BenchmarkData.Key(500);
     }
@@ -24,10 +26,12 @@ public class IteratorBenchmarks : Tier1Benchmark
     public int Sequential100()
     {
         var count = 0;
+
         foreach (var _ in _entries.Take(100))
         {
             count++;
         }
+
 
         return count;
     }

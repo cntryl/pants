@@ -12,7 +12,8 @@ public sealed class PantsWalCorruptionCoverageTests
     public void ShouldRejectRecordAndCrcValidFrameGivenInvalidEnvelopePrefix(
         byte firstMagic,
         byte secondMagic,
-        byte version)
+        byte version
+    )
     {
         var payload = BuildRawRecord();
         payload[0] = firstMagic;
@@ -183,6 +184,7 @@ public sealed class PantsWalCorruptionCoverageTests
         DiskFormat.WriteUInt64(batch, beginSequence);
         DiskFormat.WriteUInt64(batch, commitSequence);
         DiskFormat.WriteUInt32(batch, checked((uint)operations.Count));
+
         foreach (var (operation, sequence) in operations)
         {
             batch.WriteByte((byte)operation);
@@ -191,6 +193,7 @@ public sealed class PantsWalCorruptionCoverageTests
             batch.WriteByte(0);
             DiskFormat.WriteUInt32(batch, 1);
             batch.WriteByte((byte)'k');
+
             if (operation is WalOperation.Put or WalOperation.Insert)
             {
                 batch.WriteByte(1);
@@ -200,6 +203,7 @@ public sealed class PantsWalCorruptionCoverageTests
             {
                 batch.WriteByte(0);
             }
+
 
             if (operation == WalOperation.DeleteRange)
             {
@@ -212,6 +216,7 @@ public sealed class PantsWalCorruptionCoverageTests
                 batch.WriteByte(0);
             }
         }
+
 
         return batch.ToArray();
     }
@@ -231,7 +236,8 @@ public sealed class PantsWalCorruptionCoverageTests
         Stream stream,
         byte? omittedTag,
         byte tag,
-        ReadOnlySpan<byte> value)
+        ReadOnlySpan<byte> value
+    )
     {
         if (omittedTag != tag)
         {

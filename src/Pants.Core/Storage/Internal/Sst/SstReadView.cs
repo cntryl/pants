@@ -31,6 +31,7 @@ sealed class SstReadView
     {
         _families = families;
         LinearScanLevelCount = families.Values.Sum(static family => family.LinearScanLevelCount);
+
         if (LinearScanLevelCount > 0)
         {
             LinearScanLevels.Add(LinearScanLevelCount);
@@ -45,16 +46,20 @@ sealed class SstReadView
     public static SstReadView Create(IReadOnlyList<FileMeta> files)
     {
         ArgumentNullException.ThrowIfNull(files);
+
         if (files.Count == 0)
         {
             return EmptyView;
         }
 
+
         var families = new Dictionary<uint, FamilyView>();
+
         foreach (var group in files.GroupBy(static file => file.ColumnFamilyId))
         {
             families[group.Key] = FamilyView.Create(group);
         }
+
 
         return new SstReadView(families);
     }
@@ -69,13 +74,16 @@ sealed class SstReadView
     public IReadOnlyList<FileMeta> SelectPointCandidates(
         uint columnFamilyId,
         ReadOnlySpan<byte> key,
-        out int filesExamined)
+        out int filesExamined
+    )
     {
         filesExamined = 0;
+
         if (!_families.TryGetValue(columnFamilyId, out var family))
         {
             return [];
         }
+
 
         return family.SelectPointCandidates(key, ref filesExamined);
     }
@@ -92,13 +100,16 @@ sealed class SstReadView
         uint columnFamilyId,
         byte[]? startInclusive,
         byte[]? endExclusive,
-        out int filesExamined)
+        out int filesExamined
+    )
     {
         filesExamined = 0;
+
         if (!_families.TryGetValue(columnFamilyId, out var family))
         {
             return [];
         }
+
 
         return family.SelectRangeCandidates(startInclusive, endExclusive, ref filesExamined);
     }
@@ -141,7 +152,8 @@ sealed class SstReadView
         public void AddPointCandidates(
             ReadOnlySpan<byte> key,
             List<FileMeta> candidates,
-            ref int filesExamined)
+            ref int filesExamined
+        )
         {
             foreach (var file in _fallback)
             {
@@ -154,6 +166,7 @@ sealed class SstReadView
                 foreach (var indexed in _files)
                 {
                     filesExamined++;
+
                     if (indexed.Contains(key))
                     {
                         candidates.Add(indexed.File);
@@ -165,11 +178,13 @@ sealed class SstReadView
 
             var low = 0;
             var high = _files.Length - 1;
+
             while (low <= high)
             {
                 var middle = low + ((high - low) / 2);
                 filesExamined++;
                 var indexed = _files[middle];
+
                 if (key.SequenceCompareTo(indexed.SmallestKey) < 0)
                 {
                     high = middle - 1;
@@ -186,6 +201,7 @@ sealed class SstReadView
                     if (middle > 0 && key.SequenceCompareTo(indexed.SmallestKey) == 0)
                     {
                         filesExamined++;
+
                         if (_files[middle - 1].Contains(key))
                         {
                             candidates.Add(_files[middle - 1].File);
@@ -195,6 +211,7 @@ sealed class SstReadView
                     if (middle + 1 < _files.Length && key.SequenceCompareTo(indexed.LargestKey) == 0)
                     {
                         filesExamined++;
+
                         if (_files[middle + 1].Contains(key))
                         {
                             candidates.Add(_files[middle + 1].File);
@@ -210,7 +227,8 @@ sealed class SstReadView
             byte[]? startInclusive,
             byte[]? endExclusive,
             List<FileMeta> candidates,
-            ref int filesExamined)
+            ref int filesExamined
+        )
         {
             foreach (var file in _fallback)
             {
@@ -223,6 +241,7 @@ sealed class SstReadView
                 foreach (var indexed in _files)
                 {
                     filesExamined++;
+
                     if (indexed.Overlaps(startInclusive, endExclusive))
                     {
                         candidates.Add(indexed.File);
@@ -236,10 +255,12 @@ sealed class SstReadView
             // can reach the start, then take files until one begins at or past the end.
             var low = 0;
             var high = _files.Length;
+
             while (startInclusive is not null && low < high)
             {
                 var middle = low + ((high - low) / 2);
                 filesExamined++;
+
                 if (_files[middle].LargestKey.AsSpan().SequenceCompareTo(startInclusive) < 0)
                 {
                     low = middle + 1;
@@ -250,14 +271,17 @@ sealed class SstReadView
                 }
             }
 
+
             for (var index = startInclusive is null ? 0 : low; index < _files.Length; index++)
             {
                 filesExamined++;
+
                 if (endExclusive is not null &&
                     _files[index].SmallestKey.AsSpan().SequenceCompareTo(endExclusive) >= 0)
                 {
                     return;
                 }
+
 
                 candidates.Add(_files[index].File);
             }
@@ -310,6 +334,7 @@ sealed class SstReadView
             var byLevel = files.GroupBy(static file => file.Level).ToArray();
             var maximumLevel = byLevel.Max(static group => group.Key);
             var levels = new LevelView[maximumLevel + 1];
+
             for (var level = 0U; level <= maximumLevel; level++)
             {
                 var group = byLevel.FirstOrDefault(candidate => candidate.Key == level);
@@ -320,32 +345,39 @@ sealed class SstReadView
                     level != 0);
             }
 
+
             return new FamilyView(levels);
         }
 
         public List<FileMeta> SelectRangeCandidates(
             byte[]? startInclusive,
             byte[]? endExclusive,
-            ref int filesExamined)
+            ref int filesExamined
+        )
         {
             var candidates = new List<FileMeta>();
+
             foreach (var level in _levels)
             {
                 level.AddRangeCandidates(startInclusive, endExclusive, candidates, ref filesExamined);
             }
+
 
             return candidates;
         }
 
         public List<FileMeta> SelectPointCandidates(
             ReadOnlySpan<byte> key,
-            ref int filesExamined)
+            ref int filesExamined
+        )
         {
             var candidates = new List<FileMeta>();
+
             foreach (var level in _levels)
             {
                 level.AddPointCandidates(key, candidates, ref filesExamined);
             }
+
 
             candidates.Sort(static (left, right) => right.SstSequence.CompareTo(left.SstSequence));
             return candidates;

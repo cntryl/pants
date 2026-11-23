@@ -48,7 +48,8 @@ sealed class CompactionRuntimeService(
         CloudCompactionOutputPublisher? outputPublisher,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var request = CreateRequest(
             snapshot,
@@ -70,7 +71,8 @@ sealed class CompactionRuntimeService(
         CloudCompactionOutputPublisher? outputPublisher,
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs = null,
         CompactionOutputStaging? staging = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var request = CreateRequest(
             snapshot,
@@ -96,7 +98,8 @@ sealed class CompactionRuntimeService(
 
     protected override async ValueTask<CompactionResult> DispatchAsync(
         CompactionRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var store = compactionStore ??
                     throw new PantsInternalException("A compaction runtime request requires local storage.");
@@ -123,6 +126,7 @@ sealed class CompactionRuntimeService(
             Volatile.Write(
                 ref _compactingSsts,
                 snapshot.Plans.Sum(static plan => plan.Inputs.Count));
+
             if (request.DrainDebt)
             {
                 return await store.DrainCompactionDebtAsync(
@@ -137,6 +141,7 @@ sealed class CompactionRuntimeService(
                         operationCancellation.Token)
                     .ConfigureAwait(false);
             }
+
 
             return await store.CompactAsync(
                     snapshot,
@@ -173,7 +178,8 @@ sealed class CompactionRuntimeService(
 
     async ValueTask<Task<CompactionResult>> ScheduleTrackedAsync(
         CompactionRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         lock (_operationGate)
         {
@@ -219,6 +225,7 @@ sealed class CompactionRuntimeService(
         lock (_operationGate)
         {
             _scheduledOperations--;
+
             if (_scheduledOperations == 0)
             {
                 _scheduledOperationsIdle.TrySetResult();
@@ -242,7 +249,8 @@ sealed class CompactionRuntimeService(
         Func<IReadOnlyList<string>, CancellationToken, ValueTask<IDisposable?>>? prepareInputs,
         CompactionOutputStaging? staging,
         bool drainDebt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         lock (_operationGate)
         {

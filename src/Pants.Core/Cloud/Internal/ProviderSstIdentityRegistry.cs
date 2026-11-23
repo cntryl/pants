@@ -10,6 +10,7 @@ sealed class ProviderSstIdentityRegistry
     {
         var identity = new Identity(sizeBytes, version);
         var recorded = _identities.GetOrAdd(name, identity);
+
         if (recorded != identity)
         {
             throw new PantsFencedException(

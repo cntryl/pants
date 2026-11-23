@@ -29,13 +29,16 @@ sealed class OperationDeadlineCancellation : IDisposable
             {
                 return;
             }
+
             var remaining = _deadline.Remaining;
+
             if (remaining > TimeSpan.Zero)
             {
                 _timer.Change(remaining < MaximumTimerSlice ? remaining : MaximumTimerSlice, Timeout.InfiniteTimeSpan);
                 return;
             }
         }
+
         try
         {
             _source.Cancel();

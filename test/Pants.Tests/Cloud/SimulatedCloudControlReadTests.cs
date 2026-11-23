@@ -15,6 +15,7 @@ public sealed class SimulatedCloudControlReadTests
             .Select(index => $"sst/{index:D3}.sst")
             .Order(StringComparer.Ordinal)
             .ToArray();
+
         foreach (var objectKey in expectedKeys.Reverse())
         {
             Assert.True(await store.PutAsync(
@@ -23,6 +24,7 @@ public sealed class SimulatedCloudControlReadTests
                 new CloudObjectWriteCondition.IfAbsent(),
                 CancellationToken.None));
         }
+
 
         var firstPage = await store.ListPageAsync("sst/", null, CancellationToken.None);
 
@@ -50,6 +52,7 @@ public sealed class SimulatedCloudControlReadTests
         using (reads = new ProviderCloudControlMetadataReadSet(store, budget, metadataAdmitted: () =>
                {
                    Assert.True(budget.Current > 257);
+
                    if (disposeOwner)
                    {
                        reads!.Dispose();
@@ -68,6 +71,7 @@ public sealed class SimulatedCloudControlReadTests
             {
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reads.ReadAsync(key, cancellation.Token).AsTask());
             }
+
             Assert.Equal(0, budget.Current);
         }
         Assert.True(await store.PutAsync(key, "successor"u8.ToArray(), new CloudObjectWriteCondition.Unconditional()));

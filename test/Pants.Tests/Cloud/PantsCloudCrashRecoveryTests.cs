@@ -31,10 +31,12 @@ public sealed class PantsCloudCrashRecoveryTests
     {
         var scenario = Environment.GetEnvironmentVariable(
             ChildScenarioEnvironmentVariable);
+
         if (!IsKnownScenario(scenario))
         {
             return;
         }
+
 
         var path = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
@@ -149,6 +151,7 @@ public sealed class PantsCloudCrashRecoveryTests
             JsonSerializer.Serialize(new { SharedLease = sharedLease, LocalLease = localLease }));
 
         using var process = Process.GetCurrentProcess();
+
         try
         {
             process.Kill();
@@ -322,6 +325,7 @@ public sealed class PantsCloudCrashRecoveryTests
             var appliedCut = await CaptureAppliedCutAsync(reopened);
             Assert.Equal((ulong)(SealedWalBacklogBatch.DefaultMaximumSegments + 1) * 3, appliedCut);
             Assert.True(metrics.WalCloudDurableSequence >= appliedCut);
+
             for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
             {
                 await AssertValueAsync(reopened, GetBacklogKey(index), "backlog-value");
@@ -330,6 +334,7 @@ public sealed class PantsCloudCrashRecoveryTests
 
         RemoveLocalCache(directory.Path);
         await using var cacheless = await PantsDatabase.OpenAsync(CreateOptions(directory.Path));
+
         for (var index = 0; index <= SealedWalBacklogBatch.DefaultMaximumSegments; index++)
         {
             await AssertValueAsync(cacheless, GetBacklogKey(index), "backlog-value");
@@ -378,6 +383,7 @@ public sealed class PantsCloudCrashRecoveryTests
         Assert.True(metrics.SstCount >= 1);
         Assert.True(metrics.ManifestLastPersistedSequence > 0);
         Assert.True(layout.Levels.Sum(static level => level.FileCount) >= 1);
+
         for (var index = 0; index < 17; index++)
         {
             await AssertValueAsync(
@@ -406,17 +412,21 @@ public sealed class PantsCloudCrashRecoveryTests
         var corruptBytes = await File.ReadAllBytesAsync(remoteWal);
         var cursor = WalSegmentCodec.HeaderSize;
         var lastRecordEnd = cursor;
+
         while (cursor < corruptBytes.Length)
         {
             var length = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(corruptBytes.AsSpan(cursor)));
+
             if (WalSegmentCodec.IsFooter(corruptBytes.AsSpan(cursor + 8, length)))
             {
                 break;
             }
 
+
             lastRecordEnd = cursor + 8 + length;
             cursor = lastRecordEnd;
         }
+
 
         await File.WriteAllBytesAsync(remoteWal, corruptBytes[..(lastRecordEnd - 1)]);
         var retainedBytes = await File.ReadAllBytesAsync(remoteWal);
@@ -461,6 +471,7 @@ public sealed class PantsCloudCrashRecoveryTests
     static async Task WaitForCrashChildExitAsync(Process child)
     {
         using var exitTimeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             await child.WaitForExitAsync(exitTimeout.Token);
@@ -469,6 +480,7 @@ public sealed class PantsCloudCrashRecoveryTests
         {
             TryKill(child);
             using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
             try
             {
                 await child.WaitForExitAsync(cleanupTimeout.Token);
@@ -477,6 +489,7 @@ public sealed class PantsCloudCrashRecoveryTests
             {
                 // The failure below reports the bounded cleanup failure.
             }
+
 
             throw new XunitException(
                 "Crash child did not exit within the test timeout after signaling readiness.",
@@ -487,12 +500,15 @@ public sealed class PantsCloudCrashRecoveryTests
     static async Task WaitForCrashChildLockReleaseAsync(string databasePath)
     {
         var lockPath = Path.Combine(databasePath, "LOCK");
+
         if (!File.Exists(lockPath))
         {
             return;
         }
 
+
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             try
@@ -595,19 +611,23 @@ public sealed class PantsCloudCrashRecoveryTests
 
     static async Task<PantsRuntimeMetrics> WaitForMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> predicate)
+        Func<PantsRuntimeMetrics, bool> predicate
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics? last = null;
+
         try
         {
             while (true)
             {
                 last = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
+
                 if (predicate((PantsRuntimeMetrics)last))
                 {
                     return last;
                 }
+
 
                 await Task.Delay(TimeSpan.FromMilliseconds(25), timeout.Token);
             }
@@ -627,6 +647,7 @@ public sealed class PantsCloudCrashRecoveryTests
     static async Task WaitForSealedWalAsync(string databasePath)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (!Directory.EnumerateFiles(
                    Path.Combine(databasePath, "wal"),
                    "*.wal",
@@ -677,7 +698,8 @@ public sealed class PantsCloudCrashRecoveryTests
         IPantsDatabase database,
         string key,
         string value,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -689,7 +711,8 @@ public sealed class PantsCloudCrashRecoveryTests
     static async Task AssertValueAsync(
         IPantsDatabase database,
         string key,
-        string expected)
+        string expected
+    )
     {
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

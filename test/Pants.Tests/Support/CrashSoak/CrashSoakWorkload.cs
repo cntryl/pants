@@ -78,18 +78,22 @@ static class CrashSoakWorkload
         var nextId = 0;
         var lanes = new List<IReadOnlyList<CrashSoakOperation>>(scenario.LaneCount);
         var perLane = Math.Max(4, scenario.OperationsPerCycle / scenario.LaneCount);
+
         for (var lane = 0; lane < scenario.LaneCount; lane++)
         {
             var generator = new LaneGenerator(scenario, cycle, lane, random);
             var operations = new List<CrashSoakOperation>();
             var count = perLane + random.Next(perLane / 2 + 1);
+
             while (operations.Count < count)
             {
                 generator.Append(operations, ref nextId);
             }
 
+
             lanes.Add(operations);
         }
+
 
         var commits = lanes.Sum(static lane => lane.Count(static operation => !operation.IsMaintenance));
         return new CrashSoakCycle(cycle, lanes, CreateCrashPlan(scenario, random, commits));
@@ -99,10 +103,12 @@ static class CrashSoakWorkload
     {
         var loseLocalCache = scenario.Backend != CrashSoakBackend.Local && random.Next(4) == 0;
         var roll = random.Next(100);
+
         if (roll < 10)
         {
             return new CrashSoakCrashPlan(CrashSoakCrashKind.EndOfWorkload, null, 0, loseLocalCache);
         }
+
 
         if (roll < 35)
         {
@@ -132,11 +138,13 @@ static class CrashSoakWorkload
         public void Append(List<CrashSoakOperation> operations, ref int nextId)
         {
             var roll = random.Next(100);
+
             if (lane == 0 && roll < 4)
             {
                 operations.Add(Maintenance(nextId++, CrashSoakOperationKind.Flush));
                 return;
             }
+
 
             if (lane == 0 && roll < 6)
             {
@@ -187,7 +195,8 @@ static class CrashSoakWorkload
         CrashSoakOperation Operation(
             int id,
             CrashSoakOperationKind kind,
-            IReadOnlyList<CrashSoakMutation> mutations) =>
+            IReadOnlyList<CrashSoakMutation> mutations
+        ) =>
             new(id, lane, kind, NextDurability(), mutations);
 
         PantsDurability NextDurability()
@@ -212,6 +221,7 @@ static class CrashSoakWorkload
         {
             var count = 1 + random.Next(4);
             var mutations = new List<CrashSoakMutation>(count);
+
             for (var index = 0; index < count; index++)
             {
                 var roll = random.Next(100);
@@ -224,6 +234,7 @@ static class CrashSoakWorkload
                 });
             }
 
+
             return mutations;
         }
 
@@ -231,10 +242,12 @@ static class CrashSoakWorkload
         {
             var count = 1 + random.Next(3);
             var mutations = new List<CrashSoakMutation>(count);
+
             for (var index = 0; index < count; index++)
             {
                 mutations.Add(CrashSoakMutation.Put(RandomKey(), Value(id, index)));
             }
+
 
             return mutations;
         }

@@ -42,10 +42,12 @@ public sealed record PantsCloudValidationReport
     public override int GetHashCode()
     {
         var hash = new HashCode();
+
         foreach (var finding in Findings)
         {
             hash.Add(finding);
         }
+
 
         return hash.ToHashCode();
     }

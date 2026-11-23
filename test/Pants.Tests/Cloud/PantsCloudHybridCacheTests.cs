@@ -67,11 +67,13 @@ public sealed class PantsCloudHybridCacheTests
             new RuntimeDependencies(cloudHttpClient: client));
 
         var value = new byte[128 * 1024];
+
         for (var index = 0; index < 20; index++)
         {
             new Random(index).NextBytes(value);
             await CommitAsync(database, $"cloud-async-{index}", value, PantsWriteOptions.CloudAsync);
         }
+
 
         var metrics = await WaitForMetricsAsync(
             database,
@@ -143,6 +145,7 @@ public sealed class PantsCloudHybridCacheTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < RecoveryCommitCount; index++)
         {
             Assert.Equal(
@@ -201,6 +204,7 @@ public sealed class PantsCloudHybridCacheTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var count = 0;
+
         await foreach (var row in scan)
         {
             count++;
@@ -210,6 +214,7 @@ public sealed class PantsCloudHybridCacheTests
                 CultureInfo.InvariantCulture);
             Assert.Equal(RecoveryValue(index), row.Value.ToArray());
         }
+
 
         Assert.Equal(RecoveryCommitCount, count);
     }
@@ -327,7 +332,8 @@ public sealed class PantsCloudHybridCacheTests
         IPantsDatabase database,
         string key,
         byte[] value,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -339,7 +345,8 @@ public sealed class PantsCloudHybridCacheTests
     static async Task AssertReadableAsync(
         IPantsDatabase database,
         string key,
-        int expectedLength = 256 * 1024)
+        int expectedLength = 256 * 1024
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -350,10 +357,12 @@ public sealed class PantsCloudHybridCacheTests
 
     static async ValueTask<PantsRuntimeMetrics> WaitForMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> predicate)
+        Func<PantsRuntimeMetrics, bool> predicate
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics? last = null;
+
         try
         {
             while (true)
@@ -361,10 +370,12 @@ public sealed class PantsCloudHybridCacheTests
                 timeout.Token.ThrowIfCancellationRequested();
                 var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
                 last = metrics;
+
                 if (predicate(metrics))
                 {
                     return metrics;
                 }
+
 
                 await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
             }
@@ -395,9 +406,11 @@ public sealed class PantsCloudHybridCacheTests
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
             if (request.Method != HttpMethod.Get ||
                 request.Headers.Range is null ||
                 request.RequestUri?.AbsolutePath.Contains("/sst/", StringComparison.Ordinal) != true ||
@@ -410,20 +423,25 @@ public sealed class PantsCloudHybridCacheTests
                 return response;
             }
 
+
             var original = response.Content;
             var bytes = await original.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+
             if (bytes.Length == 0)
             {
                 return response;
             }
 
+
             bytes[0] ^= 0xFF;
             Volatile.Write(ref _corruptedObjectPath, request.RequestUri.AbsolutePath);
             var replacement = new ByteArrayContent(bytes);
+
             foreach (var header in original.Headers)
             {
                 replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
+
 
             response.Content = replacement;
             original.Dispose();

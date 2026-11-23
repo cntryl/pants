@@ -29,7 +29,8 @@ static class StreamingCompactionMerger
         CompactionPlan plan,
         long targetSizeBytes,
         ResourceBudget? resourceBudget = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         MergeAndPartition(
             readers
                 .Select(reader => (ICompactionEntryStream)new ReaderEntryStream(reader, resourceBudget))
@@ -47,7 +48,8 @@ static class StreamingCompactionMerger
         CompactionPlan plan,
         long targetSizeBytes,
         ResourceBudget? resourceBudget = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (targetSizeBytes == 0)
         {
@@ -120,6 +122,7 @@ static class StreamingCompactionMerger
         long reservedBytes = 0;
         long currentBytes = 0;
         byte[]? regionStart = null;
+
         try
         {
             foreach (var entry in MergeEntries(
@@ -133,12 +136,14 @@ static class StreamingCompactionMerger
                 cancellationToken.ThrowIfCancellationRequested();
                 var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 var entryBytes = EstimateEntryBytes(entry);
+
                 if (entryBytes > entryLimitBytes)
                 {
                     throw PantsException.ResourceLimit(
                         $"A {entryBytes}-byte compaction entry exceeds the " +
                         $"{entryLimitBytes}-byte compaction buffer budget.");
                 }
+
 
                 if (currentEntries.Count > 0 &&
                     currentBytes + entryBytes > target &&
@@ -184,6 +189,7 @@ static class StreamingCompactionMerger
             else if (retainedRanges.Length > 0)
             {
                 var target = effectiveTargetSizeBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
+
                 foreach (var partition in CompactionOutputPartitioner.Partition(
                              new CompactionMergeResult([], retainedRanges),
                              target))
@@ -217,7 +223,8 @@ static class StreamingCompactionMerger
         CompactionPlan plan,
         long targetSizeBytes,
         ResourceBudget? resourceBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (cancellationToken.IsCancellationRequested)
         {
@@ -251,6 +258,7 @@ static class StreamingCompactionMerger
             resourceBudget,
             rangeTombstones.Count);
         IDisposable? splitKeyReservation;
+
         try
         {
             splitKeyReservation = resourceBudget?.Reserve(splitKey.Length);
@@ -260,6 +268,7 @@ static class StreamingCompactionMerger
             DisposeStreams(streams);
             throw;
         }
+
 
         using var splitKeyBudgetReservation = splitKeyReservation;
         var entryLimitBytes = resourceBudget is null
@@ -274,6 +283,7 @@ static class StreamingCompactionMerger
         var cutReached = false;
         var sawEntry = false;
         SstEntry? previousEntry = null;
+
         try
         {
             while (streams[0].MoveNext())
@@ -281,6 +291,7 @@ static class StreamingCompactionMerger
                 cancellationToken.ThrowIfCancellationRequested();
                 var entry = streams[0].Current;
                 sawEntry = true;
+
                 if (previousEntry is { } previous &&
                     ByteArrayComparer.Instance.Equals(previous.Key, entry.Key) &&
                     previous.Sequence == entry.Sequence)
@@ -290,9 +301,11 @@ static class StreamingCompactionMerger
                     CompactionVersionIdentity.RequireMatchingContent(previous, entry);
                 }
 
+
                 previousEntry = entry;
                 var target = effectiveTargetBytes ??= OutputPartitionTarget(targetSizeBytes, resourceBudget);
                 var entryBytes = EstimateEntryBytes(entry);
+
                 if (entryBytes > entryLimitBytes)
                 {
                     throw PantsException.ResourceLimit(
@@ -300,17 +313,20 @@ static class StreamingCompactionMerger
                         $"{entryLimitBytes}-byte compaction buffer budget.");
                 }
 
+
                 if (!cutReached &&
                     ByteArrayComparer.Instance.Compare(entry.Key, splitKey) >= 0)
                 {
                     var left = CreatePartition(entries, rangeTombstones, regionStart, splitKey);
                     ReservePartition(left, resourceBudget, reservations, ref reservedBytes);
+
                     if (HasContents(left))
                     {
                         yield return left;
                         DisposeReservations(reservations);
                         reservedBytes = 0;
                     }
+
 
                     entries = [];
                     currentBytes = 0;
@@ -345,13 +361,16 @@ static class StreamingCompactionMerger
             {
                 var leftRanges = CreatePartition([], rangeTombstones, null, splitKey);
                 var rightRanges = CreatePartition([], rangeTombstones, splitKey, null);
+
                 foreach (var partition in new[] { leftRanges, rightRanges })
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
                     if (!HasContents(partition))
                     {
                         continue;
                     }
+
 
                     ReservePartition(partition, resourceBudget, reservations, ref reservedBytes);
                     yield return partition;
@@ -359,11 +378,13 @@ static class StreamingCompactionMerger
                     reservedBytes = 0;
                 }
 
+
                 yield break;
             }
 
             var finalEnd = cutReached ? null : splitKey;
             var finalPartition = CreatePartition(entries, rangeTombstones, regionStart, finalEnd);
+
             if (HasContents(finalPartition))
             {
                 ReservePartition(finalPartition, resourceBudget, reservations, ref reservedBytes);
@@ -372,9 +393,11 @@ static class StreamingCompactionMerger
                 reservedBytes = 0;
             }
 
+
             if (!cutReached)
             {
                 var rightRanges = CreatePartition([], rangeTombstones, splitKey, null);
+
                 if (HasContents(rightRanges))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -387,6 +410,7 @@ static class StreamingCompactionMerger
             else if (entries.Count == 0)
             {
                 var rightRanges = CreatePartition([], rangeTombstones, regionStart, null);
+
                 if (HasContents(rightRanges))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -408,13 +432,15 @@ static class StreamingCompactionMerger
         CompactionMergeResult partition,
         ResourceBudget? budget,
         List<IDisposable> reservations,
-        ref long reservedBytes) =>
+        ref long reservedBytes
+    ) =>
         ReserveThrough(budget, reservations, ref reservedBytes, EstimatePartitionBytes(partition));
 
     static bool IsFinalRangeEnd(
         byte[] key,
         FileMeta source,
-        IReadOnlyList<RangeTombstone> rangeTombstones) =>
+        IReadOnlyList<RangeTombstone> rangeTombstones
+    ) =>
         ByteArrayComparer.Instance.Compare(key, source.LargestKey) == 0 &&
         rangeTombstones.Any(range => ByteArrayComparer.Instance.Compare(range.End, key) == 0);
 
@@ -459,7 +485,8 @@ static class StreamingCompactionMerger
     static IDisposable? ReserveRangeTombstoneWorkspaceOrDisposeStreams(
         IReadOnlyList<ICompactionEntryStream> streams,
         ResourceBudget? resourceBudget,
-        int tombstoneCount)
+        int tombstoneCount
+    )
     {
         if (resourceBudget is null)
         {
@@ -485,7 +512,8 @@ static class StreamingCompactionMerger
         ResourceBudget? budget,
         List<IDisposable> reservations,
         ref long reservedBytes,
-        long requiredBytes)
+        long requiredBytes
+    )
     {
         if (budget is null)
         {
@@ -530,31 +558,37 @@ static class StreamingCompactionMerger
         bool pointTombstoneGcEligible,
         IReadOnlyList<RangeTombstone> droppedRanges,
         ResourceBudget? resourceBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var heads = new SstEntry?[iterators.Count];
+
             for (var i = 0; i < iterators.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 heads[i] = iterators[i].MoveNext() ? iterators[i].Current : null;
             }
 
+
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 byte[]? minKey = null;
+
                 for (var i = 0; i < heads.Length; i++)
                 {
                     var key = heads[i]?.Key;
+
                     if (key is not null &&
                         (minKey is null || ByteArrayComparer.Instance.Compare(key, minKey) < 0))
                     {
                         minKey = key;
                     }
                 }
+
 
                 if (minKey is null)
                 {
@@ -565,6 +599,7 @@ static class StreamingCompactionMerger
                 var dropGroup = false;
                 var retainedNewest = false;
                 var retainedAtOrBelowHorizon = false;
+
                 while (TrySelectNewestHead(heads, minKey, out var sourceIndex, out var entry))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -646,13 +681,16 @@ static class StreamingCompactionMerger
         SstEntry?[] heads,
         byte[] key,
         out int sourceIndex,
-        out SstEntry entry)
+        out SstEntry entry
+    )
     {
         sourceIndex = -1;
         entry = null!;
+
         for (var index = 0; index < heads.Length; index++)
         {
             var candidate = heads[index];
+
             if (candidate is null ||
                 !ByteArrayComparer.Instance.Equals(candidate.Key, key) ||
                 (sourceIndex >= 0 && candidate.Sequence <= entry.Sequence))
@@ -660,9 +698,11 @@ static class StreamingCompactionMerger
                 continue;
             }
 
+
             sourceIndex = index;
             entry = candidate;
         }
+
 
         return sourceIndex >= 0;
     }
@@ -683,7 +723,8 @@ static class StreamingCompactionMerger
         List<SstEntry> entries,
         IReadOnlyList<RangeTombstone> ranges,
         byte[]? regionStart,
-        byte[]? regionEnd)
+        byte[]? regionEnd
+    )
     {
         var overlappingRanges = ranges
             .Where(range =>

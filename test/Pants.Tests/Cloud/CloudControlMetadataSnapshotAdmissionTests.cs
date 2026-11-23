@@ -69,6 +69,7 @@ public sealed class CloudControlMetadataSnapshotAdmissionTests
         await using var persistence = CreatePersistence(cache.Path, controlStore, lease, budget);
 
         var mirror = persistence.MirrorMetadataAndSstsAsync(CancellationToken.None).AsTask();
+
         try
         {
             await putStarted.Task.WaitAsync(TestTimeouts.Expected);
@@ -78,6 +79,7 @@ public sealed class CloudControlMetadataSnapshotAdmissionTests
         {
             releasePut.TrySetResult();
         }
+
 
         await mirror;
         Assert.Equal(0, budget.Current);
@@ -118,7 +120,8 @@ public sealed class CloudControlMetadataSnapshotAdmissionTests
         string root,
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
-        ResourceBudget budget) =>
+        ResourceBudget budget
+    ) =>
         new(
             root,
             new TestCloudObjectStore(),

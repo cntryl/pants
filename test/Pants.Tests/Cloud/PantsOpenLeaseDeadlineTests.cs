@@ -20,6 +20,7 @@ public sealed class PantsOpenLeaseDeadlineTests
             {
                 if (startupEvent == StartupEvent.CleanupFinished) { cleaned.TrySetResult(); }
             })).AsTask();
+
         try
         {
             await store.Applied.WaitAsync(TestTimeouts.Expected);
@@ -32,6 +33,7 @@ public sealed class PantsOpenLeaseDeadlineTests
             store.Release();
             await cleaned.Task.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Equal(0, store.LeasePuts);
         Assert.Null(await new CloudObjectLeaseStore(store, PantsCloudObjectLayout.LeaseObjectKey).ReadAsync(CancellationToken.None));
     }
@@ -42,7 +44,9 @@ public sealed class PantsOpenLeaseDeadlineTests
     [InlineData(false, true)]
     [InlineData(true, true)]
     public async Task ShouldRetainUnconfirmedLeaseCandidateAndReleaseOnlyItsOwnIdentity(
-        bool loseResponse, bool successorTakesOver)
+        bool loseResponse,
+        bool successorTakesOver
+    )
     {
         using var cache = new TemporaryDirectory();
         using var remote = new TemporaryDirectory();
@@ -62,6 +66,7 @@ public sealed class PantsOpenLeaseDeadlineTests
         var opening = PantsDatabase.OpenForTestingAsync(options, dependencies).AsTask();
         var leaseStore = new CloudObjectLeaseStore(store, PantsCloudObjectLayout.LeaseObjectKey);
         CloudLeaseRecord? successor = null;
+
         try
         {
             await store.Applied.WaitAsync(TestTimeouts.Expected);
@@ -69,6 +74,7 @@ public sealed class PantsOpenLeaseDeadlineTests
             time.Advance(TimeSpan.FromSeconds(1));
             await Assert.ThrowsAsync<PantsLeaseIndeterminateException>(() => opening.WaitAsync(TestTimeouts.Expected));
             Assert.False(cleaned.Task.IsCompleted);
+
             if (successorTakesOver)
             {
                 successor = original.Lease with { Epoch = original.Lease.Epoch + 1, HolderId = "successor", OwnerToken = "successor-token" };
@@ -81,7 +87,9 @@ public sealed class PantsOpenLeaseDeadlineTests
             await cleaned.Task.WaitAsync(TestTimeouts.Expected);
         }
 
+
         var remaining = Assert.IsType<CloudLeaseSnapshot>(await leaseStore.ReadAsync(CancellationToken.None));
+
         if (successorTakesOver)
         {
             Assert.Equal(successor, remaining.Lease);
@@ -118,6 +126,7 @@ public sealed class PantsOpenLeaseDeadlineTests
                 _applied.TrySetResult();
                 await _release.Task;
             }
+
             return await _inner.GetAsync(key, holdRead ? CancellationToken.None : cancellationToken);
         }
         public ValueTask<CloudObjectMetadata?> HeadAsync(string key, CancellationToken cancellationToken) => _inner.HeadAsync(key, cancellationToken);
@@ -127,20 +136,28 @@ public sealed class PantsOpenLeaseDeadlineTests
             _inner.DeleteAsync(key, condition, cancellationToken);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        public async ValueTask<bool> PutAsync(string key, ReadOnlyMemory<byte> data,
-            CloudObjectWriteCondition condition, CancellationToken cancellationToken)
+        public async ValueTask<bool> PutAsync(
+            string key,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken
+        )
         {
             if (key == PantsCloudObjectLayout.LeaseObjectKey) { Interlocked.Increment(ref _leasePuts); }
+
             var applied = await _inner.PutAsync(key, data, condition, cancellationToken);
+
             if (key == PantsCloudObjectLayout.LeaseObjectKey && applied && Interlocked.Exchange(ref _armed, 0) != 0)
             {
                 _applied.TrySetResult();
                 await _release.Task;
+
                 if (loseResponse)
                 {
                     throw new PantsIOException("The lease write landed but its response was lost.");
                 }
             }
+
             return applied;
         }
     }

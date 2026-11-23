@@ -16,7 +16,8 @@ public sealed class PantsScanCacheFillTests
     public Task ShouldWarmPointReadsOnlyForSmallLimitedScansByDefault(
         bool simulatedCloud,
         int? limit,
-        bool fillsCache) =>
+        bool fillsCache
+    ) =>
         AssertPolicyAsync(simulatedCloud, PantsScanDirection.Forward, limit, null, fillsCache);
 
     [Theory]
@@ -37,7 +38,8 @@ public sealed class PantsScanCacheFillTests
         PantsScanDirection direction,
         int? limit,
         PantsCacheFill cacheFill,
-        bool fillsCache) =>
+        bool fillsCache
+    ) =>
         AssertPolicyAsync(simulatedCloud, direction, limit, cacheFill, fillsCache);
 
     [Theory]
@@ -51,7 +53,8 @@ public sealed class PantsScanCacheFillTests
         PantsScanDirection direction,
         int? limit,
         PantsCacheFill? cacheFill,
-        bool fillsCache)
+        bool fillsCache
+    )
     {
         using var directory = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -108,7 +111,8 @@ public sealed class PantsScanCacheFillTests
     [InlineData(true, PantsScanDirection.Reverse)]
     public async Task ShouldReuseCachedBlocksWhileBypassingInsertionOfOtherBlocks(
         bool simulatedCloud,
-        PantsScanDirection direction)
+        PantsScanDirection direction
+    )
     {
         using var directory = new TemporaryDirectory();
         var options = (simulatedCloud
@@ -144,7 +148,8 @@ public sealed class PantsScanCacheFillTests
         PantsScanDirection direction,
         int? limit,
         PantsCacheFill? cacheFill,
-        bool fillsCache)
+        bool fillsCache
+    )
     {
         using var directory = new TemporaryDirectory();
         var options = (simulatedCloud
@@ -183,7 +188,8 @@ public sealed class PantsScanCacheFillTests
         int? limit,
         PantsCacheFill? cacheFill,
         bool fillsCache,
-        byte[] expectedValue)
+        byte[] expectedValue
+    )
     {
         await using (var reader = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -196,6 +202,7 @@ public sealed class PantsScanCacheFillTests
         }))
         {
             var count = 0;
+
             await foreach (var row in scan)
             {
                 var index = direction == PantsScanDirection.Forward ? count : 127 - count;
@@ -203,6 +210,7 @@ public sealed class PantsScanCacheFillTests
                 Assert.Equal(expectedValue, row.Value.ToArray());
                 count++;
             }
+
 
             Assert.Equal(limit ?? 128, count);
         }

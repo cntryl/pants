@@ -44,6 +44,7 @@ public sealed class CloudReadAuthorityTests
         Task read = scanRead ? iterator.MoveNextAsync().AsTask() : reader.GetAsync("key"u8.ToArray()).AsTask();
         await hold.Entered.WaitAsync(TestTimeouts.Expected);
         handler.BlockLeaseWrites();
+
         try
         {
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
@@ -99,6 +100,7 @@ public sealed class CloudReadAuthorityTests
         Assert.True(await iterator.MoveNextAsync());
 
         handler.BlockLeaseWrites();
+
         try
         {
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
@@ -150,6 +152,7 @@ public sealed class CloudReadAuthorityTests
             {
                 _entered.TrySetResult();
                 await _release.Task.WaitAsync(cancellationToken);
+
                 if (failRead)
                 {
                     throw new HttpRequestException("Arranged provider read failure after lease expiry.");

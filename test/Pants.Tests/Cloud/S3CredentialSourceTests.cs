@@ -645,7 +645,8 @@ public sealed class S3CredentialSourceTests
 
     static S3ObjectStore CreateS3CompatibleStore(
         PantsS3CredentialSource source,
-        HttpClient client) => new(
+        HttpClient client
+    ) => new(
         new PantsS3CompatibleProvider(
             "bucket",
             "us-east-1",
@@ -663,10 +664,12 @@ public sealed class S3CredentialSourceTests
             static name => name,
             static _ => (string?)null,
             StringComparer.Ordinal);
+
         foreach (var pair in overrides)
         {
             values[pair.Key] = pair.Value;
         }
+
 
         return new EnvironmentVariableScope(values);
     }
@@ -681,11 +684,12 @@ public sealed class S3CredentialSourceTests
         string accessKey,
         string secretKey,
         string sessionToken,
-        DateTimeOffset expiration) => new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
+        DateTimeOffset expiration
+    ) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
             $"<AssumeRoleWithWebIdentityResponse><Credentials><AccessKeyId>{accessKey}</AccessKeyId><SecretAccessKey>{secretKey}</SecretAccessKey><SessionToken>{sessionToken}</SessionToken><Expiration>{expiration.ToString("O", CultureInfo.InvariantCulture)}</Expiration></Credentials></AssumeRoleWithWebIdentityResponse>")
-        };
+    };
 
     static HttpResponseMessage StsResponseWithExpiration(string expiration) => new(HttpStatusCode.OK)
     {
@@ -719,9 +723,10 @@ public sealed class S3CredentialSourceTests
     static HttpResponseMessage TemporaryAwsJsonResponse(
         string accessKey,
         string secretKey,
-        string sessionToken) => new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
+        string sessionToken
+    ) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
             $$"""
               {
                 "AccessKeyId": "{{accessKey}}",
@@ -730,5 +735,5 @@ public sealed class S3CredentialSourceTests
                 "Expiration": "{{DateTimeOffset.UtcNow.AddHours(1).ToString("O", CultureInfo.InvariantCulture)}}"
               }
               """)
-        };
+    };
 }

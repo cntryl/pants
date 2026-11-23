@@ -18,7 +18,8 @@ sealed class WalRuntimeService(
         ulong publishedSequence,
         PantsDurability durability,
         OperationDeadline deadline = default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await ExecuteAsync(
                 new AppendWalCommitRuntimeRequest(payload, publishedSequence, durability, deadline),
@@ -30,7 +31,8 @@ sealed class WalRuntimeService(
 
     public async ValueTask<TimeSpan> FlushDurabilityBoundaryAsync(
         Failpoint? beforeBoundary = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await ExecuteAsync(
                 new FlushWalDurabilityRuntimeRequest(beforeBoundary),
@@ -46,7 +48,8 @@ sealed class WalRuntimeService(
         PantsDurability durability,
         Failpoint beforeSync,
         OperationDeadline deadline = default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await ExecuteAsync(
                 new AppendWalCommitGroupRuntimeRequest(
@@ -73,7 +76,8 @@ sealed class WalRuntimeService(
 
     public async ValueTask CompleteCloudWalSealAsync(
         SealedWalSegment segment,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await ExecuteAsync(
                 new CompleteCloudWalSealRuntimeRequest(segment),
                 cancellationToken)
@@ -91,7 +95,8 @@ sealed class WalRuntimeService(
 
     public async ValueTask DeleteCloudDurableSegmentAsync(
         SealedWalSegment segment,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         _ = await ExecuteAsync(
                 new DeleteCloudDurableWalRuntimeRequest(segment),
                 cancellationToken)
@@ -99,7 +104,8 @@ sealed class WalRuntimeService(
 
     public async ValueTask<SealedWalBacklogBatch> GetCloudBacklogAsync(
         ulong? throughSegmentId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await ExecuteAsync(
                 new GetCloudWalBacklogRuntimeRequest(throughSegmentId),
@@ -110,7 +116,8 @@ sealed class WalRuntimeService(
 
     protected override ValueTask<WalRuntimeResult> DispatchAsync(
         WalRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var store = walStore ??
@@ -148,7 +155,8 @@ sealed class WalRuntimeService(
         ILocalWalStore store,
         AppendWalCommitRuntimeRequest request,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _validateCloudWalAppendAuthorityAsync is null
             ? AppendCommit(store, request)
             : AppendCommitAfterAuthorityCheckAsync(store, request, deadline, cancellationToken);
@@ -157,7 +165,8 @@ sealed class WalRuntimeService(
         ILocalWalStore store,
         AppendWalCommitRuntimeRequest request,
         OperationDeadline deadline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await deadline.RunAsync(
                 _validateCloudWalAppendAuthorityAsync!,
@@ -170,7 +179,8 @@ sealed class WalRuntimeService(
         ILocalWalStore store,
         AppendWalCommitGroupRuntimeRequest request,
         OperationDeadline deadline,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _validateCloudWalAppendAuthorityAsync is null
             ? AppendCommitGroup(store, request)
             : AppendCommitGroupAfterAuthorityCheckAsync(store, request, deadline, cancellationToken);
@@ -179,7 +189,8 @@ sealed class WalRuntimeService(
         ILocalWalStore store,
         AppendWalCommitGroupRuntimeRequest request,
         OperationDeadline deadline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await deadline.RunAsync(
                 _validateCloudWalAppendAuthorityAsync!,
@@ -190,7 +201,8 @@ sealed class WalRuntimeService(
 
     ValueTask<WalRuntimeResult> AppendCommit(
         ILocalWalStore store,
-        AppendWalCommitRuntimeRequest request)
+        AppendWalCommitRuntimeRequest request
+    )
     {
         var result = store.AppendCommit(
             request.Payload,
@@ -202,7 +214,8 @@ sealed class WalRuntimeService(
 
     ValueTask<WalRuntimeResult> AppendCommitGroup(
         ILocalWalStore store,
-        AppendWalCommitGroupRuntimeRequest request)
+        AppendWalCommitGroupRuntimeRequest request
+    )
     {
         var result = store.AppendCommitGroup(
             request.Commits,
@@ -215,7 +228,8 @@ sealed class WalRuntimeService(
 
     ValueTask<WalRuntimeResult> FlushDurabilityBoundary(
         ILocalWalStore store,
-        FlushWalDurabilityRuntimeRequest request)
+        FlushWalDurabilityRuntimeRequest request
+    )
     {
         if (request.BeforeBoundary.HasValue)
         {
@@ -228,7 +242,8 @@ sealed class WalRuntimeService(
 
     static ValueTask<WalRuntimeResult> DeleteCloudDurableSegment(
         ILocalWalStore store,
-        DeleteCloudDurableWalRuntimeRequest request)
+        DeleteCloudDurableWalRuntimeRequest request
+    )
     {
         store.DeleteCloudDurableWalSegment(request.Segment);
         return ValueTask.FromResult(default(WalRuntimeResult));
@@ -236,7 +251,8 @@ sealed class WalRuntimeService(
 
     static ValueTask<WalRuntimeResult> CompleteCloudWalSeal(
         ILocalWalStore store,
-        CompleteCloudWalSealRuntimeRequest request)
+        CompleteCloudWalSealRuntimeRequest request
+    )
     {
         store.CompleteCloudWalSeal(request.Segment);
         return ValueTask.FromResult(default(WalRuntimeResult));

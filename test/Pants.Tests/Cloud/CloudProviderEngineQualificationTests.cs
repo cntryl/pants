@@ -113,10 +113,12 @@ public sealed class CloudProviderEngineQualificationTests
     {
         var bucket = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_BUCKET");
         var region = Environment.GetEnvironmentVariable("PANTS_LIVE_S3_REGION");
+
         if (string.IsNullOrWhiteSpace(bucket) || string.IsNullOrWhiteSpace(region))
         {
             throw new InvalidOperationException("Live S3 settings changed after test discovery.");
         }
+
 
         var location = new PantsCloudStorageLocation(
             new PantsAwsS3Provider(
@@ -124,6 +126,7 @@ public sealed class CloudProviderEngineQualificationTests
                 region,
                 new PantsS3CredentialSource.AwsDefaultChain()),
             $"pants-qualification/{Guid.NewGuid():N}");
+
         try
         {
             await WriteFlushRecoverAsync(
@@ -135,6 +138,7 @@ public sealed class CloudProviderEngineQualificationTests
             await using var store = await CloudObjectStoreFactory.CreateAsync(
                 location,
                 TimeSpan.FromSeconds(10));
+
             foreach (var key in await store.ListAllAsync(string.Empty, CancellationToken.None))
             {
                 _ = await store.DeleteAsync(
@@ -232,7 +236,8 @@ public sealed class CloudProviderEngineQualificationTests
 
     static async Task WriteFlushRecoverAsync(
         PantsCloudStorageTopology topology,
-        HttpClient? cloudHttpClient)
+        HttpClient? cloudHttpClient
+    )
     {
         using var sourceCache = new TemporaryDirectory();
         using var replacementCache = new TemporaryDirectory();

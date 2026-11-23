@@ -313,12 +313,14 @@ public sealed class MidgeTransactionSemanticsHardeningParityTests
 
     static ValueTask<IPantsTransaction> BeginWriteAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
 
     static ValueTask<IPantsTransaction> BeginReadAsync(
         IPantsDatabase database,
-        IPantsColumnFamily family) =>
+        IPantsColumnFamily family
+    ) =>
         database.Transactions.BeginAsync(family, PantsTransactionMode.ReadOnly);
 
     static async Task PutAsync(IPantsDatabase database, IPantsColumnFamily family, string key, string value)
@@ -338,10 +340,12 @@ public sealed class MidgeTransactionSemanticsHardeningParityTests
     static async Task<List<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.True(scan.IsExhausted);
         Assert.False(scan.IsFailed);

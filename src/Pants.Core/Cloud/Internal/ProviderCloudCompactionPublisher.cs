@@ -19,7 +19,8 @@ sealed class ProviderCloudCompactionPublisher
         CloudLeaseCoordinator lease,
         IFailpointHandler failpoints,
         SstPublicationAdmission admission,
-        ProviderSstIdentityRegistry? identityRegistry = null)
+        ProviderSstIdentityRegistry? identityRegistry = null
+    )
     {
         _localRoot = Path.GetFullPath(localRoot);
         _controlStore = controlStore;
@@ -37,7 +38,8 @@ sealed class ProviderCloudCompactionPublisher
 
     public async ValueTask PublishAsync(
         IReadOnlyList<string> outputNames,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(outputNames);
         cancellationToken.ThrowIfCancellationRequested();
@@ -45,6 +47,7 @@ sealed class ProviderCloudCompactionPublisher
         var outputPaths = outputNames.Select(ResolveOutputPath).ToArray();
         await PublishIntentAsync(cancellationToken).ConfigureAwait(false);
         _failpoints.Hit(Failpoint.BeforeCloudUpload);
+
         for (var index = 0; index < outputNames.Count; index++)
         {
             await _sstPublisher.PublishOutputAsync(
@@ -53,6 +56,7 @@ sealed class ProviderCloudCompactionPublisher
                     cancellationToken)
                 .ConfigureAwait(false);
         }
+
 
         _failpoints.Hit(Failpoint.AfterCloudUpload);
     }
@@ -78,16 +82,19 @@ sealed class ProviderCloudCompactionPublisher
                 ? new PantsCloudObjectWriteCondition.IfAbsent()
                 : new PantsCloudObjectWriteCondition.IfVersion(current.Version),
             cancellationToken).ConfigureAwait(false);
+
         if (!published)
         {
             throw new PantsFencedException(
                 "Cloud compaction intent lost its conditional publication race.");
         }
 
+
         var readback = await metadataReads.ReadAsync(objectKey, cancellationToken)
             .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
             "Cloud compaction intent was acknowledged without an authoritative object.");
         _lease.EnsureValid();
+
         if (!readback.Data.Span.SequenceEqual(data))
         {
             throw new PantsCorruptionException(
@@ -98,12 +105,14 @@ sealed class ProviderCloudCompactionPublisher
     string ResolveOutputPath(string name)
     {
         var objectKey = PantsCloudObjectLayout.SstPrefix + name;
+
         if (!CloudSstObjectKey.TryGetName(objectKey, out var validatedName) ||
             !StringComparer.Ordinal.Equals(validatedName, name))
         {
             throw new PantsCorruptionException(
                 $"Cloud compaction output name '{name}' is unsafe.");
         }
+
 
         return Path.Combine(_localRoot, "sst", validatedName);
     }

@@ -18,10 +18,12 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             await using var writer = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 96; index++)
             {
                 writer.Put(Key(index), Value(index));
             }
+
 
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -78,10 +80,12 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             Prefix = "provider:007"u8.ToArray()
         });
         var actual = new List<string>();
+
         await foreach (var entry in scan)
         {
             actual.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.Equal(
             Enumerable.Range(70, 10).Select(static index => $"provider:{index:D4}"),
@@ -236,6 +240,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
         handler.Arm();
+
         try
         {
             await Assert.ThrowsAsync<PantsTimeoutException>(() =>
@@ -245,6 +250,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         {
             handler.Release();
         }
+
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         Assert.Equal(0, (await reopened.Diagnostics.GetRuntimeMetricsAsync()).BlockCacheUsedBytes);
@@ -288,6 +294,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         using var cancellation = new CancellationTokenSource();
         handler.Arm();
         var compaction = reopened.Maintenance.CompactAllAsync(cancellation.Token).AsTask();
+
         try
         {
             await handler.WaitUntilRequestStartsAsync(TestTimeouts.Expected);
@@ -303,6 +310,7 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         // The canceled caller can observe its response before the admitted actor command finishes
         // unwinding. Runtime metrics may return a live snapshot without entering the actor queue, so
         // use the storage-layout query to establish that the command and its cleanup have completed.
+
         _ = await reopened.Diagnostics.GetStorageLayoutAsync();
         var metrics = await reopened.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
@@ -320,10 +328,12 @@ public sealed class PantsProviderCloudDiskResidentReadTests
         await using var writer = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 96; index++)
         {
             writer.Put(Key(index), Value(index));
         }
+
 
         await writer.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);

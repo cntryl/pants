@@ -7,5 +7,6 @@ interface IAsyncSstSource : IAsyncDisposable
     ValueTask<byte[]> ReadExactlyAsync(
         long offset,
         int length,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

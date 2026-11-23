@@ -25,10 +25,12 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldAbortInChildProcessAfterCoalescedWalDurabilityBoundary()
     {
         var scenario = Environment.GetEnvironmentVariable(ChildScenarioEnvironmentVariable);
+
         if (!StringComparer.Ordinal.Equals(scenario, AfterSharedSyncScenario))
         {
             return;
         }
+
 
         var databasePath = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
@@ -40,6 +42,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                 .WithBackgroundCompaction(false),
             new RuntimeDependencies(handler));
         var transactions = new IPantsTransaction[CommitCount];
+
         for (var index = 0; index < transactions.Length; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -49,16 +52,19 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             transactions[index] = transaction;
         }
 
+
         var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await handler.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
 
         var commits = new Task[transactions.Length];
+
         for (var index = 0; index < transactions.Length; index++)
         {
             commits[index] = transactions[index]
                 .CommitAsync(PantsWriteOptions.Sync)
                 .AsTask();
         }
+
 
         await PublishSignalAsync(
             Path.Combine(databasePath, ReadyFileName),
@@ -76,6 +82,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         using var child = await StartCrashChildAsync(directory.Path);
+
         try
         {
             await WaitForCrashChildExitAsync(child.Process);
@@ -85,6 +92,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
+
 
         var standardOutput = await child.StandardOutput;
         var standardError = await child.StandardError;
@@ -97,6 +105,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < CommitCount; index++)
         {
             var value = await reader.GetAsync(GetKey(index));
@@ -110,10 +119,12 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldFenceWalSuffixAndLayoutInChildProcessWhenGroupRollbackFails()
     {
         var scenario = Environment.GetEnvironmentVariable(ChildScenarioEnvironmentVariable);
+
         if (!StringComparer.Ordinal.Equals(scenario, RollbackFailureScenario))
         {
             return;
         }
+
 
         var databasePath = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
@@ -131,6 +142,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         }
 
         var transactions = new IPantsTransaction[3];
+
         for (var index = 0; index < transactions.Length; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -141,6 +153,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
                 TestBytes.FromString($"uncertain-value-{index}"));
             transactions[index] = transaction;
         }
+
 
         var blockedMetrics = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await handler.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -190,10 +203,12 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     public async Task ShouldFenceWalSuffixInChildProcessWhenSingleRollbackFails()
     {
         var scenario = Environment.GetEnvironmentVariable(ChildScenarioEnvironmentVariable);
+
         if (!StringComparer.Ordinal.Equals(scenario, SingleRollbackFailureScenario))
         {
             return;
         }
+
 
         var databasePath = Assert.IsType<string>(
             Environment.GetEnvironmentVariable(DatabasePathEnvironmentVariable));
@@ -236,6 +251,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         using var child = await StartRollbackFailureChildAsync(directory.Path);
+
         try
         {
             await WaitForCrashChildExitAsync(child.Process);
@@ -245,6 +261,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
+
 
         var standardOutput = await child.StandardOutput;
         var standardError = await child.StandardError;
@@ -273,6 +290,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     {
         using var directory = new TemporaryDirectory();
         using var child = StartSingleRollbackFailureChild(directory.Path);
+
         try
         {
             await WaitForCrashChildExitAsync(child.Process);
@@ -282,6 +300,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             child.TryKillProcessTree();
             await WaitForCrashChildLockReleaseAsync(directory.Path);
         }
+
 
         var standardOutput = await child.StandardOutput;
         var standardError = await child.StandardError;
@@ -331,7 +350,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         string databasePath,
         string childTestName,
         string scenario,
-        string childDescription) =>
+        string childDescription
+    ) =>
         CrashChildProcess.StartAndWaitForReadinessAsync(
             CreateChildStartInfo(databasePath, childTestName, scenario),
             childDescription,
@@ -341,7 +361,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     static ProcessStartInfo CreateChildStartInfo(
         string databasePath,
         string childTestName,
-        string scenario)
+        string scenario
+    )
     {
         var start = CrashChildProcess.CreateStartInfo(
             typeof(PantsCommitCoalescingCrashRecoveryTests),
@@ -354,6 +375,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     static async Task WaitForCrashChildExitAsync(Process child)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             await child.WaitForExitAsync(timeout.Token);
@@ -370,7 +392,8 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         Process child,
         string databasePath,
         string standardOutput,
-        string standardError)
+        string standardError
+    )
     {
         Assert.NotEqual(0, child.ExitCode);
         var expected =
@@ -390,12 +413,15 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
     static async Task WaitForCrashChildLockReleaseAsync(string databasePath)
     {
         var lockPath = Path.Combine(databasePath, "LOCK");
+
         if (!File.Exists(lockPath))
         {
             return;
         }
 
+
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         try
         {
             while (true)
@@ -428,6 +454,7 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
         var leasePath = Path.Combine(databasePath, ".midge_leader");
         var lines = await File.ReadAllLinesAsync(leasePath);
         var updated = false;
+
         for (var index = 0; index < lines.Length; index++)
         {
             if (!lines[index].StartsWith("acquired_at: ", StringComparison.Ordinal))
@@ -439,12 +466,14 @@ public sealed class PantsCommitCoalescingCrashRecoveryTests
             updated = true;
         }
 
+
         Assert.True(updated, "The crashed process lease must contain an acquisition timestamp.");
         // The edit invalidates the record checksum, so the expired copy carries none.
         await File.WriteAllLinesAsync(
             leasePath,
             lines.Where(static line => !line.StartsWith("checksum: ", StringComparison.Ordinal)));
         var acquisitionLockPath = Path.Combine(databasePath, ".midge_leader.lock");
+
         if (File.Exists(acquisitionLockPath))
         {
             File.Delete(acquisitionLockPath);

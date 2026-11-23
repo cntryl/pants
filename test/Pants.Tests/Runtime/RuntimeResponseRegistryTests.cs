@@ -87,6 +87,7 @@ public sealed class RuntimeResponseRegistryTests
                 async () =>
                 {
                     await start.Task;
+
                     if (slot.Abandon(TimeSpan.FromSeconds(1)))
                     {
                         Interlocked.Increment(ref abandoned);

@@ -22,10 +22,12 @@ public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
             Enumerable.Range(0, KeyCount).Select(index => (Tier4Data.Key(index), Tier4Data.Value(64, index))),
             Tier4Database.WriteOptions(StorageMode));
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+
         if (State == RecoveryState.Compacted)
         {
             await database.Maintenance.CompactAllAsync();
         }
+
 
         await database.ShutdownAsync(TimeSpan.FromSeconds(10));
     }
@@ -37,6 +39,7 @@ public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
     public async Task ReopenAndRead100Async()
     {
         await using var database = await PantsDatabase.OpenAsync(Tier4Database.Options(_path, StorageMode));
+
         for (var index = 0; index < 100; index++)
         {
             if (await Tier4Database.GetAsync(database, Tier4Data.Key(index)) is null)
@@ -44,6 +47,7 @@ public class RecoveryThroughputSystemBenchmarks : Tier4Benchmark
                 throw new InvalidOperationException($"Recovered key {index} was not readable.");
             }
         }
+
 
         await database.ShutdownAsync(TimeSpan.FromSeconds(10));
     }

@@ -24,6 +24,7 @@ public sealed class PantsHybridReadCancellationContractTests
         handler.Arm();
 
         var read = reader.GetAsync("hybrid-key"u8.ToArray(), cancellation.Token).AsTask();
+
         try
         {
             await handler.WaitUntilRequestStartsAsync(TestTimeouts.Expected);
@@ -38,6 +39,7 @@ public sealed class PantsHybridReadCancellationContractTests
         {
             handler.Release();
         }
+
 
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
     }
@@ -59,6 +61,7 @@ public sealed class PantsHybridReadCancellationContractTests
         var read = reader.GetWithDiagnosticsAsync(
             "hybrid-key"u8.ToArray(),
             cancellation.Token).AsTask();
+
         try
         {
             await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -68,6 +71,7 @@ public sealed class PantsHybridReadCancellationContractTests
         {
             failpoint.Release();
         }
+
 
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(cancellation.Token, exception.CancellationToken);
@@ -90,6 +94,7 @@ public sealed class PantsHybridReadCancellationContractTests
 
         failpoint.Arm();
         var moveNext = enumerator.MoveNextAsync().AsTask();
+
         try
         {
             await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -99,6 +104,7 @@ public sealed class PantsHybridReadCancellationContractTests
         {
             failpoint.Release();
         }
+
 
         var exception =
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => moveNext.WaitAsync(TestTimeouts.Expected));
@@ -111,13 +117,15 @@ public sealed class PantsHybridReadCancellationContractTests
 
     static async ValueTask<IPantsDatabase> CreateDatabaseWithEvictedSstAsync(
         string path,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints
+    )
     {
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.SimulatedCloud(path, "pants-tests", "hybrid-cancellation/")
                 .WithSimulatedCloudLocalStorageBudget(LocalBudgetBytes)
                 .WithBackgroundCompaction(false),
             new RuntimeDependencies(failpoints));
+
         try
         {
             var value = CreateValue(24 * 1024, 97);
@@ -125,6 +133,7 @@ public sealed class PantsHybridReadCancellationContractTests
             var firstSstName = Path.GetFileName(Assert.Single(Directory.GetFiles(
                 Path.Combine(path, "cloud_store", "sst"),
                 "*.sst")));
+
             for (var index = 0; index < 12; index++)
             {
                 await CommitAndFlushAsync(
@@ -132,6 +141,7 @@ public sealed class PantsHybridReadCancellationContractTests
                     $"eviction-seed-{index}",
                     CreateValue(value.Length, 98 + index));
             }
+
 
             await CommitAndFlushAsync(database, "eviction-window", CreateValue(value.Length, 110));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -150,7 +160,8 @@ public sealed class PantsHybridReadCancellationContractTests
     static async Task CommitAndFlushAsync(
         IPantsDatabase database,
         string key,
-        byte[] value)
+        byte[] value
+    )
     {
         await using var writer = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -162,7 +173,8 @@ public sealed class PantsHybridReadCancellationContractTests
 
     static async ValueTask<IPantsDatabase> CreateProviderDatabaseWithMissingLocalSstAsync(
         string path,
-        HttpClient client)
+        HttpClient client
+    )
     {
         var location = new PantsCloudStorageLocation(
             new PantsAzureBlobProvider(
@@ -174,6 +186,7 @@ public sealed class PantsHybridReadCancellationContractTests
         var database = await PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(path, location).WithBackgroundCompaction(false),
             new RuntimeDependencies(cloudHttpClient: client));
+
         try
         {
             await using var writer = await database.Transactions.BeginAsync(

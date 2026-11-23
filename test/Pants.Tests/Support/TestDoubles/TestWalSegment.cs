@@ -33,11 +33,13 @@ static class TestWalSegment
         DiskFormat.WriteUInt64(footer, maximumSequence);
         DiskFormat.WriteUInt64(footer, checked((ulong)data.Length));
         DiskFormat.WriteUInt32(footer, checked((uint)families.Length));
+
         foreach (var family in families)
         {
             DiskFormat.WriteUInt32(footer, family.Key);
             DiskFormat.WriteUInt64(footer, family.Max(static record => record.Sequence));
         }
+
 
         footer.Write(WalSegmentCodec.Digest(data));
         WriteFrame(stream, footer.ToArray());

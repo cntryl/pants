@@ -47,15 +47,18 @@ public class MvccSystemBenchmarks : Tier3Benchmark
     public async Task<int> ReadOldVersionAsync()
     {
         var validated = 0;
+
         for (var offset = 0; offset < ReadBatchSize; offset++)
         {
             var index = unchecked((uint)Interlocked.Increment(ref _nextKey) % KeyCount);
             var value = await _snapshot.GetAsync(_keys[index]);
+
             if (value is { } found && found.Span[0] == 1)
             {
                 validated++;
             }
         }
+
 
         return validated;
     }

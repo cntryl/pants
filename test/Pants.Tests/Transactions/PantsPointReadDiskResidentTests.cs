@@ -71,10 +71,12 @@ public sealed class PantsPointReadDiskResidentTests
     {
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var version = 1; version <= 3; version++)
         {
             await PutAsync(database, "large-key", new string((char)('0' + version), 40 * 1_024));
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
 
@@ -95,10 +97,12 @@ public sealed class PantsPointReadDiskResidentTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.Empty(entries);
     }
@@ -128,10 +132,12 @@ public sealed class PantsPointReadDiskResidentTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         Assert.Equal(["alpha"], entries.Select(entry => TestBytes.ToText(entry.Key)));
     }
@@ -219,7 +225,8 @@ public sealed class PantsPointReadDiskResidentTests
         IPantsDatabase database,
         string key,
         string value,
-        TimeSpan? timeToLive = null)
+        TimeSpan? timeToLive = null
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

@@ -27,10 +27,12 @@ sealed class SstRequestRecordingHandler(HttpMessageHandler inner) : DelegatingHa
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var path = request.RequestUri!.AbsolutePath;
         var marker = path.LastIndexOf("/sst/", StringComparison.Ordinal);
+
         if (marker >= 0 && path.EndsWith(".sst", StringComparison.Ordinal))
         {
             long? rangeBytes = request.Headers.Range?.Ranges.SingleOrDefault() is { } range
@@ -45,6 +47,7 @@ sealed class SstRequestRecordingHandler(HttpMessageHandler inner) : DelegatingHa
                     request.Content?.Headers.ContentLength));
             }
         }
+
 
         return base.SendAsync(request, cancellationToken);
     }

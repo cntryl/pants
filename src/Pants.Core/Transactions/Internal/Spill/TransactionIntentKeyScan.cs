@@ -18,7 +18,8 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
         IReadOnlyList<IEnumerator<byte[]>> sources,
         PantsScanDirection direction,
         TransactionMemoryPool memoryPool,
-        long reservedBytes)
+        long reservedBytes
+    )
     {
         _sources = sources;
         _heads = new byte[sources.Count][];
@@ -35,10 +36,12 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
     public bool MoveNext()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_exhausted)
         {
             return false;
         }
+
 
         for (var index = 0; index < _sources.Count; index++)
         {
@@ -53,6 +56,7 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
 
         _primed = true;
         byte[]? selected = null;
+
         foreach (var head in _heads)
         {
             if (head is null)
@@ -67,12 +71,14 @@ sealed class TransactionIntentKeyScan : IEnumerator<byte[]>
             }
 
             var comparison = ByteArrayComparer.Instance.Compare(head, selected);
+
             if ((_direction == PantsScanDirection.Forward && comparison < 0) ||
                 (_direction == PantsScanDirection.Reverse && comparison > 0))
             {
                 selected = head;
             }
         }
+
 
         if (selected is null)
         {

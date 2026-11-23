@@ -30,6 +30,7 @@ static class BenchmarkUnitParser
     static double Parse(string value, Dictionary<string, double> units, string kind)
     {
         var parts = value.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
         if (parts.Length != 2 ||
             !double.TryParse(parts[0], NumberStyles.Float | NumberStyles.AllowThousands,
                 CultureInfo.InvariantCulture, out var amount) ||
@@ -38,6 +39,7 @@ static class BenchmarkUnitParser
         {
             throw new InvalidDataException($"Invalid benchmark {kind} value '{value}'.");
         }
+
 
         return amount * multiplier;
     }

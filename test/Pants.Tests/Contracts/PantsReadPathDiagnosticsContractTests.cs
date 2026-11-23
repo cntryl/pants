@@ -36,6 +36,7 @@ public sealed class PantsReadPathDiagnosticsContractTests
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var observedReject = false;
+
         for (var index = 1; index < 399; index += 2)
         {
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -44,16 +45,19 @@ public sealed class PantsReadPathDiagnosticsContractTests
                 PantsTransactionMode.ReadOnly);
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"key-{index:0000}")));
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
+
             if (after.SstBloomRejectsTotal <= before.SstBloomRejectsTotal)
             {
                 continue;
             }
+
 
             Assert.True(after.SstBloomChecksTotal > before.SstBloomChecksTotal);
             Assert.Equal(before.SstDataBlocksReadTotal, after.SstDataBlocksReadTotal);
             observedReject = true;
             break;
         }
+
 
         Assert.True(observedReject);
     }

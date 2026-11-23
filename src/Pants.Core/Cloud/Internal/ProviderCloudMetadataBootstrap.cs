@@ -20,7 +20,8 @@ static class ProviderCloudMetadataBootstrap
         CloudMetadataWriteAdmission writeAdmission,
         DatabasePathLock cacheLock,
         Func<CancellationToken, ValueTask<ProviderCloudHydrationResult>> hydrateAsync,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
         var alreadyCommitted = false;
@@ -28,19 +29,23 @@ static class ProviderCloudMetadataBootstrap
         {
             var selected = await CloudMetadataAuthority.ReadCommittedFilesAsync(controlStore,
                 cancellationToken, readSet: reads).ConfigureAwait(false);
+
             if (selected is { Count: > 0 })
             {
                 alreadyCommitted = true;
             }
+
             if (selected is null)
             {
                 throw new PantsRecoveryFailedException("The cloud metadata claim disappeared before bootstrap.");
             }
         }
+
         if (alreadyCommitted)
         {
             return await hydrateAsync(cancellationToken).ConfigureAwait(false);
         }
+
 
         RequireEmptyCache(localRoot, cacheLock, cancellationToken);
         await FencePristineCatalogAsync(walStore, lease, budget, catalogReadAdmission, writeAdmission, cancellationToken)
@@ -62,34 +67,45 @@ static class ProviderCloudMetadataBootstrap
     static void RequireEmptyCache(string root, DatabasePathLock cacheLock, CancellationToken cancellationToken)
     {
         StoragePathGuard.EnsureTreeHasNoLinks(root);
+
         foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (cacheLock.OwnsCoordinationFile(root, path))
             {
                 continue;
             }
+
             throw new PantsRecoveryFailedException(
                 $"Local cache '{path}' contains state without a committed cloud metadata generation.");
         }
     }
 
-    static async ValueTask FencePristineCatalogAsync(ICloudObjectStore store, CloudLeaseCoordinator lease,
-        ResourceBudget budget, ProviderWalCatalogReadAdmission readAdmission, CloudMetadataWriteAdmission writeAdmission,
-        CancellationToken cancellationToken)
+    static async ValueTask FencePristineCatalogAsync(
+        ICloudObjectStore store,
+        CloudLeaseCoordinator lease,
+        ResourceBudget budget,
+        ProviderWalCatalogReadAdmission readAdmission,
+        CloudMetadataWriteAdmission writeAdmission,
+        CancellationToken cancellationToken
+    )
     {
         var catalogs = new ProviderWalCatalogStore(store,
             static bytes => ProviderCloudPersistence.DecodeCatalogForFloor(bytes.Span),
             lease.EnsureValid, lease.ValidateRemoteAsync, readAdmission, writeAdmission);
+
         for (var attempt = 0; attempt < MaximumFenceAttempts; attempt++)
         {
             using var read = await catalogs.ReadAsync(true, cancellationToken, repairCopies: false).ConfigureAwait(false);
             var catalog = read.Catalog;
+
             if (catalog is not null && (catalog.Segments.Count != 0 || !catalog.Anchor.Matches(WalChainLink.Genesis) ||
                 catalog.NextSegmentId != 1 || catalog.SequenceFloor != 0 || catalog.RetiredBy != 0))
             {
                 throw new PantsRecoveryFailedException("Cannot bootstrap empty cloud metadata over existing WAL state.");
             }
+
             if (catalog?.FencingEpoch > lease.Epoch)
             {
                 throw new PantsFencedException("The bootstrap WAL catalog belongs to a newer writer.");
@@ -101,6 +117,7 @@ static class ProviderCloudMetadataBootstrap
                 NextSegmentId = 1
             }, JsonOptions, "Cloud bootstrap WAL catalog fence");
             await lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+
             if (!await store.PutAsync(PantsCloudObjectLayout.WalCatalogObjectKey, bytes.Bytes,
                     read.Version is null ? new PantsCloudObjectWriteCondition.IfAbsent() :
                         new PantsCloudObjectWriteCondition.IfVersion(read.Version), cancellationToken).ConfigureAwait(false))
@@ -108,22 +125,31 @@ static class ProviderCloudMetadataBootstrap
                 continue;
             }
 
+
             using var confirmation = new ProviderCloudControlMetadataReadSet(store, budget);
             var confirmed = await confirmation.ReadAsync(PantsCloudObjectLayout.WalCatalogObjectKey, cancellationToken)
                 .ConfigureAwait(false);
             lease.EnsureValid();
+
             if (confirmed is null || !confirmed.Data.Span.SequenceEqual(bytes.Bytes.Span))
             {
                 throw new PantsLeaseIndeterminateException("The bootstrap WAL catalog fence was not confirmed.");
             }
+
             await catalogs.ConvergeMirrorAsync(bytes.Bytes, confirmed.Version, cancellationToken).ConfigureAwait(false);
             return;
         }
+
         throw new PantsBusyException("Cloud bootstrap WAL fencing exceeded its bounded CAS retries.");
     }
 
-    static async ValueTask FenceEmptyDdlRegistryAsync(ICloudObjectStore store, CloudLeaseCoordinator lease,
-        ResourceBudget budget, CloudMetadataWriteAdmission writeAdmission, CancellationToken cancellationToken)
+    static async ValueTask FenceEmptyDdlRegistryAsync(
+        ICloudObjectStore store,
+        CloudLeaseCoordinator lease,
+        ResourceBudget budget,
+        CloudMetadataWriteAdmission writeAdmission,
+        CancellationToken cancellationToken
+    )
     {
         for (var attempt = 0; attempt < MaximumFenceAttempts; attempt++)
         {
@@ -131,10 +157,12 @@ static class ProviderCloudMetadataBootstrap
             var current = await reads.ReadAsync(PantsCloudObjectLayout.DdlRegistryObjectKey, cancellationToken)
                 .ConfigureAwait(false);
             var registry = current is null ? new CloudDdlRegistry() : CloudDdlJson.DeserializeRegistry(current.Data.Span);
+
             if (registry.Epoch != 0 || registry.ColumnFamilies.Count != 0 || registry.Operations.Count != 0)
             {
                 throw new PantsRecoveryFailedException("Cannot bootstrap empty cloud metadata over existing DDL state.");
             }
+
             if (registry.WriterEpoch > lease.Epoch)
             {
                 throw new PantsFencedException("The bootstrap DDL registry belongs to a newer writer.");
@@ -143,6 +171,7 @@ static class ProviderCloudMetadataBootstrap
             registry.WriterEpoch = lease.Epoch;
             using var bytes = writeAdmission.Serialize(registry, CloudDdlJson.Options, "Cloud bootstrap DDL fence");
             await lease.ValidateRemoteAsync(cancellationToken).ConfigureAwait(false);
+
             if (!await store.PutAsync(PantsCloudObjectLayout.DdlRegistryObjectKey, bytes.Bytes,
                     current is null ? new PantsCloudObjectWriteCondition.IfAbsent() :
                         new PantsCloudObjectWriteCondition.IfVersion(current.Version), cancellationToken).ConfigureAwait(false))
@@ -150,40 +179,50 @@ static class ProviderCloudMetadataBootstrap
                 continue;
             }
 
+
             using var confirmation = new ProviderCloudControlMetadataReadSet(store, budget);
             var confirmed = await confirmation.ReadAsync(PantsCloudObjectLayout.DdlRegistryObjectKey, cancellationToken)
                 .ConfigureAwait(false);
             lease.EnsureValid();
+
             if (confirmed is null || !confirmed.Data.Span.SequenceEqual(bytes.Bytes.Span))
             {
                 throw new PantsLeaseIndeterminateException("The bootstrap DDL fence was not confirmed.");
             }
+
             return;
         }
+
         throw new PantsBusyException("Cloud bootstrap DDL fencing exceeded its bounded CAS retries.");
     }
 
     static async ValueTask RequireNoSstObjectsAsync(ICloudObjectStore store, CancellationToken cancellationToken)
     {
         string? continuation = null;
+
         for (var page = 0; page < MaximumInventoryPages; page++)
         {
             var listed = await store.ListPageAsync(PantsCloudObjectLayout.SstPrefix, continuation, cancellationToken)
                 .ConfigureAwait(false);
+
             if (listed.ObjectKeys.Count != 0)
             {
                 throw new PantsRecoveryFailedException("Cannot bootstrap empty cloud metadata over existing SST objects.");
             }
+
             if (listed.ContinuationToken is null)
             {
                 return;
             }
+
             if (listed.ContinuationToken == continuation)
             {
                 throw new PantsCorruptionException("The bootstrap SST inventory repeated its continuation token.");
             }
+
             continuation = listed.ContinuationToken;
         }
+
         throw new PantsResourceLimitException("The bootstrap SST inventory exceeded its bounded page allowance.");
     }
 }

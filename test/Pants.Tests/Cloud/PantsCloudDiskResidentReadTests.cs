@@ -310,10 +310,12 @@ public sealed class PantsCloudDiskResidentReadTests
                 await reader.GetAsync(TestBytes.FromString("snapshot-1")))));
 
         var rows = new List<string>();
+
         await foreach (var entry in scan)
         {
             rows.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.Equal(["snapshot-1", "snapshot-2"], rows);
     }
@@ -333,10 +335,12 @@ public sealed class PantsCloudDiskResidentReadTests
                 int.MaxValue))
             .WithBackgroundCompaction(false);
         await using var database = await PantsDatabase.OpenAsync(options);
+
         for (var generation = 0; generation < 6; generation++)
         {
             await CommitBookendedAndFlushAsync(database, $"value-{generation}");
         }
+
 
         await using (var writer = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -408,11 +412,13 @@ public sealed class PantsCloudDiskResidentReadTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var batch = 0; batch < 5; batch++)
         {
             Assert.Equal(Value(batch), (await reader.GetAsync(
                 TestBytes.FromString($"batch:{batch}")))?.ToArray());
         }
+
 
         Assert.DoesNotContain(
             LocalSsts(directory.Path),
@@ -468,6 +474,7 @@ public sealed class PantsCloudDiskResidentReadTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var batch = 0; batch < 4; batch++)
         {
             Assert.Equal(Value(batch), (await reader.GetAsync(
@@ -497,17 +504,21 @@ public sealed class PantsCloudDiskResidentReadTests
         }))
         {
             var actual = new List<string>();
+
             await foreach (var entry in scan)
             {
                 actual.Add(TestBytes.ToText(entry.Key));
             }
 
+
             var expected = Enumerable.Range(0, EntryCount)
                 .Select(static index => $"address:{index:D4}");
+
             if (direction == PantsScanDirection.Reverse)
             {
                 expected = expected.Reverse();
             }
+
 
             Assert.Equal(expected, actual);
         }
@@ -526,10 +537,12 @@ public sealed class PantsCloudDiskResidentReadTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < EntryCount; index++)
         {
             transaction.Put(Key(index), Value(index));
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -555,17 +568,20 @@ public sealed class PantsCloudDiskResidentReadTests
         IPantsDatabase database,
         string key,
         string value,
-        bool forceRewrite = false)
+        bool forceRewrite = false
+    )
     {
         await using var writer = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         writer.Put(TestBytes.FromString(key), TestBytes.FromString(value));
+
         if (forceRewrite)
         {
             // Overlap only empty keyspace so this fixture requires a physical rewrite.
             writer.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await writer.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }

@@ -20,7 +20,8 @@ static class UnixTimestamp
 
     internal static ulong? ExpirationFromTimeToLive(
         DateTimeOffset commitTime,
-        TimeSpan? timeToLive)
+        TimeSpan? timeToLive
+    )
     {
         if (timeToLive is null or { Ticks: 0 })
         {

@@ -14,14 +14,17 @@ sealed class RecoveryWorkRecorder(RecoveryWorkSink sink, string stage, TimeProvi
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         ArgumentOutOfRangeException.ThrowIfNegative(frames);
         ArgumentOutOfRangeException.ThrowIfNegative(operations);
+
         if (bytes == 0 && frames == 0 && operations == 0)
         {
             return;
         }
 
+
         _bytes = SaturatingAdd(_bytes, bytes);
         _frames = SaturatingAdd(_frames, frames);
         _operations = SaturatingAdd(_operations, operations);
+
         if (_bytes >= 64 * 1024 || _frames >= 64 || _operations >= 64 ||
             timeProvider.GetElapsedTime(_reportedAt) >= PartialReportInterval)
         {

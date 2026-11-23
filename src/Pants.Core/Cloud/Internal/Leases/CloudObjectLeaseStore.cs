@@ -21,23 +21,28 @@ sealed class CloudObjectLeaseStore(
     {
         var value = await _objectStore.GetAsync(_objectKey, cancellationToken)
             .ConfigureAwait(false);
+
         if (value is not null)
         {
             return new CloudLeaseSnapshot(Parse(value.Data.Span), value.Version);
         }
 
+
         var sentinel = await _objectStore.GetAsync(CloudMetadataAuthority.SentinelKey, cancellationToken).ConfigureAwait(false);
+
         if (sentinel?.Data.Span.SequenceEqual("midge cloud metadata authority v3 initialized\n"u8) == true)
         {
             throw new PantsCorruptionException("Initialized cloud metadata has lost its primary lease.");
         }
+
 
         return null;
     }
 
     public ValueTask<bool> TryCreateAsync(
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _objectStore.PutAsync(
             _objectKey,
             Serialize(lease),
@@ -47,7 +52,8 @@ sealed class CloudObjectLeaseStore(
     public ValueTask<bool> TryReplaceAsync(
         string expectedVersion,
         CloudLeaseRecord lease,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         _objectStore.PutAsync(
             _objectKey,
             Serialize(lease),
@@ -87,6 +93,7 @@ sealed class CloudObjectLeaseStore(
     static CloudLeaseRecord Parse(ReadOnlySpan<byte> bytes)
     {
         string text;
+
         try
         {
             text = StrictUtf8.GetString(bytes);
@@ -96,6 +103,7 @@ sealed class CloudObjectLeaseStore(
             throw new PantsLeaseIndeterminateException("The cloud primary lease is not valid UTF-8.", exception);
         }
 
+
         if (!text.EndsWith('\n') || text.Contains('\r'))
         {
             throw new PantsLeaseIndeterminateException("The cloud primary lease requires LF-terminated fields.");
@@ -103,15 +111,18 @@ sealed class CloudObjectLeaseStore(
 
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         var known = new HashSet<string>(["lease_version", "fencing_epoch", "holder", "owner", "acquired", "expires"], StringComparer.Ordinal);
+
         foreach (var line in text[..^1].Split('\n'))
         {
             var separator = line.IndexOf(": ", StringComparison.Ordinal);
+
             if (separator <= 0 || !known.Contains(line[..separator]) ||
                 !fields.TryAdd(line[..separator], line[(separator + 2)..]))
             {
                 throw new PantsLeaseIndeterminateException("The cloud primary lease has an unknown or duplicate field.");
             }
         }
+
 
         if (fields.Count != known.Count)
         {
@@ -138,11 +149,13 @@ sealed class CloudObjectLeaseStore(
     {
         timestamp = default;
         var value = text.AsSpan();
+
         if (value.Length < 20 || value[4] != '-' || value[7] != '-' || value[10] is not ('T' or 't' or ' ') ||
             value[13] != ':' || value[16] != ':')
         {
             return false;
         }
+
 
         for (var index = 0; index < 19; index++)
         {
@@ -153,13 +166,16 @@ sealed class CloudObjectLeaseStore(
         }
 
         var cursor = 19;
+
         if (value[cursor] == '.')
         {
             var firstFractionDigit = ++cursor;
+
             while (cursor < value.Length && char.IsAsciiDigit(value[cursor]))
             {
                 cursor++;
             }
+
 
             if (cursor == firstFractionDigit)
             {
@@ -167,7 +183,9 @@ sealed class CloudObjectLeaseStore(
             }
         }
 
+
         var offsetMinutes = 0;
+
         if (!(cursor == value.Length - 1 && value[cursor] is 'Z' or 'z'))
         {
             if (cursor != value.Length - 6 || value[cursor] is not ('+' or '-') || value[cursor + 3] != ':' ||
@@ -179,32 +197,39 @@ sealed class CloudObjectLeaseStore(
 
             var hours = (value[cursor + 1] - '0') * 10 + value[cursor + 2] - '0';
             var minutes = (value[cursor + 4] - '0') * 10 + value[cursor + 5] - '0';
+
             if (hours > 23 || minutes > 59)
             {
                 return false;
             }
+
 
             offsetMinutes = (hours * 60 + minutes) * (value[cursor] == '+' ? 1 : -1);
         }
 
         // Parse the calendar/fraction as UTC, then apply the RFC offset. This retains nanosecond
         // fractional syntax and offsets beyond DateTimeOffset's native fourteen-hour range.
+
         var leapSecond = value[17] == '6' && value[18] == '0';
         var calendar = leapSecond
             ? string.Concat(value[..17], "59", value.Slice(19, cursor - 19), "Z")
             : string.Concat(value[..cursor], "Z");
+
         if (!DateTimeOffset.TryParse(calendar, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
         {
             return false;
         }
 
+
         try
         {
             timestamp = parsed.AddMinutes(-offsetMinutes);
+
             if (leapSecond)
             {
                 timestamp = timestamp.AddSeconds(1);
             }
+
             return true;
         }
         catch (ArgumentOutOfRangeException)

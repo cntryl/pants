@@ -90,10 +90,12 @@ public sealed class ProviderCloudEngineTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var keys = new List<string>();
+
         await foreach (var entry in scan)
         {
             keys.Add(TestBytes.ToText(entry.Key));
         }
+
 
         Assert.Equal(["a", "b"], keys);
     }
@@ -123,7 +125,8 @@ public sealed class ProviderCloudEngineTests
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
         string key,
-        string value)
+        string value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
@@ -138,7 +141,8 @@ public sealed class ProviderCloudEngineTests
     static async ValueTask<string?> GetAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,

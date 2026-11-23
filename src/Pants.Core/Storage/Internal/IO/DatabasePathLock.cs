@@ -25,9 +25,11 @@ sealed class DatabasePathLock : IDisposable
         StoragePathGuard.EnsureTreeHasNoLinks(root);
         var path = Path.Combine(root, "LOCK");
         StoragePathGuard.EnsureNotLink(path);
+
         try
         {
             var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
             try
             {
                 var result = new DatabasePathLock(root, stream);
@@ -58,8 +60,10 @@ sealed class DatabasePathLock : IDisposable
         {
             throw new PantsInternalException("The startup database exclusion was already transferred or released.");
         }
+
         var path = Path.Combine(StoragePathGuard.CanonicalizeRoot(root ?? _root), "LOCK");
         StoragePathGuard.EnsureNotLink(path);
+
         if (_identity != ReadIdentity(path))
         {
             throw new PantsInvalidPathException("The database cache directory or its coordination file changed during startup.");
@@ -82,13 +86,17 @@ sealed class DatabasePathLock : IDisposable
             // Zero requested access queries identity without conflicting with our own exclusive
             // data handle. This handle never admits a second writer.
             using var handle = OpenWindowsIdentity(path, 0, 7, 0, 3, 0x00200000, 0);
+
             if (handle.IsInvalid)
             {
                 throw new PantsInvalidPathException("The startup coordination file is no longer accessible.");
             }
+
             return ReadIdentity(handle);
         }
+
         var nativePath = Marshal.StringToCoTaskMemUTF8(path);
+
         try
         {
             var result = OperatingSystem.IsMacOS() ? StatMac(nativePath, out var information) : StatLinux(nativePath, out information);
@@ -108,8 +116,10 @@ sealed class DatabasePathLock : IDisposable
             {
                 throw new PantsInvalidPathException("The startup coordination file identity could not be read.");
             }
+
             return new FileIdentity(identity.Volume, identity.Low, identity.High);
         }
+
         var descriptor = handle.DangerousGetHandle().ToInt32();
         var result = OperatingSystem.IsMacOS() ? FStatMac(descriptor, out var information) : FStatLinux(descriptor, out information);
         return ReadUnixIdentity(result, information);
@@ -158,11 +168,22 @@ sealed class DatabasePathLock : IDisposable
     static extern int FStatLinux(int descriptor, out UnixFileInformation information);
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
-    static extern SafeFileHandle OpenWindowsIdentity(string path, uint access, uint share, nint security,
-        uint disposition, uint flags, nint template);
+    static extern SafeFileHandle OpenWindowsIdentity(
+        string path,
+        uint access,
+        uint share,
+        nint security,
+        uint disposition,
+        uint flags,
+        nint template
+    );
 
     [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool GetWindowsIdentity(SafeFileHandle handle, int informationClass,
-        out WindowsFileIdentity information, uint size);
+    static extern bool GetWindowsIdentity(
+        SafeFileHandle handle,
+        int informationClass,
+        out WindowsFileIdentity information,
+        uint size
+    );
 }

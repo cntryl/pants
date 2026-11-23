@@ -18,7 +18,8 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         Func<CancellationToken, ValueTask<IAsyncEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
         Func<ValueTask> releaseSnapshot,
-        Action? validateReadAuthority = null)
+        Action? validateReadAuthority = null
+    )
     {
         _entriesFactory = entriesFactory ?? throw new ArgumentNullException(nameof(entriesFactory));
         _releaseSnapshot = releaseSnapshot ?? throw new ArgumentNullException(nameof(releaseSnapshot));
@@ -31,7 +32,8 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         Func<CancellationToken, ValueTask<IEnumerator<PantsEntry>>> entriesFactory,
         PantsScanQuery query,
         Func<ValueTask> releaseSnapshot,
-        Action? validateReadAuthority = null)
+        Action? validateReadAuthority = null
+    )
         : this(
             async cancellationToken => new SyncAsyncEnumerator(
                 await entriesFactory(cancellationToken).ConfigureAwait(false)),
@@ -90,10 +92,12 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         {
             State = PantsIteratorState.Exhausted;
             Current = default;
+
             if (_entries is not null)
             {
                 await _entries.DisposeAsync().ConfigureAwait(false);
             }
+
 
             _entries = null;
         }
@@ -106,6 +110,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         try
         {
             _validateReadAuthority?.Invoke();
+
             try
             {
                 return await ReadNextAsync().ConfigureAwait(false);
@@ -120,6 +125,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         catch (Exception exception)
         {
             await FailAsync(exception).ConfigureAwait(false);
+
             try
             {
                 await ReleaseSnapshotAsync().ConfigureAwait(false);
@@ -129,6 +135,7 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
                 // Preserve the first terminal failure.
             }
 
+
             throw;
         }
     }
@@ -136,26 +143,32 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     async ValueTask<bool> ReadNextAsync()
     {
         _cancellationToken.ThrowIfCancellationRequested();
+
         if (_emitted >= _bounds.Limit)
         {
             await ExhaustAsync().ConfigureAwait(false);
             return false;
         }
 
+
         await EnsureEntriesInitializedAsync().ConfigureAwait(false);
+
         while (await _entries!.MoveNextAsync().ConfigureAwait(false))
         {
             var candidate = _entries.Current;
             var key = candidate.Key.Span;
+
             if (!_bounds.Matches(key))
             {
                 continue;
             }
 
+
             Current = new PantsEntry(candidate.Key.ToArray(), candidate.Value.ToArray());
             _emitted++;
             return true;
         }
+
 
         await ExhaustAsync().ConfigureAwait(false);
         return false;
@@ -178,10 +191,12 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
     {
         State = PantsIteratorState.Exhausted;
         Current = default;
+
         if (_entries is not null)
         {
             await _entries.DisposeAsync().ConfigureAwait(false);
         }
+
 
         _entries = null;
         await ReleaseSnapshotAsync().ConfigureAwait(false);
@@ -192,10 +207,12 @@ sealed class ScanInstance : IPantsScan, IAsyncEnumerator<PantsEntry>
         _failure ??= exception;
         State = PantsIteratorState.Failed;
         Current = default;
+
         if (_entries is not null)
         {
             await _entries.DisposeAsync().ConfigureAwait(false);
         }
+
 
         _entries = null;
     }

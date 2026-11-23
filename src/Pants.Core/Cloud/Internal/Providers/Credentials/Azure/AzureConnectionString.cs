@@ -35,6 +35,7 @@ sealed class AzureConnectionString
                 static pair => pair[0].Trim(),
                 static pair => pair[1].Trim(),
                 StringComparer.OrdinalIgnoreCase);
+
         if (fields.GetValueOrDefault("UseDevelopmentStorage")
                 ?.Equals("true", StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -48,7 +49,9 @@ sealed class AzureConnectionString
             };
         }
 
+
         Uri? blobEndpoint = null;
+
         if (fields.GetValueOrDefault("BlobEndpoint") is { Length: > 0 } endpoint)
         {
             if (!Uri.TryCreate(endpoint.TrimEnd('/'), UriKind.Absolute, out blobEndpoint))
@@ -57,6 +60,7 @@ sealed class AzureConnectionString
                     "Azure Storage connection-string BlobEndpoint is invalid.");
             }
         }
+
 
         return new AzureConnectionString
         {

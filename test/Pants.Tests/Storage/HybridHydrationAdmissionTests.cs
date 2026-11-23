@@ -134,6 +134,7 @@ public sealed class HybridHydrationAdmissionTests
 
         var eviction = Task.Run(async () =>
             await manager.EvictIfNeededAsync(store, CancellationToken.None));
+
         try
         {
             await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
@@ -147,6 +148,7 @@ public sealed class HybridHydrationAdmissionTests
         {
             failpoints.Release();
         }
+
 
         await eviction;
 
@@ -203,7 +205,8 @@ public sealed class HybridHydrationAdmissionTests
 
         public ValueTask VerifyRemoteSstMatchesLocalAsync(
             string name,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public void EvictLocalSst(string name)
         {

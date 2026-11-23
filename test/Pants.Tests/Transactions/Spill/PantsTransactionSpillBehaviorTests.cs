@@ -35,6 +35,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var pair in expected)
         {
             var value = await reader.GetAsync(TestBytes.FromString(pair.Key));
@@ -75,6 +76,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 500; index++)
         {
             var key = $"big_key{index:0000}";
@@ -119,6 +121,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var pair in expected)
         {
             var value = await reader.GetAsync(TestBytes.FromString(pair.Key));
@@ -161,11 +164,13 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var scan = await reader.ScanAsync(new PantsScanQuery());
         var actual = new List<string>();
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             actual.Add(TestBytes.ToText(entry.Key));
             entries.Add(entry);
         }
+
 
         var expected = Enumerable.Range(0, 200)
             .Select(static index => $"order_test_{index:0000}")
@@ -203,6 +208,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 200; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"rollback_test_{index:0000}")));
@@ -251,6 +257,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 300; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"spill_cleanup_{index:0000}")));
@@ -294,6 +301,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 300; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"uncom_spill_{index:0000}")));
@@ -314,12 +322,14 @@ public sealed class PantsTransactionSpillBehaviorTests
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 300; index++)
             {
                 transaction.Put(
                     TestBytes.FromString($"com_spill_{index:0000}"),
                     "value"u8.ToArray());
             }
+
 
             Assert.NotEmpty(TransactionSpillTestHarness.FindArtifacts(directory.Path));
             await transaction.CommitAsync(TransactionSpillTestHarness.GetSyncWriteOptions(mode));
@@ -334,6 +344,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 300; index++)
         {
             Assert.Equal(
@@ -365,6 +376,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         {
             var round = 0;
             var firstSpill = true;
+
             while (Volatile.Read(ref stopBackground) == 0)
             {
                 var commitSucceeded = false;
@@ -380,12 +392,14 @@ public sealed class PantsTransactionSpillBehaviorTests
                     }
 
                     Assert.NotEmpty(TransactionSpillTestHarness.FindArtifacts(directory.Path));
+
                     if (firstSpill)
                     {
                         firstSpill = false;
                         stagedFirstSpill.TrySetResult();
                         await releaseFirstSpill.Task.WaitAsync(TestTimeouts.Expected);
                     }
+
 
                     try
                     {
@@ -413,18 +427,22 @@ public sealed class PantsTransactionSpillBehaviorTests
         var background = Task.Run(RunBackgroundSpillsAsync);
         var maximumElapsed = TimeSpan.FromSeconds(30);
         var started = System.Diagnostics.Stopwatch.StartNew();
+
         try
         {
             await stagedFirstSpill.Task.WaitAsync(TestTimeouts.Expected);
+
             for (var index = 0; index < 50; index++)
             {
                 var key = $"foreground_{index:0000}";
+
                 while (true)
                 {
                     await using var foreground = await database.Transactions.BeginAsync(
                         database.ColumnFamilies.DefaultFamily,
                         PantsTransactionMode.ReadWrite);
                     foreground.Put(TestBytes.FromString(key), "works"u8.ToArray());
+
                     try
                     {
                         await foreground.CommitAsync(TransactionSpillTestHarness.GetWriteOptions(mode));
@@ -438,7 +456,9 @@ public sealed class PantsTransactionSpillBehaviorTests
                     }
                 }
 
+
                 Assert.True(started.Elapsed < maximumElapsed, $"Foreground write {index} starved.");
+
                 if (index == 0)
                 {
                     releaseFirstSpill.TrySetResult();
@@ -452,6 +472,7 @@ public sealed class PantsTransactionSpillBehaviorTests
             await background.WaitAsync(TestTimeouts.Expected);
         }
 
+
         var elapsed = started.Elapsed;
         Assert.True(elapsed < maximumElapsed, $"Foreground writes starved after {elapsed}.");
         Assert.True(Volatile.Read(ref backgroundCommits) > 0);
@@ -459,11 +480,13 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 50; index++)
         {
             Assert.Equal("works", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                 await reader.GetAsync(TestBytes.FromString($"foreground_{index:0000}")))));
         }
+
 
         for (var round = 0; round < Volatile.Read(ref backgroundCommits); round++)
         {
@@ -499,18 +522,22 @@ public sealed class PantsTransactionSpillBehaviorTests
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             if (Interlocked.Increment(ref readyCount) == 2)
             {
                 ready.TrySetResult();
             }
 
+
             await start.Task.WaitAsync(TestTimeouts.Expected);
+
             for (var index = 0; index < 200; index++)
             {
                 transaction.Put(
                     TestBytes.FromString($"{prefix}_key_{index:0000}"),
                     TestBytes.FromString($"{prefix}_value"));
             }
+
 
             Assert.NotEmpty(TransactionSpillTestHarness.FindArtifacts(directory.Path));
 
@@ -535,6 +562,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 200; index++)
         {
             Assert.Equal("t1_value", TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
@@ -573,6 +601,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 20; index++)
         {
             Assert.Equal(
@@ -594,6 +623,7 @@ public sealed class PantsTransactionSpillBehaviorTests
             directory.Path,
             transactionMemoryPoolBytes: 8 * 1_024);
         var expected = new Dictionary<string, byte[]>();
+
         for (var index = 0; index < 100; index++)
         {
             var value = (index % 3) switch
@@ -604,6 +634,7 @@ public sealed class PantsTransactionSpillBehaviorTests
             };
             expected[$"mixed_{index:0000}"] = value;
         }
+
 
         await using (var transaction = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,
@@ -621,6 +652,7 @@ public sealed class PantsTransactionSpillBehaviorTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var pair in expected)
         {
             var value = await reader.GetAsync(TestBytes.FromString(pair.Key));

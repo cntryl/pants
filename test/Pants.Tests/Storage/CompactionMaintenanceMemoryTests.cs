@@ -28,12 +28,14 @@ public sealed class CompactionMaintenanceMemoryTests
                 await using var transaction = await database.Transactions.BeginAsync(
                     database.ColumnFamilies.DefaultFamily,
                     PantsTransactionMode.ReadWrite);
+
                 for (var key = 0; key < 2; key++)
                 {
                     transaction.Put(
                         TestBytes.FromString($"lease-{batch}-{key}"),
                         new byte[512]);
                 }
+
 
                 await transaction.CommitAsync(PantsWriteOptions.Sync);
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -151,6 +153,7 @@ public sealed class CompactionMaintenanceMemoryTests
         await using var database = await PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(root).WithBackgroundCompaction(false));
         var family = database.ColumnFamilies.DefaultFamily;
+
         for (var flush = 0; flush < 4; flush++)
         {
             await using (var transaction = await database.Transactions.BeginAsync(

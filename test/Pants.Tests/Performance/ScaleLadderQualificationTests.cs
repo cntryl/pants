@@ -86,7 +86,8 @@ public sealed class ScaleLadderQualificationTests
     [InlineData(false, false)]
     public void ShouldFailQualificationWhenAnyRecoveryCheckFails(
         bool reopenCorrect,
-        bool crashRecoveryPassed) =>
+        bool crashRecoveryPassed
+    ) =>
         Assert.Equal(1, ScaleLadderRunner.ExitCodeFor(reopenCorrect, crashRecoveryPassed));
 
     [Fact]
@@ -102,10 +103,12 @@ public sealed class ScaleLadderQualificationTests
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             foreach (var mutation in ScaleLadderRunner.CreateMutationsForRecord(0))
             {
                 transaction.Put(mutation.Key, mutation.Value);
             }
+
 
             await transaction.CommitAsync(PantsWriteOptions.Sync);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);

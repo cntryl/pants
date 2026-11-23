@@ -73,10 +73,12 @@ public sealed class PantsHybridStorageTests
             .WithMemtableLimits(4L * 1024 * 1024);
         await using var database = await PantsDatabase.OpenAsync(options);
         var families = new List<IPantsColumnFamily>();
+
         for (var index = 0; index < 4; index++)
         {
             families.Add(await database.ColumnFamilies.CreateAsync($"small-{index}"));
         }
+
 
         for (var index = 0; index < families.Count; index++)
         {
@@ -85,6 +87,7 @@ public sealed class PantsHybridStorageTests
                 families[index],
                 $"key-{index}",
                 CreateValue(64 * 1024, 160 + index));
+
             if (index < families.Count - 1)
             {
                 Assert.Empty(LocalSsts(directory.Path));
@@ -92,6 +95,7 @@ public sealed class PantsHybridStorageTests
         }
 
         Assert.Equal(families.Count, LocalSsts(directory.Path).Length);
+
         for (var index = 0; index < families.Count; index++)
         {
             await using var reader = await database.Transactions.BeginAsync(
@@ -160,6 +164,7 @@ public sealed class PantsHybridStorageTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path),
             new RuntimeDependencies(failpoints));
+
         try
         {
             await SeedSstsAsync(database, "pressure", 12, 24 * 1024, 101);
@@ -577,10 +582,12 @@ public sealed class PantsHybridStorageTests
                 await snapshot.GetAsync("pressure"u8.ToArray())).Length);
         await snapshot.DisposeAsync();
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
+
         for (var index = 0; index < 5; index++)
         {
             await PutAsync(database, $"resumed-{index}", "value"u8.ToArray());
         }
+
 
         Assert.Equal(0, (await database.Diagnostics.GetRuntimeMetricsAsync()).NoSpaceEvents);
     }
@@ -914,15 +921,18 @@ public sealed class PantsHybridStorageTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(directory.Path, 900 * 1024),
             new RuntimeDependencies(failpoints));
+
         for (var index = 0; index < 13; index++)
         {
             await PutAsync(database, $"seed-{index}", CreateValue(64 * 1024, 79 + index));
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
+
         failpoints.Arm();
         var write = PutAsync(database, "cross-high", CreateValue(96 * 1024, 89)).AsTask();
         var localSstsBeforeAdmission = LocalSsts(directory.Path);
+
         try
         {
             await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
@@ -932,6 +942,7 @@ public sealed class PantsHybridStorageTests
         {
             failpoints.Release();
         }
+
 
         await write;
         var localSstsAfterAdmission = LocalSsts(directory.Path);
@@ -959,6 +970,7 @@ public sealed class PantsHybridStorageTests
                     L0FileCountTrigger: 32,
                     BackgroundEnabled: false)));
         var sawPartialEviction = false;
+
         for (var index = 0; index < 20; index++)
         {
             await PutAsync(database, $"burst-{index}", CreateValue(32 * 1024, 97 + index));
@@ -970,6 +982,7 @@ public sealed class PantsHybridStorageTests
             Assert.True(metrics.HybridUsagePercent < 130);
             Assert.Equal(0, metrics.HybridPendingEvictions);
         }
+
 
         Assert.True(sawPartialEviction);
     }
@@ -1002,6 +1015,7 @@ public sealed class PantsHybridStorageTests
 
             var remoteBytesAfterFlush = CloudSsts(directory.Path)
                 .Sum(static path => new FileInfo(path).Length);
+
             if (remoteBytesAfterFlush > budgetBytes && index < 11)
             {
                 writesContinuedAfterRemoteExceededBudget = true;
@@ -1017,6 +1031,7 @@ public sealed class PantsHybridStorageTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         foreach (var (key, value) in expectedValues)
         {
             Assert.Equal(
@@ -1036,7 +1051,8 @@ public sealed class PantsHybridStorageTests
         string keyPrefix,
         int count,
         int valueBytes,
-        int seedStart)
+        int seedStart
+    )
     {
         for (var index = 0; index < count; index++)
         {
@@ -1050,13 +1066,15 @@ public sealed class PantsHybridStorageTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        long budgetBytes = LocalBudgetBytes) =>
+        long budgetBytes = LocalBudgetBytes
+    ) =>
         PantsDatabase.OpenAsync(CreateOptions(path, budgetBytes));
 
     static async ValueTask PutAsync(
         IPantsDatabase database,
         string key,
-        ReadOnlyMemory<byte> value)
+        ReadOnlyMemory<byte> value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -1069,7 +1087,8 @@ public sealed class PantsHybridStorageTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        ReadOnlyMemory<byte> value)
+        ReadOnlyMemory<byte> value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -1102,7 +1121,8 @@ public sealed class PantsHybridStorageTests
         RuntimeState state,
         long transactionId,
         string key,
-        byte[] value)
+        byte[] value
+    )
     {
         var operation = new TransactionIntentOperation(
             0,
@@ -1134,7 +1154,8 @@ public sealed class PantsHybridStorageTests
         RuntimeState state,
         long transactionId,
         string key,
-        byte[] value)
+        byte[] value
+    )
     {
         var spillStore = new TransactionSpillStore(directory, transactionId, DefaultFamily);
         spillStore.WriteRun(
@@ -1193,7 +1214,8 @@ public sealed class PantsHybridStorageTests
 
         public ValueTask VerifyRemoteSstMatchesLocalAsync(
             string name,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public void EvictLocalSst(string name)
         {

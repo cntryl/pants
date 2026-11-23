@@ -9,13 +9,16 @@ static class CompactionDebt
     public static bool IsClear(
         IReadOnlyList<FileMeta> files,
         uint columnFamilyId,
-        PantsCompactionConfiguration configuration)
+        PantsCompactionConfiguration configuration
+    )
     {
         var familyFiles = files.Where(file => file.ColumnFamilyId == columnFamilyId).ToArray();
+
         if (familyFiles.Any(static file => file.Level == 0))
         {
             return false;
         }
+
 
         for (uint level = 1; level < configuration.MaximumLevels; level++)
         {
@@ -31,6 +34,7 @@ static class CompactionDebt
             var levelSize = familyFiles
                 .Where(file => file.Level == level)
                 .Aggregate(0UL, static (total, file) => checked(total + file.SizeBytes));
+
             if (levelSize > LeveledCompactionPlanner.LevelTargetBytes(configuration, level))
             {
                 return false;

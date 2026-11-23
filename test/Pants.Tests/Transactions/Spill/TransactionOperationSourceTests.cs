@@ -325,7 +325,8 @@ public sealed class TransactionOperationSourceTests
         byte[] bytes,
         int nodeIndex,
         ulong left,
-        ulong right)
+        ulong right
+    )
     {
         var frameOffset = GetRangeNodeOffset(bytes, nodeIndex);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(frameOffset + 16), left);

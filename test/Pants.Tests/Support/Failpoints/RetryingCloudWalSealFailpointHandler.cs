@@ -22,10 +22,12 @@ sealed class RetryingCloudWalSealFailpointHandler : IFailpointHandler
 
         var attempt = Interlocked.Increment(ref _attempts);
         _failureObserved.TrySetResult();
+
         if (attempt > 1)
         {
             _retryObserved.TrySetResult();
         }
+
 
         if (Volatile.Read(ref _failuresEnabled) != 0)
         {

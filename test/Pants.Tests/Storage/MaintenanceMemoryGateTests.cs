@@ -68,7 +68,8 @@ public sealed class MaintenanceMemoryGateTests
     static async Task CycleCompactionRoundsAsync(
         MaintenanceMemoryGate gate,
         ResourceBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {

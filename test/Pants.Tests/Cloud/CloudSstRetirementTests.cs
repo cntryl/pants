@@ -14,10 +14,12 @@ public sealed class CloudSstRetirementTests
         var store = new ScriptedCloudObjectStore();
         var bytes = SstCodec.Encode([new SstEntry("key"u8.ToArray(), "value"u8.ToArray(), 1, null, false)], [], PantsPerformanceGoal.Latency);
         var retired = CreateIdentity(bytes);
+
         if (!alreadyAbsent)
         {
             store.Write(PantsCloudObjectLayout.SstPrefix + Name, bytes);
         }
+
 
         var acknowledgements = 0;
         var budget = new ResourceBudget(256 * 1024);
@@ -153,6 +155,7 @@ public sealed class CloudSstRetirementTests
         Assert.DoesNotContain(store.Requests, static request => request.Operation == StoreOperation.Delete);
 
         Assert.Equal(identities.Count, acknowledgements.Select(static acknowledgement => acknowledgement.Identity.Name).Distinct(StringComparer.Ordinal).Count());
+
         foreach (var (name, expected) in identities)
         {
             var acknowledged = Assert.Single(acknowledgements, acknowledgement => acknowledgement.Identity.Name == name);
@@ -173,7 +176,12 @@ public sealed class CloudSstRetirementTests
     };
 
     static CloudSstGarbageCollector CreateCollector(
-        ICloudObjectStore store, FileMeta retired, ResourceBudget budget, Func<bool> eligible, Action<FileMeta> acknowledge) => new(
+        ICloudObjectStore store,
+        FileMeta retired,
+        ResourceBudget budget,
+        Func<bool> eligible,
+        Action<FileMeta> acknowledge
+    ) => new(
         store,
         _ => ValueTask.FromResult(new CloudSstRetentionProof(
             new HashSet<string>(StringComparer.Ordinal), new Dictionary<string, string>(), new Dictionary<uint, ulong>(), [],

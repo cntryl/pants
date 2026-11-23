@@ -27,11 +27,13 @@ static class CompactionLayout
         var activeGroups = new SortedDictionary<byte[], EndpointGroup>(ByteArrayComparer.Instance);
         var activeCount = 0;
         var found = false;
+
         foreach (var index in order)
         {
             var file = files[index];
             var start = file.SmallestKey!;
             var end = file.LargestKey!;
+
             while (activeEndpoints.Count != 0 &&
                    ByteArrayComparer.Instance.Compare(activeEndpoints.Min!, start) < 0)
             {
@@ -41,9 +43,11 @@ static class CompactionLayout
                 activeGroups.Remove(expiredEnd);
             }
 
+
             if (activeEndpoints.Count != 0)
             {
                 var furthestEnd = activeEndpoints.Max!;
+
                 if (ByteArrayComparer.Instance.Compare(furthestEnd, start) > 0)
                 {
                     Connect(parents, index, activeGroups[furthestEnd].Representatives[0]);
@@ -73,6 +77,7 @@ static class CompactionLayout
 
             group.Count++;
             activeCount++;
+
             if (group.Count <= 2)
             {
                 group.Representatives.Add(index);
@@ -89,23 +94,28 @@ static class CompactionLayout
             }
         }
 
+
         if (!found)
         {
             return [];
         }
 
         var groups = new Dictionary<int, List<FileMeta>>();
+
         foreach (var index in order)
         {
             var root = FindRoot(parents, index);
+
             if (!groups.TryGetValue(root, out var component))
             {
                 component = [];
                 groups.Add(root, component);
             }
 
+
             component.Add(files[index]);
         }
+
 
         return groups.Values
             .Where(static component => component.Count > 1)
@@ -129,6 +139,7 @@ static class CompactionLayout
     {
         var leftRoot = FindRoot(parents, left);
         var rightRoot = FindRoot(parents, right);
+
         if (leftRoot != rightRoot)
         {
             parents[rightRoot] = leftRoot;
@@ -138,10 +149,12 @@ static class CompactionLayout
     static int CompareFiles(FileMeta left, FileMeta right)
     {
         var comparison = ByteArrayComparer.Instance.Compare(left.SmallestKey, right.SmallestKey);
+
         if (comparison != 0)
         {
             return comparison;
         }
+
 
         comparison = ByteArrayComparer.Instance.Compare(left.LargestKey, right.LargestKey);
         return comparison != 0

@@ -40,6 +40,7 @@ public sealed class PantsRecoveryCompletedWorkTests
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             var family = await database.ColumnFamilies.CreateAsync("records");
+
             for (var index = 0; index < 32; index++)
             {
                 await using var transaction = await database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
@@ -71,11 +72,13 @@ public sealed class PantsRecoveryCompletedWorkTests
         await using var recovered = await PantsDatabase.OpenAsync(options);
         var recoveredFamily = Assert.IsAssignableFrom<IPantsColumnFamily>(await recovered.ColumnFamilies.GetAsync("records"));
         await using var reader = await recovered.Transactions.BeginAsync(recoveredFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 32; index++)
         {
             Assert.Equal(TestBytes.FromString($"value-{index}"),
                 (await reader.GetAsync(TestBytes.FromString($"key-{index}")))?.ToArray());
         }
+
 
         Assert.True(measurements["pants.recovery.completed_bytes"] > 0);
         Assert.True(measurements["pants.recovery.completed_frames"] > 0);

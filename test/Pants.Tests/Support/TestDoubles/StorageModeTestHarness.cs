@@ -18,7 +18,8 @@ static class StorageModeTestHarness
         IPantsDatabase database,
         string mode,
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte> value)
+        ReadOnlyMemory<byte> value
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -31,12 +32,14 @@ static class StorageModeTestHarness
         IPantsDatabase database,
         string mode,
         string key,
-        string value) =>
+        string value
+    ) =>
         await PutAsync(database, mode, TestBytes.FromString(key), TestBytes.FromString(value));
 
     public static async Task<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

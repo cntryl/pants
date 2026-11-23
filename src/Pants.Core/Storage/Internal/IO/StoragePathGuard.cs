@@ -25,6 +25,7 @@ static class StoragePathGuard
     public static string CanonicalizeRoot(string root)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
+
         try
         {
             var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
@@ -34,11 +35,13 @@ static class StoragePathGuard
             var components = fullPath[volumeRoot.Length..].Split(
                 [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                 StringSplitOptions.RemoveEmptyEntries);
+
             foreach (var component in components)
             {
                 var candidate = Path.Combine(current, component);
                 var entry = new DirectoryInfo(candidate);
                 string? linkTarget;
+
                 try
                 {
                     linkTarget = entry.LinkTarget;
@@ -48,6 +51,7 @@ static class StoragePathGuard
                 {
                     linkTarget = null;
                 }
+
 
                 if (linkTarget is null)
                 {
@@ -59,6 +63,7 @@ static class StoragePathGuard
                              throw new IOException($"Storage root link '{candidate}' could not be resolved.");
                 current = Path.GetFullPath(target.FullName);
             }
+
 
             return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
         }
@@ -108,10 +113,12 @@ static class StoragePathGuard
     public static void EnsureTreeHasNoLinks(string root)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
+
         if (!Directory.Exists(root))
         {
             return;
         }
+
 
         var links = new FileSystemEnumerable<string>(
             root,
@@ -127,6 +134,7 @@ static class StoragePathGuard
             ShouldRecursePredicate = static (ref entry) =>
                 entry.IsDirectory && !IsLink(entry.Attributes)
         };
+
         foreach (var link in links)
         {
             throw CreateException(link);
@@ -139,17 +147,21 @@ static class StoragePathGuard
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var trustedRoot = FindTrustedRoot(fullPath);
+
         if (trustedRoot is not null)
         {
             EnsureNoLinkedComponentBelowRoot(fullPath, trustedRoot);
             return;
         }
 
+
         var parent = Path.GetDirectoryName(fullPath);
+
         if (parent is not null)
         {
             EnsureNotLinkEntry(parent);
         }
+
 
         EnsureNotLinkEntry(fullPath);
     }
@@ -157,19 +169,23 @@ static class StoragePathGuard
     static string? FindTrustedRoot(string path)
     {
         string? match = null;
+
         foreach (var root in TrustedRoots.Keys)
         {
             var relative = Path.GetRelativePath(root, path);
+
             if (Path.IsPathRooted(relative) || IsParentPath(relative))
             {
                 continue;
             }
+
 
             if (match is null || root.Length > match.Length)
             {
                 match = root;
             }
         }
+
 
         return match;
     }
@@ -182,14 +198,17 @@ static class StoragePathGuard
     static void EnsureNoLinkedComponentBelowRoot(string path, string root)
     {
         var current = Path.TrimEndingDirectorySeparator(path);
+
         while (!PathComparer.Equals(Path.TrimEndingDirectorySeparator(current), root))
         {
             EnsureNotLinkEntry(current);
             var parent = Path.GetDirectoryName(current);
+
             if (parent is null)
             {
                 break;
             }
+
 
             current = Path.TrimEndingDirectorySeparator(parent);
         }

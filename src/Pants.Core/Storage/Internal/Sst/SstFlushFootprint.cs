@@ -31,7 +31,8 @@ sealed class SstFlushFootprint
         int keyLength,
         int valueLength,
         int rangeEndLength,
-        bool isRangeTombstone)
+        bool isRangeTombstone
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(keyLength);
         ArgumentOutOfRangeException.ThrowIfNegative(valueLength);
@@ -142,10 +143,12 @@ sealed class SstFlushFootprint
 
     public static long MeasureUpperBound(
         IEnumerable<WalMutation> operations,
-        PantsPerformanceGoal performanceGoal)
+        PantsPerformanceGoal performanceGoal
+    )
     {
         ArgumentNullException.ThrowIfNull(operations);
         var footprint = new SstFlushFootprint();
+
         foreach (var operation in operations)
         {
             footprint.Add(
@@ -154,6 +157,7 @@ sealed class SstFlushFootprint
                 operation.RangeEnd?.Length ?? 0,
                 operation.Operation == WalOperation.DeleteRange);
         }
+
 
         return footprint.MeasureUpperBound(performanceGoal);
     }
@@ -167,6 +171,7 @@ sealed class SstFlushFootprint
     {
         ArgumentNullException.ThrowIfNull(operations);
         var footprint = new SstFlushFootprint();
+
         foreach (var operation in operations)
         {
             footprint.Add(
@@ -175,6 +180,7 @@ sealed class SstFlushFootprint
                 operation.RangeEnd?.Length ?? 0,
                 operation.Operation == WalOperation.DeleteRange);
         }
+
 
         var sourceBytes = checked(
             footprint._pointKeyBytes +

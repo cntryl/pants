@@ -52,6 +52,7 @@ public class SstSystemBenchmarks : Tier3Benchmark
     public async Task<int> RangeSeekFirstRowsAsync()
     {
         var validated = 0;
+
         for (var offset = 0; offset < RangeBatchSize; offset++)
         {
             var index = unchecked((uint)Interlocked.Increment(ref _nextKey) % KeyCount);
@@ -60,6 +61,7 @@ public class SstSystemBenchmarks : Tier3Benchmark
                 StartInclusive = _keys[index],
                 Limit = 1
             });
+
             await foreach (var entry in scan)
             {
                 if (entry.Key.Span.SequenceEqual(_keys[index]))
@@ -70,6 +72,7 @@ public class SstSystemBenchmarks : Tier3Benchmark
                 break;
             }
         }
+
 
         return validated;
     }

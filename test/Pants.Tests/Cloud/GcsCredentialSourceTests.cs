@@ -435,7 +435,8 @@ public sealed class GcsCredentialSourceTests
     [MemberData(nameof(InvalidImpersonationResponses))]
     public async Task ShouldRejectImpersonationResponseWithoutUsableExpiryOrToken(
         string? expireTime,
-        string accessToken)
+        string accessToken
+    )
     {
         using var directory = new TemporaryDirectory();
         var subjectPath = Path.Combine(directory.Path, "subject-token");
@@ -561,7 +562,8 @@ public sealed class GcsCredentialSourceTests
 
     static string ExternalAccountJson(
         object credentialSource,
-        IReadOnlyDictionary<string, object?>? extras = null)
+        IReadOnlyDictionary<string, object?>? extras = null
+    )
     {
         var document = new Dictionary<string, object?>
         {
@@ -572,6 +574,7 @@ public sealed class GcsCredentialSourceTests
             ["token_url"] = "https://sts.example.test/v1/token",
             ["credential_source"] = credentialSource
         };
+
         if (extras is not null)
         {
             foreach (var pair in extras)
@@ -579,6 +582,7 @@ public sealed class GcsCredentialSourceTests
                 document[pair.Key] = pair.Value;
             }
         }
+
 
         return JsonSerializer.Serialize(document);
     }
@@ -599,7 +603,8 @@ public sealed class GcsCredentialSourceTests
 
     static GcsObjectStore CreateStore(
         PantsGcsCredentialSource source,
-        HttpClient client) => new(
+        HttpClient client
+    ) => new(
         new PantsGcsProvider(
             "bucket",
             "project",
@@ -617,10 +622,12 @@ public sealed class GcsCredentialSourceTests
             static name => name,
             static _ => (string?)null,
             StringComparer.Ordinal);
+
         foreach (var pair in overrides)
         {
             values[pair.Key] = pair.Value;
         }
+
 
         return new EnvironmentVariableScope(values);
     }
@@ -628,7 +635,8 @@ public sealed class GcsCredentialSourceTests
     static async Task WriteAuthorizedUserAsync(
         string path,
         string clientSecret,
-        string refreshToken) => await File.WriteAllTextAsync(
+        string refreshToken
+    ) => await File.WriteAllTextAsync(
         path,
         JsonSerializer.Serialize(new Dictionary<string, string>
         {

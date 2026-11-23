@@ -285,7 +285,8 @@ public sealed class AzureCredentialSourceTests
     [InlineData("https://account.blob.core.windows.net", "login.microsoftonline.com")]
     public async Task ShouldDeriveAzureAuthorityFromBlobEndpointWhenAuthorityHostUnset(
         string blobEndpoint,
-        string authorityHost)
+        string authorityHost
+    )
     {
         using var environment = SetAzureEnvironment(new Dictionary<string, string?>
         {
@@ -596,7 +597,8 @@ public sealed class AzureCredentialSourceTests
         Uri? endpoint,
         PantsAzureCredentialSource source,
         HttpClient client,
-        TimeProvider? timeProvider = null) => new(
+        TimeProvider? timeProvider = null
+    ) => new(
         new PantsAzureBlobProvider(
             account,
             "container",
@@ -615,10 +617,12 @@ public sealed class AzureCredentialSourceTests
             static name => name,
             static _ => (string?)null,
             StringComparer.Ordinal);
+
         foreach (var pair in overrides)
         {
             values[pair.Key] = pair.Value;
         }
+
 
         return new EnvironmentVariableScope(values);
     }

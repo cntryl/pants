@@ -14,16 +14,20 @@ public sealed class StorageSymlinkRefusalTests
         var markerPath = Path.Combine(outside.Path, "keep");
         var marker = "unchanged outside target"u8.ToArray();
         await File.WriteAllBytesAsync(markerPath, marker);
+
         if (!TryCreateDirectoryLink(Path.Combine(directory.Path, "cloud_store"), outside.Path))
         {
             return;
         }
 
+
         var options = PantsOpenOptions.SimulatedCloud(directory.Path, "pants-tests", "path-guard/");
+
         if (timedOpen)
         {
             options = options.WithOpenTimeout(TimeSpan.FromSeconds(5));
         }
+
         await Assert.ThrowsAsync<PantsInvalidPathException>(() => PantsDatabase.OpenAsync(options).AsTask());
         Assert.Equal(marker, await File.ReadAllBytesAsync(markerPath));
         Assert.Equal([markerPath], Directory.GetFileSystemEntries(outside.Path));
@@ -35,10 +39,12 @@ public sealed class StorageSymlinkRefusalTests
         using var directory = new TemporaryDirectory();
         using var target = new TemporaryDirectory();
         var alias = Path.Combine(directory.Path, "database");
+
         if (!TryCreateDirectoryLink(alias, target.Path))
         {
             return;
         }
+
 
         await using (var database = await PantsDatabase.OpenAsync(PantsOpenOptions.SimulatedCloud(alias, "pants-tests", "root-alias/")))
         {
@@ -59,10 +65,12 @@ public sealed class StorageSymlinkRefusalTests
         await CreateStoreAsync(directory.Path);
         var sst = Path.Combine(directory.Path, "sst");
         Directory.Delete(sst, true);
+
         if (!TryCreateDirectoryLink(sst, outside.Path))
         {
             return;
         }
+
 
         await Assert.ThrowsAsync<PantsInvalidPathException>(
             async () => await OpenAsync(directory.Path));
@@ -79,10 +87,12 @@ public sealed class StorageSymlinkRefusalTests
         var target = Path.Combine(outside.Path, "journal");
         File.Copy(journal, target);
         File.Delete(journal);
+
         if (!TryCreateFileLink(journal, target))
         {
             return;
         }
+
 
         await Assert.ThrowsAsync<PantsInvalidPathException>(
             async () => await OpenAsync(directory.Path));
@@ -96,10 +106,12 @@ public sealed class StorageSymlinkRefusalTests
         await CreateStoreAsync(directory.Path);
         var sstDirectory = Path.Combine(directory.Path, "sst");
         Directory.Delete(sstDirectory, recursive: true);
+
         if (!TryCreateDirectoryLink(sstDirectory, outside.Path))
         {
             return;
         }
+
 
         await Assert.ThrowsAsync<PantsInvalidPathException>(async () =>
             await PantsDatabase.VerifyPathAsync(directory.Path));
@@ -119,10 +131,12 @@ public sealed class StorageSymlinkRefusalTests
         var outsideFile = Path.Combine(outside.Path, "outside.sst");
         File.WriteAllBytes(outsideFile, new byte[1024]);
         var linkedSst = Path.Combine(root, "sst", "outside.sst");
+
         if (!TryCreateFileLink(linkedSst, outsideFile))
         {
             return;
         }
+
 
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -143,10 +157,12 @@ public sealed class StorageSymlinkRefusalTests
         var outsideFile = Path.Combine(outside.Path, "lock-target");
         File.WriteAllText(outsideFile, "owner_token=outside\n");
         var lockPath = Path.Combine(root, ".midge_leader.lock");
+
         if (!TryCreateFileLink(lockPath, outsideFile))
         {
             return;
         }
+
 
         await Assert.ThrowsAsync<PantsInvalidPathException>(() =>
             PantsDatabase.RecoverStaleLeaseMutationLockAsync(root).AsTask());
@@ -164,10 +180,12 @@ public sealed class StorageSymlinkRefusalTests
         Directory.CreateDirectory(outsideMetadata);
         var outsideManifest = Path.Combine(outsideMetadata, "manifest.snapshot.json");
         File.WriteAllText(outsideManifest, "not-json");
+
         if (!TryCreateDirectoryLink(Path.Combine(root, "cloud_store"), outside.Path))
         {
             return;
         }
+
 
         var options = PantsOpenOptions.SimulatedCloud(root, "pants-tests", "path-guard/")
             .WithBackgroundCompaction(false);
@@ -192,10 +210,12 @@ public sealed class StorageSymlinkRefusalTests
         var outsideFile = Path.Combine(outside.Path, "leader");
         File.Copy(leaderPath, outsideFile);
         File.Delete(leaderPath);
+
         if (!TryCreateFileLink(leaderPath, outsideFile))
         {
             return;
         }
+
 
         await Assert.ThrowsAsync<PantsInvalidPathException>(async () =>
             await PantsDatabase.OpenAsync(options));
@@ -210,10 +230,12 @@ public sealed class StorageSymlinkRefusalTests
         using var real = new TemporaryDirectory();
         await CreateStoreAsync(real.Path);
         var link = Path.Combine(directory.Path, "root-link");
+
         if (!TryCreateDirectoryLink(link, real.Path))
         {
             return;
         }
+
 
         await using var database = await OpenAsync(link);
     }
@@ -224,10 +246,12 @@ public sealed class StorageSymlinkRefusalTests
         using var directory = new TemporaryDirectory();
         using var outside = new TemporaryDirectory();
         var link = Path.Combine(directory.Path, "link");
+
         if (!TryCreateDirectoryLink(link, outside.Path))
         {
             return;
         }
+
 
         Assert.Throws<PantsInvalidPathException>(
             () => Internal.IO.AtomicStagedFile.Write(Path.Combine(link, "file"), "x"u8));
@@ -247,10 +271,12 @@ public sealed class StorageSymlinkRefusalTests
         Directory.Delete(sstDirectory, recursive: true);
         var outsideNestedDirectory = Path.Combine(outside.Path, "nested");
         Directory.CreateDirectory(outsideNestedDirectory);
+
         if (!TryCreateDirectoryLink(sstDirectory, outside.Path))
         {
             return;
         }
+
 
         Assert.Throws<PantsInvalidPathException>(() => Internal.IO.AtomicStagedFile.Write(
             Path.Combine(sstDirectory, "nested", "file"),
@@ -273,10 +299,12 @@ public sealed class StorageSymlinkRefusalTests
         Directory.CreateDirectory(outsideNestedDirectory);
         var target = Path.Combine(outsideNestedDirectory, "file");
         File.WriteAllBytes(target, "outside"u8.ToArray());
+
         if (!TryCreateDirectoryLink(sstDirectory, outside.Path))
         {
             return;
         }
+
 
         var linkedPath = Path.Combine(sstDirectory, "nested", "file");
         Assert.Throws<PantsInvalidPathException>(() => Internal.Sst.SstReader.Open(linkedPath));
@@ -291,10 +319,12 @@ public sealed class StorageSymlinkRefusalTests
         using var firstTarget = new TemporaryDirectory();
         using var secondTarget = new TemporaryDirectory();
         var parentLink = Path.Combine(directory.Path, "linked-parent");
+
         if (!TryCreateDirectoryLink(parentLink, firstTarget.Path))
         {
             return;
         }
+
 
         var linkedRoot = Path.Combine(parentLink, "database");
         var resolvedRoot = Path.Combine(firstTarget.Path, "database");

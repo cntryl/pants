@@ -397,7 +397,8 @@ public sealed class AzureBlobObjectStoreTests
     static string CreateExpectedSharedKeyAuthorization(
         RecordedRequest request,
         string account,
-        string base64Key)
+        string base64Key
+    )
     {
         var stringToSign = CreateExpectedSharedKeyStringToSign(request, account);
         var signature = Convert.ToBase64String(HMACSHA256.HashData(
@@ -408,7 +409,8 @@ public sealed class AzureBlobObjectStoreTests
 
     static string CreateExpectedSharedKeyStringToSign(
         RecordedRequest request,
-        string account)
+        string account
+    )
     {
         var contentLength = request.ContentLength is > 0
             ? request.ContentLength.Value.ToString(CultureInfo.InvariantCulture)
@@ -437,7 +439,8 @@ public sealed class AzureBlobObjectStoreTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Requests.Add(new RecordedRequest(
                 request.Method,

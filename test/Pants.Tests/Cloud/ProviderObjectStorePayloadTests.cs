@@ -14,7 +14,8 @@ public sealed class ProviderObjectStorePayloadTests
     [InlineData("azure", false)]
     public async Task ShouldWritePutPayloadFromCallerMemoryWithoutPerAttemptCopy(
         string provider,
-        bool retryConditionalConflict)
+        bool retryConditionalConflict
+    )
     {
         var payload = Enumerable.Range(0, 4096).Select(static value => (byte)value).ToArray();
         var handler = new PayloadObservingHandler(payload, retryConditionalConflict);
@@ -122,7 +123,8 @@ public sealed class ProviderObjectStorePayloadTests
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var stream = new PayloadObservingStream(_payload);
             await request.Content!.CopyToAsync(stream, cancellationToken).ConfigureAwait(false);
@@ -155,7 +157,8 @@ public sealed class ProviderObjectStorePayloadTests
             byte[] buffer,
             int offset,
             int count,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             UsedCallerBuffer |= ReferenceEquals(buffer, payload);
             return base.WriteAsync(buffer, offset, count, cancellationToken);
@@ -163,7 +166,8 @@ public sealed class ProviderObjectStorePayloadTests
 
         public override ValueTask WriteAsync(
             ReadOnlyMemory<byte> buffer,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             UsedCallerBuffer |= MemoryMarshal.TryGetArray(buffer, out var segment) &&
                                 ReferenceEquals(segment.Array, payload);
@@ -184,7 +188,8 @@ public sealed class ProviderObjectStorePayloadTests
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             await request.Content!.CopyToAsync(Stream.Null, cancellationToken).ConfigureAwait(false);
             UploadStarted.TrySetResult();

@@ -67,7 +67,8 @@ public sealed class PantsColdFamilyTombstoneTests
         IPantsColumnFamily cold,
         Dictionary<string, string> hotModel,
         Dictionary<string, string> coldModel,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         // Two lanes own disjoint families, so each family's model is fixed by its own lane's
         // seeded sequence. The barrier pins the interleaving: writes and flushes run concurrently
@@ -77,6 +78,7 @@ public sealed class PantsColdFamilyTombstoneTests
         var hotLane = Task.Run(async () =>
         {
             var random = new Random(1);
+
             for (var chunk = 0; chunk < ChunkCount; chunk++)
             {
                 await ApplyOperationsAsync(database, hot, hotModel, random, "hot", chunk, 0, writeOptions);
@@ -92,6 +94,7 @@ public sealed class PantsColdFamilyTombstoneTests
             var random = new Random(2);
             var persistedColdKeys = new HashSet<string>(StringComparer.Ordinal);
             var deletedPersistedColdKeys = new HashSet<string>(StringComparer.Ordinal);
+
             for (var chunk = 0; chunk < ChunkCount; chunk++)
             {
                 await ApplyOperationsAsync(database, cold, coldModel, random, "cold", chunk, 0, writeOptions);
@@ -133,13 +136,15 @@ public sealed class PantsColdFamilyTombstoneTests
         int phase,
         PantsWriteOptions writeOptions,
         HashSet<string>? persistedKeys = null,
-        HashSet<string>? deletedPersistedKeys = null)
+        HashSet<string>? deletedPersistedKeys = null
+    )
     {
         for (var start = 0; start < OperationsPerPhase; start += OperationsPerTransaction)
         {
             await using var transaction = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadWrite);
+
             for (var offset = start; offset < start + OperationsPerTransaction; offset++)
             {
                 var key = $"key-{random.Next(KeySpace):000}";
@@ -148,10 +153,12 @@ public sealed class PantsColdFamilyTombstoneTests
                 if (random.Next(3) == 0)
                 {
                     transaction.Delete(TestBytes.FromString(key));
+
                     if (persistedKeys?.Contains(key) == true)
                     {
                         deletedPersistedKeys?.Add(key);
                     }
+
 
                     model.Remove(key);
                 }
@@ -162,6 +169,7 @@ public sealed class PantsColdFamilyTombstoneTests
                     model[key] = value;
                 }
             }
+
 
             await transaction.CommitAsync(writeOptions);
         }
@@ -178,7 +186,8 @@ public sealed class PantsColdFamilyTombstoneTests
     static async Task AssertFamilyMatchesModelAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        IReadOnlyDictionary<string, string> model)
+        IReadOnlyDictionary<string, string> model
+    )
     {
         for (var index = 0; index < KeySpace; index++)
         {
@@ -191,10 +200,12 @@ public sealed class PantsColdFamilyTombstoneTests
             PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var scanned = new List<(string Key, string Value)>();
+
         await foreach (var entry in scan)
         {
             scanned.Add((TestBytes.ToText(entry.Key), TestBytes.ToText(entry.Value)));
         }
+
 
         Assert.Equal(
             model.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
@@ -205,7 +216,8 @@ public sealed class PantsColdFamilyTombstoneTests
     static async Task<string?> ReadAsync(
         IPantsDatabase database,
         IPantsColumnFamily family,
-        string key)
+        string key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,

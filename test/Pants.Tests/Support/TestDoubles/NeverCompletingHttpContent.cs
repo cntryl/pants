@@ -10,7 +10,8 @@ sealed class NeverCompletingHttpContent : HttpContent
     protected override Task SerializeToStreamAsync(
         Stream stream,
         TransportContext? context,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
 
     protected override bool TryComputeLength(out long length)

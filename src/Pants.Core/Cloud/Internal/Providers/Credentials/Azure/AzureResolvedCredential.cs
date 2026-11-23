@@ -5,7 +5,8 @@ sealed class AzureResolvedCredential
     AzureResolvedCredential(
         AzureResolvedCredentialKind kind,
         string? secret,
-        IAzureTokenProvider? tokenProvider)
+        IAzureTokenProvider? tokenProvider
+    )
     {
         Kind = kind;
         Secret = secret;

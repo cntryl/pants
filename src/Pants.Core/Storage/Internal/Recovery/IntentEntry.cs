@@ -46,6 +46,7 @@ sealed class IntentEntry
     public IntentEntry WithPhase(string phase)
     {
         var reader = new Utf8JsonReader(_json);
+
         if (!reader.Read() ||
             reader.TokenType != JsonTokenType.StartObject ||
             !reader.Read() ||
@@ -54,22 +55,27 @@ sealed class IntentEntry
             throw new JsonException("An intent log entry must be an object with one variant.");
         }
 
+
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
             writer.WritePropertyName(reader.GetString()!);
+
             if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             {
                 throw new JsonException("An intent log entry variant must be an object.");
             }
 
+
             writer.WriteStartObject();
             var phaseWritten = false;
+
             while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
             {
                 var name = reader.GetString()!;
                 _ = reader.Read();
+
                 if (name == "phase")
                 {
                     reader.Skip();
@@ -78,9 +84,11 @@ sealed class IntentEntry
                     continue;
                 }
 
+
                 writer.WritePropertyName(name);
                 CopyValue(ref reader, writer, false);
             }
+
 
             if (!phaseWritten)
             {

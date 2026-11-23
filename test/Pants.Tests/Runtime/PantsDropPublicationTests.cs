@@ -16,6 +16,7 @@ public sealed class PantsDropPublicationTests
         var drop = database.ColumnFamilies.DropAsync(family).AsTask();
         await failpoints.Entered.WaitAsync(TestTimeouts.Expected);
         IPantsTransaction? snapshot = null;
+
         try
         {
             try
@@ -33,7 +34,9 @@ public sealed class PantsDropPublicationTests
             failpoints.Release();
         }
 
+
         await drop;
+
         if (snapshot is not null)
         {
             await using var admittedSnapshot = snapshot;
@@ -94,6 +97,7 @@ public sealed class PantsDropPublicationTests
                 Interlocked.Increment(ref _journalAppends) == 2)
             {
                 _entered.TrySetResult();
+
                 if (!_release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException("Family reclamation was not released.");

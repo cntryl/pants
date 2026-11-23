@@ -54,6 +54,7 @@ sealed class WalRecoverySpool : IDisposable
     public static void CleanupOrphans(string databasePath)
     {
         var directory = Path.Combine(databasePath, "recovery");
+
         if (Directory.Exists(directory))
         {
             Directory.Delete(directory, true);
@@ -68,6 +69,7 @@ sealed class WalRecoverySpool : IDisposable
         }
 
         _disposed = true;
+
         try
         {
             DeleteSpoolFile();
@@ -86,6 +88,7 @@ sealed class WalRecoverySpool : IDisposable
         }
 
         _stream.Dispose();
+
         try
         {
             File.Delete(_path);
@@ -115,17 +118,21 @@ sealed class WalRecoverySpool : IDisposable
     void Reserve(long frameBytes)
     {
         _spooledBytes = checked(_spooledBytes + frameBytes);
+
         if (_ledger is null || _spooledBytes <= _reservedBytes)
         {
             return;
         }
 
+
         var needed = _spooledBytes - _reservedBytes;
         var chunk = Math.Max(needed, ReservationChunkBytes);
+
         if (!_ledger.TryReserve(StorageAdmissionKind.RecoverySpool, chunk, out var reservation))
         {
             // Near the limit the chunk's slack must not refuse bytes that would still fit.
             chunk = needed;
+
             if (!_ledger.TryReserve(StorageAdmissionKind.RecoverySpool, chunk, out reservation))
             {
                 _spooledBytes -= frameBytes;
@@ -134,6 +141,7 @@ sealed class WalRecoverySpool : IDisposable
                     "spool; the WAL was left untouched.");
             }
         }
+
 
         _reservations.Add(reservation);
         _reservedBytes = checked(_reservedBytes + chunk);
@@ -154,14 +162,17 @@ sealed class WalRecoverySpool : IDisposable
     {
         ArgumentNullException.ThrowIfNull(accept);
         ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (_stream is not { } stream)
         {
             return;
         }
 
+
         stream.Flush(false);
         stream.Position = 0;
         Span<byte> header = stackalloc byte[2 * sizeof(uint)];
+
         while (stream.Position < stream.Length)
         {
             if (!DiskFormat.ReadExactly(stream, header))
@@ -170,23 +181,29 @@ sealed class WalRecoverySpool : IDisposable
             }
 
             var encodedLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
+
             if (encodedLength > DiskFormat.WalMaximumRecordBytes)
             {
                 throw new StorageException("A recovery transaction spool frame is oversized.");
             }
 
+
             var payload = GC.AllocateUninitializedArray<byte>(checked((int)encodedLength));
+
             if (!DiskFormat.ReadExactly(stream, payload))
             {
                 throw new StorageException("A recovery transaction spool has a torn frame payload.");
             }
 
+
             var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(
                 header[sizeof(uint)..]);
+
             if (DiskFormat.Crc32C(payload) != expectedCrc)
             {
                 throw new StorageException("A recovery transaction spool frame is corrupt.");
             }
+
 
             accept(WalCodec.DecodeRecord(payload));
         }

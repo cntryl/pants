@@ -7,7 +7,8 @@ sealed class TransactionInfo : ISnapshotPin
         PantsTransactionMode mode,
         ulong beginSequence,
         DateTimeOffset startedAtUtc,
-        DatabaseVersion snapshot)
+        DatabaseVersion snapshot
+    )
     {
         TransactionId = transactionId;
         Mode = mode;

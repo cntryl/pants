@@ -6,7 +6,8 @@ sealed class SstScanBlock
         SstReader reader,
         int blockIndex,
         byte[] firstKey,
-        byte[]? nextFirstKey)
+        byte[]? nextFirstKey
+    )
     {
         Reader = reader;
         BlockIndex = blockIndex;

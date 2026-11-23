@@ -25,6 +25,7 @@ sealed class VerificationCompactionRaceFailpointHandler : IFailpointHandler, IDi
         }
 
         _entered.TrySetResult();
+
         if (!_release.Wait(MaximumBlockTime))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");

@@ -73,13 +73,16 @@ sealed class MutableMemtableOperations
         {
             var family = pair.Value;
             var retainedCount = family.FindLastIndex(operation => operation.Sequence <= sequence) + 1;
+
             if (retainedCount == family.Count)
             {
                 continue;
             }
 
+
             Count -= family.Count - retainedCount;
             family.RemoveRange(retainedCount, family.Count - retainedCount);
+
             if (retainedCount == 0)
             {
                 _families.Remove(pair.Key);

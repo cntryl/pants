@@ -11,12 +11,14 @@ public sealed class CurrentMidgeCloudWriterTests
         using var directory = new TemporaryDirectory();
         var fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "cloud-sst-midge0");
+
         foreach (var file in Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(directory.Path, Path.GetRelativePath(fixture, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(file, destination);
         }
+
 
         var objects = new SimulatedCloudObjectStore(Path.Combine(directory.Path, "cloud_store"));
         var leases = new CloudObjectLeaseStore(objects, PantsCloudObjectLayout.LeaseObjectKey);
@@ -66,6 +68,7 @@ public sealed class CurrentMidgeCloudWriterTests
             {
                 continue;
             }
+
             if (Directory.Exists(entry))
             {
                 Directory.Delete(entry, true);

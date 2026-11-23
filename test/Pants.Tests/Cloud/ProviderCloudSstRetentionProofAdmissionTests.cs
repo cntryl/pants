@@ -324,7 +324,10 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
             ManifestJsonOptions);
 
     static async Task<(string ManifestKey, string? IntentKey, long WorkspaceBytes)> SeedRetentionMetadataAsync(
-        ScriptedCloudObjectStore store, byte[] manifestBytes, byte[]? intentBytes = null)
+        ScriptedCloudObjectStore store,
+        byte[] manifestBytes,
+        byte[]? intentBytes = null
+    )
     {
         await CloudTestMetadata.SeedAsync(store, ManifestState.CreateInitial(), manifestBytes, intentBytes);
         using var pointer = MetadataFrameCodec.Decode(store.Read(CloudMetadataAuthority.PointerKey), 4);
@@ -332,10 +335,12 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         var manifestKey = objects.Single(static value => value.GetProperty("file_name").GetString() == "manifest.snapshot.json").GetProperty("object_key").GetString()!;
         var intentKey = objects.Where(static value => value.GetProperty("file_name").GetString() == "intent_log.json").Select(static value => value.GetProperty("object_key").GetString()).SingleOrDefault();
         var workspace = checked((store.Read(CloudMetadataAuthority.PointerKey).Length + store.Read(CloudMetadataAuthority.SentinelKey).Length) * 16L + 512);
+
         foreach (var item in objects)
         {
             workspace = checked(workspace + item.GetProperty("len").GetInt64() * 16 + 256);
         }
+
 
         store.ResetRequests();
         return (manifestKey, intentKey, workspace);
@@ -360,7 +365,8 @@ public sealed class ProviderCloudSstRetentionProofAdmissionTests
         ICloudObjectStore controlStore,
         CloudLeaseCoordinator lease,
         ResourceBudget budget,
-        IFailpointHandler? failpoints = null) => new(
+        IFailpointHandler? failpoints = null
+    ) => new(
         root,
         walStore,
         sstStore,

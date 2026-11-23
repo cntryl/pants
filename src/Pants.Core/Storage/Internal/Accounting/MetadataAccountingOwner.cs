@@ -133,6 +133,7 @@ sealed class MetadataAccountingOwner
         lock (_publicationGate)
         {
             _publicationsSealed = true;
+
             if (_pendingPublications.Count != 0)
             {
                 Invalidate();
@@ -157,16 +158,25 @@ sealed class MetadataAccountingOwner
         FoldPublication((int)MetadataOrigin.CompactionBeforeGc * 2 + (int)medium, counters, bytes == 0);
     }
 
-    void Record(MetadataOrigin origin, MetadataMedium medium, MetadataCounter count, MetadataCounter duration,
-        TimeSpan elapsed, MetadataCounter? other, ulong otherValue = 1)
+    void Record(
+        MetadataOrigin origin,
+        MetadataMedium medium,
+        MetadataCounter count,
+        MetadataCounter duration,
+        TimeSpan elapsed,
+        MetadataCounter? other,
+        ulong otherValue = 1
+    )
     {
         var counters = new ulong[MetadataAccountingArithmetic.CounterCount];
         counters[(int)count] = 1;
         counters[(int)duration] = MetadataAccountingArithmetic.Nanoseconds(elapsed, out var valid);
+
         if (other is { } counter)
         {
             counters[(int)counter] = otherValue;
         }
+
 
         FoldPublication((int)origin * 2 + (int)medium, counters, !valid);
     }

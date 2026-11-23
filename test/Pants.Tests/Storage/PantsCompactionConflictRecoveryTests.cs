@@ -23,6 +23,7 @@ public sealed class PantsCompactionConflictRecoveryTests
             FlushedThrough = new Dictionary<uint, ulong> { [0] = 7 }
         };
         var inputs = new Dictionary<string, byte[]>();
+
         for (var index = 1; index <= 2; index++)
         {
             var name = $"000000_00_{index:00000000000000000000}.sst";
@@ -50,6 +51,7 @@ public sealed class PantsCompactionConflictRecoveryTests
             });
         }
 
+
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "FORMAT"), "midge-format-version=9\n");
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "manifest.snapshot.json"),
             ManifestCodec.Encode(manifest, JsonOptions));
@@ -67,6 +69,7 @@ public sealed class PantsCompactionConflictRecoveryTests
                 .Select(static file => file.Name).Order());
             Assert.Equal(inputs.Keys.Order(), Directory.GetFiles(sstDirectory.FullName, "*.sst")
                 .Select(Path.GetFileName).Order());
+
             foreach (var (name, bytes) in inputs)
             {
                 Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(sstDirectory.FullName, name)));

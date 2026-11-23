@@ -30,6 +30,7 @@ sealed class CrashSoakModel
     public void Include(CrashSoakCycle cycle)
     {
         ArgumentNullException.ThrowIfNull(cycle);
+
         foreach (var mutation in cycle.Operations.SelectMany(static operation => operation.Mutations))
         {
             if (mutation.Kind != CrashSoakMutationKind.DeleteRange)
@@ -44,13 +45,15 @@ sealed class CrashSoakModel
         CrashSoakLedger ledger,
         bool localCacheLost,
         IReadOnlyDictionary<string, string> observed,
-        IReadOnlyList<KeyValuePair<string, string>> scanned)
+        IReadOnlyList<KeyValuePair<string, string>> scanned
+    )
     {
         ArgumentNullException.ThrowIfNull(cycle);
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(observed);
         ArgumentNullException.ThrowIfNull(scanned);
         var violations = new List<string>();
+
         foreach (var operation in cycle.Operations)
         {
             if (operation.IsDoomed && ledger.OutcomeOf(operation) == CrashSoakOutcome.Acked)
@@ -59,12 +62,15 @@ sealed class CrashSoakModel
             }
         }
 
+
         var candidatesByKey = new Dictionary<string, List<Candidate>>(StringComparer.Ordinal);
+
         foreach (var key in _keys)
         {
             var candidates = CandidatesFor(key, cycle, ledger, localCacheLost);
             candidatesByKey[key] = candidates;
             var actual = observed.GetValueOrDefault(key);
+
             if (!candidates.Any(candidate => StringComparer.Ordinal.Equals(candidate.Value, actual)))
             {
                 violations.Add(
@@ -72,6 +78,7 @@ sealed class CrashSoakModel
                     $"allowed: {string.Join(" | ", candidates.Select(candidate => candidate.Describe(ledger)))}.");
             }
         }
+
 
         violations.AddRange(CheckAtomicity(cycle, ledger, observed, candidatesByKey));
         violations.AddRange(CheckScan(observed, scanned));
@@ -83,6 +90,7 @@ sealed class CrashSoakModel
     {
         ArgumentNullException.ThrowIfNull(observed);
         _baseline.Clear();
+
         foreach (var (key, value) in observed)
         {
             _baseline[key] = value;
@@ -100,15 +108,18 @@ sealed class CrashSoakModel
     List<Candidate> CandidatesFor(string key, CrashSoakCycle cycle, CrashSoakLedger ledger, bool localCacheLost)
     {
         var candidates = new List<Candidate> { new(null, _baseline.GetValueOrDefault(key)) };
+
         foreach (var operation in cycle.Operations.OrderBy(static operation => operation.Id))
         {
             var outcome = ledger.OutcomeOf(operation);
+
             if (operation.IsDoomed ||
                 outcome is CrashSoakOutcome.NotDispatched or CrashSoakOutcome.Failed ||
                 !operation.TryGetEffect(key, out var value))
             {
                 continue;
             }
+
 
             if (outcome == CrashSoakOutcome.Acked && SurvivesCrash(operation.Durability, localCacheLost))
             {
@@ -118,6 +129,7 @@ sealed class CrashSoakModel
             candidates.Add(new Candidate(operation, value));
         }
 
+
         return candidates;
     }
 
@@ -125,22 +137,27 @@ sealed class CrashSoakModel
         CrashSoakCycle cycle,
         CrashSoakLedger ledger,
         IReadOnlyDictionary<string, string> observed,
-        Dictionary<string, List<Candidate>> candidatesByKey)
+        Dictionary<string, List<Candidate>> candidatesByKey
+    )
     {
         foreach (var operation in cycle.Operations)
         {
             var applied = new List<string>();
             var missing = new List<string>();
+
             foreach (var (key, candidates) in candidatesByKey)
             {
                 var position = candidates.FindIndex(candidate => candidate.Operation == operation);
+
                 if (position < 0)
                 {
                     continue;
                 }
 
+
                 var effect = candidates[position].Value;
                 var actual = observed.GetValueOrDefault(key);
+
                 if (StringComparer.Ordinal.Equals(actual, effect))
                 {
                     if (candidates.Count(candidate => StringComparer.Ordinal.Equals(candidate.Value, effect)) == 1)
@@ -154,6 +171,7 @@ sealed class CrashSoakModel
                 }
             }
 
+
             if (applied.Count > 0 && missing.Count > 0)
             {
                 yield return
@@ -165,12 +183,15 @@ sealed class CrashSoakModel
 
     IEnumerable<string> CheckScan(
         IReadOnlyDictionary<string, string> observed,
-        IReadOnlyList<KeyValuePair<string, string>> scanned)
+        IReadOnlyList<KeyValuePair<string, string>> scanned
+    )
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var (key, value) in scanned)
         {
             seen.Add(key);
+
             if (!_keys.Contains(key))
             {
                 yield return $"a scan returned {key}, which no workload wrote.";
@@ -182,6 +203,7 @@ sealed class CrashSoakModel
                     $"{Describe(observed.GetValueOrDefault(key))}.";
             }
         }
+
 
         foreach (var key in observed.Keys.Where(key => !seen.Contains(key)))
         {

@@ -8,5 +8,6 @@ public interface IPantsCloudProvider
 
     ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
         PantsCloudProviderContext context,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

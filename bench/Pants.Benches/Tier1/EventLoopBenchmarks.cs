@@ -31,10 +31,12 @@ public class EventLoopBenchmarks : Tier1Benchmark
         }
 
         var sum = 0;
+
         while (_channel.Reader.TryRead(out var value))
         {
             sum += value;
         }
+
 
         return sum;
     }

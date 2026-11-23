@@ -8,7 +8,8 @@ static class CloudProviderXml
     public static XDocument ParseList(
         string body,
         string expectedRoot,
-        string provider)
+        string provider
+    )
     {
         try
         {
@@ -19,11 +20,13 @@ static class CloudProviderXml
                 XmlResolver = null
             });
             var document = XDocument.Load(xmlReader, LoadOptions.None);
+
             if (document.Root?.Name.LocalName != expectedRoot)
             {
                 throw new PantsIOException(
                     $"{provider} LIST response root must be {expectedRoot}.");
             }
+
 
             return document;
         }

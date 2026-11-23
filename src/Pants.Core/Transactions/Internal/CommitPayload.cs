@@ -11,7 +11,8 @@ sealed class CommitPayload : IDisposable
         DateTimeOffset snapshotTime,
         DatabaseVersion startSnapshot,
         ITransactionOperationSource operations,
-        Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> asserts)
+        Dictionary<ColumnFamilyIdentity, IReadOnlyList<TransactionAssertion>> asserts
+    )
     {
         TransactionId = transactionId;
         Mode = mode;

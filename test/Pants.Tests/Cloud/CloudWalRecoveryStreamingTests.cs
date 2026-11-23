@@ -153,7 +153,8 @@ public sealed class CloudWalRecoveryStreamingTests
     static async Task<byte[]> PublishSegmentAsync(
         string cachePath,
         ICloudObjectStore walStore,
-        byte[] payload)
+        byte[] payload
+    )
     {
         var leaseStore = new TestCloudLeaseStore();
         var clock = new ManualClock(DateTimeOffset.UnixEpoch);
@@ -208,16 +209,19 @@ public sealed class CloudWalRecoveryStreamingTests
             string objectKey,
             ulong offset,
             int length,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastRangeReadCancellationToken = cancellationToken;
             var beforeRead = BeforeNextRangeReadAsync;
             BeforeNextRangeReadAsync = null;
+
             if (beforeRead is not null)
             {
                 await beforeRead(cancellationToken).ConfigureAwait(false);
             }
+
 
             if (!SupportsRanges)
             {
@@ -237,7 +241,8 @@ public sealed class CloudWalRecoveryStreamingTests
 
         public ValueTask<CloudObjectMetadata?> HeadAsync(
             string objectKey,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             ValueTask.FromResult(_objects.TryGetValue(objectKey, out var value)
                 ? new CloudObjectMetadata(checked((ulong)value.Data.Length), value.Version, null, null)
                 : null);
@@ -246,7 +251,8 @@ public sealed class CloudWalRecoveryStreamingTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var exists = _objects.TryGetValue(objectKey, out var current);
             var accepted = condition switch
@@ -257,10 +263,12 @@ public sealed class CloudWalRecoveryStreamingTests
                     exists && StringComparer.Ordinal.Equals(expected.Version, current.Version),
                 _ => false
             };
+
             if (!accepted)
             {
                 return ValueTask.FromResult(false);
             }
+
 
             _objects[objectKey] = (data.ToArray(), Guid.NewGuid().ToString("N"));
             return ValueTask.FromResult(true);
@@ -269,7 +277,8 @@ public sealed class CloudWalRecoveryStreamingTests
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             ValueTask.FromResult(new CloudObjectListPage(
                 continuationToken is null
                     ? _objects.Keys.Where(key => key.StartsWith(prefix, StringComparison.Ordinal))
@@ -280,7 +289,8 @@ public sealed class CloudWalRecoveryStreamingTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _objects.Remove(objectKey);
             return ValueTask.FromResult(CloudObjectDeleteOutcome.Deleted);

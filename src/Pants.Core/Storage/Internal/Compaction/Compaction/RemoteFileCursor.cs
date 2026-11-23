@@ -13,7 +13,8 @@ sealed class RemoteFileCursor : ICompactionFileCursor
     public RemoteFileCursor(
         AsyncSstReader reader,
         ResourceBudget? resourceBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _reader = reader;
         _cancellationToken = cancellationToken;

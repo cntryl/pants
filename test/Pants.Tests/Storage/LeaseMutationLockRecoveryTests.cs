@@ -17,10 +17,12 @@ public sealed class LeaseMutationLockRecoveryTests
     public void ShouldExitHoldingLeaseMutationLockInChild()
     {
         var databasePath = Environment.GetEnvironmentVariable(DatabaseEnvironmentVariable);
+
         if (databasePath is null)
         {
             return;
         }
+
 
         var readyPath = Assert.IsType<string>(Environment.GetEnvironmentVariable(ReadyEnvironmentVariable));
         // A fixed, long-past clock writes a record that any real-clock reader already treats as stale.
@@ -180,6 +182,7 @@ public sealed class LeaseMutationLockRecoveryTests
     static async Task WaitForLockReleaseAsync(string lockPath)
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             try

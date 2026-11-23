@@ -257,6 +257,7 @@ public sealed class PantsOptionsPatternTests
 
         var location = Assert.IsType<PantsStorageConfiguration.Cloud>(
             databaseFactory.Options!.Storage).Topology.Control;
+
         switch (providerKind)
         {
             case PantsCloudProviderKind.AwsS3:
@@ -413,15 +414,18 @@ public sealed class PantsOptionsPatternTests
     public async Task AddPantsProjectsEveryCloudCredentialVariant(
         PantsCloudProviderKind providerKind,
         PantsCloudCredentialKind credentialKind,
-        Type expectedCredentialType)
+        Type expectedCredentialType
+    )
     {
         using var cache = new TemporaryDirectory();
         var providerOptions = CreateProviderOptions(providerKind);
         providerOptions.Credential = CreateCredentialOptions(credentialKind);
+
         if (credentialKind == PantsCloudCredentialKind.GcsHmacKey)
         {
             providerOptions.ApiStyle = PantsGcsApiStyle.Xml;
         }
+
 
         var databaseFactory = new CapturingPantsDatabaseFactory();
         var services = new ServiceCollection();
@@ -634,7 +638,8 @@ public sealed class PantsOptionsPatternTests
     {
         public ValueTask<IPantsDatabase> OpenAsync(
             PantsOpenOptions options,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult<IPantsDatabase>(new CapturedDatabase(options));
     }
 
@@ -659,12 +664,14 @@ public sealed class PantsOptionsPatternTests
         public ValueTask<PantsBackupManifest> BackupAsync(
             string destination,
             TimeSpan timeout,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             throw new NotSupportedException();
 
         public ValueTask ShutdownAsync(
             TimeSpan timeout,
-            CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken = default
+        ) => ValueTask.CompletedTask;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

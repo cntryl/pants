@@ -318,14 +318,16 @@ public sealed class ProviderCloudControlMetadataReadTests
 
         public ValueTask<CloudObject?> GetAsync(
             string key,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             inner.GetAsync(key, cancellationToken);
 
         public async ValueTask<CloudObject?> GetRangeAsync(
             string key,
             ulong offset,
             int length,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var value = await inner.GetRangeAsync(key, offset, length, cancellationToken)
                 .ConfigureAwait(false);
@@ -336,26 +338,30 @@ public sealed class ProviderCloudControlMetadataReadTests
 
         public ValueTask<CloudObjectMetadata?> HeadAsync(
             string key,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             inner.HeadAsync(key, cancellationToken);
 
         public ValueTask<bool> PutAsync(
             string key,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             inner.PutAsync(key, data, condition, cancellationToken);
 
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             inner.ListPageAsync(prefix, continuationToken, cancellationToken);
 
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string key,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             inner.DeleteAsync(key, condition, cancellationToken);
     }
 }

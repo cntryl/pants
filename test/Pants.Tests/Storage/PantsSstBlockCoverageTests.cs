@@ -52,7 +52,8 @@ public sealed class PantsSstBlockCoverageTests
     static void Validate(
         long footerOffset,
         SstBlockHandle metadata,
-        SstBlockHandle index) =>
+        SstBlockHandle index
+    ) =>
         SstCodec.ValidateBlockCoverage(
             footerOffset,
             metadata,

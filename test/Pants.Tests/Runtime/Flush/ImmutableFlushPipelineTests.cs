@@ -18,11 +18,13 @@ public sealed class ImmutableFlushPipelineTests
             static _ => new TaskCompletionSource<FrozenFlushRuntimeResult>(
                 TaskCreationOptions.RunContinuationsAsynchronously));
         var completed = new ConcurrentDictionary<long, TaskCompletionSource>();
+
         foreach (var flush in flushes)
         {
             completed[flush.Frozen.Id] = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
         }
+
 
         var pipeline = new ImmutableFlushPipeline(
             new RuntimeTelemetry(),
@@ -86,11 +88,13 @@ public sealed class ImmutableFlushPipelineTests
             (expected, _, failure) =>
             {
                 expected.CompleteAttempt(failure);
+
                 if (failure is null)
                 {
                     flushes.Remove(expected);
                     succeeded.TrySetResult();
                 }
+
 
                 return ValueTask.FromResult(failure is not null);
             },
@@ -184,10 +188,12 @@ public sealed class ImmutableFlushPipelineTests
             (expected, _, failure) =>
             {
                 expected.CompleteAttempt(failure);
+
                 if (failure is not null)
                 {
                     telemetry.RecordFlushFailure();
                 }
+
 
                 if (failure is null)
                 {
@@ -219,11 +225,13 @@ public sealed class ImmutableFlushPipelineTests
             telemetry);
         var saturated = new ColumnFamilyIdentity(1, "family-1", 0);
         var healthy = new ColumnFamilyIdentity(2, "family-2", 0);
+
         for (var index = 0; index < MemtableWritePressure.MaximumImmutableMemtablesPerColumnFamily; index++)
         {
             var flush = CreateFlush(index + 1, checked((ulong)index + 1), saturated.Id);
             state.ImmutableMemtableFlushes.Add(flush.Frozen.Id, flush);
         }
+
 
         Assert.True(MemtableWritePressure.IsQueueFull(state, saturated));
         Assert.False(MemtableWritePressure.IsQueueFull(state, healthy));

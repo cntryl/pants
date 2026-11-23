@@ -10,6 +10,7 @@ sealed class EnvironmentVariableScope : IDisposable
             static name => name,
             Environment.GetEnvironmentVariable,
             StringComparer.Ordinal);
+
         foreach (var pair in values)
         {
             Environment.SetEnvironmentVariable(pair.Key, pair.Value);

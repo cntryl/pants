@@ -9,7 +9,8 @@ sealed class SstBlockCache
         PantsBlockCachePolicy policy,
         long capacityBytes,
         int shardCount = DefaultShardCount,
-        Func<int, ISstBlockCachePolicy>? policyFactory = null)
+        Func<int, ISstBlockCachePolicy>? policyFactory = null
+    )
     {
         if (!Enum.IsDefined(policy))
         {
@@ -45,6 +46,7 @@ sealed class SstBlockCache
     public void RemoveFile(string fileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+
         foreach (var shard in _shards)
         {
             shard.RemoveFile(fileName);

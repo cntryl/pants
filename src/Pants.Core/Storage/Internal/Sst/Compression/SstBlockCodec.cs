@@ -22,7 +22,8 @@ static class SstBlockCodec
 
     internal static byte[] CompressWithTrailer(
         ReadOnlySpan<byte> data,
-        CompressionAlgorithm algorithm)
+        CompressionAlgorithm algorithm
+    )
     {
         var (payload, emittedAlgorithm) = Compress(data, algorithm);
         return AppendTrailer(payload, emittedAlgorithm);
@@ -30,7 +31,8 @@ static class SstBlockCodec
 
     internal static byte[] CompressWithTrailer(
         ReadOnlySpan<byte> data,
-        PantsPerformanceGoal performanceGoal)
+        PantsPerformanceGoal performanceGoal
+    )
     {
         var (payload, algorithm) = Compress(data, performanceGoal);
         return AppendTrailer(payload, algorithm);
@@ -42,24 +44,31 @@ static class SstBlockCodec
         {
             throw new PantsCorruptionException("SST block is too small for trailer.");
         }
+
         var crcOffset = block.Length - sizeof(uint);
+
         if (BinaryPrimitives.ReadUInt32LittleEndian(block[crcOffset..]) != DiskFormat.Crc32C(block[..crcOffset]))
         {
             throw new PantsCorruptionException("SST block CRC32C mismatch.");
         }
+
         var payload = block[..^TrailerSize];
         var algorithm = ParseAlgorithm(block[^TrailerSize]);
+
         if (algorithm == CompressionAlgorithm.None)
         {
             return payload.Length;
         }
+
         ulong length;
+
         if (algorithm == CompressionAlgorithm.Lz4)
         {
             if (payload.Length < 4)
             {
                 throw new PantsCorruptionException("SST LZ4 size prefix is truncated.");
             }
+
             length = BinaryPrimitives.ReadUInt32LittleEndian(payload);
         }
         else
@@ -74,10 +83,13 @@ static class SstBlockCodec
                 throw new PantsCorruptionException("SST Zstd content size is invalid.", exception);
             }
         }
+
+
         if (length > DiskFormat.MaximumDecodedBlockBytes)
         {
             throw new PantsCorruptionException("SST decompressed block exceeds its maximum size.");
         }
+
         return checked((long)length);
     }
 
@@ -91,14 +103,17 @@ static class SstBlockCodec
         var crcOffset = block.Length - sizeof(uint);
         var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(block[crcOffset..]);
         var computedCrc = DiskFormat.Crc32C(block[..crcOffset]);
+
         if (storedCrc != computedCrc)
         {
             throw new PantsCorruptionException(
                 $"SST block CRC32C mismatch: stored {storedCrc:#010x}, computed {computedCrc:#010x}.");
         }
 
+
         var payloadLength = block.Length - TrailerSize;
         var algorithm = ParseAlgorithm(block[payloadLength]);
+
         try
         {
             return DiskFormat.Decompress(block[..payloadLength], (byte)algorithm);
@@ -117,7 +132,8 @@ static class SstBlockCodec
 
     internal static (byte[] Payload, CompressionAlgorithm Algorithm) Compress(
         ReadOnlySpan<byte> data,
-        PantsPerformanceGoal performanceGoal)
+        PantsPerformanceGoal performanceGoal
+    )
     {
         if (!ShouldCompress(data))
         {
@@ -135,7 +151,8 @@ static class SstBlockCodec
 
     static (byte[] Payload, CompressionAlgorithm Algorithm) Compress(
         ReadOnlySpan<byte> data,
-        CompressionAlgorithm algorithm) =>
+        CompressionAlgorithm algorithm
+    ) =>
         ShouldCompress(data)
             ? CompressWithoutThreshold(data, algorithm)
             : (data.ToArray(), CompressionAlgorithm.None);
@@ -151,14 +168,15 @@ static class SstBlockCodec
 
     static (byte[] Payload, CompressionAlgorithm Algorithm) CompressWithoutThreshold(
         ReadOnlySpan<byte> data,
-        CompressionAlgorithm algorithm) => algorithm switch
-        {
-            CompressionAlgorithm.None => (data.ToArray(), CompressionAlgorithm.None),
-            CompressionAlgorithm.Lz4 => CompressLz4(data),
-            CompressionAlgorithm.Zstd3 => CompressZstd(data, 3, CompressionAlgorithm.Zstd3),
-            CompressionAlgorithm.Zstd9 => CompressZstd(data, 9, CompressionAlgorithm.Zstd9),
-            _ => throw new PantsInternalException($"Unknown compression algorithm '{algorithm}'.")
-        };
+        CompressionAlgorithm algorithm
+    ) => algorithm switch
+    {
+        CompressionAlgorithm.None => (data.ToArray(), CompressionAlgorithm.None),
+        CompressionAlgorithm.Lz4 => CompressLz4(data),
+        CompressionAlgorithm.Zstd3 => CompressZstd(data, 3, CompressionAlgorithm.Zstd3),
+        CompressionAlgorithm.Zstd9 => CompressZstd(data, 9, CompressionAlgorithm.Zstd9),
+        _ => throw new PantsInternalException($"Unknown compression algorithm '{algorithm}'.")
+    };
 
     static (byte[] Payload, CompressionAlgorithm Algorithm) CompressAdaptive(
         ReadOnlySpan<byte> data)
@@ -170,6 +188,7 @@ static class SstBlockCodec
         };
 
         (byte[] Payload, CompressionAlgorithm Algorithm)? best = null;
+
         foreach (var candidate in candidates)
         {
             if (!CompressionQualifies(data.Length, candidate.Payload.Length) ||
@@ -180,6 +199,7 @@ static class SstBlockCodec
 
             best = candidate;
         }
+
 
         return best ?? (data.ToArray(), CompressionAlgorithm.None);
     }
@@ -205,7 +225,8 @@ static class SstBlockCodec
     static (byte[] Payload, CompressionAlgorithm Algorithm) CompressZstd(
         ReadOnlySpan<byte> data,
         int level,
-        CompressionAlgorithm algorithm)
+        CompressionAlgorithm algorithm
+    )
     {
         return (ZstdCodec.Compress(data, level), algorithm);
     }

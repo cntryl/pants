@@ -75,7 +75,8 @@ public sealed class PantsOpenOptions
         PantsRecoveryPolicy recoveryPolicy = PantsRecoveryPolicy.Strict,
         PantsCloudWritePolicy? cloudWritePolicy = null,
         IPantsClock? ttlClock = null,
-        PantsWriteBackpressureConfiguration? writeBackpressure = null)
+        PantsWriteBackpressureConfiguration? writeBackpressure = null
+    )
     {
         ArgumentNullException.ThrowIfNull(storage);
         runtime ??= PantsRuntimeConfiguration.Default;
@@ -116,12 +117,14 @@ public sealed class PantsOpenOptions
 
     public static PantsOpenOptions Cloud(
         string localCachePath,
-        PantsCloudStorageLocation location) =>
+        PantsCloudStorageLocation location
+    ) =>
         CloudMulti(localCachePath, PantsCloudStorageTopology.Shared(location));
 
     public static PantsOpenOptions CloudMulti(
         string localCachePath,
-        PantsCloudStorageTopology topology) =>
+        PantsCloudStorageTopology topology
+    ) =>
         new(Configuration.Default(new PantsStorageConfiguration.Cloud(
             ValidatePath(localCachePath, nameof(localCachePath)),
             topology ?? throw new ArgumentNullException(nameof(topology)))));
@@ -129,7 +132,8 @@ public sealed class PantsOpenOptions
     public static PantsOpenOptions SimulatedCloud(
         string localCachePath,
         string bucket,
-        string prefix) =>
+        string prefix
+    ) =>
         new(Configuration.Default(new PantsStorageConfiguration.SimulatedCloud(
             ValidatePath(localCachePath, nameof(localCachePath)),
             ValidateNonEmpty(bucket, nameof(bucket)),
@@ -196,7 +200,8 @@ public sealed class PantsOpenOptions
 
     public PantsOpenOptions WithMemtableLimits(
         long sizeLimitBytes,
-        long? flushThresholdBytes = null) =>
+        long? flushThresholdBytes = null
+    ) =>
         With(_configuration with
         {
             MemtableSizeLimitBytes = sizeLimitBytes,
@@ -436,6 +441,7 @@ public sealed class PantsOpenOptions
         }
 
         var report = location.Validate();
+
         if (!report.IsValid)
         {
             throw PantsException.InvalidArgument(

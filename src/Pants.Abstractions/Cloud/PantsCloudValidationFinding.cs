@@ -28,10 +28,12 @@ public sealed record PantsCloudValidationFinding(
     {
         var hash = new HashCode();
         hash.Add(Provider);
+
         foreach (var role in Roles)
         {
             hash.Add(role);
         }
+
 
         hash.Add(Mode);
         hash.Add(Code);

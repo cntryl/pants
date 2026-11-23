@@ -54,10 +54,12 @@ public sealed class FileLeaseIoTests
         var target = Path.Combine(outside.Path, "leader");
         File.Copy(leaderPath, target);
         File.Delete(leaderPath);
+
         if (!TryCreateFileLink(leaderPath, target))
         {
             return;
         }
+
 
         Assert.Throws<PantsInvalidPathException>(() => Acquire(directory.Path));
         Assert.True(File.Exists(target));
@@ -71,10 +73,12 @@ public sealed class FileLeaseIoTests
         var target = Path.Combine(outside.Path, "lock-target");
         File.WriteAllText(target, "outside");
         var lockPath = Path.Combine(directory.Path, ".midge_leader.lock");
+
         if (!TryCreateFileLink(lockPath, target))
         {
             return;
         }
+
 
         Assert.Throws<PantsInvalidPathException>(() => Acquire(directory.Path));
         Assert.Equal("outside", File.ReadAllText(target));
@@ -88,10 +92,12 @@ public sealed class FileLeaseIoTests
         var target = Path.Combine(outside.Path, "lock-target");
         File.WriteAllText(target, "outside");
         var probe = Path.Combine(directory.Path, "probe");
+
         if (!TryCreateFileLink(probe, target))
         {
             return;
         }
+
 
         File.Delete(probe);
         var lease = Acquire(directory.Path);
@@ -124,6 +130,7 @@ public sealed class FileLeaseIoTests
         var path = LeaderPath(directory.Path);
         File.WriteAllText(path, "epoch: 5\nholder_id: writer\nacquired_at: 1970-01-01T00:00:00Z\n");
         File.SetUnixFileMode(path, UnixFileMode.None);
+
         try
         {
             if (CanRead(path))

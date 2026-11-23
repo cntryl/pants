@@ -323,10 +323,12 @@ public sealed class PantsCloudLeaseEngineExpiryTests
         // Renewal hangs, the wall clock stalls or steps backward, and the monotonic deadline passes
         // while no caller touches the database. The watchdog timer alone must report the loss.
         handler.BlockLeaseWrites();
+
         if (wallClockStepsBack)
         {
             wallClock.UtcNow -= TimeSpan.FromHours(1);
         }
+
 
         monotonic.Advance(TimeSpan.FromMilliseconds(100));
         await handler.WaitForBlockedLeaseWriteAsync();

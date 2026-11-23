@@ -20,6 +20,18 @@
           "System.Management": "9.0.5"
         }
       },
+      "Cntryl.Conventions.Analyzers": {
+        "type": "Direct",
+        "requested": "[1.0.4, )",
+        "resolved": "1.0.4",
+        "contentHash": "EZfjxye4Nv8NPpqwPQyLuQIobHH/TvGmQkkygmRbNRFF5pmUSdvUxHlXPgFa4xrh/+us//Bv+2We+1+FD4esrQ=="
+      },
+      "Cntryl.Conventions.CodeFixes": {
+        "type": "Direct",
+        "requested": "[1.0.4, )",
+        "resolved": "1.0.4",
+        "contentHash": "33RLGXoKyq5tVGDRXrblgDl35PEFot4NnlvdszoNjjqgl20turDKOO7W1+0WxT3Bht/uEbrArtNDhlfFiO1Tvg=="
+      },
       "Microsoft.Extensions.DependencyInjection": {
         "type": "Direct",
         "requested": "[11.0.0, )",

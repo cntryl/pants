@@ -8,6 +8,7 @@ static class CheckpointClock
         {
             return started;
         }
+
         var ticks = (decimal)budget.Ticks * time.TimestampFrequency / TimeSpan.TicksPerSecond;
         return ticks >= long.MaxValue - (decimal)started ? long.MaxValue : checked(started + (long)ticks);
     }

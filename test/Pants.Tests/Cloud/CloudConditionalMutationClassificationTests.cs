@@ -50,7 +50,8 @@ public sealed class CloudConditionalMutationClassificationTests
     [InlineData(HttpStatusCode.Conflict, "BucketAlreadyOwnedByYou")]
     public async Task ShouldFailOnS3PreconditionOrConflictStatusWithoutThePredicateCode(
         HttpStatusCode status,
-        string code)
+        string code
+    )
     {
         using var handler = new CountingHandler(_ => S3Error(status, code));
         using var client = new HttpClient(handler);
@@ -202,7 +203,8 @@ public sealed class CloudConditionalMutationClassificationTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref _requests);
             return Task.FromResult(respond(request));

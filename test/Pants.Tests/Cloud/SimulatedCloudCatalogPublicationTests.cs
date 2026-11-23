@@ -29,6 +29,7 @@ public sealed class SimulatedCloudCatalogPublicationTests
         var oldSegment = TestWalSegment.Create(1, oldEpoch, 1, "old.wal", "old"u8.ToArray());
         blocked.Arm();
         var publication = Task.Run(() => old.PublishWal(oldSegment));
+
         try
         {
             await blocked.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -50,6 +51,7 @@ public sealed class SimulatedCloudCatalogPublicationTests
             var failure = await Record.ExceptionAsync(() => publication);
             Assert.Equal(primary.Data.ToArray(), (await objects.GetAsync(PantsCloudObjectLayout.WalCatalogObjectKey))?.Data.ToArray());
             Assert.Equal(mirror.Data.ToArray(), (await objects.GetAsync(PantsCloudObjectLayout.WalCatalogMirrorObjectKey))?.Data.ToArray());
+
             if (primaryPublished)
             {
                 Assert.IsType<PantsLeaseIndeterminateException>(failure);
@@ -59,6 +61,7 @@ public sealed class SimulatedCloudCatalogPublicationTests
             {
                 Assert.IsType<PantsFencedException>(failure);
             }
+
 
             var catalog = ProviderCloudPersistence.DecodeCatalogForFloor(primary.Data.Span);
             Assert.Equal(successorEpoch, catalog.FencingEpoch);

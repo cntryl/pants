@@ -26,6 +26,7 @@ static class ManifestTransitions
         }
 
         var existing = manifest.Files.SingleOrDefault(file => file.Name == metadata.Name);
+
         if (existing is not null)
         {
             if (!SameIdentity(existing, metadata))
@@ -36,16 +37,19 @@ static class ManifestTransitions
             return;
         }
 
+
         manifest.Files.Add(metadata);
     }
 
     public static void Remove(ManifestState manifest, string name)
     {
         var metadata = manifest.Files.SingleOrDefault(file => file.Name == name);
+
         if (metadata is null)
         {
             return;
         }
+
 
         if (manifest.RetiredSsts.TryGetValue(name, out var prior) && !SameIdentity(prior, metadata))
         {
@@ -80,9 +84,11 @@ static class ManifestTransitions
         var added = new Dictionary<string, (FileMeta File, int Index)>(StringComparer.Ordinal);
         var frontiers = new Dictionary<uint, (ulong Sequence, int Index)>();
         var flattened = FlattenBatch(edit.ToElement(options).GetProperty("Batch")).ToArray();
+
         for (var index = 0; index < flattened.Length; index++)
         {
             var variant = flattened[index].EnumerateObject().Single();
+
             switch (variant.Name)
             {
                 case "AddSst":
@@ -125,9 +131,11 @@ static class ManifestTransitions
             }
         }
 
+
         foreach (var (familyId, frontier) in frontiers)
         {
             var outputs = added.Values.Where(item => item.File.ColumnFamilyId == familyId).ToArray();
+
             if (!outputs.Any(item => item.Index < frontier.Index) ||
                 outputs.Any(item => !retainedNames.Contains(item.File.Name) || !item.File.LargestSequence.HasValue || item.File.LargestSequence > frontier.Sequence))
             {
@@ -141,6 +149,7 @@ static class ManifestTransitions
         foreach (var edit in edits.EnumerateArray())
         {
             var variant = edit.EnumerateObject().Single();
+
             if (variant.Name == "Batch")
             {
                 foreach (var child in FlattenBatch(variant.Value))
@@ -165,6 +174,7 @@ static class ManifestTransitions
 
         var captured = capturedValue.Deserialize<List<FileMeta>>(options)!;
         var current = ValidateMove(manifest.Files, manifest.ColumnFamilies, captured, target, out _);
+
         foreach (var file in current)
         {
             file.Level = target;
@@ -172,8 +182,12 @@ static class ManifestTransitions
     }
 
     public static FileMeta[] ValidateMove(
-        IReadOnlyList<FileMeta> files, IReadOnlyList<ColumnFamilyMeta> families,
-        IReadOnlyList<FileMeta> captured, uint target, out bool alreadyMoved)
+        IReadOnlyList<FileMeta> files,
+        IReadOnlyList<ColumnFamilyMeta> families,
+        IReadOnlyList<FileMeta> captured,
+        uint target,
+        out bool alreadyMoved
+    )
     {
         if (captured.Count == 0 || captured.Select(static file => file.Name).Distinct(StringComparer.Ordinal).Count() != captured.Count)
         {
@@ -182,6 +196,7 @@ static class ManifestTransitions
 
         var source = captured[0].Level;
         var familyId = captured[0].ColumnFamilyId;
+
         if (source == uint.MaxValue || target != source + 1 ||
             familyId != 0 && !families.Any(family => family.Id == familyId && family.DeletedAt is null) ||
             captured.Any(file => file.Level != source || file.ColumnFamilyId != familyId || !file.HasTrustedKeyBounds() ||
@@ -190,15 +205,19 @@ static class ManifestTransitions
             throw new PantsCorruptionException("Logical SST move has invalid level, family or coverage.");
         }
 
+
         var current = captured.Select(file => files.SingleOrDefault(candidate => candidate.Name == file.Name)).ToArray();
         alreadyMoved = current.All(file => file?.Level == target);
+
         for (var index = 0; index < captured.Count; index++)
         {
             var expected = captured[index].Clone();
+
             if (alreadyMoved)
             {
                 expected.Level = target;
             }
+
 
             if (current[index] is not { } actual || !SameIdentity(actual, expected))
             {
@@ -206,13 +225,16 @@ static class ManifestTransitions
             }
         }
 
+
         for (var index = 0; index < captured.Count; index++)
         {
             var file = captured[index];
+
             if (captured.Skip(index + 1).Any(other => Overlaps(file, other)))
             {
                 throw new PantsCorruptionException("Logical SST move captures overlapping files.");
             }
+
 
             foreach (var other in files.Where(other => other.ColumnFamilyId == familyId && !captured.Any(item => item.Name == other.Name)))
             {

@@ -90,10 +90,12 @@ public sealed class MetadataOriginRoutingTests
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadWrite);
+
         foreach (var (key, value) in rows)
         {
             transaction.Put(key, value);
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
@@ -110,12 +112,15 @@ public sealed class MetadataOriginRoutingTests
             database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         await using var scan = await transaction.ScanAsync(new PantsScanQuery());
         var actual = new List<PantsEntry>();
+
         await foreach (var row in scan)
         {
             actual.Add(row);
         }
 
+
         Assert.Equal(expected.Length, actual.Count);
+
         for (var index = 0; index < expected.Length; index++)
         {
             Assert.Equal(expected[index].Key, actual[index].Key.ToArray());

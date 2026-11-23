@@ -13,7 +13,8 @@ public sealed record PantsS3CompatibleProvider(
 
     public ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
         PantsCloudProviderContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(context);
         cancellationToken.ThrowIfCancellationRequested();

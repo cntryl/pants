@@ -42,16 +42,19 @@ sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDispos
 
     public void Schedule(
         ColumnFamilyIdentity identity,
-        Func<CancellationToken, ValueTask> operation)
+        Func<CancellationToken, ValueTask> operation
+    )
     {
         ArgumentNullException.ThrowIfNull(operation);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
             if (_retries.ContainsKey(identity))
             {
                 return;
             }
+
 
             _retries.Add(identity, RetryAsync(identity, operation));
         }
@@ -59,16 +62,19 @@ sealed class CloudFlushRetryScheduler(RuntimeTelemetry telemetry) : IAsyncDispos
 
     async Task RetryAsync(
         ColumnFamilyIdentity identity,
-        Func<CancellationToken, ValueTask> operation)
+        Func<CancellationToken, ValueTask> operation
+    )
     {
         var cancellationToken = _lifetimeCancellation.Token;
         var delay = InitialDelay;
+
         try
         {
             while (true)
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 telemetry.RecordCloudFlushRetry();
+
                 try
                 {
                     await operation(cancellationToken).ConfigureAwait(false);

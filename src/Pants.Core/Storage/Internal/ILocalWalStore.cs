@@ -11,20 +11,23 @@ interface ILocalWalStore
         CommitPayload payload,
         ulong publishedSequence,
         PantsDurability durability,
-        WalMetricsRecorder? metrics = null);
+        WalMetricsRecorder? metrics = null
+    );
 
     WalCommitGroupResult AppendCommitGroup(
         IReadOnlyList<WalCommitGroupEntry> commits,
         ulong publishedSequence,
         PantsDurability durability,
         Action beforeSync,
-        WalMetricsRecorder? metrics = null);
+        WalMetricsRecorder? metrics = null
+    );
 
     TimeSpan FlushDurabilityBoundary(WalMetricsRecorder? metrics = null);
 
     SealedWalSegment? SealActiveWalForCloud(
         WalMetricsRecorder? metrics = null,
-        Action? validateCloudWriteAuthority = null);
+        Action? validateCloudWriteAuthority = null
+    );
 
     void CompleteCloudWalSeal(SealedWalSegment segment);
 
@@ -33,7 +36,8 @@ interface ILocalWalStore
     SealedWalBacklogBatch GetSealedWalSegmentsForCloudPublication(
         ulong? throughSegmentId = null,
         int maximumSegments = SealedWalBacklogBatch.DefaultMaximumSegments,
-        long maximumBytes = SealedWalBacklogBatch.DefaultMaximumBytes);
+        long maximumBytes = SealedWalBacklogBatch.DefaultMaximumBytes
+    );
 
     void DeleteCloudDurableWalSegment(SealedWalSegment segment);
 }

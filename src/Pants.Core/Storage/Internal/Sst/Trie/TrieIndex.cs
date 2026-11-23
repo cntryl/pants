@@ -15,14 +15,17 @@ sealed class TrieIndex
     {
         ArgumentNullException.ThrowIfNull(blockFirstKeys);
         var builder = new TrieBuilder();
+
         for (var index = 0; index < blockFirstKeys.Count; index++)
         {
             builder.Add(blockFirstKeys[index], checked((uint)index));
         }
 
+
         using var output = new MemoryStream();
         var nodes = builder.Finish();
         WriteVarint(output, checked((ulong)nodes.Count));
+
         foreach (var node in nodes)
         {
             WriteVarint(output, node.PrefixLength);
@@ -30,6 +33,7 @@ sealed class TrieIndex
             output.Write(node.KeyDelta);
             WriteVarint(output, node.BlockId.HasValue ? checked(node.BlockId.Value + 1UL) : 0);
             WriteVarint(output, checked((ulong)node.Children.Count));
+
             foreach (var child in node.Children)
             {
                 output.WriteByte(child.FirstByte);
@@ -37,30 +41,37 @@ sealed class TrieIndex
             }
         }
 
+
         return output.ToArray();
     }
 
     public static TrieIndex Decode(
         ReadOnlySpan<byte> bytes,
         IReadOnlyList<byte[]> blockFirstKeys,
-        SstMetadataAllocation? allocation = null)
+        SstMetadataAllocation? allocation = null
+    )
     {
         var cursor = 0;
         var nodeCount = ReadInt32(bytes, ref cursor, "node count");
+
         if (nodeCount <= 0 || nodeCount > (bytes.Length - cursor) / 4)
         {
             throw new PantsCorruptionException("SST trie node count is invalid.");
         }
 
+
         var nodes = new TrieNode[nodeCount];
+
         for (var index = 0; index < nodeCount; index++)
         {
             var prefixLength = ReadUInt16(bytes, ref cursor, "prefix length");
             var keyLength = ReadInt32(bytes, ref cursor, "key delta length");
+
             if (keyLength < 0 || keyLength > bytes.Length - cursor)
             {
                 throw new PantsCorruptionException("SST trie key delta is truncated.");
             }
+
 
             var keyDelta = bytes.Slice(cursor, keyLength).ToArray();
             cursor += keyLength;
@@ -73,12 +84,15 @@ sealed class TrieIndex
                 _ => (uint)(rawBlockId - 1)
             };
             var childCount = ReadInt32(bytes, ref cursor, "child count");
+
             if (childCount < 0 || childCount > (bytes.Length - cursor) / 2)
             {
                 throw new PantsCorruptionException("SST trie child count is invalid.");
             }
 
+
             var node = new TrieNode(prefixLength, keyDelta, blockId);
+
             for (var child = 0; child < childCount; child++)
             {
                 if (cursor >= bytes.Length)
@@ -93,8 +107,10 @@ sealed class TrieIndex
                 node.Children.Add(new TrieEdge(firstByte, childIndex));
             }
 
+
             nodes[index] = node;
         }
+
 
         if (cursor != bytes.Length)
         {
@@ -107,6 +123,7 @@ sealed class TrieIndex
         CollectEntries(nodes, entries, blockFirstKeys.Count, allocation);
 
         entries.Sort(static (left, right) => ByteArrayComparer.Instance.Compare(left.Key, right.Key));
+
         foreach (var entry in entries)
         {
             if (!entry.Key.AsSpan().SequenceEqual(blockFirstKeys[entry.Value]))
@@ -114,6 +131,7 @@ sealed class TrieIndex
                 throw new PantsCorruptionException("SST trie does not match the binary block index.");
             }
         }
+
 
         return new TrieIndex(entries.ToArray());
     }
@@ -123,10 +141,12 @@ sealed class TrieIndex
         var low = 0;
         var high = _entries.Length - 1;
         var result = -1;
+
         while (low <= high)
         {
             var middle = low + (high - low) / 2;
             var comparison = key.SequenceCompareTo(_entries[middle].Key);
+
             if (comparison < 0)
             {
                 high = middle - 1;
@@ -138,6 +158,7 @@ sealed class TrieIndex
             }
         }
 
+
         return result;
     }
 
@@ -145,11 +166,13 @@ sealed class TrieIndex
         TrieNode[] nodes,
         List<KeyValuePair<byte[], int>> entries,
         int blockCount,
-        SstMetadataAllocation? allocation)
+        SstMetadataAllocation? allocation
+    )
     {
         var visited = new bool[nodes.Length];
         var pending = new Stack<(int NodeIndex, byte[] Prefix)>();
         pending.Push((0, []));
+
         while (pending.TryPop(out var current))
         {
             if (visited[current.NodeIndex])
@@ -164,6 +187,7 @@ sealed class TrieIndex
             var key = new byte[keyLength];
             current.Prefix.CopyTo(key, 0);
             node.KeyDelta.CopyTo(key, current.Prefix.Length);
+
             if (node.BlockId is { } blockId)
             {
                 if (blockId >= blockCount)
@@ -174,18 +198,22 @@ sealed class TrieIndex
                 entries.Add(new KeyValuePair<byte[], int>(key, checked((int)blockId)));
             }
 
+
             for (var childPosition = node.Children.Count - 1; childPosition >= 0; childPosition--)
             {
                 var edge = node.Children[childPosition];
                 var childIndex = checked((int)edge.ChildIndex);
+
                 if (nodes[childIndex].KeyDelta[0] != edge.FirstByte)
                 {
                     throw new PantsCorruptionException("SST trie child edge is inconsistent.");
                 }
 
+
                 pending.Push((childIndex, key));
             }
         }
+
 
         if (visited.Contains(false))
         {
@@ -195,11 +223,13 @@ sealed class TrieIndex
 
     static void ValidateGraph(
         TrieNode[] nodes,
-        Span<int> inboundEdges)
+        Span<int> inboundEdges
+    )
     {
         for (var nodeIndex = 0; nodeIndex < nodes.Length; nodeIndex++)
         {
             var node = nodes[nodeIndex];
+
             if (nodeIndex == 0)
             {
                 if (node.PrefixLength != 0 || node.KeyDelta.Length != 0)
@@ -212,15 +242,18 @@ sealed class TrieIndex
                 throw new PantsCorruptionException("SST trie contains an empty non-root key delta.");
             }
 
+
             for (var childPosition = 0; childPosition < node.Children.Count; childPosition++)
             {
                 var edge = node.Children[childPosition];
+
                 if (childPosition > 0 &&
                     node.Children[childPosition - 1].FirstByte >= edge.FirstByte)
                 {
                     throw new PantsCorruptionException(
                         "SST trie child edges are duplicated or unsorted.");
                 }
+
 
                 if (edge.ChildIndex >= (uint)nodes.Length)
                 {
@@ -254,6 +287,7 @@ sealed class TrieIndex
     static ulong ReadVarint(ReadOnlySpan<byte> bytes, ref int cursor)
     {
         ulong result = 0;
+
         for (var shift = 0; shift < 64; shift += 7)
         {
             if (cursor >= bytes.Length)
@@ -263,11 +297,13 @@ sealed class TrieIndex
 
             var value = bytes[cursor++];
             result |= (ulong)(value & 0x7f) << shift;
+
             if ((value & 0x80) == 0)
             {
                 return result;
             }
         }
+
 
         throw new PantsCorruptionException("SST trie varint overflows 64 bits.");
     }
@@ -275,10 +311,12 @@ sealed class TrieIndex
     static int ReadInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
         var value = ReadVarint(bytes, ref cursor);
+
         if (value > int.MaxValue)
         {
             throw new PantsCorruptionException($"SST trie {field} exceeds Int32.");
         }
+
 
         return (int)value;
     }
@@ -286,10 +324,12 @@ sealed class TrieIndex
     static uint ReadUInt32(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
         var value = ReadVarint(bytes, ref cursor);
+
         if (value > uint.MaxValue)
         {
             throw new PantsCorruptionException($"SST trie {field} exceeds UInt32.");
         }
+
 
         return (uint)value;
     }
@@ -297,10 +337,12 @@ sealed class TrieIndex
     static ushort ReadUInt16(ReadOnlySpan<byte> bytes, ref int cursor, string field)
     {
         var value = ReadVarint(bytes, ref cursor);
+
         if (value > ushort.MaxValue)
         {
             throw new PantsCorruptionException($"SST trie {field} exceeds UInt16.");
         }
+
 
         return (ushort)value;
     }

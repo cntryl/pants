@@ -23,7 +23,8 @@ public static class PantsServiceCollectionExtensions
 
     public static IServiceCollection AddPants(
         this IServiceCollection services,
-        PantsOpenOptions options)
+        PantsOpenOptions options
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         return services.AddPants(_ => options);
@@ -31,7 +32,8 @@ public static class PantsServiceCollectionExtensions
 
     public static IServiceCollection AddPants(
         this IServiceCollection services,
-        Func<IServiceProvider, PantsOpenOptions> optionsFactory)
+        Func<IServiceProvider, PantsOpenOptions> optionsFactory
+    )
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(optionsFactory);
@@ -45,7 +47,8 @@ public static class PantsServiceCollectionExtensions
     public static IServiceCollection AddKeyedPants(
         this IServiceCollection services,
         object serviceKey,
-        PantsOpenOptions options)
+        PantsOpenOptions options
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         return services.AddKeyedPants(serviceKey, _ => options);
@@ -54,7 +57,8 @@ public static class PantsServiceCollectionExtensions
     public static IServiceCollection AddKeyedPants(
         this IServiceCollection services,
         object serviceKey,
-        Func<IServiceProvider, PantsOpenOptions> optionsFactory)
+        Func<IServiceProvider, PantsOpenOptions> optionsFactory
+    )
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(serviceKey);
@@ -72,7 +76,8 @@ public static class PantsServiceCollectionExtensions
 
     public static OptionsBuilder<PantsDatabaseOptions> AddKeyedPants(
         this IServiceCollection services,
-        string serviceKey)
+        string serviceKey
+    )
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceKey);
@@ -89,7 +94,8 @@ public static class PantsServiceCollectionExtensions
 
     static OptionsBuilder<PantsDatabaseOptions> AddValidatedOptions(
         IServiceCollection services,
-        string name)
+        string name
+    )
     {
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<

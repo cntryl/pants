@@ -18,6 +18,7 @@ public sealed class PantsWalAuthorityRecoveryTests
         var holder = WalLedgerStore.LoadExisting(walDirectory).Holder;
         var members = new List<WalLedgerMember>();
         var previous = WalChainLink.Genesis;
+
         for (var id = 1UL; id <= 3; id++)
         {
             var open = new WalOpenFacts(id, 1, id, previous);
@@ -31,8 +32,10 @@ public sealed class PantsWalAuthorityRecoveryTests
             previous = facts?.Link ?? previous;
         }
 
+
         new WalLedgerStore(walDirectory, holder, WalChainLink.Genesis, members, 4, 100).Save();
         var damaged = Path.Combine(walDirectory, "00000000000000000002.wal");
+
         if (fault == "missing-file")
         {
             File.Delete(damaged);
@@ -40,6 +43,7 @@ public sealed class PantsWalAuthorityRecoveryTests
         else
         {
             using var stream = new FileStream(damaged, FileMode.Open, FileAccess.ReadWrite);
+
             if (fault == "missing-footer")
             {
                 stream.SetLength(checked((long)members[1].Sealed!.DataLen));
@@ -53,6 +57,7 @@ public sealed class PantsWalAuthorityRecoveryTests
                 _ = WalSegmentCodec.Seal(stream);
             }
         }
+
 
         await using (var salvaged = await PantsDatabase.OpenAsync(options.WithRecoveryPolicy(PantsRecoveryPolicy.Salvage)))
         {
@@ -85,11 +90,13 @@ public sealed class PantsWalAuthorityRecoveryTests
             "unknown"u8.ToArray(), "value"u8.ToArray(), ledger.Active.Open.FirstSeq,
             null, null, null, ledger.Active.Open.Epoch));
         WalTestFiles.ReplaceActiveRecords(directory.Path, [payload]);
+
         if (tornTail)
         {
             using var tail = new FileStream(ledger.ActivePath, FileMode.Append);
             tail.Write([0x10, 0x20, 0x30]);
         }
+
 
         var wal = await File.ReadAllBytesAsync(ledger.ActivePath);
         var ledgerPath = Path.Combine(directory.Path, "wal", "LEDGER");
@@ -116,11 +123,13 @@ public sealed class PantsWalAuthorityRecoveryTests
         var ledger = WalLedgerStore.LoadExisting(Path.Combine(directory.Path, "wal"));
         var first = ledger.Active.Open.FirstSeq;
         var records = new List<byte[]>();
+
         if (!beforeSegment)
         {
             records.Add(WalCodec.EncodeRecord(new WalRecord(0, WalOperation.Put,
                 "prefix"u8.ToArray(), "first"u8.ToArray(), first + 10, null, null, null, ledger.Active.Open.Epoch)));
         }
+
 
         records.Add(WalCodec.EncodeTransactionBatch(1, beforeSegment ? first - 1 : first + 9,
             ledger.Active.Open.Epoch,

@@ -22,18 +22,21 @@ public interface IPantsTransaction : IAsyncDisposable
     void Put(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        TimeSpan? timeToLive = null);
+        TimeSpan? timeToLive = null
+    );
 
     void Insert(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        TimeSpan? timeToLive = null);
+        TimeSpan? timeToLive = null
+    );
 
     void Delete(ReadOnlyMemory<byte> key);
 
     void DeleteRange(
         ReadOnlyMemory<byte> startInclusive,
-        ReadOnlyMemory<byte> endExclusive);
+        ReadOnlyMemory<byte> endExclusive
+    );
 
     /// <summary>
     ///     Requires the key to match <paramref name="expectedValue" /> at the transaction snapshot and
@@ -50,19 +53,23 @@ public interface IPantsTransaction : IAsyncDisposable
     /// </exception>
     void AssertValue(
         ReadOnlyMemory<byte> key,
-        ReadOnlyMemory<byte>? expectedValue);
+        ReadOnlyMemory<byte>? expectedValue
+    );
 
     ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<PantsPointReadResult> GetWithDiagnosticsAsync(
         ReadOnlyMemory<byte> key,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<IPantsScan> ScanAsync(
         PantsScanQuery query,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Commits the transaction with the requested durability.</summary>
     /// <remarks>
@@ -71,7 +78,8 @@ public interface IPantsTransaction : IAsyncDisposable
     /// </remarks>
     ValueTask CommitAsync(
         PantsWriteOptions options,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Commits and returns the sequence associated with this transaction's completion.</summary>
     /// <remarks>
@@ -83,7 +91,8 @@ public interface IPantsTransaction : IAsyncDisposable
     /// </remarks>
     ValueTask<ulong> CommitWithSequenceAsync(
         PantsWriteOptions options,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask RollbackAsync(CancellationToken cancellationToken = default);
 }

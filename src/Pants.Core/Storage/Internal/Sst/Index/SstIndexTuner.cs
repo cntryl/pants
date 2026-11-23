@@ -5,12 +5,14 @@ static class SstIndexTuner
     public static SstIndexKind Decide(KeyStructureProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+
         if (profile.KeyCount < 128 ||
             profile.Entropy > 4.0F ||
             profile.PrefixDivergence >= 1024)
         {
             return SstIndexKind.Sparse;
         }
+
 
         if ((profile.AverageSharedPrefix >= 6.0F && profile.Entropy < 3.5F) ||
             profile.CommonPrefixLength >= 2 ||

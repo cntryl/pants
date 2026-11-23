@@ -23,10 +23,12 @@ public sealed class TransactionReverseSpillMetadataTests
             {
                 Assert.Equal(materialized, pool.Used > baseline);
                 var actual = new List<string>();
+
                 while (scan.MoveNext())
                 {
                     actual.Add(TestBytes.ToText(scan.Current));
                 }
+
                 Assert.Equal(Enumerable.Range(0, 256).Reverse().Select(index => $"key-{index:0000}"), actual);
                 Assert.InRange(pool.Used, baseline, capacity);
             }

@@ -11,6 +11,7 @@ public sealed class PantsOwnedResourceScalingTests
         bool simulatedCloud)
     {
         var observations = new List<(int Count, PantsRuntimeMetrics Metrics)>();
+
         foreach (var count in new[] { 32, 64, 128 })
         {
             using var directory = new TemporaryDirectory();
@@ -22,10 +23,12 @@ public sealed class PantsOwnedResourceScalingTests
                     await using var writer = await database.Transactions.BeginAsync(
                         database.ColumnFamilies.DefaultFamily,
                         PantsTransactionMode.ReadWrite);
+
                     for (var index = start; index < start + 16; index++)
                     {
                         writer.Put(Key(index), Value(index));
                     }
+
 
                     await writer.CommitAsync(
                         simulatedCloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
@@ -48,12 +51,14 @@ public sealed class PantsOwnedResourceScalingTests
             await using (var scan = await reader.ScanAsync(new PantsScanQuery()))
             {
                 var seen = 0;
+
                 await foreach (var entry in scan)
                 {
                     Assert.Equal(Key(seen), entry.Key.ToArray());
                     Assert.Equal(Value(seen), entry.Value.ToArray());
                     seen++;
                 }
+
 
                 Assert.Equal(count, seen);
             }
@@ -69,6 +74,7 @@ public sealed class PantsOwnedResourceScalingTests
             Assert.InRange(metrics.ReadMetadataPeakBytes, 1, metrics.ReadMetadataCapacityBytes);
             observations.Add((count, metrics));
         }
+
 
         Assert.True(observations[0].Metrics.SstCount < observations[1].Metrics.SstCount);
         Assert.True(observations[1].Metrics.SstCount < observations[2].Metrics.SstCount);

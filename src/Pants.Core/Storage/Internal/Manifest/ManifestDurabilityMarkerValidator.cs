@@ -15,6 +15,7 @@ static class ManifestDurabilityMarkerValidator
     {
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
+
         if (root.ValueKind != JsonValueKind.Object ||
             !IsUnsignedInteger(root, "last_persisted_sequence") ||
             !IsUnsignedInteger(root, "ts_millis"))

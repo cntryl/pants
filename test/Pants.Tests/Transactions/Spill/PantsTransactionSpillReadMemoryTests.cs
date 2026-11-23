@@ -28,12 +28,14 @@ public sealed class PantsTransactionSpillReadMemoryTests
             PantsTransactionMode.ReadWrite);
         transaction.Put("scan:000"u8.ToArray(), "before-range"u8.ToArray());
         transaction.Put("scan:010"u8.ToArray(), "deleted-by-range"u8.ToArray());
+
         for (var index = 0; index < LargeValueCount; index++)
         {
             transaction.Put(
                 TestBytes.FromString($"scan:{index + 100:000}"),
                 new byte[LargeValueBytes]);
         }
+
 
         transaction.DeleteRange("scan:000"u8.ToArray(), "scan:020"u8.ToArray());
         transaction.Put("scan:000"u8.ToArray(), "after-range"u8.ToArray());
@@ -68,10 +70,12 @@ public sealed class PantsTransactionSpillReadMemoryTests
         var scanCreationAllocated = GC.GetAllocatedBytesForCurrentThread() - scanAllocationStart;
         await using var scan = await scanRequest;
         var rows = new List<PantsEntry>();
+
         await foreach (var row in scan)
         {
             rows.Add(row);
         }
+
 
         Assert.Equal(["scan:000", "scan:020"], rows.Select(row => TestBytes.ToText(row.Key)));
         Assert.Equal("after-range", TestBytes.ToText(rows[0].Value));
@@ -179,10 +183,12 @@ public sealed class PantsTransactionSpillReadMemoryTests
 
         using var scan = view.CreateKeyScan(null, null, PantsScanDirection.Reverse);
         var keys = new List<string>();
+
         while (scan.MoveNext())
         {
             keys.Add(TestBytes.ToText(scan.Current));
         }
+
         Assert.Equal(Enumerable.Range(0, 8).Reverse().Select(index => $"key-{index:00}"), keys);
         Assert.Equal(1, readers.PeakActive);
         Assert.Equal(0, readers.Active);
@@ -219,18 +225,22 @@ public sealed class PantsTransactionSpillReadMemoryTests
         using var view = store.CreateReadView([], new TransactionMemoryPool(4_096));
         using var scan = view.CreateKeyScan(null, null, direction);
         var keys = new List<string>();
+
         while (scan.MoveNext())
         {
             keys.Add(TestBytes.ToText(scan.Current));
         }
 
+
         var expected = Enumerable.Range(0, 8)
             .Select(index => $"key-{index:00}")
             .ToArray();
+
         if (direction == PantsScanDirection.Reverse)
         {
             Array.Reverse(expected);
         }
+
 
         Assert.Equal(expected, keys);
         Assert.Equal(1, readers.PeakActive);
@@ -257,10 +267,12 @@ public sealed class PantsTransactionSpillReadMemoryTests
         await transaction.RollbackAsync();
         Assert.NotEmpty(TransactionSpillHardeningTestHarness.FindArtifacts(directory.Path));
         var rows = new List<PantsEntry>();
+
         await foreach (var row in scan)
         {
             rows.Add(row);
         }
+
 
         await scan.DisposeAsync();
         Assert.Equal(["retained:a", "retained:b"], rows.Select(row => TestBytes.ToText(row.Key)));
@@ -271,13 +283,15 @@ public sealed class PantsTransactionSpillReadMemoryTests
     static TransactionSpillStore CreateManyRunStore(
         string path,
         int runCount,
-        CountingRunReaders readers)
+        CountingRunReaders readers
+    )
     {
         var store = new TransactionSpillStore(
             path,
             1,
             Family,
             readStreamFactory: readers.Open);
+
         for (var index = 0; index < runCount; index++)
         {
             store.WriteRun([
@@ -293,6 +307,7 @@ public sealed class PantsTransactionSpillReadMemoryTests
                     false)
             ]);
         }
+
 
         return store;
     }
@@ -318,10 +333,12 @@ public sealed class PantsTransactionSpillReadMemoryTests
             lock (_gate)
             {
                 OpenCalls++;
+
                 if (OpenCalls == _failOnOpen)
                 {
                     throw new IOException("Injected spill reader open failure.");
                 }
+
 
                 Active++;
                 PeakActive = Math.Max(PeakActive, Active);

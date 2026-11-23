@@ -128,6 +128,7 @@ public sealed class WalLedgerValidationTests
         var path = Path.Combine(directory.Path, "LEDGER");
         var bytes = File.ReadAllBytes(path);
         var snapshot = JsonNode.Parse(bytes.AsSpan(20))!["Snapshot"]!;
+
         switch (field)
         {
             case "anchor": snapshot["anchor"] = null; break;
@@ -137,6 +138,7 @@ public sealed class WalLedgerValidationTests
             case "previous": snapshot["members"]![0]!["open"]!["prev"] = null; break;
             case "digest": snapshot["members"]![0]!["open"]!["prev"]!["digest"] = null; break;
         }
+
 
         WriteSnapshot(path, snapshot);
         var corrupted = File.ReadAllBytes(path);

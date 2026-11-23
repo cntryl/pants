@@ -43,15 +43,18 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _total++;
         _rangeGets++;
         LargestRangeBytes = Math.Max(LargestRangeBytes, length);
+
         if (!_objects.TryGetValue(objectKey, out var value))
         {
             return ValueTask.FromResult<CloudObject?>(null);
         }
+
 
         var returnedLength = Math.Max(0, length - ShortenRangeByBytes);
         return ValueTask.FromResult<CloudObject?>(new CloudObject(
@@ -80,14 +83,17 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _total++;
         _puts++;
+
         if (condition is PantsCloudObjectWriteCondition.IfAbsent && _objects.ContainsKey(objectKey))
         {
             return ValueTask.FromResult(false);
         }
+
 
         _objects[objectKey] = (data.ToArray(), Guid.NewGuid().ToString("N"));
         return ValueTask.FromResult(true);
@@ -96,12 +102,14 @@ sealed class RangeCountingCloudObjectStore : ICloudObjectStore
     public ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         ValueTask.FromResult(new CloudObjectListPage([], null));
 
     public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         ValueTask.FromResult(CloudObjectDeleteOutcome.NotFound);
 }

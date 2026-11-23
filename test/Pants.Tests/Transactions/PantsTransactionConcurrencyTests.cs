@@ -134,6 +134,7 @@ public sealed class PantsTransactionConcurrencyTests
         var corrupted = original.ToArray();
         corrupted[sizeof(uint)] ^= 0xff;
         await File.WriteAllBytesAsync(sstPath, corrupted);
+
         try
         {
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -235,11 +236,13 @@ public sealed class PantsTransactionConcurrencyTests
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
         await using var first = await BeginWriteAsync(database);
         await using var second = await BeginWriteAsync(database);
+
         if (abortOnConflict)
         {
             first.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
             second.SetConflictPolicy(PantsConflictPolicy.AbortOnWriteConflict);
         }
+
 
         first.Insert("key"u8.ToArray(), "first"u8.ToArray());
         second.Insert("key"u8.ToArray(), "second"u8.ToArray());
@@ -310,10 +313,12 @@ public sealed class PantsTransactionConcurrencyTests
     static async Task<List<PantsEntry>> ReadAllAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }

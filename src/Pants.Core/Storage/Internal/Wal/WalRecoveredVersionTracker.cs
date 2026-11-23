@@ -22,12 +22,14 @@ sealed class WalRecoveredVersionTracker
     /// </summary>
     public IReadOnlyList<WalMutation> ValidateAndRecord(
         IReadOnlyList<WalMutation> mutations,
-        string source)
+        string source
+    )
     {
         ArgumentNullException.ThrowIfNull(mutations);
         ArgumentNullException.ThrowIfNull(source);
         var pending = new Dictionary<(uint ColumnFamilyId, ulong Sequence), Dictionary<byte[], Recovered>>();
         var skipped = new HashSet<WalMutation>(ReferenceEqualityComparer.Instance);
+
         foreach (var mutation in mutations)
         {
             if (!IsPointMutation(mutation.Operation))
@@ -37,10 +39,12 @@ sealed class WalRecoveredVersionTracker
 
             var identity = (mutation.ColumnFamilyId, mutation.Sequence);
             var inPending = GetOrCreate(pending, identity);
+
             if (inPending.ContainsKey(mutation.Key))
             {
                 throw Duplicate(mutation);
             }
+
 
             if (_versions.TryGetValue(identity, out var recoveredKeys) &&
                 recoveredKeys.TryGetValue(mutation.Key, out var earlier))
@@ -58,9 +62,11 @@ sealed class WalRecoveredVersionTracker
             inPending.Add(mutation.Key, new Recovered(source, mutation));
         }
 
+
         foreach (var (identity, keys) in pending)
         {
             var recoveredKeys = GetOrCreate(_versions, identity);
+
             foreach (var (key, recovered) in keys)
             {
                 recoveredKeys.Add(key.ToArray(), recovered);
@@ -85,7 +91,8 @@ sealed class WalRecoveredVersionTracker
 
     static Dictionary<byte[], Recovered> GetOrCreate(
         Dictionary<(uint ColumnFamilyId, ulong Sequence), Dictionary<byte[], Recovered>> versions,
-        (uint ColumnFamilyId, ulong Sequence) identity)
+        (uint ColumnFamilyId, ulong Sequence) identity
+    )
     {
         if (!versions.TryGetValue(identity, out var keys))
         {

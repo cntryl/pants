@@ -37,7 +37,8 @@ sealed class TransactionSpillStore : IDisposable
         ColumnFamilyIdentity family,
         StorageBudgetLedger? ledger = null,
         SpillRunRetirement? retirement = null,
-        Func<string, Stream>? readStreamFactory = null)
+        Func<string, Stream>? readStreamFactory = null
+    )
     {
         _directory = Path.Combine(databasePath, "txn");
         _transactionId = checked((ulong)transactionId);
@@ -108,6 +109,7 @@ sealed class TransactionSpillStore : IDisposable
     public void WriteRun(IReadOnlyList<TransactionIntentOperation> operations)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (operations.Count == 0)
         {
             return;
@@ -115,6 +117,7 @@ sealed class TransactionSpillStore : IDisposable
 
         // Retry first: a file freed by a successful removal returns its charge before this write
         // is measured against the budget.
+
         _retirement.RetryPending();
         var sorted = operations
             .OrderBy(static operation => operation.Key, ByteArrayComparer.Instance)
@@ -163,13 +166,15 @@ sealed class TransactionSpillStore : IDisposable
 
     public TransactionIntentReadView CreateReadView(
         IReadOnlyList<TransactionIntentOperation> residentOperations,
-        TransactionMemoryPool memoryPool)
+        TransactionMemoryPool memoryPool
+    )
     {
         ArgumentNullException.ThrowIfNull(residentOperations);
         lock (_lifetimeGate)
         {
             ObjectDisposedException.ThrowIf(_disposeRequested, this);
             _activeReadViews = checked(_activeReadViews + 1);
+
             try
             {
                 return new TransactionIntentReadView(
@@ -191,7 +196,8 @@ sealed class TransactionSpillStore : IDisposable
         byte[]? startInclusive,
         byte[]? endExclusive,
         PantsScanDirection direction,
-        TransactionMemoryPool? memoryPool = null) =>
+        TransactionMemoryPool? memoryPool = null
+    ) =>
         new TransactionSpillRunKeyCursor(
             this,
             run,
@@ -212,7 +218,8 @@ sealed class TransactionSpillStore : IDisposable
     internal void LookupLatest(
         IReadOnlyList<TransactionSpillRun> runs,
         ReadOnlySpan<byte> key,
-        ref TransactionIntentLookup? latest)
+        ref TransactionIntentLookup? latest
+    )
     {
         foreach (var run in runs)
         {
@@ -224,10 +231,12 @@ sealed class TransactionSpillStore : IDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         TransactionIntentLookup? latest = null;
+
         foreach (var run in _runs)
         {
             LookupRunKey(run, ordinal, key, ref latest);
         }
+
 
         return latest;
     }
@@ -236,6 +245,7 @@ sealed class TransactionSpillStore : IDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentNullException.ThrowIfNull(visitor);
+
         foreach (var run in _runs)
         {
             ReadRun(run, visitor);
@@ -265,11 +275,13 @@ sealed class TransactionSpillStore : IDisposable
     void DeleteRuns()
     {
         var paths = new List<string>(_runs.Count * 2);
+
         foreach (var run in _runs)
         {
             paths.Add(run.Path);
             paths.Add(run.RangePath);
         }
+
 
         _runs.Clear();
         // Charges are handed to retirement rather than released here: a read view can defer deletion,
@@ -282,6 +294,7 @@ sealed class TransactionSpillStore : IDisposable
         }
 
         _retirement.Retire(paths, reservations);
+
         try
         {
             lock (DirectoryMutationGate)
@@ -315,11 +328,13 @@ sealed class TransactionSpillStore : IDisposable
 
     internal TransactionSpillRunHeader ReadRunHeader(
         Stream stream,
-        TransactionSpillRun run)
+        TransactionSpillRun run
+    )
     {
         Span<byte> header = stackalloc byte[HeaderLength];
         stream.Position = 0;
         ReadExactly(stream, header, "Transaction spill header is truncated.");
+
         if (!header[..8].SequenceEqual(RunMagic) ||
             BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 2 ||
             DiskFormat.Crc32C(header[..44]) !=
@@ -330,12 +345,14 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill header is invalid.");
         }
 
+
         var recordCount = BinaryPrimitives.ReadUInt64LittleEndian(header[12..]);
         var ordinalTableOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
         var sparseIndexOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[28..]);
         var sparseCount = BinaryPrimitives.ReadUInt64LittleEndian(header[36..]);
         var fileLength = checked((ulong)stream.Length);
         var expectedSparseCount = checked((recordCount + SparseIndexStride - 1) / SparseIndexStride);
+
         if (recordCount != checked((ulong)run.RecordCount) ||
             recordCount > int.MaxValue ||
             sparseCount > int.MaxValue ||
@@ -350,6 +367,7 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill metadata is inconsistent.");
         }
 
+
         return new TransactionSpillRunHeader(
             checked((int)recordCount),
             ordinalTableOffset,
@@ -361,7 +379,8 @@ sealed class TransactionSpillStore : IDisposable
     internal static ulong FindSparseStart(
         Stream stream,
         TransactionSpillRunHeader header,
-        byte[]? target)
+        byte[]? target
+    )
     {
         var cursor = header.SparseIndexOffset;
         byte[]? previousKey = null;
@@ -369,6 +388,7 @@ sealed class TransactionSpillStore : IDisposable
         var candidateOffset = (ulong)HeaderLength;
         var selectedOffset = (ulong)HeaderLength;
         var selected = target is null;
+
         for (var index = 0; index < header.SparseCount; index++)
         {
             stream.Position = checked((long)cursor);
@@ -380,6 +400,7 @@ sealed class TransactionSpillStore : IDisposable
                 previousKey,
                 previousOperationOffset,
                 index);
+
             if (!selected && target is not null)
             {
                 if (ByteArrayComparer.Instance.Compare(key, target) >= 0)
@@ -393,9 +414,11 @@ sealed class TransactionSpillStore : IDisposable
                 }
             }
 
+
             previousKey = key;
             previousOperationOffset = operationOffset;
         }
+
 
         if (!selected)
         {
@@ -414,12 +437,14 @@ sealed class TransactionSpillStore : IDisposable
 
     internal static IReadOnlyList<ulong> ReadSparseOffsets(
         Stream stream,
-        TransactionSpillRunHeader header)
+        TransactionSpillRunHeader header
+    )
     {
         var offsets = new List<ulong>(header.SparseCount);
         var cursor = header.SparseIndexOffset;
         byte[]? previousKey = null;
         ulong? previousOffset = null;
+
         for (var index = 0; index < header.SparseCount; index++)
         {
             stream.Position = checked((long)cursor);
@@ -435,6 +460,7 @@ sealed class TransactionSpillStore : IDisposable
             previousKey = key;
             previousOffset = operationOffset;
         }
+
 
         if (cursor != header.FileLength)
         {
@@ -452,6 +478,7 @@ sealed class TransactionSpillStore : IDisposable
         var cursor = header.SparseIndexOffset;
         byte[]? previousKey = null;
         ulong? previousOffset = null;
+
         for (var index = 0; index < header.SparseCount; index++)
         {
             stream.Position = checked((long)cursor);
@@ -459,17 +486,22 @@ sealed class TransactionSpillStore : IDisposable
             cursor = checked((ulong)stream.Position);
             var (key, offset) = ParseSparseEntry(
                 payload, header.OrdinalTableOffset, previousKey, previousOffset, index);
+
             if (offset < before)
             {
                 selected = offset;
             }
+
             previousKey = key;
             previousOffset = offset;
         }
+
+
         if (cursor != header.FileLength || selected is null)
         {
             throw new PantsCorruptionException("Transaction spill sparse index has an invalid reverse extent.");
         }
+
         return selected.Value;
     }
 
@@ -478,7 +510,8 @@ sealed class TransactionSpillStore : IDisposable
         ulong ordinalTableOffset,
         byte[]? previousKey,
         ulong? previousOffset,
-        int index)
+        int index
+    )
     {
         if (payload.Length < 12)
         {
@@ -489,6 +522,7 @@ sealed class TransactionSpillStore : IDisposable
 
         var keyLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(payload));
         var keyEnd = checked(sizeof(uint) + keyLength);
+
         if (keyEnd > payload.Length || checked(keyEnd + sizeof(ulong)) != payload.Length)
         {
             throw PantsException.Create(
@@ -496,7 +530,9 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill sparse index entry has an invalid length.");
         }
 
+
         var key = payload.AsSpan(sizeof(uint), keyLength).ToArray();
+
         if (previousKey is not null && ByteArrayComparer.Instance.Compare(previousKey, key) > 0)
         {
             throw PantsException.Create(
@@ -504,13 +540,16 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill sparse index is not sorted.");
         }
 
+
         var operationOffset = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(keyEnd));
+
         if (operationOffset < HeaderLength || operationOffset >= ordinalTableOffset)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill sparse operation offset is out of bounds.");
         }
+
 
         if (previousOffset is { } priorOffset && operationOffset <= priorOffset)
         {
@@ -546,7 +585,8 @@ sealed class TransactionSpillStore : IDisposable
         TransactionSpillRun run,
         ulong ordinalCeiling,
         ReadOnlySpan<byte> key,
-        ref TransactionIntentLookup? latest)
+        ref TransactionIntentLookup? latest
+    )
     {
         try
         {
@@ -560,12 +600,14 @@ sealed class TransactionSpillStore : IDisposable
             var header = ReadRunHeader(stream, run);
             var keyCopy = key.ToArray();
             var cursor = FindSparseStart(stream, header, keyCopy);
+
             while (cursor < header.OrdinalTableOffset)
             {
                 var recordOffset = cursor;
                 stream.Position = checked((long)recordOffset);
                 var (candidateOrdinal, candidateKey, kind) = ReadOperationPrimaryKeyFrame(stream);
                 var nextCursor = checked((ulong)stream.Position);
+
                 if (nextCursor > header.OrdinalTableOffset || nextCursor <= cursor)
                 {
                     throw PantsException.Create(
@@ -573,12 +615,15 @@ sealed class TransactionSpillStore : IDisposable
                         "Transaction spill data frame overlaps its ordinal table.");
                 }
 
+
                 cursor = nextCursor;
                 var comparison = ByteArrayComparer.Instance.Compare(candidateKey, keyCopy);
+
                 if (comparison > 0)
                 {
                     break;
                 }
+
 
                 if (comparison == 0 &&
                     kind != CommitOperationKind.DeleteRange &&
@@ -586,6 +631,7 @@ sealed class TransactionSpillStore : IDisposable
                 {
                     stream.Position = checked((long)recordOffset);
                     var operation = ReadOperationFrame(stream);
+
                     if (operation.Ordinal != candidateOrdinal ||
                         checked((ulong)stream.Position) != nextCursor)
                     {
@@ -594,9 +640,11 @@ sealed class TransactionSpillStore : IDisposable
                             "Transaction spill point lookup changed frame boundaries.");
                     }
 
+
                     TransactionIntentLookup.Consider(ref latest, operation, key);
                 }
             }
+
 
             TransactionSpillRangeIndex.Lookup(run.RangePath, ordinalCeiling, key, ref latest);
         }
@@ -612,20 +660,24 @@ sealed class TransactionSpillStore : IDisposable
         var ordinalOffsets = new List<(ulong Ordinal, ulong Offset)>(operations.Length);
         var sparseEntries = new List<(byte[] Key, ulong Offset)>(
             operations.Length / SparseIndexStride + 1);
+
         for (var index = 0; index < operations.Length; index++)
         {
             var operation = operations[index];
             var offset = checked((ulong)stream.Position);
             WriteOperationFrame(stream, operation);
             ordinalOffsets.Add((operation.Ordinal, offset));
+
             if (index % SparseIndexStride == 0)
             {
                 sparseEntries.Add((operation.Key, offset));
             }
         }
 
+
         var ordinalTableOffset = checked((ulong)stream.Position);
         var ordinalPayload = new byte[16];
+
         foreach (var (ordinal, offset) in ordinalOffsets.OrderBy(static entry => entry.Ordinal))
         {
             BinaryPrimitives.WriteUInt64LittleEndian(ordinalPayload, ordinal);
@@ -633,7 +685,9 @@ sealed class TransactionSpillStore : IDisposable
             WriteFrame(stream, ordinalPayload);
         }
 
+
         var sparseIndexOffset = checked((ulong)stream.Position);
+
         foreach (var (key, offset) in sparseEntries)
         {
             using var payload = new MemoryStream();
@@ -642,6 +696,7 @@ sealed class TransactionSpillStore : IDisposable
             DiskFormat.WriteUInt64(payload, offset);
             WriteFrame(stream, payload.GetBuffer().AsSpan(0, checked((int)payload.Length)));
         }
+
 
         Span<byte> header = stackalloc byte[HeaderLength];
         RunMagic.CopyTo(header);
@@ -669,6 +724,7 @@ sealed class TransactionSpillStore : IDisposable
                 FileOptions.SequentialScan);
             Span<byte> header = stackalloc byte[HeaderLength];
             ReadExactly(stream, header, "Transaction spill header is truncated.");
+
             if (!header[..8].SequenceEqual(RunMagic) ||
                 BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != 2 ||
                 DiskFormat.Crc32C(header[..44]) != BinaryPrimitives.ReadUInt32LittleEndian(header[44..]))
@@ -676,12 +732,14 @@ sealed class TransactionSpillStore : IDisposable
                 throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill header is invalid.");
             }
 
+
             var recordCount = BinaryPrimitives.ReadUInt64LittleEndian(header[12..]);
             var ordinalTableOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[20..]);
             var sparseIndexOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[28..]);
             var sparseCount = BinaryPrimitives.ReadUInt64LittleEndian(header[36..]);
             var streamLength = checked((ulong)stream.Length);
             var expectedSparseCount = checked((recordCount + SparseIndexStride - 1) / SparseIndexStride);
+
             if (recordCount != checked((ulong)run.RecordCount) ||
                 ordinalTableOffset < HeaderLength ||
                 ordinalTableOffset >= streamLength ||
@@ -692,11 +750,14 @@ sealed class TransactionSpillStore : IDisposable
                 throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill metadata is inconsistent.");
             }
 
+
             stream.Position = checked((long)ordinalTableOffset);
             ulong? previousOrdinal = null;
+
             for (var index = 0; index < run.RecordCount; index++)
             {
                 var entry = ReadFrame(stream);
+
                 if (entry.Length != 16)
                 {
                     throw PantsException.Create(
@@ -704,15 +765,18 @@ sealed class TransactionSpillStore : IDisposable
                         "Transaction spill ordinal entry has an invalid length.");
                 }
 
+
                 var nextTablePosition = stream.Position;
                 var ordinal = BinaryPrimitives.ReadUInt64LittleEndian(entry);
                 var offset = BinaryPrimitives.ReadUInt64LittleEndian(entry.AsSpan(8));
+
                 if (offset < HeaderLength || offset >= ordinalTableOffset)
                 {
                     throw PantsException.Create(
                         PantsErrorCode.Corruption,
                         "Transaction spill operation offset is out of bounds.");
                 }
+
 
                 if (previousOrdinal is { } previous && ordinal <= previous)
                 {
@@ -723,6 +787,7 @@ sealed class TransactionSpillStore : IDisposable
 
                 stream.Position = checked((long)offset);
                 var operation = ReadOperationFrame(stream, ordinal);
+
                 if (checked((ulong)stream.Position) > ordinalTableOffset)
                 {
                     throw PantsException.Create(
@@ -730,10 +795,12 @@ sealed class TransactionSpillStore : IDisposable
                         "Transaction spill operation exceeds its data section.");
                 }
 
+
                 visitor(operation);
                 previousOrdinal = ordinal;
                 stream.Position = nextTablePosition;
             }
+
 
             if (checked((ulong)stream.Position) != sparseIndexOffset)
             {
@@ -810,13 +877,16 @@ sealed class TransactionSpillStore : IDisposable
 
     internal TransactionIntentOperation ReadOperationFrame(
         Stream stream,
-        ulong? expectedOrdinal = null)
+        ulong? expectedOrdinal = null
+    )
     {
         var payload = ReadFrame(stream);
+
         if (payload.Length < 30)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation is truncated.");
         }
+
 
         ReadOnlySpan<byte> bytes = payload;
         var ordinal = BinaryPrimitives.ReadUInt64LittleEndian(bytes);
@@ -824,6 +894,7 @@ sealed class TransactionSpillStore : IDisposable
         var familyId = BinaryPrimitives.ReadUInt32LittleEndian(bytes[9..]);
         var ttlPresent = bytes[13];
         var ttlSeconds = BinaryPrimitives.ReadUInt64LittleEndian(bytes[14..]);
+
         if ((expectedOrdinal is { } expected && ordinal != expected) ||
             familyId != _family.Id || ttlPresent > 1 ||
             (ttlPresent == 0 && ttlSeconds != 0) || (tag >= 2 && ttlPresent != 0))
@@ -831,21 +902,26 @@ sealed class TransactionSpillStore : IDisposable
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation metadata is invalid.");
         }
 
+
         var cursor = 22;
         var key = ReadField(bytes, ref cursor);
         var second = ReadField(bytes, ref cursor);
+
         if (cursor != bytes.Length || tag > 3 || (tag == 2 && second.Length != 0))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill operation payload is invalid.");
         }
 
+
         var maximumTimeToLiveSeconds = checked((ulong)(TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond));
+
         if (ttlPresent != 0 && ttlSeconds > maximumTimeToLiveSeconds)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill TTL exceeds the supported range.");
         }
+
 
         TimeSpan? ttl = ttlPresent == 0
             ? null
@@ -892,12 +968,14 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, frameHeader, "Transaction spill frame header is truncated.");
         var payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(frameHeader));
         var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(frameHeader[4..]);
+
         if (payloadLength > DiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill frame exceeds the limit.");
         }
+
 
         if (payloadLength < 30)
         {
@@ -918,6 +996,7 @@ sealed class TransactionSpillStore : IDisposable
         var familyId = BinaryPrimitives.ReadUInt32LittleEndian(fixedFields[9..]);
         var ttlPresent = fixedFields[13];
         var ttlSeconds = BinaryPrimitives.ReadUInt64LittleEndian(fixedFields[14..]);
+
         if (tag > 3 || familyId != _family.Id || ttlPresent > 1 ||
             (ttlPresent == 0 && ttlSeconds != 0) ||
             (tag >= 2 && ttlPresent != 0))
@@ -927,14 +1006,17 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill operation metadata is invalid.");
         }
 
+
         var maximumTimeToLiveSeconds = checked(
             (ulong)(TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerSecond));
+
         if (ttlPresent != 0 && ttlSeconds > maximumTimeToLiveSeconds)
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill TTL exceeds the supported range.");
         }
+
 
         Span<byte> fieldLength = stackalloc byte[sizeof(uint)];
         ReadCrcExactly(
@@ -944,12 +1026,14 @@ sealed class TransactionSpillStore : IDisposable
             "Transaction spill key length is truncated.");
         var keyLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(fieldLength));
         var consumed = 22 + sizeof(uint);
+
         if (keyLength > payloadLength - consumed - sizeof(uint))
         {
             throw PantsException.Create(
                 PantsErrorCode.Corruption,
                 "Transaction spill key length exceeds its frame.");
         }
+
 
         var key = GC.AllocateUninitializedArray<byte>(keyLength);
         ReadCrcExactly(
@@ -965,6 +1049,7 @@ sealed class TransactionSpillStore : IDisposable
             "Transaction spill value length is truncated.");
         consumed = checked(consumed + sizeof(uint));
         var secondLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(fieldLength));
+
         if (secondLength != payloadLength - consumed ||
             (tag == 2 && secondLength != 0))
         {
@@ -973,8 +1058,10 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill operation payload is invalid.");
         }
 
+
         Span<byte> scratch = stackalloc byte[8 * 1_024];
         var remaining = secondLength;
+
         while (remaining != 0)
         {
             var chunkLength = Math.Min(remaining, scratch.Length);
@@ -985,6 +1072,7 @@ sealed class TransactionSpillStore : IDisposable
                 "Transaction spill value is truncated.");
             remaining -= chunkLength;
         }
+
 
         if (checksum != expectedChecksum)
         {
@@ -1008,7 +1096,8 @@ sealed class TransactionSpillStore : IDisposable
         Stream stream,
         Span<byte> destination,
         ref uint checksum,
-        string message)
+        string message
+    )
     {
         ReadExactly(stream, destination, message);
         checksum = DiskFormat.Crc32CAppend(checksum, destination);
@@ -1019,12 +1108,14 @@ sealed class TransactionSpillStore : IDisposable
         ulong ordinalTableOffset,
         ulong sparseIndexOffset,
         int sparseCount,
-        int recordCount)
+        int recordCount
+    )
     {
         var sparseCursor = sparseIndexOffset;
         var operationCursor = (ulong)HeaderLength;
         byte[]? previousKey = null;
         ulong? previousOffset = null;
+
         for (var index = 0; index < sparseCount; index++)
         {
             stream.Position = checked((long)sparseCursor);
@@ -1036,6 +1127,7 @@ sealed class TransactionSpillStore : IDisposable
                 previousKey,
                 previousOffset,
                 index);
+
             if (operationOffset != operationCursor)
             {
                 throw PantsException.Create(
@@ -1043,20 +1135,25 @@ sealed class TransactionSpillStore : IDisposable
                     "Transaction spill sparse index does not match its operation stride.");
             }
 
+
             var operationsInStride = Math.Min(
                 SparseIndexStride,
                 checked(recordCount - index * SparseIndexStride));
             byte[]? indexedOperationKey = null;
+
             for (var operationIndex = 0; operationIndex < operationsInStride; operationIndex++)
             {
                 stream.Position = checked((long)operationCursor);
                 var (_, operationKey, _) = ReadOperationPrimaryKeyFrame(stream);
+
                 if (operationIndex == 0)
                 {
                     indexedOperationKey = operationKey;
                 }
 
+
                 operationCursor = checked((ulong)stream.Position);
+
                 if (operationCursor > ordinalTableOffset)
                 {
                     throw PantsException.Create(
@@ -1064,6 +1161,7 @@ sealed class TransactionSpillStore : IDisposable
                         "Transaction spill operation exceeds its data section.");
                 }
             }
+
 
             if (indexedOperationKey is null || !key.AsSpan().SequenceEqual(indexedOperationKey))
             {
@@ -1075,6 +1173,7 @@ sealed class TransactionSpillStore : IDisposable
             previousKey = key;
             previousOffset = operationOffset;
         }
+
 
         if (operationCursor != ordinalTableOffset || sparseCursor != checked((ulong)stream.Length))
         {
@@ -1088,10 +1187,12 @@ sealed class TransactionSpillStore : IDisposable
         Stream runStream,
         ulong ordinalTableOffset,
         int recordCount,
-        TransactionSpillRangeNode node)
+        TransactionSpillRangeNode node
+    )
     {
         var lower = 0;
         var upper = recordCount - 1;
+
         while (lower <= upper)
         {
             var middle = lower + (upper - lower) / 2;
@@ -1099,6 +1200,7 @@ sealed class TransactionSpillStore : IDisposable
                 ordinalTableOffset + (ulong)middle * (2 * sizeof(uint) + 2 * sizeof(ulong)));
             runStream.Position = checked((long)entryOffset);
             var entry = ReadFrame(runStream);
+
             if (entry.Length != 2 * sizeof(ulong))
             {
                 throw PantsException.Create(
@@ -1106,12 +1208,15 @@ sealed class TransactionSpillStore : IDisposable
                     "Transaction spill ordinal entry has an invalid length.");
             }
 
+
             var ordinal = BinaryPrimitives.ReadUInt64LittleEndian(entry);
+
             if (ordinal < node.Ordinal)
             {
                 lower = middle + 1;
                 continue;
             }
+
 
             if (ordinal > node.Ordinal)
             {
@@ -1122,6 +1227,7 @@ sealed class TransactionSpillStore : IDisposable
             var operationOffset = BinaryPrimitives.ReadUInt64LittleEndian(entry.AsSpan(sizeof(ulong)));
             runStream.Position = checked((long)operationOffset);
             var operation = ReadOperationFrame(runStream, node.Ordinal);
+
             if (operation.Kind != CommitOperationKind.DeleteRange ||
                 !operation.Key.AsSpan().SequenceEqual(node.Start) ||
                 operation.EndExclusive is null ||
@@ -1132,8 +1238,10 @@ sealed class TransactionSpillStore : IDisposable
                     "Transaction range node does not match its delete-range operation.");
             }
 
+
             return;
         }
+
 
         throw PantsException.Create(
             PantsErrorCode.Corruption,
@@ -1158,17 +1266,21 @@ sealed class TransactionSpillStore : IDisposable
         ReadExactly(stream, header, "Transaction spill frame header is truncated.");
         var length = BinaryPrimitives.ReadUInt32LittleEndian(header);
         var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
+
         if (length > DiskFormat.WalMaximumRecordBytes)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill frame exceeds the limit.");
         }
 
+
         var payload = GC.AllocateUninitializedArray<byte>(checked((int)length));
         ReadExactly(stream, payload, "Transaction spill frame is truncated.");
+
         if (DiskFormat.Crc32C(payload) != expectedChecksum)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill frame checksum does not match.");
         }
+
 
         return payload;
     }
@@ -1182,10 +1294,12 @@ sealed class TransactionSpillStore : IDisposable
 
         var length = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(payload[cursor..]));
         cursor += sizeof(uint);
+
         if (length < 0 || cursor > payload.Length - length)
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "Transaction spill field is truncated.");
         }
+
 
         var value = payload.Slice(cursor, length).ToArray();
         cursor += length;

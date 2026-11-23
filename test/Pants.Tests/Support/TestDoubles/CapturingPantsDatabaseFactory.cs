@@ -10,7 +10,8 @@ sealed class CapturingPantsDatabaseFactory : IPantsDatabaseFactory
 
     public ValueTask<IPantsDatabase> OpenAsync(
         PantsOpenOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         Interlocked.Increment(ref _openCount);
         Options = options;

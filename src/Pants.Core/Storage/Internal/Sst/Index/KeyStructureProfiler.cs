@@ -43,6 +43,7 @@ sealed class KeyStructureProfiler
         }
 
         var prefix = key[..Math.Min(TrackedPrefixLength, key.Length)].ToArray();
+
         if (_prefixFrequencies.TryGetValue(prefix, out var frequency))
         {
             _prefixFrequencies[prefix] = checked(frequency + 1);
@@ -51,6 +52,7 @@ sealed class KeyStructureProfiler
         {
             _prefixFrequencies.Add(prefix, 1);
         }
+
 
         foreach (var value in key)
         {
@@ -104,6 +106,7 @@ sealed class KeyStructureProfiler
         }
 
         float entropy = 0;
+
         foreach (var count in _byteFrequencies)
         {
             if (count == 0)
@@ -115,6 +118,7 @@ sealed class KeyStructureProfiler
             entropy -= probability * MathF.Log2(probability);
         }
 
+
         return entropy;
     }
 
@@ -122,10 +126,12 @@ sealed class KeyStructureProfiler
     {
         var length = Math.Min(left.Length, right.Length);
         var index = 0;
+
         while (index < length && left[index] == right[index])
         {
             index++;
         }
+
 
         return index;
     }

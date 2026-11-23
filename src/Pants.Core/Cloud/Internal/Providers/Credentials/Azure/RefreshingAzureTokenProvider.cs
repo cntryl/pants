@@ -20,7 +20,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
         Uri blobEndpoint,
         HttpClient httpClient,
         TimeSpan timeout,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         _source = source is PantsAzureCredentialSource.LightweightDefaultChain
             ? SelectDefaultChainSource()
@@ -34,12 +35,15 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     public async ValueTask<string> GetTokenAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
         if (_cached is { } cached && !cached.RequiresRefresh(_timeProvider.GetUtcNow()))
         {
             return cached.AccessToken;
         }
 
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             if (_cached is { } current && !current.RequiresRefresh(_timeProvider.GetUtcNow()))
@@ -91,7 +95,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
 
     async ValueTask<CachedAzureToken> RefreshWorkloadIdentityAsync(
         PantsAzureCredentialSource.WorkloadIdentity source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var tenant = FirstNonempty(source.TenantId, Environment.GetEnvironmentVariable("AZURE_TENANT_ID")) ??
                      throw new PantsInvalidArgumentException("Missing AZURE_TENANT_ID.");
@@ -102,6 +107,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
                             Environment.GetEnvironmentVariable("AZURE_FEDERATED_TOKEN_FILE")) ??
                         throw new PantsInvalidArgumentException("Missing AZURE_FEDERATED_TOKEN_FILE.");
         string assertion;
+
         try
         {
             assertion = (await File.ReadAllTextAsync(tokenPath, cancellationToken)
@@ -119,6 +125,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
                 "Azure federated token file could not be read.",
                 exception);
         }
+
 
         if (assertion.Length == 0)
         {
@@ -142,7 +149,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
 
     async ValueTask<CachedAzureToken> RefreshManagedIdentityAsync(
         PantsAzureCredentialSource.ManagedIdentity source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var clientId = FirstNonempty(
             source.ClientId,
@@ -164,16 +172,19 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
             new("api-version", apiVersion),
             new("resource", "https://storage.azure.com/")
         };
+
         if (clientId is not null)
         {
             parameters.Add(new KeyValuePair<string, string>("client_id", clientId));
         }
+
 
         builder.Query = string.Join(
             '&',
             parameters.Select(static parameter =>
                 $"{Uri.EscapeDataString(parameter.Key)}={Uri.EscapeDataString(parameter.Value)}"));
         using var request = new HttpRequestMessage(HttpMethod.Get, builder.Uri);
+
         if (!string.IsNullOrWhiteSpace(identityEndpoint))
         {
             request.Headers.TryAddWithoutValidation(
@@ -191,6 +202,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
             request.Headers.TryAddWithoutValidation("Metadata", "true");
         }
 
+
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, "Azure managed identity token request");
         return await ParseTokenResponseAsync(
@@ -202,7 +214,8 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     async ValueTask<CachedAzureToken> RequestOAuthTokenAsync(
         string tenant,
         IReadOnlyDictionary<string, string> fields,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var authority = ResolveAuthority();
         var tokenUri = new Uri(
@@ -224,12 +237,14 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
 
     async ValueTask<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         try
         {
             return await _httpClient.SendAsync(
@@ -252,10 +267,12 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     Uri ResolveAuthority()
     {
         var configured = Environment.GetEnvironmentVariable("AZURE_AUTHORITY_HOST");
+
         if (configured is not null)
         {
             return ValidateAuthority(configured);
         }
+
 
         var authority = _blobEndpoint.Host switch
         {
@@ -290,9 +307,11 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     async ValueTask<CachedAzureToken> ParseTokenResponseAsync(
         HttpResponseMessage response,
         bool requireAbsoluteExpiry,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         JsonDocument document;
+
         try
         {
             document = JsonDocument.Parse(
@@ -304,27 +323,33 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
             throw new PantsIOException("Azure token response JSON is malformed.", exception);
         }
 
+
         using (document)
         {
             var root = document.RootElement;
+
             if (root.ValueKind != JsonValueKind.Object)
             {
                 throw new PantsIOException(
                     "Azure token response must be a JSON object.");
             }
 
+
             var token = root.TryGetProperty("access_token", out var tokenElement) &&
                         tokenElement.ValueKind == JsonValueKind.String
                 ? tokenElement.GetString()
                 : null;
+
             if (string.IsNullOrWhiteSpace(token))
             {
                 throw new PantsIOException(
                     "Azure token response omitted a non-empty access_token.");
             }
 
+
             var now = _timeProvider.GetUtcNow();
             DateTimeOffset expiresAt;
+
             if (root.TryGetProperty("expires_on", out var absolute) &&
                 TryReadPositiveInt64(absolute, out var seconds))
             {
@@ -359,6 +384,7 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
                 throw new PantsIOException(
                     "Azure token response omitted a valid expiry.");
             }
+
 
             if (expiresAt <= now)
             {
@@ -421,10 +447,12 @@ sealed class RefreshingAzureTokenProvider : IAzureTokenProvider, IDisposable
     static bool TryReadPositiveInt64(JsonElement value, out long result)
     {
         result = 0;
+
         if (value.ValueKind == JsonValueKind.Number)
         {
             return value.TryGetInt64(out result);
         }
+
 
         return value.ValueKind == JsonValueKind.String &&
                long.TryParse(

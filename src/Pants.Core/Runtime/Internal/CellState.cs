@@ -31,6 +31,7 @@ sealed class CellState
     internal static CellState FromUnixMilliseconds(
         byte[]? value,
         ulong writeSequence,
-        ulong? expirationUnixMilliseconds) =>
+        ulong? expirationUnixMilliseconds
+    ) =>
         new(value, writeSequence, expirationUnixMilliseconds);
 }

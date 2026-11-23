@@ -26,14 +26,17 @@ sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<byte[]>
         }
 
         var length = Math.Min(x.Length, y.Length);
+
         for (var index = 0; index < length; index++)
         {
             var comparison = x[index].CompareTo(y[index]);
+
             if (comparison != 0)
             {
                 return comparison;
             }
         }
+
 
         return x.Length.CompareTo(y.Length);
     }
@@ -45,10 +48,12 @@ sealed class ByteArrayComparer : IComparer<byte[]>, IEqualityComparer<byte[]>
         ArgumentNullException.ThrowIfNull(value);
 
         var hash = new HashCode();
+
         foreach (var item in value)
         {
             hash.Add(item);
         }
+
 
         return hash.ToHashCode();
     }

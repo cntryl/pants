@@ -13,7 +13,8 @@ sealed class SstScanReadValidator : IScanReadValidator
         RuntimeTelemetry telemetry,
         IReadOnlyList<SstReader> readers,
         IReadOnlyList<SstScanBlock> blocks,
-        int candidateSsts)
+        int candidateSsts
+    )
     {
         _telemetry = telemetry;
         _readers = readers;

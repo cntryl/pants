@@ -17,10 +17,12 @@ public sealed class ProviderSstMirrorPublicationTests
         using var recorder = new SstRequestRecordingHandler(azure);
         using var client = new HttpClient(recorder);
         await using var database = await OpenAsync(cache.Path, new RuntimeDependencies(cloudHttpClient: client));
+
         for (var flush = 0; flush < 3; flush++)
         {
             await CommitAndFlushAsync(database, $"published-{flush}", 100_000);
         }
+
 
         var published = LocalSstNames(cache.Path);
         // Background WAL retirement checks covering SSTs by HEAD; let it finish first.
@@ -56,10 +58,12 @@ public sealed class ProviderSstMirrorPublicationTests
                 cloudHttpClient: client,
                 hybridLocalStorageBudgetBytes: 4500 * 1024));
         await CommitAndFlushAsync(database, "remote-first", 16 * 1024);
+
         for (var index = 0; index < 10; index++)
         {
             await CommitAndFlushAsync(database, $"remote-second-{index}", 512 * 1024);
         }
+
         var localSsts = LocalSstNames(cache.Path);
         var remoteOnly = azure.GetObjectPaths("/sst/")
             .Select(static path => path[(path.LastIndexOf('/') + 1)..])
@@ -116,10 +120,12 @@ public sealed class ProviderSstMirrorPublicationTests
         using var recorder = new SstRequestRecordingHandler(azure);
         using var client = new HttpClient(recorder);
         await using var database = await OpenAsync(cache.Path, new RuntimeDependencies(cloudHttpClient: client));
+
         for (var flush = 0; flush < 4; flush++)
         {
             await CommitAndFlushAsync(database, $"compaction-{flush}", 100_000, forceRewrite: true);
         }
+
 
         recorder.Clear();
 
@@ -128,17 +134,21 @@ public sealed class ProviderSstMirrorPublicationTests
         var requests = recorder.Requests;
         Assert.Contains(requests, static request => request.Method == "PUT");
         Assert.DoesNotContain(requests, static request => request.IsWholeGet);
+
         for (var index = 0; index < requests.Count; index++)
         {
             var upload = requests[index];
+
             if (upload.Method != "PUT")
             {
                 continue;
             }
+
             var remaining = Assert.IsType<long>(upload.PayloadBytes);
             Assert.True(remaining > 0);
             // A verified output may become a later round's input. Only its first complete
             // readback belongs to this publisher's bounded verification contract.
+
             foreach (var readback in requests.Skip(index + 1).Where(request =>
                          request.Name == upload.Name && request.Method == "GET"))
             {
@@ -147,13 +157,16 @@ public sealed class ProviderSstMirrorPublicationTests
                 Assert.InRange(bytes, 1, ProviderSstPublisher.VerificationRangeBytes);
                 remaining -= bytes;
                 Assert.True(remaining >= 0);
+
                 if (remaining == 0)
                 {
                     break;
                 }
             }
+
             Assert.Equal(0, remaining);
         }
+
         await AssertValueAsync(database, "compaction-2", 100_000);
     }
 
@@ -166,11 +179,13 @@ public sealed class ProviderSstMirrorPublicationTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             CreateOptions(cache.Path).WithMemoryBudget(PantsMemoryBudget.FromBytes(64L * 1024 * 1024)),
             new RuntimeDependencies(cloudHttpClient: client));
+
         for (var flush = 0; flush < 4; flush++)
         {
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var key = 0; key < 64; key++)
             {
                 transaction.Put(
@@ -179,10 +194,12 @@ public sealed class ProviderSstMirrorPublicationTests
             }
 
             // Overlap only empty keyspace so this fixture requires a physical rewrite.
+
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
 
         await database.Maintenance.CompactAllAsync();
 
@@ -235,11 +252,13 @@ public sealed class ProviderSstMirrorPublicationTests
                          PantsTransactionMode.ReadWrite))
         {
             transaction.Put(TestBytes.FromString(key), CreateValue(valueBytes));
+
             if (forceRewrite)
             {
                 // Overlap only empty keyspace so this fixture requires a physical rewrite.
                 transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
             }
+
             await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         }
 

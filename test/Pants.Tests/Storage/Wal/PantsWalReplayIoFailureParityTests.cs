@@ -35,6 +35,7 @@ public sealed class PantsWalReplayIoFailureParityTests
 
         var exercisedReadFailures = 0;
         const int MaximumReadFailures = 256;
+
         for (var failAt = 1; failAt <= MaximumReadFailures; failAt++)
         {
             using var trial = new TemporaryDirectory();
@@ -42,6 +43,7 @@ public sealed class PantsWalReplayIoFailureParityTests
             var failpoints = new NthWalReplayReadFailureHandler(failAt);
             IPantsDatabase? faultedOpen = null;
             Exception? openFailure = null;
+
             try
             {
                 faultedOpen = await PantsDatabase.OpenForTestingAsync(
@@ -52,6 +54,7 @@ public sealed class PantsWalReplayIoFailureParityTests
             {
                 openFailure = exception;
             }
+
 
             if (!failpoints.Fired)
             {
@@ -65,10 +68,12 @@ public sealed class PantsWalReplayIoFailureParityTests
             }
 
             exercisedReadFailures++;
+
             if (faultedOpen is not null)
             {
                 await faultedOpen.ShutdownAsync(TestTimeouts.Expected);
             }
+
 
             if (openFailure is not null)
             {
@@ -81,6 +86,7 @@ public sealed class PantsWalReplayIoFailureParityTests
             await using var recovered = await PantsDatabase.OpenAsync(CreateOptions(trial.Path));
             await AssertAcknowledgedWritesAsync(recovered);
         }
+
 
         Assert.InRange(exercisedReadFailures, 1, MaximumReadFailures - 1);
     }
@@ -100,6 +106,7 @@ public sealed class PantsWalReplayIoFailureParityTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < AcknowledgedWriteCount; index++)
         {
             Assert.Equal(

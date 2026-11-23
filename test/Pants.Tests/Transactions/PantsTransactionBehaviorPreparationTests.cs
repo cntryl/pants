@@ -21,6 +21,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             write.Put("accepted"u8.ToArray(), "recoverable"u8.ToArray());
             var commit = write.CommitWithSequenceAsync(PantsWriteOptions.Sync).AsTask();
             await hold.Entered.WaitAsync(TestTimeouts.Expected);
+
             try
             {
                 time.Advance(TimeSpan.FromSeconds(1));
@@ -31,6 +32,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             {
                 hold.Release();
             }
+
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -71,6 +73,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             var firstCommit = first.CommitWithSequenceAsync(PantsWriteOptions.Sync).AsTask();
             await hold.Entered.WaitAsync(TestTimeouts.Expected);
             var secondCommit = second.CommitWithSequenceAsync(PantsWriteOptions.Sync).AsTask();
+
             try
             {
                 await admitted.Task.WaitAsync(TestTimeouts.Expected);
@@ -82,6 +85,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
                 hold.Release();
                 await Task.WhenAll(firstCommit, secondCommit).WaitAsync(TestTimeouts.Expected);
             }
+
             Assert.True(await firstCommit < await secondCommit);
             Assert.Equal((await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence, await secondCommit);
             Assert.Equal(value, await ReadAsync(database, "a"));
@@ -121,6 +125,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             write.Put("b"u8.ToArray(), value, TimeSpan.FromSeconds(1));
             var commit = write.CommitWithSequenceAsync(PantsWriteOptions.Sync).AsTask();
             await hold.Entered.WaitAsync(TestTimeouts.Expected);
+
             try
             {
                 clock.UtcNow = DateTimeOffset.FromUnixTimeMilliseconds(30_000);
@@ -129,6 +134,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             {
                 hold.Release();
             }
+
             Assert.True(await commit > 0);
             Assert.Null(await ReadAsync(database, "a"));
             Assert.Null(await ReadAsync(database, "b"));
@@ -170,6 +176,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             Assert.Equal(before.WalAppendCount, after.WalAppendCount);
             Assert.Equal("kept"u8.ToArray(), await ReadAsync(database, "prior"));
         }
+
         if (mode != "memory")
         {
             await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -187,13 +194,16 @@ public sealed class PantsTransactionBehaviorPreparationTests
         using var directory = new TemporaryDirectory();
         await using var database = await PantsDatabase.OpenAsync(Options(mode, directory.Path));
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
+
         foreach (var write in new[] { false, true })
         {
             await using var rejected = await BeginWriteAsync(database);
+
             if (write)
             {
                 rejected.Put("rejected"u8.ToArray(), "absent"u8.ToArray());
             }
+
             var incompatible = durability switch
             {
                 PantsDurability.Sync => PantsWriteOptions.Sync,
@@ -204,6 +214,7 @@ public sealed class PantsTransactionBehaviorPreparationTests
             };
             await Assert.ThrowsAsync<PantsInvalidArgumentException>(() => rejected.CommitAsync(incompatible).AsTask());
         }
+
         var after = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before.CurrentSequence, after.CurrentSequence);
         Assert.Equal(before.WalAppendCount, after.WalAppendCount);
@@ -272,7 +283,9 @@ public sealed class PantsTransactionBehaviorPreparationTests
             {
                 return;
             }
+
             _entered.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException("The first physical WAL append was not released.");

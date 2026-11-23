@@ -13,6 +13,7 @@ readonly struct StartupOperations(StartupScope? scope)
     {
         scope?.Check();
         cancellationToken.ThrowIfCancellationRequested();
+
         try
         {
             await operation(cancellationToken).ConfigureAwait(false);
@@ -22,6 +23,7 @@ readonly struct StartupOperations(StartupScope? scope)
             scope?.Check();
             throw;
         }
+
         scope?.Check();
     }
 
@@ -30,6 +32,7 @@ readonly struct StartupOperations(StartupScope? scope)
         scope?.Check();
         cancellationToken.ThrowIfCancellationRequested();
         T result;
+
         try
         {
             result = await operation(cancellationToken).ConfigureAwait(false);
@@ -41,6 +44,7 @@ readonly struct StartupOperations(StartupScope? scope)
         }
         // Return resource-producing results to their owner before the next phase checks the
         // deadline. Throwing here could discard an acquired store or lease before assignment.
+
         return result;
     }
 }

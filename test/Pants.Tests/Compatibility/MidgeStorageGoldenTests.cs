@@ -85,6 +85,7 @@ public sealed class MidgeStorageGoldenTests
     static string ComputeDirectoryHash(string path)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
         foreach (var entryPath in Directory
                      .EnumerateFileSystemEntries(path, "*", SearchOption.AllDirectories)
                      .OrderBy(
@@ -101,11 +102,13 @@ public sealed class MidgeStorageGoldenTests
             hash.AppendData(relativePathBytes);
             var fileLength = isDirectory ? 0 : new FileInfo(entryPath).Length;
             AppendLength(hash, fileLength);
+
             if (!isDirectory)
             {
                 hash.AppendData(File.ReadAllBytes(entryPath));
             }
         }
+
 
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }

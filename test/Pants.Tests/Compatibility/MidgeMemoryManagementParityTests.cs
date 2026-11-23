@@ -29,6 +29,7 @@ public sealed class MidgeMemoryManagementParityTests
                     family,
                     PantsTransactionMode.ReadWrite);
                 transaction.Put(key, value);
+
                 try
                 {
                     await transaction.CommitAsync(WriteOptions(mode));
@@ -39,6 +40,7 @@ public sealed class MidgeMemoryManagementParityTests
                     break;
                 }
 
+
                 if (index % 10 == 0)
                 {
                     await database.Maintenance.FlushAsync(family);
@@ -46,21 +48,26 @@ public sealed class MidgeMemoryManagementParityTests
             }
 
             await database.Maintenance.FlushAsync(family);
+
             if (mode != "memory")
             {
                 await database.Maintenance.CompactAllAsync();
             }
 
+
             var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.True(writeCount > 0, $"The {mode} mode accepted no transactions.");
+
             if (mode != "memory")
             {
                 Assert.NotEqual(PantsEngineHealth.WriteStalled, metrics.Health);
             }
 
+
             await using var reader = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < writeCount; index++)
             {
                 var key = TestBytes.FromString($"key_{index:00000000}");

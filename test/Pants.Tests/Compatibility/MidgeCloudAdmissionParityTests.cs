@@ -25,10 +25,12 @@ public sealed class MidgeCloudAdmissionParityTests
             using var directory = new TemporaryDirectory();
             var options = CreateCloudOptions(directory.Path, OneMebibyte)
                 .WithMemtableLimits(8 * OneMebibyte);
+
             if (spillPoolBytes is { } poolBytes)
             {
                 options = options.WithTransactionMemoryPool(poolBytes);
             }
+
 
             var familyName = "data";
             var values = new byte[valueLengths.Length][];
@@ -36,6 +38,7 @@ public sealed class MidgeCloudAdmissionParityTests
             await using (var database = await PantsDatabase.OpenAsync(options))
             {
                 var family = await database.ColumnFamilies.CreateAsync(familyName);
+
                 for (var index = 0; index < valueLengths.Length; index++)
                 {
                     values[index] = CreateXorShiftBytes(valueLengths[index] * 1024, ref seed);
@@ -45,6 +48,7 @@ public sealed class MidgeCloudAdmissionParityTests
                     transaction.Put(UInt32Bytes(checked((uint)index)), values[index]);
                     await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
                 }
+
 
                 await database.Maintenance.FlushAsync(family);
                 await database.ShutdownAsync(TestTimeouts.Expected);
@@ -56,6 +60,7 @@ public sealed class MidgeCloudAdmissionParityTests
             await using var reader = await reopened.Transactions.BeginAsync(
                 reopenedFamily,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < values.Length; index++)
             {
                 Assert.Equal(
@@ -77,10 +82,12 @@ public sealed class MidgeCloudAdmissionParityTests
         {
             using var directory = new TemporaryDirectory();
             var options = CreateCloudOptions(directory.Path, OneMebibyte);
+
             if (spillPoolBytes is { } poolBytes)
             {
                 options = options.WithTransactionMemoryPool(poolBytes);
             }
+
 
             await using var database = await PantsDatabase.OpenAsync(options);
             var family = await database.ColumnFamilies.CreateAsync("data");
@@ -112,6 +119,7 @@ public sealed class MidgeCloudAdmissionParityTests
             await using var reader = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < values.Length; index++)
             {
                 Assert.Null(await reader.GetAsync(UInt32Bytes(checked((uint)index))));
@@ -131,6 +139,7 @@ public sealed class MidgeCloudAdmissionParityTests
             await using var transaction = await database.Transactions.BeginAsync(
                 family,
                 PantsTransactionMode.ReadWrite);
+
             if (range)
             {
                 transaction.DeleteRange(
@@ -141,6 +150,7 @@ public sealed class MidgeCloudAdmissionParityTests
             {
                 transaction.Delete(Enumerable.Repeat((byte)'a', 32 * 1024).ToArray());
             }
+
 
             var walBytesBefore = WalBytes(directory.Path);
 
@@ -161,16 +171,20 @@ public sealed class MidgeCloudAdmissionParityTests
         await using (var database = await PantsDatabase.OpenAsync(options))
         {
             var families = new List<IPantsColumnFamily>(FamilyCount);
+
             for (var index = 0; index < FamilyCount; index++)
             {
                 families.Add(await database.ColumnFamilies.CreateAsync($"cf-{index}"));
             }
 
+
             var seed = 0x1f37_9945u;
+
             for (var index = 0; index < values.Length; index++)
             {
                 values[index] = CreateXorShiftBytes(2048, ref seed);
             }
+
 
             var walBytesBeforeOversized = WalBytes(directory.Path);
             await using (var oversized = await database.Transactions.BeginAsync(
@@ -189,6 +203,7 @@ public sealed class MidgeCloudAdmissionParityTests
             for (var index = 0; index < families.Count; index++)
             {
                 var committed = false;
+
                 for (var attempt = 0; attempt < RepeatedFailureCount && !committed; attempt++)
                 {
                     try
@@ -210,6 +225,7 @@ public sealed class MidgeCloudAdmissionParityTests
                     }
                 }
 
+
                 Assert.True(committed, $"Family {index} must progress after flushing accepted work.");
                 Assert.InRange(WorkingBytes(directory.Path), 0, ManyFamilyBudget);
             }
@@ -223,6 +239,7 @@ public sealed class MidgeCloudAdmissionParityTests
         }
 
         await using var reopened = await PantsDatabase.OpenAsync(options);
+
         for (var index = 0; index < FamilyCount; index++)
         {
             var family = await reopened.ColumnFamilies.GetAsync($"cf-{index}");
@@ -232,6 +249,7 @@ public sealed class MidgeCloudAdmissionParityTests
                 PantsTransactionMode.ReadOnly);
             Assert.Equal(values[index], (await reader.GetAsync("key"u8.ToArray()))?.ToArray());
         }
+
 
         Assert.InRange(WorkingBytes(directory.Path), 0, ManyFamilyBudget);
         Assert.True(RemoteSstBytes(directory.Path) > ManyFamilyBudget);
@@ -313,6 +331,7 @@ public sealed class MidgeCloudAdmissionParityTests
     static byte[] CreateXorShiftBytes(int length, ref uint seed)
     {
         var bytes = new byte[length];
+
         for (var index = 0; index < bytes.Length; index++)
         {
             seed ^= seed << 13;
@@ -320,6 +339,7 @@ public sealed class MidgeCloudAdmissionParityTests
             seed ^= seed << 5;
             bytes[index] = (byte)seed;
         }
+
 
         return bytes;
     }

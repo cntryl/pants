@@ -33,6 +33,7 @@ public sealed class SstDecodedAdmissionTests
         var bytes = CreatePrefixEncodedSst();
         await File.WriteAllBytesAsync(path, bytes);
         var budget = new ResourceBudget(64 * 1024);
+
         if (asynchronous)
         {
             var source = LocalAsyncSstSource.Open(path);
@@ -49,6 +50,7 @@ public sealed class SstDecodedAdmissionTests
 
             Assert.Throws<PantsResourceLimitException>(() => iterator.MoveNext());
         }
+
 
         Assert.Equal(0, budget.Current);
         Assert.True(budget.Peak <= budget.Limit);

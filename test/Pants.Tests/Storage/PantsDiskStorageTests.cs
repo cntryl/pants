@@ -122,7 +122,8 @@ public sealed class PantsDiskStorageTests
     [InlineData(PantsPerformanceGoal.Economy, 3)]
     public async Task ShouldApplyMidgeCompressionPolicyAndRoundTrip(
         PantsPerformanceGoal performanceGoal,
-        byte expectedAlgorithm)
+        byte expectedAlgorithm
+    )
     {
         using var directory = new TemporaryDirectory();
         var value = Enumerable.Repeat((byte)'v', 16 * 1024).ToArray();
@@ -547,6 +548,7 @@ public sealed class PantsDiskStorageTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(failpoint));
+
         for (var generation = 0; generation < 2; generation++)
         {
             await using var write = await database.Transactions.BeginAsync(
@@ -556,6 +558,7 @@ public sealed class PantsDiskStorageTests
             await write.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
+
 
         var inputPaths = Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst");
         Assert.Equal(2, inputPaths.Length);
@@ -661,7 +664,8 @@ public sealed class PantsDiskStorageTests
     [InlineData("intent_log.json", "not-json")]
     public async Task ShouldApplyRecoveryPolicyToCorruptControlMetadata(
         string relativePath,
-        string corruptContents)
+        string corruptContents
+    )
     {
         using var directory = new TemporaryDirectory();
         await using (var database = await OpenAsync(directory.Path))
@@ -672,12 +676,14 @@ public sealed class PantsDiskStorageTests
         await File.WriteAllTextAsync(path, corruptContents);
         var strict = await Assert.ThrowsAnyAsync<PantsException>(() =>
             OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Strict).AsTask());
+
         if (relativePath == "intent_log.json")
         {
             await Assert.ThrowsAnyAsync<PantsException>(() => OpenWithRecoveryAsync(directory.Path, PantsRecoveryPolicy.Salvage).AsTask());
             Assert.Equal(corruptContents, await File.ReadAllTextAsync(path));
             return;
         }
+
 
         Assert.Equal(PantsErrorCode.RecoveryFailed, strict.Code);
 
@@ -962,14 +968,17 @@ public sealed class PantsDiskStorageTests
 
         var manifestNames = new[] { "manifest.snapshot.json", "manifest.json", "manifest.journal" };
         var backups = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+
         foreach (var name in manifestNames)
         {
             var path = Path.Combine(directory.Path, name);
+
             if (File.Exists(path))
             {
                 backups[name] = await File.ReadAllBytesAsync(path);
             }
         }
+
 
         Assert.Contains("manifest.snapshot.json", backups.Keys);
         await File.WriteAllTextAsync(Path.Combine(directory.Path, "manifest.snapshot.json"), "{corrupt");
@@ -1092,10 +1101,12 @@ public sealed class PantsDiskStorageTests
         var walPath = WalTestFiles.ActivePath(directory.Path);
         var wal = await File.ReadAllBytesAsync(walPath);
         var offset = WalSegmentCodec.HeaderSize;
+
         for (var frame = 0; frame < 2; frame++)
         {
             offset += 8 + checked((int)BitConverter.ToUInt32(wal, offset));
         }
+
 
         wal[offset + 4] ^= 0xff;
         await File.WriteAllBytesAsync(walPath, wal);
@@ -1203,14 +1214,16 @@ public sealed class PantsDiskStorageTests
 
     static ValueTask<IPantsDatabase> OpenWithRecoveryAsync(
         string path,
-        PantsRecoveryPolicy recoveryPolicy) =>
+        PantsRecoveryPolicy recoveryPolicy
+    ) =>
         PantsDatabase.OpenAsync(PantsOpenOptions.Local(path).WithRecoveryPolicy(recoveryPolicy));
 
     static async Task WriteLeaseRecordAsync(
         string path,
         ulong epoch,
         string holderId,
-        DateTimeOffset acquiredAt)
+        DateTimeOffset acquiredAt
+    )
     {
         Directory.CreateDirectory(path);
         await File.WriteAllTextAsync(
@@ -1227,23 +1240,25 @@ public sealed class PantsDiskStorageTests
 
     static Dictionary<string, object?> CreateIntentFileMetadata(
         JsonElement manifestFile,
-        string name) => new(StringComparer.Ordinal)
-        {
-            ["name"] = name,
-            ["level"] = manifestFile.GetProperty("level").Clone(),
-            ["size_bytes"] = manifestFile.GetProperty("size_bytes").Clone(),
-            ["content_crc32c"] = manifestFile.GetProperty("content_crc32c").Clone(),
-            ["cf_id"] = manifestFile.GetProperty("cf_id").Clone(),
-            ["smallest_key"] = manifestFile.GetProperty("smallest_key").Clone(),
-            ["largest_key"] = manifestFile.GetProperty("largest_key").Clone(),
-            ["key_bounds_complete"] = manifestFile.GetProperty("key_bounds_complete").Clone(),
-            ["smallest_seq"] = manifestFile.GetProperty("smallest_seq").Clone(),
-            ["largest_seq"] = manifestFile.GetProperty("largest_seq").Clone()
-        };
+        string name
+    ) => new(StringComparer.Ordinal)
+    {
+        ["name"] = name,
+        ["level"] = manifestFile.GetProperty("level").Clone(),
+        ["size_bytes"] = manifestFile.GetProperty("size_bytes").Clone(),
+        ["content_crc32c"] = manifestFile.GetProperty("content_crc32c").Clone(),
+        ["cf_id"] = manifestFile.GetProperty("cf_id").Clone(),
+        ["smallest_key"] = manifestFile.GetProperty("smallest_key").Clone(),
+        ["largest_key"] = manifestFile.GetProperty("largest_key").Clone(),
+        ["key_bounds_complete"] = manifestFile.GetProperty("key_bounds_complete").Clone(),
+        ["smallest_seq"] = manifestFile.GetProperty("smallest_seq").Clone(),
+        ["largest_seq"] = manifestFile.GetProperty("largest_seq").Clone()
+    };
 
     static Task WriteFlushIntentAsync(
         string path,
-        Dictionary<string, object?> fileMetadata)
+        Dictionary<string, object?> fileMetadata
+    )
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new object[]
         {

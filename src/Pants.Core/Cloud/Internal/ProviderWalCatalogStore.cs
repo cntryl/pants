@@ -44,7 +44,8 @@ sealed class ProviderWalCatalogStore(
         bool rejectOrphanedWalSegments,
         CancellationToken cancellationToken,
         bool waitForMaintenanceGate = true,
-        bool repairCopies = true)
+        bool repairCopies = true
+    )
     {
         for (var attempt = 0; attempt < MaximumRepairAttempts; attempt++)
         {
@@ -60,6 +61,7 @@ sealed class ProviderWalCatalogStore(
                 mirrorMetadata,
                 cancellationToken,
                 waitForMaintenanceGate).ConfigureAwait(false);
+
             try
             {
                 var primary = await ReadObjectAsync(
@@ -92,6 +94,7 @@ sealed class ProviderWalCatalogStore(
                 // Only decode the recovery copy after the primary has been proven unusable.
                 // A mirror with another format cannot override a valid primary's authority.
                 var mirrorCatalog = TryDecode(mirror, out var mirrorError);
+
                 if (mirror is null || mirrorCatalog is null)
                 {
                     if (primary is null && mirror is null)
@@ -115,6 +118,7 @@ sealed class ProviderWalCatalogStore(
                         $"(primary: {primaryFailure}; mirror: {mirrorFailure}).");
                 }
 
+
                 if (!repairCopies)
                 {
                     return TransferRead(mirror.Version, mirrorCatalog, ref readLease);
@@ -130,6 +134,7 @@ sealed class ProviderWalCatalogStore(
                         ? new PantsCloudObjectWriteCondition.IfAbsent()
                         : new PantsCloudObjectWriteCondition.IfVersion(primary.Version),
                     cancellationToken).ConfigureAwait(false);
+
                 if (repaired)
                 {
                     var readbackMetadata = await walStore.HeadAsync(
@@ -137,11 +142,13 @@ sealed class ProviderWalCatalogStore(
                             cancellationToken)
                         .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
                         "The cloud WAL catalog repair was acknowledged without an authoritative object.");
+
                     if (readbackMetadata.SizeBytes != checked((ulong)mirror.Data.Length))
                     {
                         throw new PantsCorruptionException(
                             "The cloud WAL catalog repair read back a different byte length after CAS.");
                     }
+
 
                     var readback = await ReadObjectAsync(
                             PantsCloudObjectLayout.WalCatalogObjectKey,
@@ -149,11 +156,13 @@ sealed class ProviderWalCatalogStore(
                             cancellationToken)
                         .ConfigureAwait(false) ?? throw new PantsLeaseIndeterminateException(
                         "The cloud WAL catalog repair was acknowledged without an authoritative object.");
+
                     if (!readback.Data.Span.SequenceEqual(mirror.Data.Span))
                     {
                         throw new PantsCorruptionException(
                             "The cloud WAL catalog repair read back different bytes after CAS.");
                     }
+
 
                     return TransferRead(readback.Version, decode(readback.Data), ref readLease);
                 }
@@ -187,7 +196,8 @@ sealed class ProviderWalCatalogStore(
     static WalCatalogRead TransferRead(
         string? version,
         ProviderWalCatalog? catalog,
-        ref ProviderWalCatalogReadLease? readLease)
+        ref ProviderWalCatalogReadLease? readLease
+    )
     {
         readLease?.ReleaseGate();
         var read = new WalCatalogRead(version, catalog, readLease);
@@ -198,7 +208,8 @@ sealed class ProviderWalCatalogStore(
     async ValueTask<CloudObject?> ReadObjectAsync(
         string objectKey,
         CloudObjectMetadata? metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (metadata is null)
         {
@@ -212,10 +223,12 @@ sealed class ProviderWalCatalogStore(
         }
 
         var bytes = GC.AllocateUninitializedArray<byte>(checked((int)metadata.SizeBytes));
+
         for (var offset = 0; offset < bytes.Length;)
         {
             var length = Math.Min(ProviderWalCatalogReadAdmission.ReadRangeBytes, bytes.Length - offset);
             CloudObject? range;
+
             try
             {
                 range = await walStore.GetRangeAsync(
@@ -241,6 +254,7 @@ sealed class ProviderWalCatalogStore(
                     exception);
             }
 
+
             if (range is null)
             {
                 throw new PantsBusyException(
@@ -264,22 +278,26 @@ sealed class ProviderWalCatalogStore(
             recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", length, 0, 0));
         }
 
+
         return new CloudObject(bytes, metadata.Version);
     }
 
     async ValueTask<CloudObject> ReadSmallWholeObjectAsync(
         string objectKey,
         CloudObjectMetadata metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var whole = await walStore.GetAsync(objectKey, cancellationToken).ConfigureAwait(false) ??
                     throw new PantsBusyException(
                         $"Cloud WAL catalog object '{objectKey}' changed during a bounded read.");
+
         if (!StringComparer.Ordinal.Equals(whole.Version, metadata.Version))
         {
             throw new PantsBusyException(
                 $"Cloud WAL catalog object '{objectKey}' changed during a bounded read.");
         }
+
 
         if (whole.Data.Length != checked((int)metadata.SizeBytes))
         {
@@ -287,10 +305,12 @@ sealed class ProviderWalCatalogStore(
                 $"Cloud WAL catalog object '{objectKey}' returned a different byte length than HEAD.");
         }
 
+
         if (!whole.Data.IsEmpty)
         {
             recoveryWork?.Record(new RecoveryWorkCompleted("remote_read", whole.Data.Length, 0, 0));
         }
+
         return whole;
     }
 
@@ -302,7 +322,8 @@ sealed class ProviderWalCatalogStore(
     public async ValueTask ConvergeMirrorAsync(
         ReadOnlyMemory<byte> primaryBytes,
         string primaryVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var mirror = await walStore.HeadAsync(
             PantsCloudObjectLayout.WalCatalogMirrorObjectKey,
@@ -315,9 +336,11 @@ sealed class ProviderWalCatalogStore(
         ReadOnlyMemory<byte> primaryBytes,
         string primaryVersion,
         CloudObjectMetadata? mirror,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ensureLeaseValid();
+
         for (var attempt = 0; attempt < MaximumRepairAttempts; attempt++)
         {
             await ValidateBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -328,6 +351,7 @@ sealed class ProviderWalCatalogStore(
                     ? new PantsCloudObjectWriteCondition.IfAbsent()
                     : new PantsCloudObjectWriteCondition.IfVersion(mirror.Version),
                 cancellationToken).ConfigureAwait(false);
+
             if (written)
             {
                 ensureLeaseValid();
@@ -336,18 +360,22 @@ sealed class ProviderWalCatalogStore(
 
             // Another writer moved the mirror. If the primary has moved on too, the committer
             // that moved it owns convergence; writing these now-stale bytes would regress the mirror.
+
             var primary = await walStore.HeadAsync(
                 PantsCloudObjectLayout.WalCatalogObjectKey,
                 cancellationToken).ConfigureAwait(false);
+
             if (primary is null || !StringComparer.Ordinal.Equals(primary.Version, primaryVersion))
             {
                 return;
             }
 
+
             mirror = await walStore.HeadAsync(
                 PantsCloudObjectLayout.WalCatalogMirrorObjectKey,
                 cancellationToken).ConfigureAwait(false);
         }
+
 
         throw new PantsBusyException("Cloud WAL catalog mirror convergence exceeded its bounded CAS retries.");
     }
@@ -357,6 +385,7 @@ sealed class ProviderWalCatalogStore(
         var keys = await walStore.ListAllAsync(
             PantsCloudObjectLayout.WalPrefix,
             cancellationToken).ConfigureAwait(false);
+
         if (keys.Any(IsWalSegmentKey))
         {
             throw new PantsRecoveryFailedException(
@@ -379,10 +408,12 @@ sealed class ProviderWalCatalogStore(
     ProviderWalCatalog? TryDecode(CloudObject? candidate, out PantsCorruptionException? error)
     {
         error = null;
+
         if (candidate is null)
         {
             return null;
         }
+
 
         try
         {

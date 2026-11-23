@@ -169,7 +169,8 @@ public sealed class S3ObjectStoreTests
     public async Task ShouldSelectNativeAwsBucketUriAndSignItsExactPath(
         string bucket,
         string expectedUri,
-        string expectedHost)
+        string expectedHost
+    )
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -415,7 +416,8 @@ public sealed class S3ObjectStoreTests
         RecordedRequest request,
         string host,
         string accessKey,
-        string secretKey)
+        string secretKey
+    )
     {
         var timestamp = Assert.IsType<string>(request.AmzDate);
         Assert.Equal(EmptyPayloadSha256, request.ContentSha256);
@@ -459,7 +461,8 @@ public sealed class S3ObjectStoreTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Requests.Add(new RecordedRequest(
                 request.Method,

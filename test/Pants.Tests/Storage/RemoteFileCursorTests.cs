@@ -44,7 +44,8 @@ public sealed class RemoteFileCursorTests
         public async ValueTask<byte[]> ReadExactlyAsync(
             long offset,
             int length,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             if (Gate)
             {

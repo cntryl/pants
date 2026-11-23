@@ -37,6 +37,7 @@ public sealed class PantsCloudDurabilityWaitTests
         hold.Arm();
         var blocking = CommitAsync(database, "blocker", "later");
         await hold.Entered.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             var runtime = Assert.IsType<DatabaseInstance>(database);
@@ -51,6 +52,7 @@ public sealed class PantsCloudDurabilityWaitTests
         {
             hold.Release();
         }
+
         await blocking.WaitAsync(TestTimeouts.Expected);
         _ = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(before, await database.Cloud.GetDurableSequenceAsync());
@@ -75,6 +77,7 @@ public sealed class PantsCloudDurabilityWaitTests
         await firstAcknowledgement.Entered.WaitAsync(TestTimeouts.Expected);
         Task<bool>? secondWait = null;
         ulong second = 0;
+
         try
         {
             second = await CommitAsync(database, "second", "pending");
@@ -97,6 +100,7 @@ public sealed class PantsCloudDurabilityWaitTests
             firstAcknowledgement.Release();
             secondUpload.Release();
         }
+
         Assert.NotNull(secondWait);
         Assert.True(await secondWait.WaitAsync(TestTimeouts.Expected));
         Assert.True(await database.Cloud.GetDurableSequenceAsync() >= second);
@@ -121,6 +125,7 @@ public sealed class PantsCloudDurabilityWaitTests
         var timeout = runtimeBudget ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(1);
         var waiting = database.Cloud!.WaitForDurableAsync(target, timeout).AsTask();
         await hold.Entered.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.False(waiting.IsCompleted);
@@ -134,6 +139,7 @@ public sealed class PantsCloudDurabilityWaitTests
         {
             hold.Release();
         }
+
         Assert.True(await database.Cloud.WaitForDurableAsync(target, TestTimeouts.Expected));
         Assert.True(await database.Cloud.GetDurableSequenceAsync() >= target);
         Assert.False(await waiting);
@@ -154,6 +160,7 @@ public sealed class PantsCloudDurabilityWaitTests
         using var cancellation = new CancellationTokenSource();
         var waiting = database.Cloud!.WaitForDurableAsync(target, TestTimeouts.Expected, cancellation.Token).AsTask();
         await hold.Entered.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             cancellation.Cancel();
@@ -165,6 +172,7 @@ public sealed class PantsCloudDurabilityWaitTests
         {
             hold.Release();
         }
+
         Assert.True(await database.Cloud.WaitForDurableAsync(target, TestTimeouts.Expected));
         Assert.Equal("value"u8.ToArray(), await ReadAsync(database, "key"));
     }
@@ -179,6 +187,7 @@ public sealed class PantsCloudDurabilityWaitTests
             new RuntimeDependencies(cloudHttpClient: client));
         var target = await CommitAsync(database, "key", "value");
         handler.FailWalWrites = true;
+
         try
         {
             Assert.False(await database.Cloud!.WaitForDurableAsync(target, TestTimeouts.Expected));
@@ -189,6 +198,7 @@ public sealed class PantsCloudDurabilityWaitTests
         {
             handler.FailWalWrites = false;
         }
+
         Assert.True(await database.Cloud!.WaitForDurableAsync(target, TestTimeouts.Expected));
         Assert.Equal("value"u8.ToArray(), await ReadAsync(database, "key"));
     }
@@ -209,6 +219,7 @@ public sealed class PantsCloudDurabilityWaitTests
         var target = await CommitAsync(database, "key", "value");
         Assert.True(await database.Cloud!.WaitForDurableAsync(target, TestTimeouts.Expected));
         handler.BlockLeaseWrites();
+
         try
         {
             time.Advance(TimeSpan.FromMilliseconds(100));
@@ -242,6 +253,7 @@ public sealed class PantsCloudDurabilityWaitTests
         var waiting = database.Cloud!.WaitForDurableAsync(target, TestTimeouts.Expected).AsTask();
         await hold.Entered.WaitAsync(TestTimeouts.Expected);
         handler.BlockLeaseWrites();
+
         try
         {
             time.Advance(TimeSpan.FromMilliseconds(100));
@@ -274,6 +286,7 @@ public sealed class PantsCloudDurabilityWaitTests
         var sentinel = await CommitAsync(database, "sentinel", "published");
         Assert.True(await database.Cloud!.WaitForDurableAsync(sentinel, TestTimeouts.Expected));
         var target = await CommitAsync(database, "pending", "second");
+
         try
         {
             if (confirmSecond)
@@ -341,6 +354,7 @@ public sealed class PantsCloudDurabilityWaitTests
             if (failpoint == target && Interlocked.Exchange(ref _armed, 0) == 1)
             {
                 _entered.TrySetResult();
+
                 if (!_release.Wait(TestTimeouts.Expected))
                 {
                     throw new TimeoutException($"The held {target} was not released.");
@@ -378,6 +392,7 @@ public sealed class PantsCloudDurabilityWaitTests
                 _entered.TrySetResult();
                 await _release.Task;
             }
+
             return await base.SendAsync(request, cancellationToken);
         }
     }

@@ -8,12 +8,15 @@ static class CloudSstReferenceReader
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         var manifest = CloudManifestReader.ReadManifest(localRoot);
+
         if (manifest is not null)
         {
             AddManifestNames((ManifestState)manifest, names);
         }
 
+
         var sstDirectory = Path.Combine(localRoot, "sst");
+
         if (Directory.Exists(sstDirectory))
         {
             foreach (var path in Directory.EnumerateFiles(
@@ -25,21 +28,26 @@ static class CloudSstReferenceReader
             }
         }
 
+
         var intentPath = Path.Combine(localRoot, "intent_log.json");
+
         if (File.Exists(intentPath))
         {
             AddIntentNames(File.ReadAllBytes(intentPath), names);
         }
+
 
         return names;
     }
 
     public static void AddManifestNames(
         ManifestState manifest,
-        ISet<string> names)
+        ISet<string> names
+    )
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(names);
+
         foreach (var file in manifest.Files)
         {
             AddValidatedName(file.Name, names);
@@ -65,12 +73,15 @@ static class CloudSstReferenceReader
         ReadOnlyMemory<byte> bytes)
     {
         using var document = IntentLogCodec.ToDocument(IntentLogCodec.Read(bytes.ToArray()).Entries);
+
         if (document.RootElement.ValueKind != JsonValueKind.Array)
         {
             return [];
         }
 
+
         var intents = new List<CloudCompactionOutputSet>();
+
         foreach (var entry in document.RootElement.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.Object || entry.EnumerateObject().Count() != 1)
@@ -79,6 +90,7 @@ static class CloudSstReferenceReader
             }
 
             var variant = entry.EnumerateObject().Single();
+
             if (variant.Name != "CompactionPublish" ||
                 variant.Value.ValueKind != JsonValueKind.Object ||
                 !variant.Value.TryGetProperty("phase", out var phase) ||
@@ -94,8 +106,10 @@ static class CloudSstReferenceReader
                 continue;
             }
 
+
             intents.Add(new CloudCompactionOutputSet(columnFamilyId, removed, added));
         }
+
 
         return intents;
     }
@@ -134,19 +148,23 @@ static class CloudSstReferenceReader
         string propertyName,
         bool objectNames,
         uint columnFamilyId,
-        out IReadOnlySet<string> names)
+        out IReadOnlySet<string> names
+    )
     {
         var parsedNames = new HashSet<string>(StringComparer.Ordinal);
         names = parsedNames;
+
         if (!intent.TryGetProperty(propertyName, out var values) ||
             values.ValueKind != JsonValueKind.Array)
         {
             return false;
         }
 
+
         foreach (var value in values.EnumerateArray())
         {
             JsonElement nameElement;
+
             if (objectNames)
             {
                 if (value.ValueKind != JsonValueKind.Object ||
@@ -160,12 +178,14 @@ static class CloudSstReferenceReader
                 nameElement = value;
             }
 
+
             if (nameElement.ValueKind != JsonValueKind.String)
             {
                 return false;
             }
 
             var name = nameElement.GetString();
+
             if (name is null ||
                 !CloudSstObjectKey.TryGetName(
                     PantsCloudObjectLayout.SstPrefix + name,
@@ -176,6 +196,7 @@ static class CloudSstReferenceReader
             {
                 return false;
             }
+
 
             if (!parsedNames.Add(validatedName))
             {

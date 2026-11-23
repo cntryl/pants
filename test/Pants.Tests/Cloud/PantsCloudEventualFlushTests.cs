@@ -62,6 +62,7 @@ public sealed class PantsCloudEventualFlushTests
         await using (var database = await PantsDatabase.OpenForTestingAsync(options, dependencies))
         {
             var family = database.ColumnFamilies.DefaultFamily;
+
             for (var index = 0; index < 50; index++)
             {
                 await using var transaction = await database.Transactions.BeginAsync(
@@ -73,6 +74,7 @@ public sealed class PantsCloudEventualFlushTests
                 await transaction.CommitAsync(PantsWriteOptions.CloudAsync);
             }
 
+
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
@@ -83,6 +85,7 @@ public sealed class PantsCloudEventualFlushTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 50; index++)
         {
             Assert.Equal(
@@ -521,7 +524,8 @@ public sealed class PantsCloudEventualFlushTests
         IPantsDatabase database,
         IPantsColumnFamily family,
         string key,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             family,
@@ -532,10 +536,12 @@ public sealed class PantsCloudEventualFlushTests
 
     static async ValueTask<PantsRuntimeMetrics> WaitForMetricsAsync(
         IPantsDatabase database,
-        Func<PantsRuntimeMetrics, bool> predicate)
+        Func<PantsRuntimeMetrics, bool> predicate
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         PantsRuntimeMetrics? last = null;
+
         try
         {
             while (true)
@@ -543,10 +549,12 @@ public sealed class PantsCloudEventualFlushTests
                 timeout.Token.ThrowIfCancellationRequested();
                 var metrics = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
                 last = metrics;
+
                 if (predicate(metrics))
                 {
                     return metrics;
                 }
+
 
                 await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
             }
@@ -565,10 +573,12 @@ public sealed class PantsCloudEventualFlushTests
     static void CopyDirectory(string source, string destination)
     {
         Directory.CreateDirectory(destination);
+
         foreach (var file in Directory.EnumerateFiles(source))
         {
             File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
         }
+
 
         foreach (var directory in Directory.EnumerateDirectories(source))
         {
@@ -581,7 +591,8 @@ public sealed class PantsCloudEventualFlushTests
     static PantsCloudWritePolicy CreatePolicy(
         long segmentGap,
         int maximumPendingWrites,
-        TimeSpan? maximumDelay = null) => new(
+        TimeSpan? maximumDelay = null
+    ) => new(
         segmentGap,
         long.MaxValue,
         maximumDelay ?? TimeSpan.FromHours(1),
@@ -589,7 +600,8 @@ public sealed class PantsCloudEventualFlushTests
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        PantsCloudWritePolicy policy) =>
+        PantsCloudWritePolicy policy
+    ) =>
         PantsDatabase.OpenAsync(CreateOptions(path, policy));
 
     static PantsOpenOptions CreateOptions(string path, PantsCloudWritePolicy policy) =>

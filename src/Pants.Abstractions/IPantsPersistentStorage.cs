@@ -6,5 +6,6 @@ public interface IPantsPersistentStorage
 
     ValueTask<PantsStorageVerificationReport> VerifyAsync(
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

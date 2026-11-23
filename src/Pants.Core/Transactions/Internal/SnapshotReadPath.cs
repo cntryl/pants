@@ -17,13 +17,16 @@ static class SnapshotReadPath
     public static IReadOnlyList<FileMeta> ResolveCandidateFilesForPoint(
         DatabaseVersion snapshot,
         ColumnFamilyIdentity family,
-        ReadOnlySpan<byte> key)
+        ReadOnlySpan<byte> key
+    )
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+
         if (snapshot.ReadView is { } index)
         {
             return index.SelectPointCandidates(family.Id, key, out _);
         }
+
 
         var keyCopy = key.ToArray();
         return snapshot.GetVisibleFiles(family.Id)
@@ -41,13 +44,16 @@ static class SnapshotReadPath
         DatabaseVersion snapshot,
         ColumnFamilyIdentity family,
         byte[]? startInclusive,
-        byte[]? endExclusive)
+        byte[]? endExclusive
+    )
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+
         if (snapshot.ReadView is { } index)
         {
             return index.SelectRangeCandidates(family.Id, startInclusive, endExclusive, out _);
         }
+
 
         return snapshot.GetVisibleFiles(family.Id)
             .Where(file => Overlaps(file, startInclusive, endExclusive))

@@ -14,13 +14,15 @@ static class StorageVerifier
 
     public static async ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
         string path,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         await VerifyPathAsync(path, null, cancellationToken).ConfigureAwait(false);
 
     public static async ValueTask<PantsStorageVerificationReport> VerifyPathAsync(
         string path,
         IAsyncSstSourceFactory? remoteSstSourceFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         cancellationToken.ThrowIfCancellationRequested();
@@ -32,9 +34,11 @@ static class StorageVerifier
     static PantsStorageVerificationReport VerifyPath(
         string path,
         IAsyncSstSourceFactory? remoteSstSourceFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         string root;
+
         try
         {
             root = StoragePathGuard.CanonicalizeRoot(path);
@@ -45,6 +49,7 @@ static class StorageVerifier
             throw PantsException.Create(PantsErrorCode.InvalidPath, "The database path is invalid.", exception);
         }
 
+
         if (!Directory.Exists(root))
         {
             throw PantsException.Create(PantsErrorCode.InvalidPath, $"Database path '{root}' does not exist.");
@@ -54,6 +59,7 @@ static class StorageVerifier
 
         cancellationToken.ThrowIfCancellationRequested();
         var formatPath = Path.Combine(root, "FORMAT");
+
         if (!File.Exists(formatPath) || File.ReadAllText(formatPath) != "midge-format-version=9\n")
         {
             throw PantsException.Create(
@@ -61,19 +67,24 @@ static class StorageVerifier
                 "The path does not contain a valid Midge FORMAT v9 marker.");
         }
 
+
         var manifestPath = File.Exists(Path.Combine(root, "manifest.snapshot.json"))
             ? Path.Combine(root, "manifest.snapshot.json")
             : Path.Combine(root, "manifest.json");
+
         if (!File.Exists(manifestPath))
         {
             throw PantsException.Create(PantsErrorCode.Corruption, "The manifest snapshot is missing.");
         }
 
+
         ManifestState manifest;
+
         try
         {
             manifest = ManifestCodec.Decode(PositionalFile.ReadAllBytes(manifestPath));
             var journal = Path.Combine(root, "manifest.journal");
+
             if (File.Exists(journal))
             {
                 LocalDiskStore.ReplayManifestMetadata(manifest, File.ReadAllBytes(journal));
@@ -84,16 +95,19 @@ static class StorageVerifier
             throw PantsException.Create(PantsErrorCode.Corruption, "The manifest cannot be decoded.", exception);
         }
 
+
         long bytesVerified = 0;
         long dataBlocksVerified = 0;
         var sstFilesVerified = 0;
         var warnings = new List<string>();
         var ownedSsts = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var file in manifest.Files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var safeName = ValidateFileName(file.Name);
             var sstPath = Path.Combine(root, "sst", safeName);
+
             if (remoteSstSourceFactory is not null)
             {
                 var verified = VerifyRemoteSst(remoteSstSourceFactory, file, cancellationToken);
@@ -110,12 +124,14 @@ static class StorageVerifier
                 }
 
                 var bytes = File.ReadAllBytes(sstPath);
+
                 if (checked((ulong)bytes.Length) != file.SizeBytes)
                 {
                     throw PantsException.Create(
                         PantsErrorCode.Corruption,
                         $"Manifest SST '{safeName}' has an unexpected length.");
                 }
+
 
                 if (file.ContentCrc32C is not { } expectedCrc)
                 {
@@ -132,6 +148,7 @@ static class StorageVerifier
                 }
 
                 SstContents contents;
+
                 try
                 {
                     contents = SstCodec.Decode(bytes);
@@ -145,15 +162,19 @@ static class StorageVerifier
                         exception);
                 }
 
+
                 bytesVerified = checked(bytesVerified + bytes.Length);
                 dataBlocksVerified = checked(dataBlocksVerified + contents.DataBlockCount);
             }
+
 
             ownedSsts.Add(safeName);
             sstFilesVerified++;
         }
 
+
         var sstDirectory = Path.Combine(root, "sst");
+
         if (Directory.Exists(sstDirectory))
         {
             foreach (var file in Directory.EnumerateFiles(sstDirectory, "*.sst"))
@@ -165,24 +186,29 @@ static class StorageVerifier
             }
         }
 
+
         var (walRecords, walBytes, walBoundary) = VerifyWal(root, cancellationToken);
         bytesVerified = checked(bytesVerified + walBytes);
 
         var intentEntries = 0;
         var intentPath = Path.Combine(root, "intent_log.json");
+
         if (File.Exists(intentPath))
         {
             try
             {
                 var decoded = IntentLogCodec.Read(File.ReadAllBytes(intentPath));
                 using var document = IntentLogCodec.ToDocument(decoded.Entries);
+
                 if (document.RootElement.ValueKind != JsonValueKind.Array)
                 {
                     throw new JsonException("The intent log root is not an array.");
                 }
 
+
                 ValidateIntentLogSstNames(document.RootElement);
                 intentEntries = document.RootElement.GetArrayLength();
+
                 if (intentEntries != 0)
                 {
                     warnings.Add($"Intent log retains {intentEntries} publication entries.");
@@ -197,7 +223,9 @@ static class StorageVerifier
             }
         }
 
+
         var journalPath = Path.Combine(root, "manifest.journal");
+
         try
         {
             if (File.Exists(journalPath))
@@ -213,7 +241,9 @@ static class StorageVerifier
                 exception);
         }
 
+
         var retainedWalDirectory = Path.Combine(root, "wal");
+
         foreach (var retained in Directory.Exists(retainedWalDirectory)
                      ? Directory.EnumerateFiles(
                          retainedWalDirectory,
@@ -223,6 +253,7 @@ static class StorageVerifier
         {
             warnings.Add($"Salvage-retained WAL preserved: {Path.GetFileName(retained)}");
         }
+
 
         var health = warnings.Count == 0
             ? PantsEngineHealth.Healthy
@@ -245,7 +276,8 @@ static class StorageVerifier
     static (long Bytes, int DataBlocks) VerifyRemoteSst(
         IAsyncSstSourceFactory sourceFactory,
         FileMeta file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (file.ContentCrc32C is not { } expectedCrc)
         {
@@ -256,6 +288,7 @@ static class StorageVerifier
 
         IAsyncSstSource? source = sourceFactory.OpenAsync(file, cancellationToken)
             .AsTask().GetAwaiter().GetResult();
+
         if (source is null)
         {
             throw PantsException.Create(
@@ -263,9 +296,11 @@ static class StorageVerifier
                 $"Manifest SST '{file.Name}' is missing.");
         }
 
+
         try
         {
             var length = source.Length;
+
             if (length < 0 || checked((ulong)length) != file.SizeBytes)
             {
                 throw PantsException.Create(
@@ -273,14 +308,17 @@ static class StorageVerifier
                     $"Manifest SST '{file.Name}' has an unexpected length.");
             }
 
+
             const int verificationRangeBytes = 64 * 1024;
             uint checksum = 0;
+
             for (long offset = 0; offset < length;)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var rangeLength = checked((int)Math.Min(verificationRangeBytes, length - offset));
                 var bytes = source.ReadExactlyAsync(offset, rangeLength, cancellationToken)
                     .AsTask().GetAwaiter().GetResult();
+
                 if (bytes.Length != rangeLength)
                 {
                     throw PantsException.Create(
@@ -288,9 +326,11 @@ static class StorageVerifier
                         $"Manifest SST '{file.Name}' returned a short verification range.");
                 }
 
+
                 checksum = DiskFormat.Crc32CAppend(checksum, bytes);
                 offset += rangeLength;
             }
+
 
             if (checksum != expectedCrc)
             {
@@ -302,6 +342,7 @@ static class StorageVerifier
             var opening = AsyncSstReader.OpenAsync(source, file, cancellationToken).AsTask();
             source = null;
             var reader = opening.GetAwaiter().GetResult();
+
             try
             {
                 byte[]? smallestKey = null;
@@ -346,12 +387,14 @@ static class StorageVerifier
                     var block = reader.ReadDataBlockAsync(blockIndex, cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
                     var entries = SstCodec.DecodeDataBlock(block);
+
                     if (entries.Count == 0 ||
                         !entries[0].Key.AsSpan().SequenceEqual(reader.GetFirstKey(blockIndex)))
                     {
                         throw new PantsCorruptionException(
                             "SST index first key does not match its data block.");
                     }
+
 
                     foreach (var entry in entries)
                     {
@@ -390,21 +433,26 @@ static class StorageVerifier
 
     static (long Records, long Bytes, ulong? Boundary) VerifyWal(
         string root,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var walDirectory = Path.Combine(root, "wal");
+
         if (!Directory.Exists(walDirectory))
         {
             return (0, 0, null);
         }
 
+
         var ledger = WalLedgerStore.LoadExisting(walDirectory);
         var replayPaths = ledger.Members.Select(member =>
             Path.Combine(walDirectory, $"{member.Open.Id:00000000000000000000}.wal")).ToArray();
+
         for (var index = 0; index < ledger.Members.Count; index++)
         {
             ValidateLedgerMember(replayPaths[index], ledger.Holder, ledger.Members[index], cancellationToken);
         }
+
 
         var records = 0L;
         var decodedBytes = 0L;
@@ -413,10 +461,12 @@ static class StorageVerifier
         var writerEpochFrontiers = DiscoverWriterEpochFrontiers(replayPaths, activePath, cancellationToken);
         var replayOrdinal = 0UL;
         var scratchDirectory = Path.Combine(Path.GetTempPath(), $"pants-verification-{Guid.NewGuid():N}");
+
         try
         {
             using var recovery = new WalRecoveryStateMachine(scratchDirectory);
             var recoveredVersions = new WalRecoveredVersionTracker();
+
             foreach (var replayPath in replayPaths)
             {
                 var (fileRecords, fileBytes, fileBoundary) = VerifyWalFile(
@@ -435,6 +485,7 @@ static class StorageVerifier
                 boundary = fileBoundary ?? boundary;
             }
 
+
             return (records, decodedBytes, boundary);
         }
         finally
@@ -446,11 +497,20 @@ static class StorageVerifier
         }
     }
 
-    internal static void ValidateLedgerMember(string path, Guid holder, WalLedgerMember member,
-        CancellationToken cancellationToken) => ValidateLedgerMember(path, holder, member, null, cancellationToken);
+    internal static void ValidateLedgerMember(
+        string path,
+        Guid holder,
+        WalLedgerMember member,
+        CancellationToken cancellationToken
+    ) => ValidateLedgerMember(path, holder, member, null, cancellationToken);
 
-    internal static void ValidateLedgerMember(string path, Guid holder, WalLedgerMember member,
-        long? maximumReplayableTransactionBytes, CancellationToken cancellationToken)
+    internal static void ValidateLedgerMember(
+        string path,
+        Guid holder,
+        WalLedgerMember member,
+        long? maximumReplayableTransactionBytes,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -466,18 +526,26 @@ static class StorageVerifier
         }
     }
 
-    static void ValidateLedgerMemberCore(string path, Guid holder, WalLedgerMember member,
-        long? maximumReplayableTransactionBytes, CancellationToken cancellationToken)
+    static void ValidateLedgerMemberCore(
+        string path,
+        Guid holder,
+        WalLedgerMember member,
+        long? maximumReplayableTransactionBytes,
+        CancellationToken cancellationToken
+    )
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
         var header = new byte[WalSegmentCodec.HeaderSize];
+
         if (!DiskFormat.ReadExactly(stream, header))
         {
             throw new PantsCorruptionException("WAL ledger member header is truncated.");
         }
 
+
         var (open, actualHolder) = WalSegmentCodec.DecodeHeader(header);
+
         if (actualHolder != holder || open.Id != member.Open.Id || open.Epoch != member.Open.Epoch ||
             open.FirstSeq != member.Open.FirstSeq || !open.Prev.Matches(member.Open.Prev) ||
             member.DurableBytes > (ulong)stream.Length)
@@ -485,7 +553,9 @@ static class StorageVerifier
             throw new PantsCorruptionException("WAL segment identity or durable boundary differs from its ledger.");
         }
 
+
         stream.Position = 0;
+
         if (member.Sealed is null)
         {
             if (member.DurableBytes is { } durableBytes)
@@ -496,9 +566,11 @@ static class StorageVerifier
             return;
         }
 
+
         var facts = member.Sealed;
         var decoded = WalFrameReader.ScanSegment(stream, maximumReplayableTransactionBytes, cancellationToken).Footer
             ?? throw new PantsCorruptionException("A sealed WAL ledger member has no complete footer.");
+
         if (!facts.Link.Matches(decoded.Link) || facts.RecordCount != decoded.RecordCount ||
             facts.DataLen != decoded.DataLen || facts.MaxSeqPerCf.Length != decoded.MaxSeqPerCf.Length ||
             facts.MaxSeqPerCf.Where((pair, index) => !pair.AsSpan().SequenceEqual(decoded.MaxSeqPerCf[index])).Any())
@@ -510,10 +582,12 @@ static class StorageVerifier
     static WalWriterEpochFrontiers DiscoverWriterEpochFrontiers(
         IReadOnlyList<string> replayPaths,
         string activePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var frontiers = new WalWriterEpochFrontiers();
         var ordinal = 0UL;
+
         foreach (var replayPath in replayPaths)
         {
             using var stream = new FileStream(
@@ -521,6 +595,7 @@ static class StorageVerifier
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
+
             try
             {
                 WalFrameReader.Visit(
@@ -528,6 +603,7 @@ static class StorageVerifier
                     (record, _) =>
                     {
                         frontiers.Record(record, ordinal);
+
                         if (ordinal != ulong.MaxValue)
                         {
                             ordinal++;
@@ -554,6 +630,7 @@ static class StorageVerifier
             }
         }
 
+
         return frontiers;
     }
 
@@ -565,7 +642,8 @@ static class StorageVerifier
         WalRecoveredVersionTracker recoveredVersions,
         WalWriterEpochFrontiers writerEpochFrontiers,
         ref ulong replayOrdinal,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var stream = new FileStream(
             walPath,
@@ -576,6 +654,7 @@ static class StorageVerifier
         var decodedBytes = 0L;
         var boundary = precedingBoundary;
         var currentOrdinal = replayOrdinal;
+
         try
         {
             WalFrameReader.Visit(
@@ -583,10 +662,12 @@ static class StorageVerifier
                 (record, frameBytes) =>
                 {
                     var recordOrdinal = currentOrdinal;
+
                     if (currentOrdinal != ulong.MaxValue)
                     {
                         currentOrdinal++;
                     }
+
 
                     if (writerEpochFrontiers.IsStale(record, recordOrdinal))
                     {
@@ -624,6 +705,7 @@ static class StorageVerifier
                 $"WAL '{Path.GetFileName(walPath)}' contains values outside supported limits.",
                 exception);
         }
+
 
         return (records, decodedBytes, boundary);
     }

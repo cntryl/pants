@@ -21,6 +21,7 @@ public sealed class CloudDurabilityWaitShutdownTests
             });
         var accepted = waits.WaitAsync(1, TestTimeouts.Expected, CancellationToken.None).AsTask();
         await entered.Task.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             waits.StopForShutdown();
@@ -36,6 +37,7 @@ public sealed class CloudDurabilityWaitShutdownTests
         {
             release.TrySetResult();
         }
+
         await completed.Task.WaitAsync(TestTimeouts.Expected);
         Assert.False(await accepted);
     }
@@ -59,6 +61,7 @@ public sealed class CloudDurabilityWaitShutdownTests
             });
         var racing = Task.Run(async () => await waits.WaitAsync(1, TestTimeouts.Expected, CancellationToken.None));
         await entered.Task.WaitAsync(TestTimeouts.Expected);
+
         try
         {
             waits.StopForShutdown();
@@ -67,6 +70,7 @@ public sealed class CloudDurabilityWaitShutdownTests
         {
             release.Set();
         }
+
         Assert.False(await racing.WaitAsync(TestTimeouts.Expected));
         Assert.Equal(0, requests);
     }

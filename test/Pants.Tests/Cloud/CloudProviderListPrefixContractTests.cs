@@ -35,7 +35,8 @@ public sealed class CloudProviderListPrefixContractTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref _requests);
             var body = provider switch

@@ -211,12 +211,14 @@ public sealed class FileLeaseTests
 
         Assert.NotNull(lastDurableLockImage);
         Assert.False(File.Exists(lockPath));
+
         if (!lockRemovalWasSynchronized)
         {
             // The sentinel write synced the directory before unlinking this lock. Restore that
             // last durable namespace image to model power loss after shutdown.
             File.WriteAllBytes(lockPath, lastDurableLockImage);
         }
+
 
         using var successor = FileLease.Acquire(
             directory.Path,
@@ -339,6 +341,7 @@ public sealed class FileLeaseTests
 
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
         FileLease? successor = null;
+
         while (successor is null)
         {
             try
@@ -358,6 +361,7 @@ public sealed class FileLeaseTests
                 await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
             }
         }
+
 
         using (successor)
         {
@@ -390,6 +394,7 @@ public sealed class FileLeaseTests
             DateTimeOffset.UnixEpoch);
 
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while ((await fenced.Diagnostics.GetRuntimeMetricsAsync()).Health != PantsEngineHealth.Degraded &&
                !await Task.Run(() => IsFenced(fenced), timeout.Token))
         {
@@ -399,7 +404,9 @@ public sealed class FileLeaseTests
         // The successor must get past the lease and LOCK. On Windows the undisposed instance
         // still holds the WAL file open, so reaching that file (a storage error) is also proof
         // the LOCK handle is gone; being refused as lease-held is the failure.
+
         IPantsDatabase? successor = null;
+
         while (true)
         {
             try
@@ -417,6 +424,7 @@ public sealed class FileLeaseTests
                 return;
             }
         }
+
 
         await using (successor)
         {
@@ -600,13 +608,16 @@ public sealed class FileLeaseTests
         string path,
         ulong epoch,
         string holderId,
-        DateTimeOffset acquiredAt)
+        DateTimeOffset acquiredAt
+    )
     {
         var lockPath = Path.Combine(path, ".midge_leader.lock");
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             FileStream mutationLock;
+
             try
             {
                 mutationLock = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
@@ -616,6 +627,7 @@ public sealed class FileLeaseTests
                 await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);
                 continue;
             }
+
 
             try
             {
@@ -634,14 +646,17 @@ public sealed class FileLeaseTests
     static async Task<ulong> ReadLeaseEpochAsync(string path)
     {
         var content = await File.ReadAllTextAsync(Path.Combine(path, ".midge_leader"));
+
         foreach (var line in content.Split('\n'))
         {
             var parts = line.Split(": ", 2);
+
             if (parts.Length == 2 && parts[0] == "epoch")
             {
                 return ulong.Parse(parts[1], CultureInfo.InvariantCulture);
             }
         }
+
 
         throw new InvalidOperationException("No epoch field found in leader record.");
     }
@@ -730,7 +745,8 @@ public sealed class FileLeaseTests
     static FileLease AcquireWithMonotonicTime(
         string root,
         ManualTimeProvider time,
-        Action? leaseLossCallback) =>
+        Action? leaseLossCallback
+    ) =>
         FileLease.Acquire(
             root,
             0,

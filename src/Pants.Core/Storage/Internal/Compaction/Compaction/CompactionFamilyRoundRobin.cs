@@ -8,18 +8,22 @@ static class CompactionFamilyRoundRobin
             .Distinct()
             .Order()
             .ToArray();
+
         if (orderedFamilyIds.Length == 0)
         {
             return [];
         }
 
+
         var nextFamilyIndex = lastScheduledFamilyId is { } lastFamilyId
             ? Array.FindIndex(orderedFamilyIds, familyId => familyId > lastFamilyId)
             : 0;
+
         if (nextFamilyIndex < 0)
         {
             nextFamilyIndex = 0;
         }
+
 
         return orderedFamilyIds
             .Skip(nextFamilyIndex)
@@ -30,7 +34,8 @@ static class CompactionFamilyRoundRobin
     public static uint[] OrderCriticalFamilies(
         IEnumerable<uint> familyIds,
         IReadOnlySet<uint> criticalFamilies,
-        uint? lastScheduledFamilyId) =>
+        uint? lastScheduledFamilyId
+    ) =>
         OrderFamilies(familyIds, lastScheduledFamilyId)
             .Where(criticalFamilies.Contains)
             .ToArray();

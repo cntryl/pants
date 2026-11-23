@@ -429,6 +429,7 @@ public sealed class AsyncSstReaderCacheTests
             .ToArray();
         release.Set();
         var cold = await Task.WhenAll(opens).WaitAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.All(cold, static receipt => Assert.False(receipt.CacheHit));
@@ -473,6 +474,7 @@ public sealed class AsyncSstReaderCacheTests
         var readers = await Task.WhenAll(opens).WaitAsync(TestTimeouts.Expected);
 
         Assert.Equal(1, counter.Opens);
+
         foreach (var reader in readers)
         {
             await reader.DisposeAsync();
@@ -560,6 +562,7 @@ public sealed class AsyncSstReaderCacheTests
 
         using var cache = new AsyncSstReaderCache(readerBytes * 3);
         var counter = new ReadCounter();
+
         for (var index = 0; index < 100; index++)
         {
             var file = new FileMeta { Name = $"{index}.sst" };
@@ -568,6 +571,7 @@ public sealed class AsyncSstReaderCacheTests
                 token => OpenAsync(path, file, counter, token),
                 CancellationToken.None);
         }
+
 
         Assert.True(cache.CachedReaderCount <= 3);
     }
@@ -595,7 +599,8 @@ public sealed class AsyncSstReaderCacheTests
         string path,
         FileMeta file,
         ReadCounter counter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Interlocked.Increment(ref counter.Opens);
         return await AsyncSstReader.OpenAsync(
@@ -633,7 +638,8 @@ public sealed class AsyncSstReaderCacheTests
         public ValueTask<byte[]> ReadExactlyAsync(
             long offset,
             int length,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             inner.ReadExactlyAsync(offset, length, cancellationToken);
 
         public ValueTask DisposeAsync() =>

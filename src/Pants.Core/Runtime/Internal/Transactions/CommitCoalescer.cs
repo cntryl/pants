@@ -21,9 +21,11 @@ sealed class CommitCoalescer(
         CommitRuntimeCommand command,
         PantsDurability? groupDurability,
         Dictionary<ColumnFamilyIdentity, long> stagedBytesByFamily,
-        IReadOnlyList<CommitRuntimeCommand>? stagedCommands = null)
+        IReadOnlyList<CommitRuntimeCommand>? stagedCommands = null
+    )
     {
         var durability = command.WriteOptions.Durability;
+
         if (durability is not (PantsDurability.Sync or
                 PantsDurability.Buffered or
                 PantsDurability.BestEffort or
@@ -35,8 +37,10 @@ sealed class CommitCoalescer(
             return false;
         }
 
+
         var commandBytesByFamily = new Dictionary<ColumnFamilyIdentity, long>(
             ColumnFamilyIdentityComparer.Instance);
+
         try
         {
             var walBatchBytes = WalCodec.TransactionBatchRecordOverhead;
@@ -50,6 +54,7 @@ sealed class CommitCoalescer(
                     operation.Value?.Length,
                     operation.EndExclusive?.Length));
             });
+
             if (NeedsPriorStateValidation(command) &&
                 stagedCommands is not null &&
                 stagedCommands.Any(staged => ConflictsWithEarlierWrites(command, staged)))
@@ -59,6 +64,7 @@ sealed class CommitCoalescer(
 
             // A batch that cannot be framed fails when it is encoded. Committing it alone keeps
             // that failure from rolling back the well-formed commits it would be grouped with.
+
             if (durability != PantsDurability.BestEffort &&
                 walBatchBytes > DiskFormat.WalMaximumRecordBytes)
             {
@@ -70,6 +76,7 @@ sealed class CommitCoalescer(
                 var stagedBytes = checked(
                     stagedBytesByFamily.GetValueOrDefault(pair.Key) + pair.Value);
                 var activeBytes = state.ActiveMemtableBytes.GetValueOrDefault(pair.Key);
+
                 if (activeBytes != 0 &&
                     checked(activeBytes + stagedBytes) > memtableSizeLimitBytes)
                 {
@@ -106,7 +113,8 @@ sealed class CommitCoalescer(
 
     static bool ConflictsWithEarlierWrites(
         CommitRuntimeCommand candidate,
-        CommitRuntimeCommand earlier)
+        CommitRuntimeCommand earlier
+    )
     {
         var conflicts = false;
         earlier.Payload.Operations.ForEach(earlierOperation =>
@@ -115,6 +123,7 @@ sealed class CommitCoalescer(
             {
                 conflicts |= OperationsOverlap(earlierOperation, candidateOperation);
             });
+
             if (candidate.Payload.Asserts.TryGetValue(earlierOperation.Family, out var assertions))
             {
                 conflicts |= assertions.Any(assertion =>
@@ -126,7 +135,8 @@ sealed class CommitCoalescer(
 
     static bool OperationsOverlap(
         TransactionIntentOperation left,
-        TransactionIntentOperation right)
+        TransactionIntentOperation right
+    )
     {
         if (!ColumnFamilyIdentityComparer.Instance.Equals(left.Family, right.Family))
         {
@@ -135,10 +145,12 @@ sealed class CommitCoalescer(
 
         var leftRange = left.Kind == CommitOperationKind.DeleteRange;
         var rightRange = right.Kind == CommitOperationKind.DeleteRange;
+
         if (!leftRange && !rightRange)
         {
             return left.Key.AsSpan().SequenceEqual(right.Key);
         }
+
 
         if (leftRange && rightRange)
         {
@@ -165,14 +177,16 @@ sealed class CommitCoalescer(
     public static IReadOnlyList<PreparedCoalescedCommit> CreatePreparedCommits(
         RuntimeState state,
         IReadOnlyList<CommitRuntimeCommand> commands,
-        ulong? sequenceFloor = null) =>
+        ulong? sequenceFloor = null
+    ) =>
         CoalescedCommitApplyPreflight.Create(state, commands, sequenceFloor);
 
     public async ValueTask AppendAsync(
         RuntimeState state,
         IReadOnlyList<PreparedCoalescedCommit> prepared,
         PantsDurability durability,
-        Failpoint beforeSync)
+        Failpoint beforeSync
+    )
     {
         if (prepared.Count == 0 ||
             durability is not (PantsDurability.Sync or
@@ -194,21 +208,26 @@ sealed class CommitCoalescer(
             ? PantsDurability.Buffered
             : durability;
         var deadline = prepared[0].Command.Deadline;
+
         for (var index = 1; index < prepared.Count; index++)
         {
             var candidate = prepared[index].Command.Deadline;
+
             if (candidate.Remaining < deadline.Remaining)
             {
                 deadline = candidate;
             }
         }
 
+
         var result = await appendGroupAsync(group, state.Sequence, walDurability, beforeSync, deadline)
             .ConfigureAwait(false);
+
         if (result.CommitSequence != prepared[^1].Sequence)
         {
             throw new PantsInternalException("The WAL receipt does not match its admitted commit group.");
         }
+
         if (durability == PantsDurability.Sync)
         {
             telemetry.RecordDurabilityWaitersFannedOut(result.CommitCount);
@@ -217,9 +236,11 @@ sealed class CommitCoalescer(
 
     public void Apply(
         RuntimeState state,
-        IReadOnlyList<PreparedCoalescedCommit> prepared)
+        IReadOnlyList<PreparedCoalescedCommit> prepared
+    )
     {
         var staged = new StagedMemtableApply(state);
+
         foreach (var commit in prepared)
         {
             foreach (var operation in commit.Operations)
@@ -228,6 +249,7 @@ sealed class CommitCoalescer(
                 afterOperationStaged();
             }
         }
+
 
         if (prepared.Count != 0)
         {

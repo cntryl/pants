@@ -56,6 +56,7 @@ public sealed class PantsCloudWriteAdmissionParityTests
         await CommitWriteAsync(database, "occupy-upload-queue");
         await failpoint.WaitUntilEnteredAsync(TestTimeouts.Expected);
         ulong validatedCut = 0;
+
         try
         {
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -90,6 +91,7 @@ public sealed class PantsCloudWriteAdmissionParityTests
         {
             failpoint.Release();
         }
+
         Assert.True(await database.Cloud!.WaitForDurableAsync(validatedCut, TestTimeouts.Expected));
     }
 

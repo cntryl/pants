@@ -10,7 +10,8 @@ static class SimulatedCloudSstGarbageCollector
         IFailpointHandler failpoints,
         Func<IReadOnlyDictionary<string, FileMeta>>? readDeletionCandidates = null,
         Action<FileMeta>? acknowledgeDeletion = null,
-        Action? ensureAuthority = null)
+        Action? ensureAuthority = null
+    )
     {
         try
         {
@@ -20,21 +21,26 @@ static class SimulatedCloudSstGarbageCollector
             Directory.CreateDirectory(cloudSstDirectory);
             ReconcileQuarantines(cloudSstDirectory);
             var encounteredAnomaly = false;
+
             foreach (var retired in proof.ReleasedRetired.Values)
             {
                 var path = Path.Combine(cloudSstDirectory, retired.Name);
+
                 if (!File.Exists(path) && !CloudSstReferenceReader.ReadLocalProtectedNames(localRoot).Contains(retired.Name))
                 {
                     ensureAuthority?.Invoke();
+
                     if (!VerifyProof(proof))
                     {
                         return false;
                     }
 
+
                     AtomicStagedFile.FlushDirectory(cloudSstDirectory);
                     acknowledgeDeletion!(retired);
                 }
             }
+
 
             foreach (var path in Directory.EnumerateFiles(
                          cloudSstDirectory,
@@ -42,11 +48,13 @@ static class SimulatedCloudSstGarbageCollector
                          SearchOption.TopDirectoryOnly))
             {
                 var objectKey = PantsCloudObjectLayout.SstPrefix + Path.GetFileName(path);
+
                 if (!CloudSstObjectKey.TryGetName(objectKey, out var name))
                 {
                     encounteredAnomaly = true;
                     continue;
                 }
+
 
                 if (proof.ProtectedNames.Contains(name) ||
                     CloudSstReferenceReader.ReadLocalProtectedNames(localRoot).Contains(name))
@@ -56,25 +64,31 @@ static class SimulatedCloudSstGarbageCollector
 
                 var bytes = File.ReadAllBytes(path);
                 proof.ReleasedRetired.TryGetValue(name, out var retired);
+
                 if (retired is not null && (!retired.ContentCrc32C.HasValue || retired.SizeBytes != (ulong)bytes.Length || retired.ContentCrc32C.Value != DiskFormat.Crc32C(bytes)))
                 {
                     encounteredAnomaly = true;
                     continue;
                 }
 
+
                 var expectedVersion = CreateVersion(bytes);
+
                 if (!VerifyProof(proof) ||
                     CloudSstReferenceReader.ReadLocalProtectedNames(localRoot).Contains(name))
                 {
                     return false;
                 }
 
+
                 failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
                 ensureAuthority?.Invoke();
+
                 if (!VerifyProof(proof) || !QuarantineAndDelete(path, expectedVersion))
                 {
                     return false;
                 }
+
 
                 if (retired is not null)
                 {
@@ -103,12 +117,15 @@ static class SimulatedCloudSstGarbageCollector
                      SearchOption.TopDirectoryOnly))
         {
             var marker = quarantinePath.LastIndexOf(".gc-", StringComparison.Ordinal);
+
             if (marker < 0)
             {
                 continue;
             }
 
+
             var originalPath = quarantinePath[..marker];
+
             if (File.Exists(originalPath))
             {
                 File.Delete(quarantinePath);
@@ -134,6 +151,7 @@ static class SimulatedCloudSstGarbageCollector
         var manifest = CloudManifestReader.DecodeMetadata(selected);
         CloudSstReferenceReader.AddManifestNames(manifest, names);
         var released = new Dictionary<string, FileMeta>(StringComparer.Ordinal);
+
         foreach (var retired in manifest.RetiredSsts)
         {
             if (canAcknowledge && candidates?.TryGetValue(retired.Key, out var candidate) == true && ManifestTransitions.SameIdentity(retired.Value, candidate))
@@ -145,6 +163,7 @@ static class SimulatedCloudSstGarbageCollector
                 names.Add(retired.Key);
             }
         }
+
         if (selected.TryGetValue("intent_log.json", out var intentBytes))
         {
             CloudSstReferenceReader.AddIntentNames(intentBytes, names);
@@ -175,9 +194,11 @@ static class SimulatedCloudSstGarbageCollector
     static bool QuarantineAndDelete(string path, string expectedVersion)
     {
         var quarantinePath = $"{path}.gc-{Guid.NewGuid():N}";
+
         try
         {
             File.Move(path, quarantinePath, false);
+
             if (!StringComparer.Ordinal.Equals(
                     CreateVersion(File.ReadAllBytes(quarantinePath)),
                     expectedVersion))
@@ -186,6 +207,7 @@ static class SimulatedCloudSstGarbageCollector
                 throw new PantsRecoveryFailedException(
                     $"Simulated-cloud SST garbage collection proof for '{path}' became stale before deletion.");
             }
+
 
             File.Delete(quarantinePath);
             return true;

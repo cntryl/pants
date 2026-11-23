@@ -14,7 +14,8 @@ public sealed class CloudNamespaceNormalizationTests
     public async Task ShouldShareAuthorityAndRecoverExactRowsAcrossNormalizedPrefixAliases(
         string decorated,
         string canonical,
-        bool copiedLocation)
+        bool copiedLocation
+    )
     {
         using var originalCache = new TemporaryDirectory();
         using var successorCache = new TemporaryDirectory();

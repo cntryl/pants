@@ -59,11 +59,13 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
     public void AcknowledgeHeader(ReadOnlySpan<byte> bytes)
     {
         var (header, _) = WalSegmentCodec.DecodeHeader(bytes);
+
         if (Offset != 0 || header.Id != Segment.SegmentId || header.Epoch != Segment.WriterEpoch ||
             Segment.Previous is null || !header.Prev.Matches(Segment.Previous))
         {
             throw new PantsCorruptionException("Published WAL header differs from its catalog.");
         }
+
 
         _header = header;
         Checksum = DiskFormat.Crc32CAppend(Checksum, bytes);
@@ -77,6 +79,7 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
         var facts = Segment.Facts ?? throw new PantsCorruptionException("WAL catalog has no sealed facts.");
         var digest = new byte[16];
         BinaryPrimitives.WriteUInt128LittleEndian(digest, _digest.GetCurrentHashAsUInt128());
+
         if (_header is null || _footerSeen || Offset != (long)facts.DataLen || frame.Length != Remaining ||
             payload.Length != 63 + _familyMaxima.Count * 12 || !WalSegmentCodec.IsFooter(payload) || payload[2] != 1 ||
             BinaryPrimitives.ReadUInt64LittleEndian(payload[3..]) != Segment.SegmentId ||
@@ -91,7 +94,9 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
             throw new PantsCorruptionException("Published WAL footer disagrees with its records or catalog.");
         }
 
+
         var index = 0;
+
         foreach (var (family, maximum) in _familyMaxima)
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(payload[(47 + index * 12)..]) != family ||
@@ -103,6 +108,7 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
 
             index++;
         }
+
 
         Checksum = DiskFormat.Crc32CAppend(Checksum, frame);
         Offset += frame.Length;
@@ -117,6 +123,7 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
         }
 
         IReadOnlyList<WalMutation> mutations;
+
         try
         {
             mutations = record.Operation == WalOperation.TransactionBatch
@@ -132,8 +139,10 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
                 exception);
         }
 
+
         var coveringFiles = new List<FileMeta>(mutations.Count);
         var coveringDroppedFamilies = new Dictionary<uint, ulong>();
+
         for (var index = 0; index < mutations.Count; index++)
         {
             if (!coverage.TryFindCovering(
@@ -158,6 +167,7 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
             }
         }
 
+
         if (_header is null || record.Sequence < _header.FirstSeq ||
             _recordCount != 0 && record.Sequence <= ObservedMaximumSequence)
         {
@@ -177,10 +187,12 @@ sealed class WalSegmentProof(ProviderPublishedWalSegment segment, string version
         Checksum = DiskFormat.Crc32CAppend(Checksum, frame);
         Offset = checked(Offset + frame.Length);
         UncoveredUnder = null;
+
         foreach (var file in coveringFiles)
         {
             _coveringFiles[file.Name] = file;
         }
+
 
         foreach (var (familyId, dropSequence) in coveringDroppedFamilies)
         {

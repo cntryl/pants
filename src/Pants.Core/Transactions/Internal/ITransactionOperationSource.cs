@@ -12,7 +12,8 @@ interface ITransactionOperationSource
 
     ValueTask ForEachAsync(
         Func<TransactionIntentOperation, ValueTask> visitor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(visitor);
         ForEach(operation =>

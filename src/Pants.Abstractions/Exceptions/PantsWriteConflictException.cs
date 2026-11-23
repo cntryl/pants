@@ -10,7 +10,8 @@ public sealed class PantsWriteConflictException : PantsException
     internal PantsWriteConflictException(
         string message,
         bool isRangeConflict,
-        Exception? innerException = null)
+        Exception? innerException = null
+    )
         : base(PantsErrorCode.WriteConflict, message, innerException)
     {
         IsRangeConflict = isRangeConflict;

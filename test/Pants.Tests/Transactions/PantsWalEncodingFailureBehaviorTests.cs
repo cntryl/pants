@@ -36,6 +36,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         var value = new byte[valueBytes];
         value.AsSpan().Fill((byte)'v');
         var database = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+
         try
         {
             Assert.Equal(3UL, await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.CloudStrict));
@@ -56,6 +57,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         {
             await CloseAsync(database);
         }
+
         await using var reopened = await PantsDatabase.OpenForTestingAsync(options, dependencies);
         await using var reader = await reopened.Transactions.BeginAsync(reopened.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
         Assert.Equal("stable"u8.ToArray(), (await reader.GetAsync("old"u8.ToArray()))?.ToArray());
@@ -74,7 +76,11 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     [InlineData(true, true, false, false)]
     [InlineData(true, false, false, true)]
     public async Task ShouldRejectTheHybridRawFrameBeforePhysicalEncodingWithoutPoisoningTheWriter(
-        bool provider, bool spilled, bool random, bool acceptedBoundary)
+        bool provider,
+        bool spilled,
+        bool random,
+        bool acceptedBoundary
+    )
     {
         using var directory = new TemporaryDirectory();
         using var handler = new InMemoryAzureBlobHandler();
@@ -102,6 +108,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
                 write.Put("key"u8.ToArray(), value);
                 var transactionDirectory = Path.Combine(directory.Path, "txn");
                 Assert.Equal(spilled, Directory.Exists(transactionDirectory) && Directory.EnumerateFiles(transactionDirectory, "*.run").Any());
+
                 if (acceptedBoundary)
                 {
                     Assert.Equal(6UL, await write.CommitWithSequenceAsync(PantsWriteOptions.CloudStrict));
@@ -113,12 +120,14 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             }
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(6UL, after.CurrentSequence);
+
             if (!acceptedBoundary)
             {
                 Assert.Equal(before.WalAppendCount, after.WalAppendCount);
                 Assert.Equal(before.WalBytesWrittenTotal, after.WalBytesWrittenTotal);
                 await AssertOldCutAsync(database, PantsWriteOptions.CloudStrict);
             }
+
             Assert.Equal(9UL, await PutAsync(database, "suffix", "durable"u8.ToArray(), PantsWriteOptions.CloudStrict));
             Assert.Equal(12UL, await PutAsync(database, "volatile", "accepted"u8.ToArray(), PantsWriteOptions.BestEffort));
             await database.ShutdownAsync(TestTimeouts.Expected);
@@ -129,6 +138,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         Assert.Equal("durable"u8.ToArray(), (await reader.GetAsync("suffix"u8.ToArray()))?.ToArray());
         Assert.Equal("accepted"u8.ToArray(), (await reader.GetAsync("volatile"u8.ToArray()))?.ToArray());
         var actual = await reader.GetAsync("key"u8.ToArray());
+
         if (acceptedBoundary)
         {
             Assert.True(actual.HasValue);
@@ -138,6 +148,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         {
             Assert.Null(actual);
         }
+
         Assert.Equal(12UL, await reader.CommitWithSequenceAsync(PantsWriteOptions.CloudStrict));
     }
 
@@ -146,6 +157,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             Assert.Equal(3UL, await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync));
@@ -164,6 +176,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             Assert.Equal(3UL, await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync));
@@ -176,11 +189,13 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             Assert.Equal(before.WalFsyncCount, after.WalFsyncCount);
             Assert.Equal(PantsEngineHealth.Degraded, after.Health);
             await AssertOldCutAsync(database);
+
             foreach (var options in new[] { PantsWriteOptions.Buffered, PantsWriteOptions.BestEffort })
             {
                 await using var empty = await BeginAsync(database);
                 Assert.Equal(3UL, await empty.CommitWithSequenceAsync(options));
             }
+
             Assert.Equal(6UL, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
         }
         finally
@@ -196,6 +211,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -219,6 +235,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -231,6 +248,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
                 1 => PantsWriteOptions.BestEffort,
                 _ => PantsWriteOptions.Sync
             };
+
             if (policy == 2)
             {
                 await Assert.ThrowsAsync<PantsRecoveryFailedException>(() => assertion.CommitWithSequenceAsync(options).AsTask());
@@ -239,6 +257,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             {
                 Assert.Equal(3UL, await assertion.CommitWithSequenceAsync(options));
             }
+
             Assert.Equal(6UL, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
             await AssertOldCutAsync(database);
         }
@@ -253,6 +272,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -273,6 +293,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     {
         using var directory = new TemporaryDirectory();
         var database = await PantsDatabase.OpenAsync(Options(directory.Path));
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -294,6 +315,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         using var directory = new TemporaryDirectory();
         var options = Options(directory.Path);
         var database = await PantsDatabase.OpenAsync(options);
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -320,6 +342,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         var options = Options(directory.Path);
         var database = await PantsDatabase.OpenForTestingAsync(options, new RuntimeDependencies(held));
         var flush = Task.CompletedTask;
+
         try
         {
             _ = await PutAsync(database, "old", "stable"u8.ToArray(), PantsWriteOptions.Sync);
@@ -339,6 +362,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         finally
         {
             held.Release();
+
             try
             {
                 await flush.WaitAsync(TestTimeouts.Expected);
@@ -347,6 +371,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             {
                 // Shutdown rejects publication waiters, but retains the actual physical worker.
             }
+
             await CloseAsync(database);
         }
     }
@@ -362,11 +387,13 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             Assert.IsType<PantsResourceLimitException>(await FailLargeCommitAsync(database, true));
             Assert.Equal(3UL, (await database.Diagnostics.GetRuntimeMetricsAsync()).CurrentSequence);
             await AssertOldCutAsync(database);
+
             foreach (var writeOptions in new[] { PantsWriteOptions.Buffered, PantsWriteOptions.BestEffort })
             {
                 await using var empty = await BeginAsync(database);
                 Assert.Equal(3UL, await empty.CommitWithSequenceAsync(writeOptions));
             }
+
             Assert.Equal(6UL, await PutAsync(database, "suffix", "durable"u8.ToArray(), PantsWriteOptions.Sync));
             Assert.Equal(9UL, await PutAsync(database, "volatile", "allowed"u8.ToArray(), PantsWriteOptions.BestEffort));
         }
@@ -417,6 +444,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
     static byte[] CreateValue(int bytesBelowLimit, bool random)
     {
         var value = new byte[64 * 1024 * 1024 - bytesBelowLimit];
+
         if (!random)
         {
             value.AsSpan().Fill((byte)'v');
@@ -424,6 +452,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         else
         {
             var state = 0x12345678U;
+
             for (var index = 0; index < value.Length; index++)
             {
                 state ^= state << 13;
@@ -432,6 +461,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
                 value[index] = (byte)state;
             }
         }
+
         return value;
     }
 
@@ -454,6 +484,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
         {
             // The failed physical writer is settled and the lease is already released.
         }
+
         await database.DisposeAsync();
     }
 
@@ -474,6 +505,7 @@ public sealed class PantsWalEncodingFailureBehaviorTests
             }
 
             _entered.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException("The physical flush output was not released.");

@@ -19,7 +19,9 @@ public sealed class PantsLeaseDerivedSkewOptionsTests
             ["Pants:Storage:Path"] = directory.Path,
             ["Pants:LeaseTimeToLive"] = TimeSpan.FromSeconds(ttl).ToString("c")
         };
+
         if (explicitSkew) { values["Pants:LeaseClockSkewTolerance"] = "00:00:02"; }
+
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
         services.AddPants().BindConfiguration("Pants");

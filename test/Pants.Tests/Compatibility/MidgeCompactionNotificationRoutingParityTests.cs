@@ -46,19 +46,23 @@ public sealed class MidgeCompactionNotificationRoutingParityTests
         await WriteGenerationsAsync(database);
         var started = Stopwatch.GetTimestamp();
         PantsRuntimeMetrics after;
+
         while (true)
         {
             after = await database.Diagnostics.GetRuntimeMetricsAsync();
+
             if (after.CompactionsRun > before.CompactionsRun)
             {
                 break;
             }
+
 
             Assert.True(
                 Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10),
                 $"Automatic compaction did not publish: {after}.");
             await Task.Delay(TimeSpan.FromMilliseconds(5));
         }
+
 
         await AssertLatestValuesAsync(database);
         await database.ShutdownAsync(TestTimeouts.Expected);
@@ -77,6 +81,7 @@ public sealed class MidgeCompactionNotificationRoutingParityTests
     static async Task WriteGenerationsAsync(IPantsDatabase database)
     {
         var family = database.ColumnFamilies.DefaultFamily;
+
         for (var generation = 0; generation < GenerationCount; generation++)
         {
             await using (var transaction = await database.Transactions.BeginAsync(
@@ -102,6 +107,7 @@ public sealed class MidgeCompactionNotificationRoutingParityTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var key = 0; key < KeyCount; key++)
         {
             Assert.Equal(

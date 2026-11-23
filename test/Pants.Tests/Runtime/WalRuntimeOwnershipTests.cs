@@ -26,6 +26,7 @@ public sealed class WalRuntimeOwnershipTests
         var single = grouped ? null : service.AppendCommitAsync(first, state.Sequence, PantsDurability.Sync).AsTask();
         var append = (Task?)group ?? single!;
         await barrier.WaitUntilEnteredAsync(TestTimeouts.Expected);
+
         try
         {
             Assert.False(append.IsCompleted);
@@ -37,6 +38,7 @@ public sealed class WalRuntimeOwnershipTests
         {
             barrier.Release();
         }
+
 
         await append;
         Assert.Equal(0UL, state.Sequence);

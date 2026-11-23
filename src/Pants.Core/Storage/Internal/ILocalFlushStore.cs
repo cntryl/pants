@@ -10,5 +10,6 @@ interface ILocalFlushStore
 
     FlushPublicationResult PublishFrozenFlushPlan(
         FrozenMemtableFlush frozen,
-        FlushPublicationPlan plan);
+        FlushPublicationPlan plan
+    );
 }

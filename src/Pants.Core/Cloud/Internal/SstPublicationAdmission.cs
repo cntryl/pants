@@ -38,7 +38,8 @@ sealed class SstPublicationAdmission
     /// </summary>
     public static SstPublicationAdmission DeferredWhenBusy(
         ResourceBudget budget,
-        MaintenanceMemoryGate gate) =>
+        MaintenanceMemoryGate gate
+    ) =>
         new(budget, gate, true);
 
     /// <summary>
@@ -58,12 +59,14 @@ sealed class SstPublicationAdmission
     {
         cancellationToken.ThrowIfCancellationRequested();
         var bytes = ImmutablePublicationEnvelope.For(sizeBytes);
+
         if (bytes > _budget.Limit)
         {
             throw PantsException.ResourceLimit(
                 $"Publishing an SST of {sizeBytes} bytes needs a {bytes}-byte maintenance " +
                 $"envelope; the pool holds {_budget.Limit} bytes.");
         }
+
 
         if (_gate is null)
         {

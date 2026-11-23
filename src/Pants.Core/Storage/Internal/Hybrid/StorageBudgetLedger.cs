@@ -43,6 +43,7 @@ sealed class StorageBudgetLedger
             lock (_admissionGate)
             {
                 RejectedAdmission? oldest = null;
+
                 foreach (var rejection in _rejectedAdmissions)
                 {
                     if (rejection is not null &&
@@ -51,6 +52,7 @@ sealed class StorageBudgetLedger
                         oldest = rejection;
                     }
                 }
+
 
                 if (oldest is null)
                 {
@@ -129,15 +131,18 @@ sealed class StorageBudgetLedger
     public bool TryReserve(
         StorageAdmissionKind kind,
         long estimateBytes,
-        [NotNullWhen(true)] out StorageReservation? reservation)
+        [NotNullWhen(true)] out StorageReservation? reservation
+    )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(estimateBytes);
 
         var ceiling = GetCeilingBytes(kind);
+
         while (true)
         {
             var reserved = Volatile.Read(ref _reservedBytes);
             var charged = checked(_residentBytes() + reserved);
+
             if (checked(charged + estimateBytes) > ceiling)
             {
                 reservation = null;
@@ -148,6 +153,7 @@ sealed class StorageBudgetLedger
                     PantsStorageAdmissionReason.LocalCapacity);
                 return false;
             }
+
 
             if (Interlocked.CompareExchange(
                     ref _reservedBytes,
@@ -208,7 +214,8 @@ sealed class StorageBudgetLedger
         StorageAdmissionKind kind,
         long requestedBytes,
         long freeBytes,
-        PantsStorageAdmissionReason reason)
+        PantsStorageAdmissionReason reason
+    )
     {
         lock (_admissionGate)
         {
@@ -231,6 +238,7 @@ sealed class StorageBudgetLedger
         while (true)
         {
             var current = Volatile.Read(ref value);
+
             if (current == long.MaxValue ||
                 Interlocked.CompareExchange(ref value, current + 1, current) == current)
             {
@@ -288,7 +296,8 @@ sealed class StorageBudgetLedger
         internal StorageReservation(
             StorageBudgetLedger ledger,
             StorageAdmissionKind kind,
-            long estimateBytes)
+            long estimateBytes
+        )
         {
             _ledger = ledger;
             _kind = kind;

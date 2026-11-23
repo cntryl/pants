@@ -9,7 +9,8 @@ sealed class OnlineVerificationBarrier
         long token,
         string? path,
         ulong sequence,
-        PantsEngineHealth runtimeHealth)
+        PantsEngineHealth runtimeHealth
+    )
     {
         Token = token;
         Path = path;

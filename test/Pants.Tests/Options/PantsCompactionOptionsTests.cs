@@ -39,7 +39,8 @@ public sealed class PantsCompactionOptionsTests
         PantsWorkloadProfile workload,
         bool backgroundEnabled,
         bool explicitCompaction,
-        int expectedTrigger)
+        int expectedTrigger
+    )
     {
         var settings = new Dictionary<string, string?>
         {
@@ -47,10 +48,12 @@ public sealed class PantsCompactionOptionsTests
             ["Pants:WorkloadProfile"] = workload.ToString(),
             ["Pants:BackgroundCompaction"] = backgroundEnabled ? "true" : "false"
         };
+
         if (explicitCompaction)
         {
             settings["Pants:Compaction:L0FileCountTrigger"] = "9";
         }
+
 
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var factory = new CapturingPantsDatabaseFactory();

@@ -12,7 +12,8 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
         RuntimeResponseRegistry registry,
         long requestId,
         string requestKind,
-        OperationDeadline deadline = default)
+        OperationDeadline deadline = default
+    )
     {
         WriteOptions = writeOptions;
         Payload = payload;
@@ -49,13 +50,16 @@ sealed class CommitRuntimeCommand : IRuntimeCommand
     public void Fail(
         RuntimeState state,
         Exception exception,
-        bool recordNoSpaceEvent = true)
+        bool recordNoSpaceEvent = true
+    )
     {
         var publicException = RuntimeExceptionMapper.ToPublicException(exception);
+
         if (recordNoSpaceEvent && RuntimeExceptionMapper.IsNoSpace(exception))
         {
             state.RecordNoSpaceEvent();
         }
+
 
         _response.Fail(publicException);
     }

@@ -8,7 +8,8 @@ sealed class ValidatingScanEnumerator : IAsyncEnumerator<PantsEntry>
 
     public ValidatingScanEnumerator(
         IAsyncEnumerator<PantsEntry> entries,
-        IScanReadValidator validator)
+        IScanReadValidator validator
+    )
     {
         _entries = entries;
         _validator = validator;

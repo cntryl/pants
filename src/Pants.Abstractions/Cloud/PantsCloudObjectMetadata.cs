@@ -5,7 +5,8 @@ public sealed record PantsCloudObjectMetadata
     public PantsCloudObjectMetadata(
         ulong sizeBytes,
         string version,
-        DateTimeOffset? lastModifiedUtc) : this(
+        DateTimeOffset? lastModifiedUtc
+    ) : this(
         sizeBytes,
         version,
         null,
@@ -17,7 +18,8 @@ public sealed record PantsCloudObjectMetadata
         ulong sizeBytes,
         string eTag,
         string? generation,
-        DateTimeOffset? lastModifiedUtc)
+        DateTimeOffset? lastModifiedUtc
+    )
     {
         SizeBytes = sizeBytes;
         ETag = eTag;

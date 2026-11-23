@@ -14,7 +14,8 @@ static class MemtableWritePressure
     public static bool IsStalled(
         RuntimePlan options,
         RuntimeState state,
-        IEnumerable<ColumnFamilyIdentity> identities) =>
+        IEnumerable<ColumnFamilyIdentity> identities
+    ) =>
         GetTotalBytes(state) >= GetHardLimitBytes(options) ||
         identities.Any(identity =>
             IsQueueFull(state, identity) || HasCriticalL0Debt(options, state, identity));
@@ -41,7 +42,8 @@ static class MemtableWritePressure
     public static bool HasCriticalL0Debt(
         RuntimePlan options,
         RuntimeState state,
-        ColumnFamilyIdentity identity)
+        ColumnFamilyIdentity identity
+    )
     {
         var activeBytes = state.ActiveMemtableBytes.GetValueOrDefault(identity);
         var slotUsage = GetL0SlotUsage(state, identity);
@@ -72,7 +74,8 @@ static class MemtableWritePressure
 
     public static bool IsQueueFull(
         RuntimeState state,
-        ColumnFamilyIdentity identity) =>
+        ColumnFamilyIdentity identity
+    ) =>
         state.ImmutableMemtableFlushes.Values.Count(flush =>
             flush.Frozen.ColumnFamily == identity) >= MaximumImmutableMemtablesPerColumnFamily;
 

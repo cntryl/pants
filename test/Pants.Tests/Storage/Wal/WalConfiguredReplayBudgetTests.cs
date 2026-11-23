@@ -195,6 +195,7 @@ public sealed class WalConfiguredReplayBudgetTests
                 BodyRead = true;
                 throw new IOException("The configured frame limit must be checked before its body is read.");
             }
+
             var count = (int)Math.Min(buffer.Length, 8 - Position);
             Header(64).AsSpan((int)Position, count).CopyTo(buffer);
             Position += count;

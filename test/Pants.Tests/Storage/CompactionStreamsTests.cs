@@ -33,6 +33,7 @@ public sealed class CompactionStreamsTests
             null);
         var peak = 0;
         var merged = new List<CompactionMergeResult>();
+
         foreach (var partition in StreamingCompactionMerger.MergeAndPartition(
                      streams.Streams,
                      streams.RangeTombstones,
@@ -44,6 +45,7 @@ public sealed class CompactionStreamsTests
         }
 
         // One level-0 source stream plus one chained target stream.
+
         Assert.True(peak <= 2, $"{peak} readers were open at once.");
         var keys = merged.SelectMany(static partition => partition.Entries)
             .Select(static entry => TestBytes.ToText(entry.Key))
@@ -313,7 +315,8 @@ public sealed class CompactionStreamsTests
         uint level,
         ulong sequence,
         (string Key, ulong Sequence, string Value)[] entries,
-        (string Start, string End, ulong Sequence)[]? tombstones = null)
+        (string Start, string End, ulong Sequence)[]? tombstones = null
+    )
     {
         var sstEntries = entries
             .OrderBy(static entry => entry.Key, StringComparer.Ordinal)
@@ -376,14 +379,17 @@ public sealed class CompactionStreamsTests
         public ICompactionFileCursor Open(FileMeta file)
         {
             var openCount = Interlocked.Increment(ref _openCount);
+
             while (true)
             {
                 var peak = Volatile.Read(ref _peakOpenCount);
+
                 if (openCount <= peak || Interlocked.CompareExchange(ref _peakOpenCount, openCount, peak) == peak)
                 {
                     break;
                 }
             }
+
 
             var entry = new SstEntry(
                 file.SmallestKey!,

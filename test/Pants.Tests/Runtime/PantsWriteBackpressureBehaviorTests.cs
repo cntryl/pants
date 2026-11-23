@@ -42,6 +42,7 @@ public sealed class PantsWriteBackpressureBehaviorTests
                 await PutAsync(database, $"seed-{index}");
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
+
             var before = await database.Diagnostics.GetRuntimeMetricsAsync();
 
             var rejection = await Assert.ThrowsAsync<PantsWriteStallException>(() => PutAsync(database, "refused"));
@@ -69,6 +70,7 @@ public sealed class PantsWriteBackpressureBehaviorTests
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
         await AssertValueAsync(reopened, "refused", true);
+
         for (var index = 0; index < 4; index++)
         {
             await AssertValueAsync(reopened, $"seed-{index}", true);
@@ -123,11 +125,13 @@ public sealed class PantsWriteBackpressureBehaviorTests
         await using var transaction = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+
         if (forceRewrite)
         {
             // The test observes physical output; overlapping empty keyspace prevents promotion.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
 

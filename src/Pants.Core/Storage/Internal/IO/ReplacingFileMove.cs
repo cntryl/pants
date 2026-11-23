@@ -28,7 +28,8 @@ static class ReplacingFileMove
         bool overwrite,
         bool isWindows,
         Action<string, string, bool> move,
-        Func<string, string, bool> posixReplace)
+        Func<string, string, bool> posixReplace
+    )
     {
         try
         {

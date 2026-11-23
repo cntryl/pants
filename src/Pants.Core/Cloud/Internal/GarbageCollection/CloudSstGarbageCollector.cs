@@ -26,7 +26,8 @@ sealed class CloudSstGarbageCollector
         Func<IReadOnlySet<string>> readLocalProtectedNames,
         Action ensureAuthority,
         Func<CancellationToken, ValueTask> validateRemoteAuthorityAsync,
-        IFailpointHandler failpoints)
+        IFailpointHandler failpoints
+    )
     {
         _sstStore = sstStore;
         _captureProofAsync = captureProofAsync;
@@ -42,6 +43,7 @@ sealed class CloudSstGarbageCollector
         {
             _ensureAuthority();
             using var proof = await _captureProofAsync(cancellationToken).ConfigureAwait(false);
+
             if (!_hasPendingListPage)
             {
                 var page = await _sstStore.ListPageAsync(
@@ -56,21 +58,26 @@ sealed class CloudSstGarbageCollector
                 }
 
                 var pageBytes = 0;
+
                 foreach (var objectKey in page.ObjectKeys)
                 {
                     var objectKeyBytes = Encoding.UTF8.GetByteCount(objectKey);
+
                     if (objectKeyBytes > CloudObjectStore.MaximumListPageBytes - pageBytes)
                     {
                         throw new PantsInternalException(
                             $"Cloud LIST page byte count exceeded limit of {CloudObjectStore.MaximumListPageBytes}.");
                     }
 
+
                     pageBytes += objectKeyBytes;
                 }
+
 
                 var nextListContinuation = string.IsNullOrEmpty(page.ContinuationToken)
                     ? null
                     : page.ContinuationToken;
+
                 if (nextListContinuation is not null &&
                     Encoding.UTF8.GetByteCount(nextListContinuation) > MaximumContinuationTokenBytes)
                 {
@@ -83,10 +90,12 @@ sealed class CloudSstGarbageCollector
                     throw new PantsInternalException("Cloud LIST repeated continuation token.");
                 }
 
+
                 _pendingListCandidates = new Queue<string>(page.ObjectKeys);
                 _pendingListContinuation = nextListContinuation;
                 _hasPendingListPage = true;
             }
+
 
             var hasRetiredSsts = proof.RetiredSsts is { Count: > 0 };
             var listCandidateLimit = hasRetiredSsts
@@ -106,25 +115,30 @@ sealed class CloudSstGarbageCollector
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal);
             var encounteredAnomaly = false;
+
             foreach (var objectKey in objectKeys)
             {
                 _ensureAuthority();
+
                 if (!CloudSstObjectKey.TryGetName(objectKey, out var name))
                 {
                     encounteredAnomaly = true;
                     continue;
                 }
 
+
                 var retired = proof.RetiredSsts?.GetValueOrDefault(name);
                 var isRetired = retired is not null;
                 var isPartialCompactionOutput = proof.PartialCompactionOutputVersions.TryGetValue(
                     name,
                     out var expectedPartialOutputVersion);
+
                 if ((proof.ProtectedNames.Contains(name) && !isPartialCompactionOutput) ||
                     _readLocalProtectedNames().Contains(name))
                 {
                     continue;
                 }
+
 
                 if (!isRetired && (!CloudSstIdentity.TryParse(name, out var sstIdentity) ||
                     !proof.RemoteNextSstSequences.TryGetValue(sstIdentity.ColumnFamilyId, out var nextSequence) ||
@@ -140,6 +154,7 @@ sealed class CloudSstGarbageCollector
 
                 var objectIdentity = await _sstStore.HeadAsync(objectKey, cancellationToken)
                     .ConfigureAwait(false);
+
                 if (objectIdentity is null)
                 {
                     if (isRetired && await VerifyProofAsync(proof, cancellationToken).ConfigureAwait(false) &&
@@ -152,6 +167,7 @@ sealed class CloudSstGarbageCollector
 
                     continue;
                 }
+
 
                 if (string.IsNullOrWhiteSpace(objectIdentity.Version))
                 {
@@ -179,20 +195,24 @@ sealed class CloudSstGarbageCollector
                 _failpoints.Hit(Failpoint.BeforeCloudSstGarbageCollectionDelete);
                 _ensureAuthority();
                 await _validateRemoteAuthorityAsync(cancellationToken).ConfigureAwait(false);
+
                 if (isRetired && proof.ValidateRetiredSst?.Invoke(retired!) != true)
                 {
                     return false;
                 }
 
+
                 var outcome = await _sstStore.DeleteAsync(
                     objectKey,
                     new PantsCloudObjectDeleteCondition.IfVersion(objectIdentity.Version),
                     cancellationToken).ConfigureAwait(false);
+
                 if (outcome == CloudObjectDeleteOutcome.ConditionNotMet)
                 {
                     throw new PantsRecoveryFailedException(
                         $"Cloud SST garbage collection proof for '{objectKey}' became stale before deletion.");
                 }
+
 
                 if (isRetired && outcome is CloudObjectDeleteOutcome.Deleted or CloudObjectDeleteOutcome.NotFound)
                 {
@@ -201,6 +221,7 @@ sealed class CloudSstGarbageCollector
                     proof.AcknowledgeRetiredSst?.Invoke(retired!);
                 }
             }
+
 
             if (encounteredAnomaly)
             {
@@ -239,7 +260,8 @@ sealed class CloudSstGarbageCollector
     static (string[] Names, string? NextContinuation) SelectRetiredSsts(
         IReadOnlyDictionary<string, FileMeta>? retiredSsts,
         string? continuation,
-        int maximumNames)
+        int maximumNames
+    )
     {
         if (retiredSsts is null || retiredSsts.Count == 0)
         {
@@ -247,10 +269,12 @@ sealed class CloudSstGarbageCollector
         }
 
         var names = GetNextNames(retiredSsts.Keys, continuation, maximumNames, out var hasMore);
+
         if (names.Length == 0 && continuation is not null)
         {
             names = GetNextNames(retiredSsts.Keys, null, maximumNames, out hasMore);
         }
+
 
         return names.Length == 0
             ? (names, null)
@@ -261,10 +285,12 @@ sealed class CloudSstGarbageCollector
         IEnumerable<string> source,
         string? continuation,
         int maximumNames,
-        out bool hasMore)
+        out bool hasMore
+    )
     {
         var names = new SortedSet<string>(StringComparer.Ordinal);
         hasMore = false;
+
         foreach (var name in source)
         {
             if (continuation is not null && StringComparer.Ordinal.Compare(name, continuation) <= 0)
@@ -279,12 +305,17 @@ sealed class CloudSstGarbageCollector
             }
         }
 
+
         return names.ToArray();
     }
 
     async ValueTask<bool> VerifyRetiredBytesAsync(
-        CloudSstRetentionProof proof, string objectKey, CloudObjectMetadata identity, FileMeta retired,
-        CancellationToken cancellationToken)
+        CloudSstRetentionProof proof,
+        string objectKey,
+        CloudObjectMetadata identity,
+        FileMeta retired,
+        CancellationToken cancellationToken
+    )
     {
         if (retired.SizeBytes == 0 || !retired.ContentCrc32C.HasValue || identity.SizeBytes != retired.SizeBytes)
         {
@@ -295,11 +326,13 @@ sealed class CloudSstGarbageCollector
         var pageBytes = checked((int)Math.Min(retired.SizeBytes, (ulong)Math.Min(64 * 1024L, Math.Max(1L, budget.Limit / 8))));
         using var reservation = budget.Reserve(checked(pageBytes * 2L));
         var checksum = 0U;
+
         for (ulong offset = 0; offset < retired.SizeBytes;)
         {
             _ensureAuthority();
             var length = checked((int)Math.Min((ulong)pageBytes, retired.SizeBytes - offset));
             CloudObject? page;
+
             try
             {
                 page = await _sstStore.GetRangeAsync(objectKey, offset, length, cancellationToken).ConfigureAwait(false);
@@ -308,6 +341,7 @@ sealed class CloudSstGarbageCollector
             {
                 page = await _sstStore.GetAsync(objectKey, cancellationToken).ConfigureAwait(false);
             }
+
 
             if (page is null || page.Version != identity.Version || page.Data.Length != length)
             {
@@ -318,19 +352,22 @@ sealed class CloudSstGarbageCollector
             offset += checked((ulong)length);
         }
 
+
         var confirmed = await _sstStore.HeadAsync(objectKey, cancellationToken).ConfigureAwait(false);
         return checksum == retired.ContentCrc32C && confirmed?.Version == identity.Version && confirmed.SizeBytes == retired.SizeBytes;
     }
 
     async ValueTask<bool> VerifyProofAsync(
         CloudSstRetentionProof proof,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var guard in proof.AuthorityGuards)
         {
             _ensureAuthority();
             var current = await guard.Store.HeadAsync(guard.ObjectKey, cancellationToken)
                 .ConfigureAwait(false);
+
             if (current is null ||
                 !StringComparer.Ordinal.Equals(current.Version, guard.Version))
             {

@@ -258,6 +258,7 @@ public sealed class PantsCloudCompactionStagingTests
     static async Task SeedAsync(string path)
     {
         await using var database = await PantsDatabase.OpenAsync(SeedOptions(path));
+
         for (var flush = 0; flush < FlushCount; flush++)
         {
             await using (var writer = await database.Transactions.BeginAsync(
@@ -295,6 +296,7 @@ public sealed class PantsCloudCompactionStagingTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < FlushCount * EntriesPerFlush; index++)
         {
             Assert.Equal(Value(index), (await reader.GetAsync(Key(index)))?.ToArray());

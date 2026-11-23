@@ -97,6 +97,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
         await using var database = await PantsDatabase.OpenForTestingAsync(
             options,
             new RuntimeDependencies(handler));
+
         for (var generation = 0; generation < 2; generation++)
         {
             await using (var transaction = await database.Transactions.BeginAsync(
@@ -117,8 +118,10 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         }
 
+
         var compactTask = database.Maintenance.CompactAllAsync().AsTask();
         await handler.WaitUntilBlockedAsync(TestTimeouts.Expected);
+
         try
         {
             var beforeRead = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -141,6 +144,7 @@ public sealed class PantsMemtableAndCacheMetricsContractTests
         {
             handler.Release();
         }
+
 
         await compactTask;
         var afterCompaction = await database.Diagnostics.GetRuntimeMetricsAsync();

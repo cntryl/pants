@@ -100,10 +100,12 @@ public sealed class PantsCloudDiskResidentFailureTests
             await using var writer = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var index = 0; index < 32; index++)
             {
                 writer.Put(Key(index), Value(index));
             }
+
 
             await writer.CommitAsync(PantsWriteOptions.CloudStrict);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);

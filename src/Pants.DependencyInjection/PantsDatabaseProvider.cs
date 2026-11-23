@@ -13,7 +13,8 @@ sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
     public PantsDatabaseProvider(
         IServiceProvider serviceProvider,
         IPantsDatabaseFactory databaseFactory,
-        PantsDatabaseRegistration registration)
+        PantsDatabaseRegistration registration
+    )
     {
         _serviceProvider = serviceProvider;
         _databaseFactory = databaseFactory;
@@ -61,12 +62,14 @@ sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
             if (_databaseTask is null)
             {
                 initialization = new TaskCompletionSource<IPantsDatabase>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 _databaseTask = initialization.Task;
             }
+
 
             databaseTask = _databaseTask;
         }
@@ -83,16 +86,19 @@ sealed class PantsDatabaseProvider : IPantsDatabaseProvider, IAsyncDisposable
 
     async Task InitializeDatabaseAsync(
         TaskCompletionSource<IPantsDatabase> initialization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
             var options = _optionsFactory(_serviceProvider);
+
             if (options is null)
             {
                 throw new InvalidOperationException(
                     "The registered Pants options factory returned null.");
             }
+
 
             var database = await _databaseFactory
                 .OpenAsync(options, cancellationToken)

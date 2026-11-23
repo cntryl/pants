@@ -65,6 +65,7 @@ public sealed class PantsSimulatedCloudTests
         await CommitCloudStrictValueAsync(database, "seed/second", "value/second", forceRewrite: true);
 
         var compaction = database.Maintenance.CompactAllAsync().AsTask();
+
         try
         {
             await failpoints.WaitUntilBlockedAsync(TestTimeouts.Expected);
@@ -75,6 +76,7 @@ public sealed class PantsSimulatedCloudTests
         {
             failpoints.Release();
         }
+
 
         await compaction.WaitAsync(TestTimeouts.Expected);
         await using var reader = await database.Transactions.BeginAsync(
@@ -204,11 +206,13 @@ public sealed class PantsSimulatedCloudTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(System.Text.Encoding.UTF8.GetBytes(key), System.Text.Encoding.UTF8.GetBytes(value));
+
         if (forceRewrite)
         {
             // Overlap only empty keyspace so this fixture requires a physical rewrite.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
     }
 
@@ -218,9 +222,11 @@ public sealed class PantsSimulatedCloudTests
     static void RemoveCloudCheckpoints(string root)
     {
         var cloudRoot = Path.Combine(root, "cloud_store");
+
         foreach (var name in new[] { "metadata", "sst" })
         {
             var path = Path.Combine(cloudRoot, name);
+
             if (Directory.Exists(path))
             {
                 Directory.Delete(path, recursive: true);

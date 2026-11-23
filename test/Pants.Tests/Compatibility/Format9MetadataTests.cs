@@ -23,6 +23,7 @@ public sealed class Format9MetadataTests
     {
         using var directory = new TemporaryDirectory();
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "LsmSpec", "7748fd1", "conformance", "fixtures", "format9", fixture);
+
         foreach (var path in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var target = Path.Combine(directory.Path, Path.GetRelativePath(source, path));
@@ -30,11 +31,13 @@ public sealed class Format9MetadataTests
             File.Copy(path, target);
         }
 
+
         for (var attempt = 0; attempt < 2; attempt++)
         {
             await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
             await using var transaction = await database.Transactions.BeginAsync(database.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
             var value = await transaction.GetAsync("fixture/alpha"u8.ToArray());
+
             if (fixture == "populated-local")
             {
                 Assert.Equal("value-alpha"u8.ToArray(), Assert.IsType<ReadOnlyMemory<byte>>(value).ToArray());
@@ -174,6 +177,7 @@ public sealed class Format9MetadataTests
         runtime.Remove("sst_seq");
         runtime.Remove("sublevel");
         IntentEntry intent;
+
         if (compaction)
         {
             runtime["name"] = "unpublished.sst";
@@ -199,6 +203,7 @@ public sealed class Format9MetadataTests
             }, Options);
         }
 
+
         await File.WriteAllBytesAsync(Path.Combine(directory.Path, "intent_log.json"), IntentLogCodec.CreateEdit(IntentLogCodec.Read([]), [intent]));
         await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path)).AsTask());
         Assert.Equal(originalSst, File.ReadAllBytes(Path.Combine(directory.Path, "sst", sourceName)));
@@ -216,6 +221,7 @@ public sealed class Format9MetadataTests
         payload.WriteByte(0xad);
         payload.Write("next_sst_seqs"u8);
         payload.WriteByte(0x81);
+
         if (stringKey)
         {
             payload.WriteByte(0xa1);
@@ -226,8 +232,10 @@ public sealed class Format9MetadataTests
             payload.WriteByte(0);
         }
 
+
         payload.WriteByte(1);
         var frame = EncodeFrame(1, payload.ToArray());
+
         if (stringKey)
         {
             Assert.Throws<PantsCorruptionException>(() => MetadataFrameCodec.Decode(frame, 1));
@@ -276,6 +284,7 @@ public sealed class Format9MetadataTests
         manifest.NextSstSeqs[0] = 1;
         manifest.Files.Add(MetadataFile("default.sst"));
         var names = new[] { "default.sst" };
+
         if (scenario != "missing")
         {
             manifest.ColumnFamilies.Add(new ColumnFamilyMeta
@@ -291,6 +300,7 @@ public sealed class Format9MetadataTests
             manifest.Files.Add(MetadataFile("owned.sst", 1));
             names = scenario == "foreign" ? ["default.sst"] : scenario == "duplicate" ? ["owned.sst", "owned.sst"] : ["owned.sst"];
         }
+
 
         var edit = new ManifestEdit("Batch", new List<ManifestEdit>
         {
@@ -339,6 +349,7 @@ public sealed class Format9MetadataTests
             new("AddSst", output),
             new("AdvanceFlushFrontier", new { cf_id = 0U, freeze_sequence = 10UL })
         };
+
         if (scenario == "later-high")
         {
             children.Add(new ManifestEdit("AddSst", MetadataFile("too-new.sst", largestSequence: 11)));
@@ -350,12 +361,14 @@ public sealed class Format9MetadataTests
         else if (scenario is "removed" or "remove-ack-add")
         {
             children.Add(new ManifestEdit("RemoveSst", new { name = output.Name }));
+
             if (scenario == "remove-ack-add")
             {
                 children.Add(new ManifestEdit("CompleteSstDelete", new { file = output }));
                 children.Add(new ManifestEdit("AddSst", output));
             }
         }
+
 
         var nested = new ManifestEdit("Batch", new List<ManifestEdit> { new("Batch", children) });
         Assert.ThrowsAny<PantsException>(() => LocalDiskStore.ReplayManifestMetadata(EncodeJournal(nested, 1), manifest));
@@ -394,6 +407,7 @@ public sealed class Format9MetadataTests
         using var stream = new MemoryStream();
         var type = edit.Variant switch { "Batch" => (byte)8, "ReclaimColumnFamily" => (byte)11, "CompleteSstDelete" => (byte)13, _ => throw new InvalidOperationException() };
         Span<byte> checksum = stackalloc byte[4];
+
         foreach (var item in new[]
         {
             (Type: type, Payload: MetadataFrameCodec.Encode(2, JsonSerializer.SerializeToElement(new { edit_id = editId, edit }, Options))),
@@ -407,6 +421,7 @@ public sealed class Format9MetadataTests
             stream.Write(checksum);
         }
 
+
         return stream.ToArray();
     }
 
@@ -416,11 +431,13 @@ public sealed class Format9MetadataTests
     public void ShouldRejectSstAdditionGivenFamilyIsMissingOrDropped(bool dropped)
     {
         var manifest = ManifestState.CreateInitial();
+
         if (dropped)
         {
             manifest.ColumnFamilies.Add(new ColumnFamilyMeta { Id = 1, Name = "dropped", CreatedAt = 1, DeletedAt = 2, DropSequence = 2 });
             manifest.FlushedThrough[1] = ulong.MaxValue;
         }
+
 
         var batch = new ManifestEdit("Batch", new List<ManifestEdit> { new("AddSst", MetadataFile("new.sst", 1)) });
         Assert.ThrowsAny<PantsException>(() => LocalDiskStore.ReplayManifestMetadata(EncodeJournal(batch, 1), manifest));
@@ -437,6 +454,7 @@ public sealed class Format9MetadataTests
     {
         var manifest = ManifestState.CreateInitial();
         manifest.Files.Add(MetadataFile("default.sst"));
+
         if (scenario is "foreign" or "conflict")
         {
             manifest.ColumnFamilies.Add(new ColumnFamilyMeta
@@ -449,6 +467,7 @@ public sealed class Format9MetadataTests
             });
             manifest.FlushedThrough[1] = scenario == "conflict" ? ulong.MaxValue : 0;
         }
+
 
         var id = scenario == "default" ? 0U : 1U;
         var names = scenario == "foreign" ? new[] { "default.sst" } : [];

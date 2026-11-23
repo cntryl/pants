@@ -319,11 +319,13 @@ public sealed class PantsPointReadDiagnosticsTests
     static async ValueTask SeedCloudReadsAsync(IPantsDatabase database, byte[] expected)
     {
         await FlushAsync(database, "cloud-key", expected, PantsWriteOptions.CloudStrict);
+
         for (var index = 0; index < 12; index++)
         {
             await FlushAsync(database, $"diagnostics-seed-{index}", CreateValue(expected.Length, 84 + index),
                 PantsWriteOptions.CloudStrict);
         }
+
         await FlushAsync(database, "eviction-window", CreateValue(expected.Length, 90), PantsWriteOptions.CloudStrict);
     }
 
@@ -349,7 +351,8 @@ public sealed class PantsPointReadDiagnosticsTests
         IPantsDatabase database,
         string key,
         ReadOnlyMemory<byte> value,
-        PantsWriteOptions? options = null)
+        PantsWriteOptions? options = null
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

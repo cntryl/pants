@@ -19,7 +19,8 @@ sealed class SimulatedCloudMutationLock : IDisposable
         string root,
         string fullPath,
         CancellationToken cancellationToken,
-        Action? onContention = null)
+        Action? onContention = null
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var stripe = DiskFormat.Crc32C(Encoding.UTF8.GetBytes(fullPath)) % 64;
@@ -27,12 +28,15 @@ sealed class SimulatedCloudMutationLock : IDisposable
         AtomicStagedFile.CreateDirectoryDurably(directory);
         var path = Path.Combine(directory, $"stripe-{stripe:x2}.lock");
         var stream = OpenStripe(path);
+
         try
         {
             var delayMilliseconds = 1;
+
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
                 if (OperatingSystem.IsWindows())
                 {
                     try
@@ -53,10 +57,12 @@ sealed class SimulatedCloudMutationLock : IDisposable
                     }
 
                     var error = Marshal.GetLastPInvokeError();
+
                     if (error == 4)
                     {
                         continue;
                     }
+
 
                     if (error is not 11 and not 35)
                     {
@@ -67,6 +73,7 @@ sealed class SimulatedCloudMutationLock : IDisposable
                 {
                     throw new PantsNotSupportedException("Simulated cloud requires native conditional mutation locks on this platform.");
                 }
+
 
                 onContention?.Invoke();
                 Thread.Sleep(delayMilliseconds);
@@ -119,6 +126,7 @@ sealed class SimulatedCloudMutationLock : IDisposable
             throw new PantsNotSupportedException("Simulated cloud requires native conditional mutation locks on this platform.");
         }
 
+
         if (!File.Exists(path))
         {
             try
@@ -131,10 +139,12 @@ sealed class SimulatedCloudMutationLock : IDisposable
                 // Another process created this permanent stripe first.
             }
         }
+
         var closeOnExec = OperatingSystem.IsLinux() ? 0x80000
             : OperatingSystem.IsMacOS() ? 0x1000000 : 0x100000;
         var encodedPath = Marshal.StringToCoTaskMemUTF8(path);
         int descriptor;
+
         try
         {
             descriptor = Open(encodedPath, 2 | closeOnExec);
@@ -143,6 +153,7 @@ sealed class SimulatedCloudMutationLock : IDisposable
         {
             Marshal.FreeCoTaskMem(encodedPath);
         }
+
         if (descriptor < 0)
         {
             var error = Marshal.GetLastPInvokeError();
@@ -150,6 +161,7 @@ sealed class SimulatedCloudMutationLock : IDisposable
         }
 
         var handle = new SafeFileHandle(descriptor, ownsHandle: true);
+
         try
         {
             return new FileStream(handle, FileAccess.ReadWrite, 1, isAsync: false);

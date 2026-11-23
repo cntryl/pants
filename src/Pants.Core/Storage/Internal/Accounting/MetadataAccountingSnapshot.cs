@@ -24,15 +24,18 @@ sealed record MetadataAccountingSnapshot(
         }
 
         var buckets = ImmutableArray.CreateBuilder<MetadataAccountingBucket>(Buckets.Length);
+
         for (var index = 0; index < Buckets.Length; index++)
         {
             var after = Buckets[index];
             var prior = before.Buckets[index];
+
             if (after.Origin != prior.Origin || after.Medium != prior.Medium ||
                 (int)after.Origin * 2 + (int)after.Medium != index)
             {
                 throw new InvalidOperationException("Metadata accounting bucket identity differs.");
             }
+
 
             ValidateCoverage(after);
             ValidateCoverage(prior);
@@ -47,6 +50,7 @@ sealed record MetadataAccountingSnapshot(
             ValidateCoverage(delta);
             buckets.Add(delta);
         }
+
 
         return this with { Buckets = buckets.MoveToImmutable() };
     }
@@ -64,6 +68,7 @@ sealed record MetadataAccountingSnapshot(
         static ulong Count(ImmutableArray<ulong> counts)
         {
             var total = 0UL;
+
             foreach (var count in counts)
             {
                 if (!MetadataAccountingArithmetic.Add(ref total, count))
@@ -71,6 +76,7 @@ sealed record MetadataAccountingSnapshot(
                     throw new InvalidOperationException("Metadata accounting histogram overflowed.");
                 }
             }
+
 
             return total;
         }
@@ -91,6 +97,7 @@ sealed record MetadataAccountingSnapshot(
         }
 
         var result = ImmutableArray.CreateBuilder<ulong>(length);
+
         for (var index = 0; index < length; index++)
         {
             if (after[index] < before[index])
@@ -100,6 +107,7 @@ sealed record MetadataAccountingSnapshot(
 
             result.Add(after[index] - before[index]);
         }
+
 
         return result.MoveToImmutable();
     }

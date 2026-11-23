@@ -18,6 +18,7 @@ public sealed class PantsSequenceExhaustionTests
         using var directory = new TemporaryDirectory();
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Compatibility", "Midge",
             "c684310d9d8ce8ecd1151c47151d4bea98b348cf", "unsigned-sequence-high-sst");
+
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var destination = Path.Combine(directory.Path, Path.GetRelativePath(source, file));
@@ -25,10 +26,12 @@ public sealed class PantsSequenceExhaustionTests
             File.Copy(file, destination);
         }
 
+
         var floor = ulong.MaxValue - (1UL << 20) + (pastBoundary ? 1UL : 0UL);
         var walDirectory = Path.Combine(directory.Path, "wal");
         WalLedgerStore.LoadExisting(walDirectory).Reserve(floor);
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
+
         if (!pastBoundary)
         {
             await using var database = await PantsDatabase.OpenAsync(options);
@@ -52,19 +55,23 @@ public sealed class PantsSequenceExhaustionTests
             await database.ShutdownAsync(TestTimeouts.Expected);
         }
 
+
         var walBefore = Directory.GetFiles(walDirectory).Where(static path => Path.GetExtension(path) == ".wal" || Path.GetFileName(path) == "LEDGER").ToDictionary(static path => Path.GetFileName(path)!, File.ReadAllBytes);
         var error = await Assert.ThrowsAsync<PantsResourceLimitException>(() =>
             PantsDatabase.OpenAsync(options).AsTask());
         Assert.Equal(PantsErrorCode.ResourceLimit, error.Code);
         Assert.Equal(walBefore.Keys.Order(), Directory.GetFiles(walDirectory).Where(static path => Path.GetExtension(path) == ".wal" || Path.GetFileName(path) == "LEDGER").Select(Path.GetFileName).Order());
+
         foreach (var (name, bytes) in walBefore)
         {
             Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(walDirectory, name!)));
         }
 
         // Offline readers can verify the valid u64 history even when no writer epoch fits.
+
         var report = await PantsDatabase.VerifyPathAsync(directory.Path);
         Assert.True(report.Authoritative);
+
         if (!pastBoundary)
         {
             Assert.True(report.WalBoundary > long.MaxValue);
@@ -99,6 +106,7 @@ public sealed class PantsSequenceExhaustionTests
             new RuntimeDependencies(initialMemorySequence: ulong.MaxValue - 1));
 
         var transactions = new List<IPantsTransaction>();
+
         for (var index = 0; index < 8; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -107,6 +115,7 @@ public sealed class PantsSequenceExhaustionTests
             transaction.Put(TestBytes.FromString($"key-{index}"), TestBytes.FromString("value"));
             transactions.Add(transaction);
         }
+
 
         var errors = await Task.WhenAll(transactions.Select(transaction => Task.Run(async () =>
         {
@@ -140,7 +149,8 @@ public sealed class PantsSequenceExhaustionTests
 
     static async Task AssertExhaustedCommitLeavesStateUnchangedAsync(
         IPantsDatabase database,
-        ulong expectedSequence)
+        ulong expectedSequence
+    )
     {
         await using (var writer = await database.Transactions.BeginAsync(
                          database.ColumnFamilies.DefaultFamily,

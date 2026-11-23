@@ -36,6 +36,7 @@ sealed class DegradedWriteStallFailpointHandler : IFailpointHandler, IDisposable
         }
 
         _flushEntered.TrySetResult();
+
         if (!_flushRelease.Wait(MaximumBlockTime))
         {
             throw new TimeoutException($"Timed out waiting to release {failpoint}.");

@@ -54,7 +54,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         ulong writerEpoch,
         IFailpointHandler? failpoints = null,
         SstPublicationAdmission? sstPublicationAdmission = null,
-        CloudLeaseCoordinator? lease = null)
+        CloudLeaseCoordinator? lease = null
+    )
     {
         if (writerEpoch == 0)
         {
@@ -70,10 +71,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             new MaintenanceMemoryGate());
         Directory.CreateDirectory(_cloudRoot);
         _catalog = LoadCatalog(_cloudRoot, out _catalogPrimaryVersion, out _catalogMirrorVersion) ?? WalPublicationCatalog.Empty(writerEpoch);
+
         if (_catalog.NextSegmentId == 0)
         {
             _catalog.NextSegmentId = ReadNextWalSegmentId(_cloudRoot);
         }
+
 
         if (_catalog.FencingEpoch > writerEpoch)
         {
@@ -92,6 +95,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(15));
         CloudMetadataAuthority? metadataAuthority = null;
+
         try
         {
             if (_ownsLease)
@@ -115,6 +119,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         catch
         {
             metadataAuthority?.Dispose();
+
             if (_ownsLease)
             {
                 try
@@ -126,6 +131,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     _lease.Dispose();
                 }
             }
+
 
             throw;
         }
@@ -152,6 +158,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
 
         _metadataAuthority.Dispose();
+
         if (_ownsLease)
         {
             try
@@ -163,6 +170,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 _lease.Dispose();
             }
         }
+
 
         GC.SuppressFinalize(this);
     }
@@ -178,10 +186,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
+
         if (!File.Exists(path))
         {
             return ValueTask.FromResult<CloudDdlRegistryObject?>(null);
         }
+
 
         var bytes = File.ReadAllBytes(path);
         return ValueTask.FromResult<CloudDdlRegistryObject?>(new CloudDdlRegistryObject(
@@ -192,7 +202,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public ValueTask FenceDdlRegistryAsync(
         CloudDdlRegistry bootstrap,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
@@ -200,10 +211,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             ? File.ReadAllBytes(path)
             : CloudDdlJson.SerializeRegistry(bootstrap);
         var fenced = CloudDdlFence.Encode(current, _writerEpoch);
+
         if (!File.Exists(path) || !current.AsSpan().SequenceEqual(fenced))
         {
             AtomicStagedFile.Write(path, fenced);
         }
+
 
         return ValueTask.CompletedTask;
     }
@@ -212,11 +225,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         CloudDdlRegistry registry,
         string? expectedVersion,
         CancellationToken cancellationToken,
-        Action? beforeSubmission = null)
+        Action? beforeSubmission = null
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = ResolveObjectPath(_cloudRoot, PantsCloudObjectLayout.DdlRegistryObjectKey);
         var exists = File.Exists(path);
+
         if (expectedVersion is null)
         {
             if (exists)
@@ -231,6 +246,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return ValueTask.FromResult(false);
         }
 
+
         registry.WriterEpoch = _writerEpoch;
         var bytes = CloudDdlJson.SerializeRegistry(registry);
         beforeSubmission?.Invoke();
@@ -240,7 +256,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         PublishWalBatchCatalog(segments);
@@ -284,6 +301,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _lease.EnsureValid();
         var current = LoadCatalog(_cloudRoot, repairCopies: false);
         var lease = _simulatedLeaseStore.ReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
         if (current is null || current.FencingEpoch != _writerEpoch || lease?.Lease.Epoch != _writerEpoch || lease.Lease.HolderId != _lease.HolderId || lease.Lease.OwnerToken != _lease.OwnerToken)
         {
             throw new PantsFencedException("Simulated cloud authority belongs to another writer epoch.");
@@ -299,11 +317,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     public static SimulatedCloudHydrationResult PrepareLocalCache(
         string localRoot,
-        PantsRecoveryPolicy recoveryPolicy)
+        PantsRecoveryPolicy recoveryPolicy
+    )
     {
         var root = Path.GetFullPath(localRoot);
         StoragePathGuard.EnsureTreeHasNoLinks(root);
         var cloudRoot = Path.Combine(root, "cloud_store");
+
         if (!Directory.Exists(cloudRoot))
         {
             return new SimulatedCloudHydrationResult(
@@ -312,6 +332,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 1);
         }
 
+
         var localManifest = CloudManifestReader.ReadManifest(root);
         var objectStore = new SimulatedCloudObjectStore(cloudRoot);
         _ = new CloudObjectLeaseStore(objectStore, PantsCloudObjectLayout.LeaseObjectKey).ReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
@@ -319,18 +340,22 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var selected = CloudMetadataAuthority.ReadCommittedFilesAsync(objectStore, CancellationToken.None,
                 minimumGeneration: catalog?.RetiredBy ?? 0)
             .AsTask().GetAwaiter().GetResult();
+
         if (selected is { Count: 0 })
         {
             CloudInitializationCacheValidator.Validate(root);
             selected = null;
         }
 
+
         var remoteManifest = selected is not null && selected.ContainsKey("manifest.snapshot.json") ? CloudManifestReader.DecodeMetadata(selected) : null;
+
         if (selected is not null)
         {
             foreach (var fileName in MetadataFiles)
             {
                 var localPath = Path.Combine(root, fileName);
+
                 if (selected.TryGetValue(fileName, out var body))
                 {
                     AtomicStagedFile.Write(localPath, body.Span);
@@ -342,37 +367,45 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             }
         }
 
+
         var activeManifest = remoteManifest ?? localManifest;
         var remoteNextWalSegmentId = activeManifest?.WalHistoryStart ?? 1;
 
         var localSstDirectory = Path.Combine(root, "sst");
         Directory.CreateDirectory(localSstDirectory);
+
         foreach (var file in activeManifest?.Files ?? [])
         {
             var localPath = Path.Combine(localSstDirectory, file.Name);
             var cloudPath = Path.Combine(cloudRoot, "sst", file.Name);
+
             if (!File.Exists(cloudPath))
             {
                 var isRemoteAuthoritative = localManifest is null || remoteManifest?.Files.Any(remoteFile =>
                     StringComparer.Ordinal.Equals(
                         remoteFile.Name,
                         file.Name)) == true;
+
                 if (isRemoteAuthoritative || !File.Exists(localPath))
                 {
                     throw new PantsRecoveryFailedException(
                         $"Authoritative simulated-cloud SST '{file.Name}' is missing.");
                 }
 
+
                 continue;
             }
 
+
             var remoteLength = new FileInfo(cloudPath).Length;
+
             if (file.SizeBytes != 0 && checked((ulong)remoteLength) != file.SizeBytes)
             {
                 throw new PantsCorruptionException(
                     $"Simulated-cloud SST '{file.Name}' length differs from its manifest.");
             }
         }
+
 
         if (catalog is null)
         {
@@ -383,10 +416,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         Directory.CreateDirectory(localWalDirectory);
         var requiresSalvage = false;
         var cloudDurableSequence = catalog.Anchor.LastSeq;
+
         foreach (var (segmentId, publication) in catalog.Segments)
         {
             ValidatePublication(segmentId, publication, catalog.FencingEpoch);
             var remotePath = ResolveObjectPath(cloudRoot, publication.ObjectKey);
+
             if (!File.Exists(remotePath))
             {
                 throw PantsException.Create(
@@ -394,7 +429,9 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"Published cloud WAL object '{publication.ObjectKey}' is missing.");
             }
 
+
             var bytes = File.ReadAllBytes(remotePath);
+
             if (checked((ulong)bytes.Length) != publication.SizeBytes ||
                 DiskFormat.Crc32C(bytes) != publication.ContentCrc32C)
             {
@@ -412,9 +449,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 cloudDurableSequence = Math.Max(cloudDurableSequence, publication.MaximumSequence);
             }
 
+
             var localName = $"{segmentId:00000000000000000000}.wal";
             AtomicStagedFile.Write(Path.Combine(localWalDirectory, localName), bytes);
         }
+
 
         return new SimulatedCloudHydrationResult(
             catalog.FencingEpoch,
@@ -443,10 +482,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         EnsureSimulatedAuthority();
         var batchEpoch = segments[0].WriterEpoch;
+
         if (segments.Any(segment => segment.WriterEpoch != batchEpoch))
         {
             throw PantsException.InvalidArgument("A cloud WAL batch cannot cross writer epochs.");
         }
+
 
         if (batchEpoch > _writerEpoch)
         {
@@ -465,14 +506,17 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             historyStartSegmentId = metadata.AuthoritativeManifest?.WalHistoryStart ?? 1;
         }
         var publishableSegments = new List<SealedWalSegment>(segments.Count);
+
         for (var index = 0; index < segments.Count; index++)
         {
             var segment = segments[index];
+
             if (index > 0 && segment.SegmentId <= segments[index - 1].SegmentId)
             {
                 throw new PantsCorruptionException(
                     "A simulated-cloud WAL publication batch must contain consecutive segment identities.");
             }
+
 
             if (_catalog.Segments.TryGetValue(segment.SegmentId, out var published))
             {
@@ -489,12 +533,14 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                         segment.WriterEpoch,
                         segment.SegmentId)
                 };
+
                 if (!published.Equals(candidate))
                 {
                     throw PantsException.Create(
                         PantsErrorCode.Fenced,
                         $"Cloud WAL segment {segment.SegmentId} conflicts with its publication catalog entry.");
                 }
+
 
                 continue;
             }
@@ -508,14 +554,17 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
             var predecessor = publishableSegments.Count > 0 ? publishableSegments[^1].Facts.Link :
                 _catalog.Segments.Count > 0 ? _catalog.Segments.Values.Last().Facts!.Link : _catalog.Anchor;
+
             if (!segment.Header.Prev.Matches(predecessor))
             {
                 throw new PantsCorruptionException("A simulated WAL publication does not link the catalog head.");
             }
 
+
             nextSegmentId = checked(segment.SegmentId + 1);
             publishableSegments.Add(segment);
         }
+
 
         if (publishableSegments.Count == 0)
         {
@@ -542,9 +591,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }).ToArray();
 
         var changed = false;
+
         for (var index = 0; index < publications.Length; index++)
         {
             var publication = publications[index];
+
             if (_catalog.Segments.TryGetValue(publication.SegmentId, out var existing))
             {
                 if (!existing.Equals(publication))
@@ -557,11 +608,13 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 continue;
             }
 
+
             AtomicStagedFile.Write(
                 ResolveObjectPath(_cloudRoot, publication.ObjectKey),
                 publishableSegments[index].Bytes);
             changed = true;
         }
+
 
         if (!changed)
         {
@@ -569,10 +622,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
 
         var updatedSegments = new SortedDictionary<ulong, PublishedWalSegment>(_catalog.Segments);
+
         foreach (var publication in publications)
         {
             updatedSegments[publication.SegmentId] = publication;
         }
+
 
         var updatedCatalog = new WalPublicationCatalog
         {
@@ -601,27 +656,33 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             _localRoot,
             MetadataFiles,
             _metadataSnapshotBudget);
+
         try
         {
             var localSstDirectory = Path.Combine(_localRoot, "sst");
             var pendingSstCount = 0L;
+
             foreach (var localSst in EnumerateLocalSsts())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var name = ValidateSstName(Path.GetFileName(localSst));
                 var remotePath = Path.Combine(_cloudRoot, "sst", name);
+
                 if (!File.Exists(remotePath))
                 {
                     pendingSstCount = checked(pendingSstCount + 1);
                     continue;
                 }
 
+
                 var localLength = new FileInfo(localSst).Length;
+
                 if (new FileInfo(remotePath).Length != localLength)
                 {
                     throw new PantsFencedException(
                         $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
                 }
+
 
                 using var admission = await _sstPublicationAdmission.AdmitAsync(
                         localLength,
@@ -630,12 +691,14 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 cancellationToken.ThrowIfCancellationRequested();
                 var localBytes = File.ReadAllBytes(localSst);
                 var remoteBytes = File.ReadAllBytes(remotePath);
+
                 if (!remoteBytes.AsSpan().SequenceEqual(localBytes))
                 {
                     throw new PantsFencedException(
                         $"Immutable simulated-cloud SST '{Path.GetFileName(localSst)}' conflicts.");
                 }
             }
+
 
             foreach (var references in metadata.ReferencedSsts
                          .GroupBy(static file => file.Name, StringComparer.Ordinal))
@@ -644,6 +707,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 var name = ValidateSstName(references.Key);
                 var localPath = Path.Combine(localSstDirectory, name);
                 var remotePath = Path.Combine(_cloudRoot, "sst", name);
+
                 if (File.Exists(localPath) && !File.Exists(remotePath))
                 {
                     using var admission = await _sstPublicationAdmission.AdmitAsync(
@@ -652,6 +716,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                         .ConfigureAwait(false);
                     cancellationToken.ThrowIfCancellationRequested();
                     var bytes = File.ReadAllBytes(localPath);
+
                     foreach (var proof in references)
                     {
                         CloudSstValidator.Validate(bytes, proof);
@@ -662,15 +727,18 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             if (pendingSstCount > 0)
             {
                 _failpoints.Hit(Failpoint.BeforeCloudUpload);
+
                 foreach (var localSst in EnumerateLocalSsts())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var name = ValidateSstName(Path.GetFileName(localSst));
                     var remotePath = Path.Combine(_cloudRoot, "sst", name);
+
                     if (File.Exists(remotePath))
                     {
                         continue;
                     }
+
 
                     using var admission = await _sstPublicationAdmission.AdmitAsync(
                             new FileInfo(localSst).Length,
@@ -680,6 +748,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     var bytes = File.ReadAllBytes(localSst);
                     AtomicStagedFile.Write(remotePath, bytes);
                 }
+
 
                 _failpoints.Hit(Failpoint.AfterCloudUpload);
             }
@@ -723,18 +792,21 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     void ValidateCapturedSstMetadata(
         CloudControlMetadataSnapshot metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var file in metadata.ReferencedSsts)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var name = ValidateSstName(file.Name);
             var path = Path.Combine(_cloudRoot, "sst", name);
+
             if (!File.Exists(path))
             {
                 throw new PantsRecoveryFailedException(
                     $"Manifest simulated-cloud SST '{name}' is unavailable for publication.");
             }
+
 
             var source = LocalAsyncSstSource.Open(path);
             var reader = AsyncSstReader.OpenAsync(source, file, cancellationToken)
@@ -795,7 +867,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     static WalPublicationCatalog? LoadCatalog(
         string cloudRoot,
         out string? primaryVersion,
-        out string? mirrorVersion)
+        out string? mirrorVersion
+    )
     {
         var objects = new SimulatedCloudObjectStore(cloudRoot);
         using var reads = new ProviderCloudControlMetadataReadSet(objects, new ResourceBudget(64L * 1024 * 1024));
@@ -808,20 +881,25 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var primaryBytes = primaryObject?.Data.ToArray();
         var mirrorBytes = mirrorObject?.Data.ToArray();
         var primary = TryDecodeCatalog(primaryBytes, out var primaryError);
+
         if (primary is not null)
         {
             return primary;
         }
 
+
         var mirror = TryDecodeCatalog(mirrorBytes, out var mirrorError);
+
         if (mirror is not null)
         {
             return mirror;
         }
 
+
         if (primaryBytes is null && mirrorBytes is null)
         {
             var walDirectory = Path.Combine(cloudRoot, "wal");
+
             if (Directory.Exists(walDirectory) &&
                 Directory.EnumerateFiles(walDirectory, "*.wal", SearchOption.AllDirectories).Any())
             {
@@ -830,6 +908,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                     $"'{PantsCloudObjectLayout.WalCatalogObjectKey}' and its mirror are both missing; " +
                     "refusing to open and orphan acknowledged writes.");
             }
+
 
             return null;
         }
@@ -844,17 +923,21 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     static ulong ReadNextWalSegmentId(string cloudRoot)
     {
         var nextSegmentId = 1UL;
+
         foreach (var fileName in new[] { "manifest.snapshot.json", "manifest.json" })
         {
             var path = Path.Combine(cloudRoot, "metadata", fileName);
+
             if (!File.Exists(path))
             {
                 continue;
             }
 
+
             var manifest = CloudManifestReader.DecodeManifest(File.ReadAllBytes(path));
             nextSegmentId = Math.Max(nextSegmentId, manifest.WalHistoryStart);
         }
+
 
         return nextSegmentId;
     }
@@ -862,10 +945,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     static WalPublicationCatalog? TryDecodeCatalog(byte[]? bytes, out PantsException? error)
     {
         error = null;
+
         if (bytes is null)
         {
             return null;
         }
+
 
         try
         {
@@ -913,7 +998,8 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     static void ValidatePublication(
         ulong segmentId,
         PublishedWalSegment publication,
-        ulong fencingEpoch)
+        ulong fencingEpoch
+    )
     {
         if (segmentId == 0)
         {
@@ -925,6 +1011,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var expectedKey = PantsCloudObjectLayout.WalSegmentObjectKey(
             publication.WriterEpoch,
             segmentId);
+
         if (publication.SegmentId != segmentId ||
             publication.WriterEpoch > fencingEpoch ||
             publication.SizeBytes == 0 ||
@@ -966,6 +1053,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _lease.ValidateRemoteAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
         _failpoints.Hit(Failpoint.BeforeSimulatedCloudCatalogWrite);
         bool published;
+
         try
         {
             published = _objectStore.PutAsync(PantsCloudObjectLayout.WalCatalogObjectKey, bytes,
@@ -980,10 +1068,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             throw CatalogPublicationUnknown(exception);
         }
 
+
         if (!published)
         {
             var current = _objectStore.HeadAsync(PantsCloudObjectLayout.WalCatalogObjectKey)
                 .AsTask().GetAwaiter().GetResult();
+
             if (current?.Version != CreateVersion(bytes.Span) || current.SizeBytes != checked((ulong)bytes.Length))
             {
                 throw new PantsFencedException("The simulated cloud WAL catalog changed after its publication snapshot was read.");
@@ -991,6 +1081,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
             // A lost native write receipt can leave exactly this target committed. Its content
             // identity is sufficient for reconciliation only while the full lease remains ours.
+
             _lease.ValidateRemoteAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
         }
 
@@ -998,6 +1089,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         _catalogPrimaryVersion = CreateVersion(bytes.Span);
         _catalog = catalog;
         _catalogMirrorPending = true;
+
         try
         {
             _failpoints.Hit(Failpoint.AfterSimulatedCloudCatalogPrimaryWrite);
@@ -1023,6 +1115,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                         : new CloudObjectWriteCondition.IfVersion(_catalogMirrorVersion),
                     CancellationToken.None)
                 .AsTask().GetAwaiter().GetResult();
+
             if (written)
             {
                 _catalogMirrorVersion = CreateVersion(bytes.Span);
@@ -1030,13 +1123,16 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 return;
             }
 
+
             var primary = _objectStore.HeadAsync(PantsCloudObjectLayout.WalCatalogObjectKey)
                 .AsTask().GetAwaiter().GetResult();
+
             if (primary is null || primary.Version != _catalogPrimaryVersion ||
                 primary.SizeBytes != checked((ulong)bytes.Length))
             {
                 throw new PantsFencedException("A successor owns simulated cloud catalog mirror convergence.");
             }
+
 
             var mirror = _objectStore.HeadAsync(PantsCloudObjectLayout.WalCatalogMirrorObjectKey)
                 .AsTask().GetAwaiter().GetResult();
@@ -1058,17 +1154,21 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
     void PruneCoveredWal(CloudControlMetadataSnapshot metadata)
     {
         var manifest = metadata.AuthoritativeManifest;
+
         if (manifest is null)
         {
             return;
         }
 
+
         var historyStartChanged = false;
+
         if (_catalog.WalHistoryStartSegmentId < manifest.WalHistoryStart)
         {
             _catalog.WalHistoryStartSegmentId = manifest.WalHistoryStart;
             historyStartChanged = true;
         }
+
 
         if (_catalog.NextSegmentId < manifest.WalHistoryStart)
         {
@@ -1077,6 +1177,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         }
 
         var coveredSequence = new WalCoverageIndex(manifest).MaximumSequenceWithDurableEvidence;
+
         if (coveredSequence == 0)
         {
             if (historyStartChanged)
@@ -1087,9 +1188,11 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return;
         }
 
+
         var candidates = _catalog.Segments.Values
             .Where(segment => segment.MaximumSequence <= coveredSequence)
             .ToArray();
+
         if (candidates.Length == 0)
         {
             if (historyStartChanged)
@@ -1100,25 +1203,31 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             return;
         }
 
+
         var retired = new List<PublishedWalSegment>(candidates.Length);
         var walBytes = new Dictionary<ulong, byte[]>();
         var walGuards = new Dictionary<ulong, SimulatedCloudObjectGuard>();
+
         foreach (var segment in candidates)
         {
             var path = ResolveObjectPath(_cloudRoot, segment.ObjectKey);
+
             if (!File.Exists(path))
             {
                 throw new PantsRecoveryFailedException(
                     $"Published simulated-cloud WAL '{segment.ObjectKey}' is missing during pruning.");
             }
 
+
             var bytes = File.ReadAllBytes(path);
+
             if (checked((ulong)bytes.Length) != segment.SizeBytes ||
                 DiskFormat.Crc32C(bytes) != segment.ContentCrc32C)
             {
                 throw new PantsCorruptionException(
                     $"Published simulated-cloud WAL '{segment.ObjectKey}' differs from its catalog proof.");
             }
+
 
             if (!CloudWalCoverageValidator.ValidateAndIsCovered(
                     bytes,
@@ -1137,6 +1246,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 new SimulatedCloudObjectGuard(path, CreateVersion(bytes)));
         }
 
+
         if (retired.Count == 0)
         {
             if (historyStartChanged)
@@ -1149,6 +1259,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
         var dependencyGuards = ValidateManifestDependencies((ManifestState)manifest, metadata);
         VerifyIdentityGuards(dependencyGuards.Concat(walGuards.Values));
+
         foreach (var segment in retired)
         {
             CloudWalCoverageValidator.ValidateAndEnsureCovered(
@@ -1158,28 +1269,35 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 (ManifestState)manifest);
         }
 
+
         var generation = CloudMetadataAuthority.ReadGenerationOrdinal(File.ReadAllBytes(
             ResolveObjectPath(_cloudRoot, CloudMetadataAuthority.PointerKey)));
+
         if (generation == 0)
         {
             throw new PantsCorruptionException("WAL retirement has no committed metadata generation.");
         }
 
+
         _catalog.Anchor = retired[^1].Facts!.Link;
         _catalog.RetiredBy = Math.Max(_catalog.RetiredBy, generation);
+
         foreach (var segment in retired)
         {
             _catalog.Segments.Remove(segment.SegmentId);
         }
+
 
         _catalog.NextSegmentId = Math.Max(
             _catalog.NextSegmentId,
             manifest.WalHistoryStart);
 
         SaveCatalog();
+
         foreach (var segment in retired)
         {
             var guard = walGuards[segment.SegmentId];
+
             if (File.Exists(guard.Path) &&
                 StringComparer.Ordinal.Equals(
                     CreateFileVersion(guard.Path),
@@ -1192,22 +1310,27 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
 
     List<SimulatedCloudObjectGuard> ValidateManifestDependencies(
         ManifestState manifest,
-        CloudControlMetadataSnapshot metadata)
+        CloudControlMetadataSnapshot metadata
+    )
     {
         var guards = new List<SimulatedCloudObjectGuard>(
             manifest.Files.Count + MetadataFiles.Length);
+
         foreach (var file in manifest.Files)
         {
             var path = ResolveObjectPath(
                 _cloudRoot,
                 PantsCloudObjectLayout.SstPrefix + file.Name);
+
             if (!File.Exists(path))
             {
                 throw new PantsRecoveryFailedException(
                     $"Manifest simulated-cloud SST '{file.Name}' is missing during WAL pruning.");
             }
 
+
             var length = new FileInfo(path).Length;
+
             if ((file.SizeBytes != 0 && checked((ulong)length) != file.SizeBytes) ||
                 (file.ContentCrc32C.HasValue &&
                  ComputeFileCrc32C(path) != file.ContentCrc32C.Value))
@@ -1215,6 +1338,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 throw new PantsCorruptionException(
                     $"Manifest simulated-cloud SST '{file.Name}' differs during WAL pruning.");
             }
+
 
             var source = LocalAsyncSstSource.Open(path);
             var reader = AsyncSstReader.OpenAsync(source, file, CancellationToken.None)
@@ -1224,10 +1348,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
             guards.Add(new SimulatedCloudObjectGuard(path, CreateFileVersion(path)));
         }
 
+
         var pointerPath = ResolveObjectPath(_cloudRoot, CloudMetadataAuthority.PointerKey);
         var pointerBytes = File.ReadAllBytes(pointerPath);
         var selected = CloudMetadataAuthority.ReadCommittedFilesAsync(_objectStore, CancellationToken.None, _metadataSnapshotBudget).AsTask().GetAwaiter().GetResult() ??
             throw new PantsRecoveryFailedException("Simulated cloud metadata has no committed generation.");
+
         foreach (var fileName in MetadataFiles)
         {
             if (selected.TryGetValue(fileName, out var committed) != metadata.Files.TryGetValue(fileName, out var captured) ||
@@ -1236,6 +1362,7 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
                 throw new PantsCorruptionException("Simulated cloud committed metadata differs from the captured publication.");
             }
         }
+
 
         guards.Add(new SimulatedCloudObjectGuard(pointerPath, CreateVersion(pointerBytes)));
 
@@ -1293,10 +1420,12 @@ sealed class SimulatedCloudPersistence : ICloudPersistence
         var buffer = new byte[64 * 1024];
         var checksum = 0U;
         int read;
+
         while ((read = stream.Read(buffer)) != 0)
         {
             checksum = DiskFormat.Crc32CAppend(checksum, buffer.AsSpan(0, read));
         }
+
 
         return checksum;
     }

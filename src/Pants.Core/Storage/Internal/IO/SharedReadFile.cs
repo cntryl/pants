@@ -30,10 +30,12 @@ static class SharedReadFile
     public static byte[]? TryReadAllBytes(string path)
     {
         using var stream = Open(path);
+
         if (stream is null)
         {
             return null;
         }
+
 
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);

@@ -22,11 +22,13 @@ sealed record CompactionIntentIdentity(
     {
         var inputsMatch = HasSameInputs(replacement);
         var outputsMatch = HasSameOutputs(replacement);
+
         if (outputsMatch && !inputsMatch)
         {
             throw new PantsCorruptionException(
                 "A compaction output identity is owned by different inputs.");
         }
+
 
         if (phase == "ManifestPublished" && (inputsMatch || outputsMatch))
         {
@@ -39,7 +41,8 @@ sealed record CompactionIntentIdentity(
         uint columnFamilyId,
         IEnumerable<string> removedFiles,
         IEnumerable<string> addedFiles,
-        uint? moveTargetLevel = null) =>
+        uint? moveTargetLevel = null
+    ) =>
         new(
             columnFamilyId,
             string.Join('\n', removedFiles.Order(StringComparer.Ordinal)),

@@ -179,7 +179,8 @@ public sealed class CompactionTurnSelectorTests
         uint[] familyIds,
         IReadOnlySet<uint> critical,
         uint? cursor,
-        IReadOnlySet<uint>? excluded = null) =>
+        IReadOnlySet<uint>? excluded = null
+    ) =>
         CompactionTurnSelector.Select(
             files,
             familyIds,
@@ -216,15 +217,16 @@ public sealed class CompactionTurnSelectorTests
         string smallest,
         string largest,
         ulong sizeBytes = 10,
-        uint columnFamilyId = 0) => new()
-        {
-            Name = name,
-            Level = level,
-            ColumnFamilyId = columnFamilyId,
-            SstSequence = sequence,
-            SizeBytes = sizeBytes,
-            SmallestKey = TestBytes.FromString(smallest).ToArray(),
-            LargestKey = TestBytes.FromString(largest).ToArray(),
-            KeyBoundsComplete = true
-        };
+        uint columnFamilyId = 0
+    ) => new()
+    {
+        Name = name,
+        Level = level,
+        ColumnFamilyId = columnFamilyId,
+        SstSequence = sequence,
+        SizeBytes = sizeBytes,
+        SmallestKey = TestBytes.FromString(smallest).ToArray(),
+        LargestKey = TestBytes.FromString(largest).ToArray(),
+        KeyBoundsComplete = true
+    };
 }

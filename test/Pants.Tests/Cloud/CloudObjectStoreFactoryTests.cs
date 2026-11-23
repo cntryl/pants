@@ -34,6 +34,7 @@ public sealed class CloudObjectStoreFactoryTests
             while (listener.IsListening)
             {
                 HttpListenerContext context;
+
                 try
                 {
                     context = await listener.GetContextAsync();
@@ -42,6 +43,7 @@ public sealed class CloudObjectStoreFactoryTests
                 {
                     return;
                 }
+
 
                 Interlocked.Increment(ref requests);
                 context.Response.StatusCode = 307;
@@ -77,6 +79,7 @@ public sealed class CloudObjectStoreFactoryTests
             while (listener.IsListening)
             {
                 HttpListenerContext context;
+
                 try
                 {
                     context = await listener.GetContextAsync();
@@ -85,6 +88,7 @@ public sealed class CloudObjectStoreFactoryTests
                 {
                     return;
                 }
+
 
                 Interlocked.Increment(ref requests);
                 context.Response.StatusCode = 307;
@@ -129,6 +133,7 @@ public sealed class CloudObjectStoreFactoryTests
             while (listener.IsListening)
             {
                 HttpListenerContext context;
+
                 try
                 {
                     context = await listener.GetContextAsync();
@@ -137,6 +142,7 @@ public sealed class CloudObjectStoreFactoryTests
                 {
                     return;
                 }
+
 
                 Interlocked.Increment(ref requests);
                 context.Response.StatusCode = 302;
@@ -230,7 +236,8 @@ public sealed class CloudObjectStoreFactoryTests
 
         public ValueTask<IPantsCloudObjectStore> OpenObjectStoreAsync(
             PantsCloudProviderContext context,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Context = context;
@@ -247,31 +254,36 @@ public sealed class CloudObjectStoreFactoryTests
 
         public ValueTask<PantsCloudObject?> GetAsync(
             string objectKey,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             _inner.GetAsync(objectKey, cancellationToken);
 
         public ValueTask<PantsCloudObjectMetadata?> HeadAsync(
             string objectKey,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             _inner.HeadAsync(objectKey, cancellationToken);
 
         public ValueTask<bool> PutAsync(
             string objectKey,
             ReadOnlyMemory<byte> data,
             PantsCloudObjectWriteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public ValueTask<PantsCloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             _inner.ListPageAsync(prefix, continuationToken, cancellationToken);
 
         public ValueTask<PantsCloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             PantsCloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             _inner.DeleteAsync(objectKey, condition, cancellationToken);
 
         public ValueTask DisposeAsync()

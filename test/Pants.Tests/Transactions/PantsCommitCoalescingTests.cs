@@ -15,6 +15,7 @@ public sealed class PantsCommitCoalescingTests
                              .WithBackgroundCompaction(false)))
         {
             var transactions = new List<IPantsTransaction>();
+
             for (var index = 0; index < 32; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -25,6 +26,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"value-{index:D2}"));
                 transactions.Add(transaction);
             }
+
 
             await Task.WhenAll(transactions.Select(transaction => Task.Run(async () =>
             {
@@ -46,6 +48,7 @@ public sealed class PantsCommitCoalescingTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 32; index++)
         {
             var value = await reader.GetAsync(
@@ -66,6 +69,7 @@ public sealed class PantsCommitCoalescingTests
                          new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>(commitCount);
+
             for (var index = 0; index < commitCount; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -76,6 +80,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"buffered-value-{index:D2}"));
                 transactions.Add(transaction);
             }
+
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -100,6 +105,7 @@ public sealed class PantsCommitCoalescingTests
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < commitCount; index++)
             {
                 Assert.Equal(
@@ -107,6 +113,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                         await reader.GetAsync(TestBytes.FromString($"buffered-key-{index:D2}")))));
             }
+
 
             foreach (var transaction in transactions)
             {
@@ -118,6 +125,7 @@ public sealed class PantsCommitCoalescingTests
         await using var reopenedReader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < commitCount; index++)
         {
             Assert.Equal(
@@ -139,6 +147,7 @@ public sealed class PantsCommitCoalescingTests
                 .WithWalBufferSize(1),
             new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>(commitCount);
+
         for (var index = 0; index < commitCount; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -149,6 +158,7 @@ public sealed class PantsCommitCoalescingTests
                 TestBytes.FromString($"rotated-buffered-value-{index:D2}"));
             transactions.Add(transaction);
         }
+
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -189,6 +199,7 @@ public sealed class PantsCommitCoalescingTests
                          new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>(commitCount);
+
             for (var index = 0; index < commitCount; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -199,6 +210,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"rolled-back-buffered-value-{index}"));
                 transactions.Add(transaction);
             }
+
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -254,11 +266,13 @@ public sealed class PantsCommitCoalescingTests
         await using var reopenedReader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < commitCount; index++)
         {
             Assert.Null(await reopenedReader.GetAsync(
                 TestBytes.FromString($"rolled-back-buffered-key-{index}")));
         }
+
 
         Assert.Null(await reopenedReader.GetAsync("fenced-after-buffered-rollback"u8.ToArray()));
     }
@@ -272,6 +286,7 @@ public sealed class PantsCommitCoalescingTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
             new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
+
         for (var index = 0; index < 8; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -282,6 +297,7 @@ public sealed class PantsCommitCoalescingTests
                 TestBytes.FromString($"physical-append-value-{index}"));
             transactions.Add(transaction);
         }
+
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -313,6 +329,7 @@ public sealed class PantsCommitCoalescingTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
             new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
+
         for (var index = 0; index < 16; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -323,6 +340,7 @@ public sealed class PantsCommitCoalescingTests
                 TestBytes.FromString($"failed-value-{index:D2}"));
             transactions.Add(transaction);
         }
+
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -349,10 +367,12 @@ public sealed class PantsCommitCoalescingTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 16; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"failed-key-{index:D2}")));
         }
+
 
         foreach (var transaction in transactions)
         {
@@ -419,6 +439,7 @@ public sealed class PantsCommitCoalescingTests
             PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false),
             new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
+
         for (var index = 0; index < 3; index++)
         {
             var transaction = await database.Transactions.BeginAsync(
@@ -429,6 +450,7 @@ public sealed class PantsCommitCoalescingTests
                 TestBytes.FromString($"append-failure-value-{index}"));
             transactions.Add(transaction);
         }
+
 
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
         await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -453,10 +475,12 @@ public sealed class PantsCommitCoalescingTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < transactions.Count; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"append-failure-key-{index}")));
         }
+
 
         foreach (var transaction in transactions)
         {
@@ -476,6 +500,7 @@ public sealed class PantsCommitCoalescingTests
                          new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
+
             for (var index = 0; index < 3; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -486,6 +511,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"ghost-value-{index}"));
                 transactions.Add(transaction);
             }
+
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -514,10 +540,12 @@ public sealed class PantsCommitCoalescingTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"ghost-key-{index}")));
         }
+
 
         Assert.Null(await reader.GetAsync("fenced-after-failure"u8.ToArray()));
     }
@@ -534,6 +562,7 @@ public sealed class PantsCommitCoalescingTests
                          new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
+
             for (var index = 0; index < 3; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -544,6 +573,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"torn-value-{index}"));
                 transactions.Add(transaction);
             }
+
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -572,10 +602,12 @@ public sealed class PantsCommitCoalescingTests
         await using var reader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 3; index++)
         {
             Assert.Null(await reader.GetAsync(TestBytes.FromString($"torn-key-{index}")));
         }
+
 
         Assert.Null(await reader.GetAsync("fenced-after-torn-group"u8.ToArray()));
     }
@@ -593,11 +625,13 @@ public sealed class PantsCommitCoalescingTests
                 .WithTransactionMemoryPool(1_024),
             new RuntimeDependencies(failpoints));
         var transactions = new List<IPantsTransaction>();
+
         for (var transactionIndex = 0; transactionIndex < 2; transactionIndex++)
         {
             var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var operationIndex = 0; operationIndex < 4; operationIndex++)
             {
                 transaction.Put(
@@ -605,8 +639,10 @@ public sealed class PantsCommitCoalescingTests
                     new byte[900]);
             }
 
+
             transactions.Add(transaction);
         }
+
 
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
         var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
@@ -686,6 +722,7 @@ public sealed class PantsCommitCoalescingTests
                          new RuntimeDependencies(failpoints)))
         {
             var transactions = new List<IPantsTransaction>();
+
             for (var index = 0; index < 2; index++)
             {
                 var transaction = await database.Transactions.BeginAsync(
@@ -696,6 +733,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.FromString($"post-sync-value-{index}"));
                 transactions.Add(transaction);
             }
+
 
             var barrier = database.Diagnostics.GetRuntimeMetricsAsync().AsTask();
             await failpoints.WaitForRuntimeBarrierAsync(TestTimeouts.Expected);
@@ -709,6 +747,7 @@ public sealed class PantsCommitCoalescingTests
             await using var reader = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
+
             for (var index = 0; index < transactions.Count; index++)
             {
                 Assert.Equal(
@@ -716,6 +755,7 @@ public sealed class PantsCommitCoalescingTests
                     TestBytes.ToText(Assert.IsType<ReadOnlyMemory<byte>>(
                         await reader.GetAsync(TestBytes.FromString($"post-sync-key-{index}")))));
             }
+
 
             foreach (var transaction in transactions)
             {
@@ -727,6 +767,7 @@ public sealed class PantsCommitCoalescingTests
         await using var reopenedReader = await reopened.Transactions.BeginAsync(
             reopened.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 2; index++)
         {
             Assert.Equal(

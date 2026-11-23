@@ -32,7 +32,8 @@ static class CloudRetryPolicy
         int failedAttempt,
         string provider,
         CancellationToken operationToken,
-        CancellationToken callerToken)
+        CancellationToken callerToken
+    )
     {
         try
         {

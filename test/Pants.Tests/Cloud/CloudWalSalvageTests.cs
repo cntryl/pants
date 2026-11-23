@@ -49,12 +49,14 @@ public sealed class CloudWalSalvageTests
     static byte[] Frame(params byte[][] payloads)
     {
         using var stream = new MemoryStream();
+
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
+
 
         return stream.ToArray();
     }

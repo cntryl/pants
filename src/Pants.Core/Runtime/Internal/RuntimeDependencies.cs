@@ -17,7 +17,8 @@ sealed class RuntimeDependencies
         TimeSpan? cloudWalRetirementQuantum = null,
         Action<RecoveryWorkCompleted>? recoveryWorkCompleted = null,
         Action<StartupEvent>? startupObserver = null,
-        Action<long>? commitAdmittedObserver = null)
+        Action<long>? commitAdmittedObserver = null
+    )
     {
         RecoveryWorkCompleted = recoveryWorkCompleted;
         StartupObserver = startupObserver;
@@ -35,12 +36,14 @@ sealed class RuntimeDependencies
         LeaseClock = leaseClock ?? SystemPantsClock.Instance;
         HybridLocalStorageBudgetBytes = hybridLocalStorageBudgetBytes;
         StartupPhases = new StartupPhaseRecorder(startupPhaseMeasurement);
+
         if (LeaseHeartbeatInterval is { } interval && interval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(leaseHeartbeatInterval),
                 "The lease heartbeat interval must be greater than zero.");
         }
+
 
         if (HybridLocalStorageBudgetBytes is <= 0)
         {

@@ -11,7 +11,8 @@ public sealed class HybridStorageBudgetPolicyTests
     [InlineData(98, 3)]
     public void ShouldClassifyExactWatermarkBoundaries(
         long committedBytes,
-        int expected)
+        int expected
+    )
     {
         var policy = new HybridStorageBudgetPolicy(100);
 

@@ -10,12 +10,14 @@ public sealed class WalStreamingTests
         using var directory = new TemporaryDirectory();
         var ledger = WalLedgerStore.LoadOrCreate(directory.Path, 1);
         using var stream = new FileStream(ledger.ActivePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
+
         for (var sequence = 1UL; sequence <= 128; sequence++)
         {
             var record = new WalRecord(0, WalOperation.Put, "key"u8.ToArray(), new byte[1024],
                 sequence, null, null, null, 1);
             WalCodec.AppendFrame(stream.SafeFileHandle, stream.Length, WalCodec.EncodeRecord(record));
         }
+
 
         _ = WalSegmentCodec.Seal(stream);
         stream.Position = 0;

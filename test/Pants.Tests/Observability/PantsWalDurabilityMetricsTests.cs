@@ -131,10 +131,12 @@ public sealed class PantsWalDurabilityMetricsTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         const int operationCount = 6;
+
         for (var index = 0; index < operationCount; index++)
         {
             transaction.Put(TestBytes.FromString($"spill-{index}"), new byte[900]);
         }
+
 
         Assert.NotEmpty(Directory.GetFiles(Path.Combine(directory.Path, "txn"), "*.run"));
         await transaction.CommitAsync(PantsWriteOptions.Buffered);
@@ -266,14 +268,17 @@ public sealed class PantsWalDurabilityMetricsTests
         }
 
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (true)
         {
             var recovered = await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token);
+
             if (recovered.WalPendingWrites == 0 &&
                 recovered.WalCloudDurableSequence >= recovered.CurrentSequence)
             {
                 break;
             }
+
 
             await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
         }
@@ -301,7 +306,8 @@ public sealed class PantsWalDurabilityMetricsTests
     static async ValueTask CommitAsync(
         IPantsDatabase database,
         string key,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

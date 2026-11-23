@@ -15,11 +15,13 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await InitializeDatabaseAsync(directory.Path);
         await WriteWalAsync(directory.Path, CreatePut("legacy", "preserved", 1, 1), CreatePut("target", "fresh", 10, 1), CreatePut("target", "stale", 2, 1));
         await Assert.ThrowsAnyAsync<PantsException>(() => PantsDatabase.VerifyPathAsync(directory.Path).AsTask());
+
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
         {
             await Assert.ThrowsAnyAsync<PantsException>(() => OpenAsync(directory.Path, recoveryPolicy).AsTask());
             return;
         }
+
 
         await using var recovered = await OpenAsync(directory.Path, recoveryPolicy);
         Assert.Equal("preserved", await ReadAsync(recovered, "legacy"));
@@ -292,10 +294,12 @@ public sealed class PantsWalWriterEpochRecoveryTests
     [InlineData(PantsRecoveryPolicy.Salvage, true)]
     public async Task ShouldTreatDuplicateLogicalVersionAsCorruptionGivenFamilyIsNotActive(
         PantsRecoveryPolicy recoveryPolicy,
-        bool droppedFamily)
+        bool droppedFamily
+    )
     {
         using var directory = new TemporaryDirectory();
         uint columnFamilyId;
+
         if (droppedFamily)
         {
             columnFamilyId = await InitializeWithDroppedFamilyAsync(directory.Path);
@@ -305,6 +309,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
             await InitializeDatabaseAsync(directory.Path);
             columnFamilyId = 999;
         }
+
 
         DeleteSealedWalSegments(directory.Path);
         await WriteRawFramesAsync(directory.Path, CreateDuplicateLogicalVersionWal("conflicting", columnFamilyId));
@@ -353,6 +358,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
+
         for (var index = 0; index < 8; index++)
         {
             transaction.Put(
@@ -360,13 +366,15 @@ public sealed class PantsWalWriterEpochRecoveryTests
                 TestBytes.FromString("value"));
         }
 
+
         await transaction.CommitAsync(PantsWriteOptions.Sync);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
 
     static ValueTask<IPantsDatabase> OpenAsync(
         string path,
-        PantsRecoveryPolicy recoveryPolicy) =>
+        PantsRecoveryPolicy recoveryPolicy
+    ) =>
         PantsDatabase.OpenAsync(
             PantsOpenOptions.Local(path)
                 .WithRecoveryPolicy(recoveryPolicy)
@@ -386,7 +394,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         string value,
         ulong sequence,
         ulong writerEpoch,
-        uint columnFamilyId = 0) =>
+        uint columnFamilyId = 0
+    ) =>
         WalCodec.EncodeRecord(new WalRecord(
             columnFamilyId,
             WalOperation.Put,
@@ -402,7 +411,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
         string key,
         string value,
         ulong sequence,
-        uint columnFamilyId = 0) => new(
+        uint columnFamilyId = 0
+    ) => new(
         columnFamilyId,
         WalOperation.Put,
         TestBytes.FromString(key),
@@ -436,13 +446,16 @@ public sealed class PantsWalWriterEpochRecoveryTests
     {
         var directory = Path.Combine(path, "wal");
         var holder = WalLedgerStore.LoadExisting(directory).Holder;
+
         foreach (var existing in Directory.GetFiles(directory, "*.wal"))
         {
             File.Delete(existing);
         }
 
+
         var previous = WalChainLink.Genesis;
         var members = new List<WalLedgerMember>();
+
         for (var index = 0; index < segments.Length; index++)
         {
             var segment = segments[index];
@@ -453,6 +466,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
             using var stream = new FileStream(walPath, FileMode.Create, FileAccess.ReadWrite);
             stream.Write(WalSegmentCodec.EncodeHeader(open, holder));
             stream.Write(Frame(segment.Payloads));
+
             if (index < segments.Length - 1)
             {
                 var facts = WalSegmentCodec.Seal(stream);
@@ -464,6 +478,7 @@ public sealed class PantsWalWriterEpochRecoveryTests
                 members.Add(new WalLedgerMember(open, null, (ulong)stream.Length));
             }
         }
+
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
         {
@@ -529,7 +544,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
     static byte[] CreateDuplicateLogicalVersionWal(
         string duplicateValue,
-        uint columnFamilyId = 0) =>
+        uint columnFamilyId = 0
+    ) =>
         Frame(
         [
             CreatePut(
@@ -549,10 +565,12 @@ public sealed class PantsWalWriterEpochRecoveryTests
     {
         var directory = Path.Combine(path, "wal");
         var prior = WalLedgerStore.LoadExisting(directory);
+
         foreach (var file in Directory.EnumerateFiles(directory, "*.wal"))
         {
             File.Delete(file);
         }
+
 
         var open = new WalOpenFacts(1, 1, 1, WalChainLink.Genesis);
         File.WriteAllBytes(Path.Combine(directory, "00000000000000000001.wal"), WalSegmentCodec.EncodeHeader(open, prior.Holder));
@@ -561,7 +579,8 @@ public sealed class PantsWalWriterEpochRecoveryTests
 
     static async Task AssertDuplicateRecoveryAsync(
         string path,
-        PantsRecoveryPolicy recoveryPolicy)
+        PantsRecoveryPolicy recoveryPolicy
+    )
     {
         if (recoveryPolicy == PantsRecoveryPolicy.Strict)
         {
@@ -581,12 +600,14 @@ public sealed class PantsWalWriterEpochRecoveryTests
     static byte[] Frame(IEnumerable<byte[]> payloads)
     {
         using var stream = new MemoryStream();
+
         foreach (var payload in payloads)
         {
             DiskFormat.WriteUInt32(stream, checked((uint)payload.Length));
             DiskFormat.WriteUInt32(stream, DiskFormat.Crc32C(payload));
             stream.Write(payload);
         }
+
 
         return stream.ToArray();
     }

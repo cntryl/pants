@@ -8,7 +8,8 @@ static class CloudWalCoverageValidator
         ReadOnlySpan<byte> bytes,
         ulong expectedMaximumSequence,
         ulong expectedWriterEpoch,
-        ManifestState manifest)
+        ManifestState manifest
+    )
     {
         if (!ValidateAndIsCovered(
                 bytes,
@@ -25,18 +26,22 @@ static class CloudWalCoverageValidator
         ReadOnlySpan<byte> bytes,
         ulong expectedMaximumSequence,
         ulong expectedWriterEpoch,
-        ManifestState manifest)
+        ManifestState manifest
+    )
     {
         ArgumentNullException.ThrowIfNull(manifest);
+
         if (bytes.IsEmpty)
         {
             throw new PantsCorruptionException("A published cloud WAL segment is empty.");
         }
 
+
         var observedMaximumSequence = 0UL;
         ulong? observedWriterEpoch = null;
         var mutations = new List<WalMutation>();
         var coverage = new WalCoverageIndex(manifest);
+
         try
         {
             WalFrameReader.Visit(
@@ -54,6 +59,7 @@ static class CloudWalCoverageValidator
                     observedMaximumSequence = Math.Max(
                         observedMaximumSequence,
                         record.Sequence);
+
                     if (record.Operation == WalOperation.TransactionBatch)
                     {
                         mutations.AddRange(WalCodec.DecodeTransactionBatch(
@@ -73,6 +79,7 @@ static class CloudWalCoverageValidator
                 "A published cloud WAL transaction frame is malformed.",
                 exception);
         }
+
 
         if (observedMaximumSequence != expectedMaximumSequence)
         {
@@ -106,10 +113,12 @@ static class CloudWalCoverageValidator
 
         var smallestKey = file.SmallestKey;
         var largestKey = file.LargestKey;
+
         if (mutation.Key.AsSpan().SequenceCompareTo(smallestKey) < 0)
         {
             return false;
         }
+
 
         return mutation.Operation == WalOperation.DeleteRange
             ? mutation.RangeEnd is not null &&

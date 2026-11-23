@@ -8,7 +8,8 @@ static class Tier2Database
         IPantsDatabase database,
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
-        PantsWriteOptions writeOptions)
+        PantsWriteOptions writeOptions
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
@@ -19,7 +20,8 @@ static class Tier2Database
 
     public static async ValueTask<ReadOnlyMemory<byte>?> GetAsync(
         IPantsDatabase database,
-        ReadOnlyMemory<byte> key)
+        ReadOnlyMemory<byte> key
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

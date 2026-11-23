@@ -59,6 +59,7 @@ public sealed class CloudWalCatalogAuthorityTests
         using var directory = new TemporaryDirectory();
         var primary = "{\"format_version\":4}"u8.ToArray();
         var mirror = EncodeCatalog();
+
         if (simulated)
         {
             var walDirectory = Path.Combine(directory.Path, "cloud_store", "wal");
@@ -75,6 +76,7 @@ public sealed class CloudWalCatalogAuthorityTests
             Assert.Equal(mirror, File.ReadAllBytes(mirrorPath));
             return;
         }
+
 
         var store = new ScriptedCloudObjectStore();
         store.Write(PantsCloudObjectLayout.WalCatalogObjectKey, primary);
@@ -146,6 +148,7 @@ public sealed class CloudWalCatalogAuthorityTests
     public void ShouldClassifyInvalidCatalogStructureAsCorruption(string path, string json)
     {
         var root = JsonNode.Parse(EncodeCatalog())!.AsObject();
+
         if (path == "anchor.digest")
         {
             root["anchor"]!["digest"] = JsonNode.Parse(json);
@@ -154,6 +157,7 @@ public sealed class CloudWalCatalogAuthorityTests
         {
             root[path] = JsonNode.Parse(json);
         }
+
 
         Assert.Throws<PantsCorruptionException>(() =>
             ProviderCloudPersistence.DecodeCatalogForFloor(JsonSerializer.SerializeToUtf8Bytes(root)));
@@ -184,12 +188,14 @@ public sealed class CloudWalCatalogAuthorityTests
             [1] = TestWalSegment.Publish(first),
             [4] = TestWalSegment.Publish(successor)
         };
+
         foreach (var segment in new[] { first, successor })
         {
             var path = Path.Combine(cloudRoot, segments[segment.SegmentId].ObjectKey);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path, segment.Bytes);
         }
+
 
         File.WriteAllBytes(Path.Combine(cloudRoot, "wal", "publication-catalog.v1.json"), EncodeCatalog(segments));
 

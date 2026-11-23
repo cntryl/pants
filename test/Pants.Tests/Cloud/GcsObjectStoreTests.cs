@@ -405,7 +405,8 @@ public sealed class GcsObjectStoreTests
     static GcsObjectStore CreateStore(
         HttpClient client,
         PantsGcsApiStyle apiStyle,
-        string prefix) => new(
+        string prefix
+    ) => new(
         new PantsGcsProvider(
             "bucket",
             "project",
@@ -430,7 +431,8 @@ public sealed class GcsObjectStoreTests
     static HttpResponseMessage XmlMetadataResponse(
         int size,
         string etag,
-        string generation)
+        string generation
+    )
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -444,7 +446,8 @@ public sealed class GcsObjectStoreTests
     static HttpResponseMessage Response(
         HttpStatusCode status,
         string content,
-        string generation)
+        string generation
+    )
     {
         var response = new HttpResponseMessage(status)
         {
@@ -462,7 +465,8 @@ public sealed class GcsObjectStoreTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Requests.Add(new RecordedRequest(
                 request.Method,

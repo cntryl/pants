@@ -5,8 +5,14 @@ namespace Cntryl.Pants.Checkpoint;
 
 static class CheckpointProcess
 {
-    public static async Task<CheckpointEvidence.ProcessOutcome> RunAsync(ProcessStartInfo start, string selector,
-        TimeSpan allowance, Func<ulong?>? progress = null, TimeSpan? noProgressAllowance = null, TimeProvider? timeProvider = null)
+    public static async Task<CheckpointEvidence.ProcessOutcome> RunAsync(
+        ProcessStartInfo start,
+        string selector,
+        TimeSpan allowance,
+        Func<ulong?>? progress = null,
+        TimeSpan? noProgressAllowance = null,
+        TimeProvider? timeProvider = null
+    )
     {
         start.UseShellExecute = false;
         start.RedirectStandardOutput = true;
@@ -14,6 +20,7 @@ static class CheckpointProcess
         var time = timeProvider ?? TimeProvider.System;
         var started = time.GetTimestamp();
         using var process = new Process { StartInfo = start };
+
         try
         {
             process.Start();
@@ -23,6 +30,7 @@ static class CheckpointProcess
             return new CheckpointEvidence.ProcessOutcome(0, selector, -1, false, "", "", exception.ToString(),
                 CheckpointClock.Nanoseconds(time.GetElapsedTime(started)));
         }
+
         var processId = process.Id;
         var output = CaptureAsync(process.StandardOutput);
         var error = CaptureAsync(process.StandardError);
@@ -31,6 +39,7 @@ static class CheckpointProcess
         using var monitorCancellation = new CancellationTokenSource();
         string? terminationReason = null;
         var monitor = progress is null ? Task.CompletedTask : MonitorAsync();
+
         try
         {
             await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
@@ -54,6 +63,7 @@ static class CheckpointProcess
             monitorCancellation.Cancel();
             await monitor.ConfigureAwait(false);
         }
+
         return new CheckpointEvidence.ProcessOutcome(processId, selector, process.ExitCode, killed,
             await output.ConfigureAwait(false), await error.ConfigureAwait(false), null,
             CheckpointClock.Nanoseconds(time.GetElapsedTime(started)))
@@ -65,12 +75,14 @@ static class CheckpointProcess
         {
             var lastProgress = 0UL;
             var lastChange = time.GetTimestamp();
+
             try
             {
                 while (true)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), monitorCancellation.Token).ConfigureAwait(false);
                     var observed = progress!();
+
                     if (observed is { } count && count > lastProgress)
                     {
                         lastChange = time.GetTimestamp();
@@ -116,14 +128,18 @@ static class CheckpointProcess
         const int limit = 64 * 1024;
         var text = new StringBuilder();
         var buffer = new char[4096];
+
         while (true)
         {
             var read = await reader.ReadAsync(buffer).ConfigureAwait(false);
+
             if (read == 0)
             {
                 return text.ToString();
             }
+
             var retained = Math.Min(read, limit - text.Length);
+
             if (retained > 0)
             {
                 text.Append(buffer, 0, retained);

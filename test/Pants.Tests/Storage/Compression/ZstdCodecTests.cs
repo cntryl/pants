@@ -13,10 +13,12 @@ public sealed class ZstdCodecTests
     static byte[] ExpectedPayload()
     {
         var builder = new StringBuilder();
+
         for (var index = 0; index < 40; index++)
         {
             builder.Append(System.Globalization.CultureInfo.InvariantCulture, $"pants-midge-{index % 17:000};");
         }
+
 
         return Encoding.ASCII.GetBytes(builder.ToString());
     }

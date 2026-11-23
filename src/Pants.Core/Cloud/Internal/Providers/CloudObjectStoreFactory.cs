@@ -45,10 +45,12 @@ static class CloudObjectStoreFactory
             MaxConnectionsPerServer = 64,
             UseCookies = false
         };
+
         if (connectTimeout is { } timeout)
         {
             handler.ConnectTimeout = timeout;
         }
+
 
         return handler;
     }
@@ -58,7 +60,8 @@ static class CloudObjectStoreFactory
         TimeSpan timeout,
         HttpClient? httpClient = null,
         TimeProvider? timeProvider = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(location);
         var storageClient = httpClient ?? StorageHttpClient;

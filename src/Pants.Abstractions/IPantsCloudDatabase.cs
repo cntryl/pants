@@ -18,5 +18,6 @@ public interface IPantsCloudDatabase
     ValueTask<bool> WaitForDurableAsync(
         ulong sequence,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

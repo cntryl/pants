@@ -26,17 +26,21 @@ sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
     public bool TrySelectVictim(out SstBlockCacheKey key)
     {
         using var candidates = _frequencies.GetEnumerator();
+
         if (!candidates.MoveNext())
         {
             key = default;
             return false;
         }
 
+
         key = candidates.Current.Key;
         var minimum = candidates.Current.Value;
+
         while (candidates.MoveNext())
         {
             var candidate = candidates.Current.Value;
+
             if (candidate.Frequency < minimum.Frequency ||
                 (candidate.Frequency == minimum.Frequency && candidate.Order < minimum.Order))
             {
@@ -44,6 +48,7 @@ sealed class TinyLfuSstBlockCachePolicy : ISstBlockCachePolicy
                 minimum = candidate;
             }
         }
+
 
         return true;
     }

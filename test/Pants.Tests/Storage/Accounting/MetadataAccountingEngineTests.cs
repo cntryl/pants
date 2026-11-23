@@ -26,6 +26,7 @@ public sealed class MetadataAccountingEngineTests
             new NonDecreasingPantsClock(options.TtlClock), new RuntimeTelemetry(), new RuntimeDependencies(publication));
         var handle = actor.MetadataAccounting;
         Task? disposal = null;
+
         try
         {
             await publication.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -38,6 +39,7 @@ public sealed class MetadataAccountingEngineTests
             publication.Release();
             await (disposal ?? actor.DisposeAsync().AsTask()).WaitAsync(TestTimeouts.Expected);
         }
+
 
         var settled = handle.Snapshot();
         Assert.True(settled.IncompleteObservations > 0);
@@ -60,6 +62,7 @@ public sealed class MetadataAccountingEngineTests
         var handle = ((DatabaseInstance)database).MetadataAccounting;
         await PutAsync(database);
         var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
+
         try
         {
             await build.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -69,6 +72,7 @@ public sealed class MetadataAccountingEngineTests
         {
             build.Release();
         }
+
 
         await flush.WaitAsync(TestTimeouts.Expected);
         var bucket = handle.Snapshot().Bucket(MetadataOrigin.OrdinaryLocalFlush, MetadataMedium.Persistent);
@@ -144,6 +148,7 @@ public sealed class MetadataAccountingEngineTests
         Assert.Equal(0UL, snapshot.Bucket(MetadataOrigin.OrdinaryLocalFlush, MetadataMedium.Persistent)[MetadataCounter.FlushCommittedCount]);
         Assert.Equal(0UL, snapshot.IncompleteObservations);
         await using var read = await recovered.Transactions.BeginAsync(recovered.ColumnFamilies.DefaultFamily, PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < 16; index++)
         {
             Assert.Equal(Enumerable.Repeat((byte)index, 16 * 1024).ToArray(),
@@ -191,6 +196,7 @@ public sealed class MetadataAccountingEngineTests
         var handle = ((DatabaseInstance)database).MetadataAccounting;
         await PutAsync(database, PantsWriteOptions.CloudStrict);
         failure.Arm();
+
         try
         {
             await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask());
@@ -201,6 +207,7 @@ public sealed class MetadataAccountingEngineTests
         {
             failure.Release();
         }
+
 
         await database.ShutdownAsync(TestTimeouts.Expected);
         var settled = handle.Snapshot();
@@ -278,6 +285,7 @@ public sealed class MetadataAccountingEngineTests
         var handle = ((DatabaseInstance)database).MetadataAccounting;
         await PutAsync(database);
         var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily).AsTask();
+
         try
         {
             await failure.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -289,6 +297,7 @@ public sealed class MetadataAccountingEngineTests
         {
             failure.Release();
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         var snapshot = handle.Snapshot();

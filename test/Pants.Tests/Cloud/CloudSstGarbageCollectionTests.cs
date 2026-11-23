@@ -70,10 +70,12 @@ public sealed class CloudSstGarbageCollectionTests
             .ToArray();
         var secondPageKey = PantsCloudObjectLayout.SstPrefix + "000000_01_00000000000000000010.sst";
         var store = new BoundedBatchCloudObjectStore(firstPageKeys, secondPageKey);
+
         foreach (var objectKey in firstPageKeys.Append(secondPageKey))
         {
             store.Seed(objectKey);
         }
+
 
         var collector = CreateCollector(store, static () => { });
 
@@ -111,10 +113,12 @@ public sealed class CloudSstGarbageCollectionTests
                 $"000000_01_{sequence:D20}.sst")
             .ToArray();
         var store = new GuardedListPageCloudObjectStore(objectKeys);
+
         foreach (var objectKey in objectKeys)
         {
             store.Seed(objectKey);
         }
+
 
         var collector = CreateCollector(store, static () => { });
 
@@ -226,10 +230,12 @@ public sealed class CloudSstGarbageCollectionTests
         {
             await PrepareTwoSstsAsync(database, "successor-adoption");
             initialNames.UnionWith(handler.GetObjectPaths("/sst/"));
+
             foreach (var file in CloudManifestReader.ReadManifest(firstCache.Path)!.Files)
             {
                 initialMetadata.Add(file.Name, file.Clone());
             }
+
             failpoints.Arm(Failpoint.BeforeCompactionManifestPublish);
 
             await Assert.ThrowsAsync<PantsIOException>(() => database.Maintenance.CompactAllAsync().AsTask());
@@ -254,10 +260,12 @@ public sealed class CloudSstGarbageCollectionTests
             var authoritative = Assert.Single((await successor.Diagnostics.GetStorageLayoutAsync()).Levels.SelectMany(static level => level.Files));
             Assert.Equal(Path.GetFileName(orphanPath), authoritative.Name);
             var retired = CloudManifestReader.ReadManifest(secondCache.Path)!.RetiredSsts;
+
             foreach (var file in initialMetadata.Values)
             {
                 Assert.True(ManifestTransitions.SameIdentity(file, retired[file.Name]));
             }
+
             await AssertReadableAsync(successor, "successor-adoption");
         }
 
@@ -287,6 +295,7 @@ public sealed class CloudSstGarbageCollectionTests
             leaseHeartbeatInterval: TimeSpan.FromMilliseconds(100),
             runtimeTimeProvider: monotonic,
             leaseClock: wallClock);
+
         if (coldReader)
         {
             await using (var seed = await PantsDatabase.OpenForTestingAsync(options, dependencies))
@@ -301,7 +310,9 @@ public sealed class CloudSstGarbageCollectionTests
                 .WithLeaseTimeToLive(TimeSpan.FromSeconds(30));
         }
 
+
         await using var original = await PantsDatabase.OpenForTestingAsync(options, dependencies);
+
         if (!coldReader)
         {
             await CommitAndFlushAsync(original, "snapshot-takeover/key");
@@ -311,12 +322,14 @@ public sealed class CloudSstGarbageCollectionTests
             Assert.Empty(Directory.GetFiles(Path.Combine(coldReaderCache.Path, "sst"), "*.sst"));
         }
 
+
         var originalSst = Assert.Single(handler.GetObjectPaths("/sst/"));
         await using var snapshot = await original.Transactions.BeginAsync(
             original.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
 
         handler.BlockLeaseWrites(ignoreCancellation: true);
+
         try
         {
             monotonic.Advance(TimeSpan.FromMilliseconds(100));
@@ -334,6 +347,7 @@ public sealed class CloudSstGarbageCollectionTests
 
         // The released predecessor renewal must be expired. Wait for its exact late-release
         // write before acquiring the successor so the test does not create an unrelated CAS race.
+
         var expiredAt = wallClock.UtcNow - TimeSpan.FromMilliseconds(100) - TimeSpan.FromTicks(1);
         var expiredField = $"expires: {expiredAt.UtcDateTime:O}\n";
         await TestWait.UntilAsync(() => handler.GetObjectText("midge_primary_lease.json")
@@ -572,11 +586,13 @@ public sealed class CloudSstGarbageCollectionTests
         await database.Maintenance.CompactAllAsync();
         var pending = CloudManifestReader.ReadManifest(directory.Path)!.RetiredSsts;
         Assert.Equal(2, pending.Count);
+
         foreach (var file in original)
         {
             Assert.True(ManifestTransitions.SameIdentity(file, pending[file.Name]));
             Assert.True(File.Exists(Path.Combine(directory.Path, "cloud_store", "sst", file.Name)));
         }
+
 
         failpoints.Enabled = false;
         await database.Maintenance.CompactAllAsync();
@@ -589,7 +605,8 @@ public sealed class CloudSstGarbageCollectionTests
 
     static CloudSstGarbageCollector CreateCollector(
         ICloudObjectStore store,
-        Action ensureAuthority) => new(
+        Action ensureAuthority
+    ) => new(
         store,
         _ => ValueTask.FromResult(new CloudSstRetentionProof(
             new HashSet<string>(StringComparer.Ordinal),
@@ -670,7 +687,8 @@ public sealed class CloudSstGarbageCollectionTests
     static ValueTask<IPantsDatabase> OpenProviderAsync(
         string path,
         HttpClient client,
-        IFailpointHandler failpoints) =>
+        IFailpointHandler failpoints
+    ) =>
         PantsDatabase.OpenForTestingAsync(
             PantsOpenOptions.Cloud(path, CreateAzureLocation())
                 .WithBackgroundCompaction(false),
@@ -700,11 +718,13 @@ public sealed class CloudSstGarbageCollectionTests
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadWrite);
         transaction.Put(Encoding.UTF8.GetBytes(key), "value"u8.ToArray());
+
         if (forceRewrite)
         {
             // Overlap only empty keyspace so this fixture requires a physical rewrite.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(PantsWriteOptions.CloudStrict);
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
     }
@@ -754,7 +774,8 @@ public sealed class CloudSstGarbageCollectionTests
 
         public async ValueTask<CloudObjectMetadata?> HeadAsync(
             string objectKey,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var metadata = await _inner.HeadAsync(objectKey, cancellationToken);
             return metadata is not null && StringComparer.Ordinal.Equals(objectKey, versionlessKey)
@@ -762,14 +783,19 @@ public sealed class CloudSstGarbageCollectionTests
                 : metadata;
         }
 
-        public ValueTask<bool> PutAsync(string objectKey, ReadOnlyMemory<byte> data,
-            CloudObjectWriteCondition condition, CancellationToken cancellationToken) =>
+        public ValueTask<bool> PutAsync(
+            string objectKey,
+            ReadOnlyMemory<byte> data,
+            CloudObjectWriteCondition condition,
+            CancellationToken cancellationToken
+        ) =>
             _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public async ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var page = await _inner.ListPageAsync(prefix, continuationToken, cancellationToken);
             return continuationToken is null
@@ -777,8 +803,11 @@ public sealed class CloudSstGarbageCollectionTests
                 : page;
         }
 
-        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(string objectKey,
-            CloudObjectDeleteCondition condition, CancellationToken cancellationToken) =>
+        public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
+            string objectKey,
+            CloudObjectDeleteCondition condition,
+            CancellationToken cancellationToken
+        ) =>
             _inner.DeleteAsync(objectKey, condition, cancellationToken);
 
         public void Seed(string key) => _inner.Seed(key, "data"u8);
@@ -805,13 +834,15 @@ public sealed class CloudSstGarbageCollectionTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             ListContinuations.Add(continuationToken);
@@ -832,7 +863,8 @@ public sealed class CloudSstGarbageCollectionTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             _inner.DeleteAsync(objectKey, condition, cancellationToken);
 
         public void Seed(string objectKey) => _inner.Seed(objectKey, "orphan"u8);
@@ -870,13 +902,15 @@ public sealed class CloudSstGarbageCollectionTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             ListContinuations.Add(continuationToken);
@@ -897,7 +931,8 @@ public sealed class CloudSstGarbageCollectionTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             _inner.DeleteAsync(objectKey, condition, cancellationToken);
 
         public void Seed(string objectKey) => _inner.Seed(objectKey, "orphan"u8);
@@ -928,13 +963,15 @@ public sealed class CloudSstGarbageCollectionTests
             string objectKey,
             ReadOnlyMemory<byte> data,
             CloudObjectWriteCondition condition,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken
+        ) =>
             _inner.PutAsync(objectKey, data, condition, cancellationToken);
 
         public ValueTask<CloudObjectListPage> ListPageAsync(
             string prefix,
             string? continuationToken,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var pageKeys = continuationToken is null
@@ -947,7 +984,8 @@ public sealed class CloudSstGarbageCollectionTests
         public ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
             string objectKey,
             CloudObjectDeleteCondition condition,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref _deleteRequestCount);
             return _inner.DeleteAsync(objectKey, condition, cancellationToken);

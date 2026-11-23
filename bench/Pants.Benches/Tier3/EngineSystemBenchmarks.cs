@@ -35,18 +35,22 @@ public class EngineSystemBenchmarks : Tier3Benchmark
             BinaryPrimitives.WriteUInt64BigEndian(key, checked((ulong)index));
             return key;
         }).ToArray();
+
         foreach (var chunk in _keys.Chunk(PutBatchSize))
         {
             await using var transaction = await _database.Transactions.BeginAsync(
                 _family,
                 PantsTransactionMode.ReadWrite);
+
             foreach (var key in chunk)
             {
                 transaction.Put(key, _expected);
             }
 
+
             await transaction.CommitAsync(PantsWriteOptions.BestEffort);
         }
+
 
         await _database.Maintenance.FlushAsync(_family);
         _readPathBefore = await _database.Diagnostics.GetReadPathDiagnosticsAsync();
@@ -58,6 +62,7 @@ public class EngineSystemBenchmarks : Tier3Benchmark
         var readPathAfter = await _database.Diagnostics.GetReadPathDiagnosticsAsync();
         await _database.DisposeAsync();
         Tier3Database.DeletePath(_path);
+
         if (readPathAfter.ReadOnlyTransactionsBegun <= _readPathBefore.ReadOnlyTransactionsBegun ||
             readPathAfter.CandidateSstFilesChecked <= _readPathBefore.CandidateSstFilesChecked ||
             readPathAfter.CandidateBlocksChecked <= _readPathBefore.CandidateBlocksChecked)
@@ -74,10 +79,12 @@ public class EngineSystemBenchmarks : Tier3Benchmark
             _family,
             PantsTransactionMode.ReadOnly);
         var value = await transaction.GetAsync(_keys[index]);
+
         if (value is not { } found || !found.Span.SequenceEqual(_expected))
         {
             throw new InvalidOperationException("Measured engine point read returned an unexpected value.");
         }
+
 
         return value;
     }

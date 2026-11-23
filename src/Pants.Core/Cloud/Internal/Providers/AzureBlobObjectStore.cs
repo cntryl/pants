@@ -25,14 +25,17 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         HttpClient httpClient,
         TimeSpan timeout,
         HttpClient? credentialHttpClient = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         ArgumentNullException.ThrowIfNull(configuration);
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+
         if (timeout < TimeSpan.FromMilliseconds(1))
         {
             throw PantsException.InvalidArgument("Azure Blob operation timeout must be at least one millisecond.");
         }
+
 
         _prefix = NormalizePrefix(prefix);
         _timeout = timeout;
@@ -61,16 +64,19 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObject?> GetAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
                 token => CreateGetRequestAsync(objectKey, token),
                 cancellationToken)
             .ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
@@ -84,7 +90,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         string objectKey,
         ulong offset,
         int length,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, null, cancellationToken);
 
     internal override ValueTask<CloudObject?> GetRangeAsync(
@@ -92,7 +99,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata expectedMetadata,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         GetRangeCoreAsync(objectKey, offset, length, expectedMetadata, cancellationToken);
 
     async ValueTask<CloudObject?> GetRangeCoreAsync(
@@ -100,7 +108,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata? expectedMetadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ValidateRange(offset, length);
         using var response = await SendReadAsync(
@@ -108,10 +117,12 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 expectedMetadata?.SizeBytes,
                 cancellationToken)
             .ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         if (expectedMetadata is not null && response.StatusCode == HttpStatusCode.PreconditionFailed)
         {
@@ -122,10 +133,12 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         var data = await response.Content.ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+
         if (data.Length != length)
         {
             throw new PantsIOException("Azure Blob ranged GET returned an unexpected byte count.");
         }
+
 
         var version = response.Headers.ETag?.Tag ??
                       throw new PantsIOException(
@@ -135,16 +148,19 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     public override async ValueTask<CloudObjectMetadata?> HeadAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var response = await SendReadAsync(
                 token => CreateHeadRequestAsync(objectKey, token),
                 cancellationToken)
             .ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
+
 
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         var size = response.Content.Headers.ContentLength is { } contentLength && contentLength >= 0
@@ -164,7 +180,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
@@ -177,6 +194,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         if (!response.IsSuccessStatusCode)
         {
             var code = await ReadAzureErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
+
             if ((response.StatusCode == HttpStatusCode.PreconditionFailed &&
                  (StringComparer.OrdinalIgnoreCase.Equals(code, "ConditionNotMet") ||
                   StringComparer.OrdinalIgnoreCase.Equals(code, "TargetConditionNotMet"))) ||
@@ -195,7 +213,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectListPage> ListPageAsync(
         string prefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var fullPrefix = CombinePrefix(prefix);
         using var response = await SendReadAsync(
@@ -221,17 +240,20 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     public override async ValueTask<CloudObjectDeleteOutcome> DeleteAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(condition);
         using var response = await SendMutationAsync(
                 token => CreateDeleteRequestAsync(objectKey, condition, token),
                 cancellationToken)
             .ConfigureAwait(false);
+
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return CloudObjectDeleteOutcome.NotFound;
         }
+
 
         if (response.StatusCode == HttpStatusCode.PreconditionFailed &&
             condition is PantsCloudObjectDeleteCondition.IfVersion &&
@@ -246,7 +268,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     async ValueTask<HttpRequestMessage> CreateGetRequestAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
@@ -258,16 +281,19 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         ulong offset,
         int length,
         CloudObjectMetadata? expectedMetadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Get, BuildObjectUri(objectKey));
         request.Headers.Range = new RangeHeaderValue(
             checked((long)offset),
             checked((long)offset + length - 1));
+
         if (expectedMetadata is not null)
         {
             request.Headers.IfMatch.Add(new EntityTagHeaderValue(expectedMetadata.Version));
         }
+
 
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
@@ -275,7 +301,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     async ValueTask<HttpRequestMessage> CreateHeadRequestAsync(
         string objectKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Head, BuildObjectUri(objectKey));
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
@@ -286,13 +313,15 @@ sealed class AzureBlobObjectStore : CloudObjectStore
         string objectKey,
         ReadOnlyMemory<byte> data,
         CloudObjectWriteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Put, BuildObjectUri(objectKey))
         {
             Content = new ReadOnlyMemoryContent(data)
         };
         request.Headers.TryAddWithoutValidation("x-ms-blob-type", "BlockBlob");
+
         switch (condition)
         {
             case PantsCloudObjectWriteCondition.Unconditional:
@@ -307,6 +336,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 throw PantsException.InvalidArgument("The cloud object write condition is invalid.");
         }
 
+
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
     }
@@ -314,7 +344,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateListRequestAsync(
         string fullPrefix,
         string? continuationToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var builder = new UriBuilder(_containerEndpoint.AbsoluteUri.TrimEnd('/'));
         var parameters = new List<KeyValuePair<string, string>>
@@ -324,10 +355,12 @@ sealed class AzureBlobObjectStore : CloudObjectStore
             new("prefix", fullPrefix),
             new("maxresults", CloudObjectStore.MaximumListPageKeys.ToString(CultureInfo.InvariantCulture))
         };
+
         if (continuationToken is not null)
         {
             parameters.Add(new KeyValuePair<string, string>("marker", continuationToken));
         }
+
 
         builder.Query = string.Join(
             '&',
@@ -341,9 +374,11 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     async ValueTask<HttpRequestMessage> CreateDeleteRequestAsync(
         string objectKey,
         CloudObjectDeleteCondition condition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var request = new HttpRequestMessage(HttpMethod.Delete, BuildObjectUri(objectKey));
+
         switch (condition)
         {
             case PantsCloudObjectDeleteCondition.Unconditional:
@@ -357,42 +392,49 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                     "The cloud object delete condition is invalid.");
         }
 
+
         await PrepareRequestAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
     }
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendReadAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, true, expectedRangeObjectLength, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendMutationAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, false, cancellationToken);
 
     ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         SendAsync(requestFactory, retryTransientFailures, null, cancellationToken);
 
     async ValueTask<HttpResponseMessage> SendAsync(
         Func<CancellationToken, ValueTask<HttpRequestMessage>> requestFactory,
         bool retryTransientFailures,
         ulong? expectedRangeObjectLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -404,6 +446,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                     expectedRangeObjectLength,
                     linked.Token,
                     cancellationToken).ConfigureAwait(false);
+
                 if (!retryTransientFailures && IsRetryable(response.StatusCode))
                 {
                     var statusCode = response.StatusCode;
@@ -411,6 +454,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                     throw new PantsIOException(
                         $"Azure Blob mutation outcome is indeterminate after HTTP {(int)statusCode}.");
                 }
+
 
                 if (!retryTransientFailures ||
                     !CloudRetryPolicy.IsTransientStatus(response.StatusCode) ||
@@ -471,12 +515,14 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     async ValueTask PrepareRequestAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         request.Headers.TryAddWithoutValidation("x-ms-version", ServiceVersion);
         request.Headers.TryAddWithoutValidation(
             "x-ms-date",
             _timeProvider.GetUtcNow().ToString("R", CultureInfo.InvariantCulture));
+
         switch (_credential.Kind)
         {
             case AzureResolvedCredentialKind.Sas:
@@ -502,6 +548,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     {
         var stringToSign = CreateSharedKeyStringToSign(request, _account);
         byte[] key;
+
         try
         {
             key = Convert.FromBase64String(accountKey);
@@ -513,12 +560,14 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 exception);
         }
 
+
         return Convert.ToBase64String(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(stringToSign)));
     }
 
     internal static string CreateSharedKeyStringToSign(
         HttpRequestMessage request,
-        string account)
+        string account
+    )
     {
         var contentLength = request.Content?.Headers.ContentLength is > 0 and var length
             ? length.ToString(CultureInfo.InvariantCulture)
@@ -531,6 +580,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
                 .Select(static header =>
                     $"{header.Key.ToLowerInvariant()}:{string.Join(',', header.Value).Trim()}")) + "\n";
         var canonicalResource = $"/{account}{request.RequestUri!.AbsolutePath}";
+
         foreach (var query in request.RequestUri.Query.TrimStart('?')
                      .Split('&', StringSplitOptions.RemoveEmptyEntries)
                      .Select(static pair => pair.Split('=', 2))
@@ -542,6 +592,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
             canonicalResource +=
                 $"\n{query.Key}:{string.Join(',', query.Select(static pair => Uri.UnescapeDataString(pair.ElementAtOrDefault(1) ?? string.Empty)).Order(StringComparer.Ordinal))}";
         }
+
 
         return string.Join(
             '\n',
@@ -574,6 +625,7 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     static void ValidateRange(ulong offset, int length)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+
         if (offset > long.MaxValue || offset > (ulong)(long.MaxValue - length + 1))
         {
             throw PantsException.InvalidArgument("The cloud object range is too large.");
@@ -614,7 +666,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     static async ValueTask<bool> HasAzurePredicateFailureAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var code = await ReadAzureErrorCodeAsync(response, cancellationToken).ConfigureAwait(false);
         return code is not null &&
@@ -624,7 +677,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     static async ValueTask<string?> ReadAzureErrorCodeAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var headerCode = response.Headers.TryGetValues("x-ms-error-code", out var values)
             ? values.FirstOrDefault()
@@ -662,11 +716,13 @@ sealed class AzureBlobObjectStore : CloudObjectStore
     static string NormalizeListPrefix(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
+
         if (prefix.StartsWith('/') || prefix.Contains('\\') ||
             prefix.Split('/').Any(static segment => segment is "." or ".."))
         {
             throw new PantsInvalidArgumentException("Cloud object list prefix is unsafe.");
         }
+
 
         return prefix;
     }
@@ -687,7 +743,8 @@ sealed class AzureBlobObjectStore : CloudObjectStore
 
     static async ValueTask EnsureSuccessAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (response.IsSuccessStatusCode)
         {

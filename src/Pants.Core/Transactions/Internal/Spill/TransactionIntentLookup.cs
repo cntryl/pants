@@ -8,7 +8,8 @@ sealed record TransactionIntentLookup(
     public static void Consider(
         ref TransactionIntentLookup? latest,
         TransactionIntentOperation operation,
-        ReadOnlySpan<byte> key)
+        ReadOnlySpan<byte> key
+    )
     {
         var candidate = operation.Kind switch
         {
@@ -23,6 +24,7 @@ sealed record TransactionIntentLookup(
                 new TransactionIntentLookup(operation.Ordinal, null, true),
             _ => null
         };
+
         if (candidate is not null && (latest is null || candidate.Ordinal > latest.Ordinal))
         {
             latest = candidate;

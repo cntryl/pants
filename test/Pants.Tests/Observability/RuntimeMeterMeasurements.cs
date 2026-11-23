@@ -31,6 +31,7 @@ sealed class RuntimeMeterMeasurements : IDisposable
                 instrument.Name,
                 measurement,
                 (_, current) => checked(current + measurement));
+
             if (!tags.IsEmpty)
             {
                 Volatile.Write(ref _hasTags, 1);
@@ -47,9 +48,11 @@ sealed class RuntimeMeterMeasurements : IDisposable
 
     public async ValueTask WaitForAsync(
         IReadOnlySet<string> names,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var started = Stopwatch.GetTimestamp();
+
         while (names.Any(name => this[name] == 0))
         {
             if (Stopwatch.GetElapsedTime(started) >= timeout)

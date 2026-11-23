@@ -83,6 +83,7 @@ static class ScaleLadderRunner
         await using var ingestAndCompactionPeakMonitor = new PeakWorkingSetMonitor(currentProcess);
         long logicalBytesIngested = 0;
         var ingestStopwatch = Stopwatch.StartNew();
+
         for (long batchStart = 0; batchStart < recordCount; batchStart += BatchSize)
         {
             var batchCount = (int)Math.Min(BatchSize, recordCount - batchStart);
@@ -93,6 +94,7 @@ static class ScaleLadderRunner
                 for (var offset = 0; offset < batchCount; offset++)
                 {
                     var index = batchStart + offset;
+
                     foreach (var mutation in CreateMutationsForRecord(index))
                     {
                         transaction.Put(mutation.Key, mutation.Value);
@@ -105,10 +107,12 @@ static class ScaleLadderRunner
             }
 
             var ingested = batchStart + batchCount;
+
             if (ingested % FlushEveryRecords < BatchSize)
             {
                 await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             }
+
 
             if (ingested % 1_000_000 < BatchSize)
             {
@@ -118,6 +122,7 @@ static class ScaleLadderRunner
                     $"{ingested / Math.Max(0.001, ingestStopwatch.Elapsed.TotalSeconds):N0} rec/s)");
             }
         }
+
 
         await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
         await database.Maintenance.CompactAllAsync();
@@ -174,10 +179,12 @@ static class ScaleLadderRunner
             databasePath,
             recordCount,
             budgetBytes);
+
         if (!reopenProbeSucceeded)
         {
             Console.Error.WriteLine($"  reopen probe FAILED: {reopenProbeDetail}");
         }
+
 
         return new TierReport(
             recordCount,
@@ -231,9 +238,11 @@ static class ScaleLadderRunner
     /// </summary>
     static async Task<LatencySummary> MeasurePointLatenciesAsync(
         IPantsDatabase database,
-        long[] sampleIndices)
+        long[] sampleIndices
+    )
     {
         var samples = new double[sampleIndices.Length];
+
         for (var i = 0; i < sampleIndices.Length; i++)
         {
             var index = sampleIndices[i];
@@ -252,15 +261,18 @@ static class ScaleLadderRunner
             }
         }
 
+
         return LatencySummary.From(samples);
     }
 
     static async Task<LatencySummary> MeasurePrefixLatenciesAsync(
         IPantsDatabase database,
         long recordCount,
-        long[] sampleGroups)
+        long[] sampleGroups
+    )
     {
         var samples = new double[sampleGroups.Length];
+
         for (var i = 0; i < sampleGroups.Length; i++)
         {
             var group = sampleGroups[i];
@@ -271,9 +283,11 @@ static class ScaleLadderRunner
             var stopwatch = Stopwatch.StartNew();
             await using var scan = await transaction.ScanAsync(CreatePrefixQueryForGroup(group));
             var count = 0;
+
             await foreach (var entry in scan)
             {
                 var expectedIndex = group * GroupSize + count;
+
                 if (!entry.Key.Span.SequenceEqual(PostalIndexKeyFor(expectedIndex)) ||
                     !entry.Value.Span.SequenceEqual(IndexValueFor(expectedIndex)))
                 {
@@ -283,8 +297,10 @@ static class ScaleLadderRunner
                         "is worthless.");
                 }
 
+
                 count++;
             }
+
 
             samples[i] = stopwatch.Elapsed.TotalMicroseconds;
 
@@ -295,6 +311,7 @@ static class ScaleLadderRunner
                     $"expected {expectedCount}.");
             }
         }
+
 
         return LatencySummary.From(samples);
     }
@@ -344,11 +361,13 @@ static class ScaleLadderRunner
         // the reported database size and write amplification meaningless.
         var value = GC.AllocateUninitializedArray<byte>(ValueSizeBytes);
         var state = unchecked((ulong)index * 6364136223846793005UL + 1442695040888963407UL);
+
         for (var i = 0; i < value.Length; i++)
         {
             state = unchecked(state * 6364136223846793005UL + 1442695040888963407UL);
             value[i] = (byte)(state >> 33);
         }
+
 
         return value;
     }
@@ -360,7 +379,8 @@ static class ScaleLadderRunner
     internal static double CalculateWriteAmplification(
         long logicalBytes,
         long sstBytesWritten,
-        long walBytesWritten) =>
+        long walBytesWritten
+    ) =>
         logicalBytes == 0
             ? 0
             : (double)checked(sstBytesWritten + walBytesWritten) / logicalBytes;

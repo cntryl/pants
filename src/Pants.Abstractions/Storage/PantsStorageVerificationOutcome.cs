@@ -41,7 +41,8 @@ public sealed record PantsStorageVerificationOutcome(
 
     internal static PantsStorageVerificationOutcome FromPathFailure(
         PantsStoragePathFailure failure,
-        string message) =>
+        string message
+    ) =>
         new(
             PantsStorageVerificationOutcomeKind.Storage,
             null,

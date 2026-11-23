@@ -33,6 +33,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
             Assert.False(commit.IsCompleted);
             Assert.True(clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)));
 
+
             if (canceled)
             {
                 clock.Advance(TimeSpan.FromMilliseconds(50));
@@ -44,6 +45,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
                 clock.Advance(TimeSpan.FromMilliseconds(100));
                 await Assert.ThrowsAsync<PantsTimeoutException>(() => commit.WaitAsync(TestTimeouts.Expected));
             }
+
             clock.Advance(TimeSpan.FromSeconds(2));
             var after = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(before.CurrentSequence, after.CurrentSequence);
@@ -80,6 +82,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
             transaction.Put("accepted"u8.ToArray(), "value"u8.ToArray());
             held.Arm();
             var commit = transaction.CommitAsync(PantsWriteOptions.Sync).AsTask();
+
             try
             {
                 Assert.True(clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)));
@@ -94,6 +97,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
             {
                 held.Release();
             }
+
             Assert.NotNull(await database.ColumnFamilies.GetAsync("default"));
             await AssertValueAsync(database, database.ColumnFamilies.DefaultFamily, "accepted", true);
         }
@@ -115,11 +119,13 @@ public sealed class PantsWriteBackpressureOwnershipTests
         await using var database = await PantsDatabase.OpenAsync(options);
         var debtor = await database.ColumnFamilies.CreateAsync("debtor");
         var unrelated = await database.ColumnFamilies.CreateAsync("unrelated");
+
         for (var index = 0; index < 4; index++)
         {
             await PutAsync(database, debtor, $"seed-{index}", simulatedCloud);
             await database.Maintenance.FlushAsync(debtor);
         }
+
         await using var snapshot = await database.Transactions.BeginAsync(debtor, PantsTransactionMode.ReadOnly);
         Assert.False(await database.Maintenance.WaitForWriteStallClearAsync(database.ColumnFamilies.DefaultFamily,
             TimeSpan.Zero));
@@ -159,9 +165,11 @@ public sealed class PantsWriteBackpressureOwnershipTests
             await rateWait.Entered.WaitAsync(TestTimeouts.Expected);
             Assert.False(flush.IsCompleted);
             Assert.Equal(0, clock.GetTimestamp());
+
             if (shutdown)
             {
                 await database.ShutdownAsync(TestTimeouts.Expected);
+
                 try
                 {
                     await flush.WaitAsync(TestTimeouts.Expected);
@@ -180,12 +188,14 @@ public sealed class PantsWriteBackpressureOwnershipTests
                     transaction.Put("pressure"u8.ToArray(), new byte[2800]);
                     await transaction.CommitAsync(PantsWriteOptions.Sync);
                 }
+
                 await flush.WaitAsync(TestTimeouts.Expected);
                 var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
                 Assert.True(metrics.SstBytesWrittenTotal > 0);
                 Assert.Equal(0UL, metrics.BackgroundRateLimitedBytes);
                 await database.ShutdownAsync(TestTimeouts.Expected);
             }
+
             Assert.Equal(0, clock.GetTimestamp());
         }
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -210,6 +220,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
         var options = seedOptions.WithCompaction(
             new PantsCompactionConfiguration(L0FileCountTrigger: 2, BackgroundEnabled: false));
         await using var database = await PantsDatabase.OpenForTestingAsync(options, new RuntimeDependencies(held));
+
         try
         {
             await held.WaitUntilEnteredAsync(TestTimeouts.Expected);
@@ -257,10 +268,12 @@ public sealed class PantsWriteBackpressureOwnershipTests
             new RuntimeDependencies(runtimeTimeProvider: clock));
         var debtor = await database.ColumnFamilies.CreateAsync("debtor");
         await PutAsync(database, debtor, "seed");
+
         if (!memorySoft)
         {
             await database.Maintenance.FlushAsync(debtor);
         }
+
         var before = await database.Diagnostics.GetRuntimeMetricsAsync();
         await using (var asserted = await database.Transactions.BeginAsync(debtor, PantsTransactionMode.ReadWrite))
         {
@@ -271,12 +284,14 @@ public sealed class PantsWriteBackpressureOwnershipTests
             PantsTransactionMode.ReadWrite);
         transaction.Put("other"u8.ToArray(), "value"u8.ToArray());
         var commit = transaction.CommitAsync(PantsWriteOptions.Sync).AsTask();
+
         if (memorySoft)
         {
             Assert.False(commit.IsCompleted);
             Assert.True(clock.HasTimerDueIn(TimeSpan.FromMilliseconds(1)));
             clock.Advance(TimeSpan.FromMilliseconds(20));
         }
+
         await commit.WaitAsync(TestTimeouts.Expected);
 
         var after = await database.Diagnostics.GetRuntimeMetricsAsync();
@@ -333,6 +348,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
             await PutAsync(database, database.ColumnFamilies.DefaultFamily, "seed");
             using var cancellation = new CancellationTokenSource();
             var flush = database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily, cancellation.Token).AsTask();
+
             try
             {
                 await rate.Entered.WaitAsync(TestTimeouts.Expected);
@@ -350,6 +366,7 @@ public sealed class PantsWriteBackpressureOwnershipTests
             {
                 rate.Continue();
             }
+
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
             var completed = await database.Diagnostics.GetRuntimeMetricsAsync();
             Assert.Equal(0, completed.ImmutableMemtables);
@@ -360,16 +377,23 @@ public sealed class PantsWriteBackpressureOwnershipTests
         await AssertValueAsync(reopened, reopened.ColumnFamilies.DefaultFamily, "seed", true);
     }
 
-    static async Task PutAsync(IPantsDatabase database, IPantsColumnFamily family, string key, bool cloud = false,
-        bool forceRewrite = false)
+    static async Task PutAsync(
+        IPantsDatabase database,
+        IPantsColumnFamily family,
+        string key,
+        bool cloud = false,
+        bool forceRewrite = false
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(family, PantsTransactionMode.ReadWrite);
         transaction.Put(TestBytes.FromString(key), "value"u8.ToArray());
+
         if (forceRewrite)
         {
             // The test observes physical output; overlapping empty keyspace prevents promotion.
             transaction.DeleteRange("!overlap/a"u8.ToArray(), "!overlap/z"u8.ToArray());
         }
+
         await transaction.CommitAsync(cloud ? PantsWriteOptions.CloudStrict : PantsWriteOptions.Sync);
     }
 
@@ -397,7 +421,9 @@ public sealed class PantsWriteBackpressureOwnershipTests
             {
                 return;
             }
+
             _entered.TrySetResult();
+
             if (Volatile.Read(ref _continuing) != 0)
             {
                 clock.Advance(TimeSpan.FromSeconds(1));

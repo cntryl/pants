@@ -22,12 +22,14 @@ sealed class OneShotCloudWalSealFailureHandler(
         }
 
         var attempt = Interlocked.Increment(ref _attempts);
+
         if (attempt == 1)
         {
             _failureInjected.TrySetResult();
             throw createFailure?.Invoke() ??
                   new IOException($"Injected first cloud WAL seal failure at {failure}.");
         }
+
 
         _retryAttempted.TrySetResult();
     }

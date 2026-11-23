@@ -72,16 +72,19 @@ public sealed class PantsCompactionPartitionSizingTests
     static async Task WriteFlushesAsync(PantsOpenOptions options)
     {
         await using var database = await PantsDatabase.OpenAsync(options);
+
         for (var flush = 0; flush < FlushCount; flush++)
         {
             await using var transaction = await database.Transactions.BeginAsync(
                 database.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadWrite);
+
             for (var entry = 0; entry < EntriesPerFlush; entry++)
             {
                 var index = (entry * FlushCount) + flush;
                 transaction.Put(Key(index), Value(index));
             }
+
 
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
             await database.Maintenance.FlushAsync(database.ColumnFamilies.DefaultFamily);
@@ -93,6 +96,7 @@ public sealed class PantsCompactionPartitionSizingTests
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,
             PantsTransactionMode.ReadOnly);
+
         for (var index = 0; index < FlushCount * EntriesPerFlush; index++)
         {
             var read = await reader.GetAsync(Key(index));

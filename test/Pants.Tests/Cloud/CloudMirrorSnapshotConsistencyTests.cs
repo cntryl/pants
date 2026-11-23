@@ -38,6 +38,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         await persistence.MirrorMetadataAndSstsAsync(CancellationToken.None);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         if (provider)
         {
             control.BeforeGetAsync = async (key, _, token) =>
@@ -54,7 +55,9 @@ public sealed class CloudMirrorSnapshotConsistencyTests
             upload.Arm();
         }
 
+
         var mirror = Task.Run(async () => await persistence.MirrorMetadataAndSstsWithReceiptAsync(owner.Identity, CancellationToken.None));
+
         try
         {
             if (provider)
@@ -74,6 +77,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
             release.TrySetResult();
             upload.Release();
         }
+
 
         using var publication = await mirror.WaitAsync(TestTimeouts.Expected);
         publication.InstallInto(owner);
@@ -274,7 +278,8 @@ public sealed class CloudMirrorSnapshotConsistencyTests
     static (FileMeta Metadata, byte[] Bytes) CreateSst(
         ulong sequence,
         byte[] key,
-        int valueBytes)
+        int valueBytes
+    )
     {
         var value = new byte[valueBytes];
         new Random(checked((int)sequence)).NextBytes(value);
@@ -302,16 +307,19 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static void WriteLocalFixture(
         string root,
-        IReadOnlyList<(FileMeta Metadata, byte[] Bytes)> ssts)
+        IReadOnlyList<(FileMeta Metadata, byte[] Bytes)> ssts
+    )
     {
         Directory.CreateDirectory(Path.Combine(root, "sst"));
         File.WriteAllText(Path.Combine(root, "FORMAT"), "midge-format-version=9\n");
         File.WriteAllBytes(Path.Combine(root, "manifest.journal"), []);
         File.WriteAllBytes(Path.Combine(root, "intent_log.json"), []);
+
         foreach (var sst in ssts)
         {
             WriteSst(root, sst);
         }
+
 
         WriteManifest(root, ssts.Select(static sst => sst.Metadata).ToArray());
     }
@@ -319,7 +327,8 @@ public sealed class CloudMirrorSnapshotConsistencyTests
     static void AddSstAndAdvanceManifest(
         string root,
         (FileMeta Metadata, byte[] Bytes) first,
-        (FileMeta Metadata, byte[] Bytes) second)
+        (FileMeta Metadata, byte[] Bytes) second
+    )
     {
         WriteSst(root, second);
         WriteManifest(root, [first.Metadata, second.Metadata]);
@@ -327,7 +336,8 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static void WriteSst(
         string root,
-        (FileMeta Metadata, byte[] Bytes) sst) =>
+        (FileMeta Metadata, byte[] Bytes) sst
+    ) =>
         AtomicStagedFile.Write(
             Path.Combine(root, "sst", sst.Metadata.Name),
             sst.Bytes);
@@ -355,11 +365,13 @@ public sealed class CloudMirrorSnapshotConsistencyTests
 
     static async Task AssertProviderManifestDependenciesAsync(
         SnapshotConsistencyCloudObjectStore controlStore,
-        SnapshotConsistencyCloudObjectStore sstStore)
+        SnapshotConsistencyCloudObjectStore sstStore
+    )
     {
         var files = await CloudMetadataAuthority.ReadCommittedFilesAsync(controlStore, CancellationToken.None);
         Assert.NotNull(files);
         var manifest = CloudManifestReader.DecodeMetadata(files);
+
         foreach (var file in manifest.Files)
         {
             var sst = Assert.IsType<byte[]>(sstStore.GetData(PantsCloudObjectLayout.SstPrefix + file.Name));
@@ -373,6 +385,7 @@ public sealed class CloudMirrorSnapshotConsistencyTests
         var selected = CloudMetadataAuthority.ReadCommittedFilesAsync(new SimulatedCloudObjectStore(cloudRoot), CancellationToken.None)
             .AsTask().GetAwaiter().GetResult();
         var manifest = CloudManifestReader.DecodeMetadata(Assert.IsType<Dictionary<string, ReadOnlyMemory<byte>>>(selected));
+
         foreach (var file in manifest.Files)
         {
             var path = Path.Combine(cloudRoot, "sst", file.Name);

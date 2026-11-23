@@ -182,7 +182,8 @@ public sealed class CommitValidatorInsertOnlyTests
     static CommitPayload CreatePayload(
         RuntimeState state,
         ITransactionOperationSource operations,
-        PantsConflictPolicy conflictPolicy = PantsConflictPolicy.LastWriteWins) =>
+        PantsConflictPolicy conflictPolicy = PantsConflictPolicy.LastWriteWins
+    ) =>
         new(
             1,
             PantsTransactionMode.ReadWrite,
@@ -203,7 +204,8 @@ public sealed class CommitValidatorInsertOnlyTests
         ulong ordinal,
         ColumnFamilyIdentity family,
         string key,
-        bool insertOnly = false) =>
+        bool insertOnly = false
+    ) =>
         new(
             ordinal,
             CommitOperationKind.Put,
@@ -218,7 +220,8 @@ public sealed class CommitValidatorInsertOnlyTests
     static TransactionIntentOperation Delete(
         ulong ordinal,
         ColumnFamilyIdentity family,
-        string key) =>
+        string key
+    ) =>
         new(
             ordinal,
             CommitOperationKind.Delete,
@@ -234,7 +237,8 @@ public sealed class CommitValidatorInsertOnlyTests
         ulong ordinal,
         ColumnFamilyIdentity family,
         string start,
-        string end) =>
+        string end
+    ) =>
         new(
             ordinal,
             CommitOperationKind.DeleteRange,

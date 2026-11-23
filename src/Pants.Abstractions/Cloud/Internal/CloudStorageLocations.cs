@@ -17,6 +17,7 @@ static class CloudStorageLocations
         void Add(PantsCloudStorageLocation location, PantsCloudStorageRole role)
         {
             var index = unique.FindIndex(item => item.Location == location);
+
             if (index < 0)
             {
                 unique.Add((location, [role]));

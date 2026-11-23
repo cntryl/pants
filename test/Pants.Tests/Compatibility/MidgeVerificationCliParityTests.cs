@@ -145,16 +145,19 @@ public sealed class MidgeVerificationCliParityTests
             UseShellExecute = false
         };
         startInfo.ArgumentList.Add(typeof(PantsCliCommandLineParser).Assembly.Location);
+
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
+
 
         using var process = new Process { StartInfo = startInfo };
         Assert.True(process.Start());
         var standardOutput = process.StandardOutput.ReadToEndAsync();
         var standardError = process.StandardError.ReadToEndAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
         try
         {
             await process.WaitForExitAsync(timeout.Token);
@@ -165,6 +168,7 @@ public sealed class MidgeVerificationCliParityTests
             await process.WaitForExitAsync();
             throw;
         }
+
 
         return new(
             process.ExitCode,

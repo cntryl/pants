@@ -21,7 +21,8 @@ sealed class GcsExternalAccountTokenProvider(
 
     public async ValueTask<GcsAccessToken> FetchAsync(
         JsonElement credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (credential.TryGetProperty("client_id", out _) ||
             credential.TryGetProperty("client_secret", out _))
@@ -49,11 +50,13 @@ sealed class GcsExternalAccountTokenProvider(
             ? sourceElement
             : throw new PantsInvalidArgumentException(
                 "GCS external-account ADC is missing credential_source.");
+
         if (source.ValueKind != JsonValueKind.Object)
         {
             throw new PantsInvalidArgumentException(
                 "GCS external-account credential_source must be an object.");
         }
+
 
         var subjectToken = await ReadSubjectTokenAsync(source, cancellationToken)
             .ConfigureAwait(false);
@@ -73,6 +76,7 @@ sealed class GcsExternalAccountTokenProvider(
             ["subject_token_type"] = subjectTokenType,
             ["subject_token"] = subjectToken
         };
+
         if (RefreshingGcsTokenProvider.GetOptionalString(
                 credential,
                 "workforce_pool_user_project") is { } userProject)
@@ -82,6 +86,7 @@ sealed class GcsExternalAccountTokenProvider(
                 userProject
             });
         }
+
 
         var federated = await RequestFormTokenAsync(
             new Uri(tokenUrl, UriKind.Absolute),
@@ -98,7 +103,8 @@ sealed class GcsExternalAccountTokenProvider(
 
     async ValueTask<string> ReadSubjectTokenAsync(
         JsonElement source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (source.TryGetProperty("executable", out _) ||
             source.TryGetProperty("command", out _) ||
@@ -109,6 +115,7 @@ sealed class GcsExternalAccountTokenProvider(
         }
 
         string content;
+
         if (RefreshingGcsTokenProvider.GetOptionalString(source, "file") is { } file)
         {
             try
@@ -142,15 +149,18 @@ sealed class GcsExternalAccountTokenProvider(
                 "GCS external-account ADC requires a supported file or URL credential_source.");
         }
 
+
         return ParseSubjectToken(source, content);
     }
 
     async ValueTask<string> ReadSubjectTokenUrlAsync(
         Uri uri,
         JsonElement source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+
         if (source.TryGetProperty("headers", out var headers))
         {
             if (headers.ValueKind != JsonValueKind.Object)
@@ -173,6 +183,7 @@ sealed class GcsExternalAccountTokenProvider(
             }
         }
 
+
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         EnsureSuccess(response, "GCS external-account subject-token request");
         return await response.Content.ReadAsStringAsync(cancellationToken)
@@ -182,7 +193,8 @@ sealed class GcsExternalAccountTokenProvider(
     async ValueTask<GcsAccessToken> RequestFormTokenAsync(
         Uri uri,
         IReadOnlyDictionary<string, string> fields,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -202,7 +214,8 @@ sealed class GcsExternalAccountTokenProvider(
         Uri uri,
         string sourceToken,
         ulong lifetimeSeconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
@@ -226,12 +239,14 @@ sealed class GcsExternalAccountTokenProvider(
 
     async ValueTask<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = new CancellationTokenSource(_timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             deadline.Token);
+
         try
         {
             return await _httpClient.SendAsync(
@@ -261,6 +276,7 @@ sealed class GcsExternalAccountTokenProvider(
         var type = format.ValueKind == JsonValueKind.Object
             ? RefreshingGcsTokenProvider.GetOptionalString(format, "type")
             : null;
+
         if (type is null or "text")
         {
             var value = content.Trim();
@@ -269,6 +285,7 @@ sealed class GcsExternalAccountTokenProvider(
                     "GCS external-account subject token is empty.")
                 : value;
         }
+
 
         if (type != "json")
         {
@@ -280,6 +297,7 @@ sealed class GcsExternalAccountTokenProvider(
             format,
             "subject_token_field_name");
         JsonDocument document;
+
         try
         {
             document = JsonDocument.Parse(content);
@@ -290,6 +308,7 @@ sealed class GcsExternalAccountTokenProvider(
                 "GCS external-account subject-token JSON is malformed.",
                 exception);
         }
+
 
         using (document)
         {
@@ -324,9 +343,11 @@ sealed class GcsExternalAccountTokenProvider(
     static async ValueTask<GcsAccessToken> ParseImpersonationResponseAsync(
         HttpResponseMessage response,
         TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         JsonDocument document;
+
         try
         {
             document = JsonDocument.Parse(
@@ -340,11 +361,13 @@ sealed class GcsExternalAccountTokenProvider(
                 exception);
         }
 
+
         using (document)
         {
             var root = document.RootElement;
             var token = RefreshingGcsTokenProvider.GetOptionalString(root, "accessToken");
             var expiry = RefreshingGcsTokenProvider.GetOptionalString(root, "expireTime");
+
             if (token is null ||
                 expiry is null ||
                 !DateTimeOffset.TryParse(
@@ -357,6 +380,7 @@ sealed class GcsExternalAccountTokenProvider(
                 throw new PantsIOException(
                     "GCS service-account impersonation response must contain a non-empty token and future RFC3339 expiry.");
             }
+
 
             return new GcsAccessToken(token, expiresAt);
         }

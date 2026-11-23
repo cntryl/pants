@@ -13,6 +13,7 @@ static class IntentLogCodec
         var cursor = 0;
         ulong sequence = 0;
         uint checksum = 0;
+
         while (cursor < bytes.Length)
         {
             if (!MetadataFrameCodec.TryGetFrameLength(bytes.AsSpan(cursor), 3, out var length))
@@ -23,6 +24,7 @@ static class IntentLogCodec
             var frame = bytes.AsSpan(cursor, length);
             using var document = MetadataFrameCodec.Decode(frame, 3);
             var value = document.RootElement;
+
             if (value.ValueKind != JsonValueKind.Object ||
                 !value.TryGetProperty("sequence", out var sequenceValue) || !sequenceValue.TryGetUInt64(out var nextSequence) ||
                 sequence == ulong.MaxValue || nextSequence != sequence + 1 ||
@@ -33,17 +35,21 @@ static class IntentLogCodec
                 throw new PantsCorruptionException("Intent suffix chain is invalid.");
             }
 
+
             entries.RemoveRange((int)keep, entries.Count - (int)keep);
+
             foreach (var entry in append.EnumerateArray())
             {
                 ValidateEntry(entry);
                 entries.Add(IntentEntry.FromJson(JsonSerializer.SerializeToUtf8Bytes(entry)));
             }
 
+
             sequence = nextSequence;
             checksum = BinaryPrimitives.ReadUInt32BigEndian(frame[^4..]);
             cursor += length;
         }
+
 
         return new IntentLogState(entries, sequence, checksum, bytes, cursor);
     }
@@ -53,10 +59,12 @@ static class IntentLogCodec
         using var previous = ToDocument(prior.Entries);
         using var next = ToDocument(entries);
         var keep = 0;
+
         while (keep < prior.Entries.Count && keep < entries.Count && JsonElement.DeepEquals(previous.RootElement[keep], next.RootElement[keep]))
         {
             keep++;
         }
+
 
         var payload = JsonSerializer.SerializeToElement(new
         {
@@ -74,10 +82,12 @@ static class IntentLogCodec
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartArray();
+
             foreach (var entry in entries)
             {
                 entry.WriteTo(writer);
             }
+
 
             writer.WriteEndArray();
         }
@@ -93,18 +103,23 @@ static class IntentLogCodec
         }
 
         var variant = entry.EnumerateObject().Single();
+
         if (variant.Name is not ("SeqnoAllocated" or "FlushPlanned" or "CompactionPlanned" or "FlushPublish" or "CompactionPublish" or "MoveSstsPublish" or "SstAdded" or "CompactionApplied" or "WalSynced" or "CloudUploadComplete"))
         {
             throw new PantsCorruptionException("Intent entry variant is unknown.");
         }
 
+
         var fields = variant.Value;
+
         if (fields.ValueKind != JsonValueKind.Object)
         {
             throw new PantsCorruptionException("Intent variant fields must be a map.");
         }
 
+
         ValidateNames(fields);
+
         switch (variant.Name)
         {
             case "SeqnoAllocated":
@@ -165,6 +180,7 @@ static class IntentLogCodec
     static void ValidateCompactionFiles(JsonElement fields)
     {
         Require(fields, "removed", JsonValueKind.Array);
+
         foreach (var file in Require(fields, "added", JsonValueKind.Array).EnumerateArray())
         {
             ValidateRuntimeFile(file);
@@ -177,6 +193,7 @@ static class IntentLogCodec
         RequireUnsigned(file, "level", uint.MaxValue);
         RequireUnsigned(file, "size_bytes");
         RequireUnsigned(file, "cf_id", uint.MaxValue);
+
         foreach (var name in new[] { "smallest_key", "largest_key" })
         {
             if (!file.TryGetProperty(name, out var bound) || bound.ValueKind is not (JsonValueKind.Null or JsonValueKind.Array) ||
@@ -185,6 +202,7 @@ static class IntentLogCodec
                 throw new PantsCorruptionException("Runtime SST key bound must be a nullable byte array.");
             }
         }
+
 
         foreach (var name in new[] { "smallest_seq", "largest_seq" })
         {
@@ -196,6 +214,7 @@ static class IntentLogCodec
 
         ValidateOptionalUnsigned(file, "content_crc32c", uint.MaxValue);
         ValidateOptionalUnsigned(file, "earliest_expiration_millis", ulong.MaxValue);
+
         if (file.TryGetProperty("key_bounds_complete", out var complete) && complete.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
         {
             throw new PantsCorruptionException("Runtime SST bound completeness must be boolean.");
@@ -242,6 +261,7 @@ static class IntentLogCodec
     static void RequireUnsigned(JsonElement fields, string name, ulong maximum = ulong.MaxValue)
     {
         var value = Require(fields, name, JsonValueKind.Number);
+
         if (!value.TryGetUInt64(out var number) || number > maximum)
         {
             throw new PantsCorruptionException($"Intent field '{name}' is outside its unsigned range.");

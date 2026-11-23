@@ -388,6 +388,7 @@ public sealed class PantsTransactionParityTests
     public async Task ShouldBoundRuntimeStateAcrossTwoThousandCommits()
     {
         await using var database = await PantsDatabase.OpenAsync(PantsOpenOptions.InMemory());
+
         for (var index = 0; index < 2_000; index++)
         {
             await using var transaction = await database.Transactions.BeginAsync(
@@ -398,6 +399,7 @@ public sealed class PantsTransactionParityTests
                 "value"u8.ToArray());
             await transaction.CommitAsync(PantsWriteOptions.Buffered);
         }
+
 
         var metrics = await database.Diagnostics.GetRuntimeMetricsAsync();
         Assert.Equal(0, metrics.ActiveSnapshots);
@@ -419,21 +421,25 @@ public sealed class PantsTransactionParityTests
 
     static Task SeedAsync(
         IPantsDatabase database,
-        params (string Key, string Value)[] entries) =>
+        params (string Key, string Value)[] entries
+    ) =>
         SeedAsync(database, database.ColumnFamilies.DefaultFamily, entries);
 
     static async Task SeedAsync(
         IPantsDatabase database,
         IPantsColumnFamily columnFamily,
-        params (string Key, string Value)[] entries)
+        params (string Key, string Value)[] entries
+    )
     {
         await using var transaction = await database.Transactions.BeginAsync(
             columnFamily,
             PantsTransactionMode.ReadWrite);
+
         foreach (var (key, value) in entries)
         {
             transaction.Put(TestBytes.FromString(key), TestBytes.FromString(value));
         }
+
 
         await transaction.CommitAsync(PantsWriteOptions.Sync);
     }
@@ -450,10 +456,12 @@ public sealed class PantsTransactionParityTests
     static async Task<IReadOnlyList<PantsEntry>> CollectAsync(IPantsScan scan)
     {
         var entries = new List<PantsEntry>();
+
         await foreach (var entry in scan)
         {
             entries.Add(entry);
         }
+
 
         return entries;
     }

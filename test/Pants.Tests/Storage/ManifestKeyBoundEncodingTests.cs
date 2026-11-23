@@ -22,6 +22,7 @@ public sealed class ManifestKeyBoundEncodingTests
         {
             using var document = MetadataFrameCodec.Decode(File.ReadAllBytes(Path.Combine(directory.Path, name)), 1);
             var file = Assert.Single(document.RootElement.GetProperty("files").EnumerateArray());
+
             foreach (var bound in new[] { "smallest_key", "largest_key" })
             {
                 var values = file.GetProperty(bound).EnumerateArray().Select(static item => item.GetByte());
@@ -50,6 +51,7 @@ public sealed class ManifestKeyBoundEncodingTests
         using var directory = new TemporaryDirectory();
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
         await FlushDeleteAsync(options, [1, 2, 3]);
+
         foreach (var name in new[] { "manifest.snapshot.json" })
         {
             var path = Path.Combine(directory.Path, name);
@@ -61,6 +63,7 @@ public sealed class ManifestKeyBoundEncodingTests
             BinaryPrimitives.WriteUInt32BigEndian(invalid.AsSpan(invalid.Length - 4), DiskFormat.Crc32C(invalid.AsSpan(0, invalid.Length - 4)));
             File.WriteAllBytes(path, invalid);
         }
+
 
         var exception = await Assert.ThrowsAsync<PantsCorruptionException>(() =>
             PantsDatabase.OpenAsync(options).AsTask());

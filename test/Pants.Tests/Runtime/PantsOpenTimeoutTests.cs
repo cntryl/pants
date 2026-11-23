@@ -12,6 +12,7 @@ public sealed class PantsOpenTimeoutTests
         var opening = PantsDatabase.OpenForTestingAsync(PantsOpenOptions.InMemory()
             .WithOpenTimeout(TimeSpan.FromDays(100)), new RuntimeDependencies(prepared, runtimeTimeProvider: time)).AsTask();
         var advancing = Task.CompletedTask;
+
         try
         {
             await prepared.Entered.WaitAsync(TestTimeouts.Expected);
@@ -51,6 +52,7 @@ public sealed class PantsOpenTimeoutTests
         var opening = PantsDatabase.OpenForTestingAsync(options,
             new RuntimeDependencies(barrier, cloudHttpClient: client, startupObserver: observation.Observe),
             cancellation.Token).AsTask();
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -63,6 +65,7 @@ public sealed class PantsOpenTimeoutTests
             barrier.Release();
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Equal(1, observation.Prepared);
         Assert.Equal(0, observation.Admitted);
         Assert.Equal(1, observation.Aborted);
@@ -83,6 +86,7 @@ public sealed class PantsOpenTimeoutTests
                 startupPhaseMeasurement: phase =>
                 {
                     if (phase.Phase == StartupPhase.Format) { time.Advance(TimeSpan.FromMilliseconds(600)); }
+
                     if (phase.Phase == StartupPhase.ServiceStartup) { time.Advance(TimeSpan.FromMilliseconds(400)); }
                 })).AsTask();
         await Assert.ThrowsAsync<PantsTimeoutException>(() => opening.WaitAsync(TestTimeouts.Expected));
@@ -115,6 +119,7 @@ public sealed class PantsOpenTimeoutTests
         var options = PantsOpenOptions.Local(directory.Path).WithOpenTimeout(TimeSpan.FromSeconds(1));
         var opening = PantsDatabase.OpenForTestingAsync(options,
             new RuntimeDependencies(barrier, runtimeTimeProvider: time, startupObserver: observation.Observe)).AsTask();
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -129,6 +134,7 @@ public sealed class PantsOpenTimeoutTests
             barrier.Release();
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Contains("1970-01-01T00:00:00Z", await File.ReadAllTextAsync(Path.Combine(directory.Path, ".midge_leader")));
         await using var reopened = await PantsDatabase.OpenAsync(PantsOpenOptions.Local(directory.Path));
         await WriteAsync(reopened, 1);
@@ -157,6 +163,7 @@ public sealed class PantsOpenTimeoutTests
         var options = PantsOpenOptions.Local(directory.Path).WithBackgroundCompaction(false);
         var opening = PantsDatabase.OpenForTestingAsync(options.WithOpenTimeout(TimeSpan.FromSeconds(1)),
             new RuntimeDependencies(barrier, runtimeTimeProvider: time, startupObserver: observation.Observe)).AsTask();
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -170,6 +177,7 @@ public sealed class PantsOpenTimeoutTests
             barrier.Release();
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Equal(0, observation.Admitted);
         Assert.Empty(Directory.GetFiles(Path.Combine(directory.Path, "sst"), "*.sst"));
         await using var reopened = await PantsDatabase.OpenAsync(options);
@@ -188,6 +196,7 @@ public sealed class PantsOpenTimeoutTests
         var options = Options(directory.Path, simulatedCloud).WithOpenTimeout(TimeSpan.FromSeconds(1));
         var opening = Task.Run(async () => await PantsDatabase.OpenForTestingAsync(options,
             new RuntimeDependencies(barrier, runtimeTimeProvider: time, startupObserver: observation.Observe)));
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -202,6 +211,7 @@ public sealed class PantsOpenTimeoutTests
             await DisposeSuccessfulOpenAsync(opening);
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         await using var reopened = await PantsDatabase.OpenAsync(Options(directory.Path, simulatedCloud));
         Assert.True(reopened.Cloud?.IsPrimaryLeaseHealthy ?? true);
     }
@@ -228,6 +238,7 @@ public sealed class PantsOpenTimeoutTests
             options.WithOpenTimeout(TimeSpan.FromSeconds(1)),
             new RuntimeDependencies(barrier, runtimeTimeProvider: time, startupObserver: observation.Observe,
                 cloudHttpClient: client)));
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -240,9 +251,11 @@ public sealed class PantsOpenTimeoutTests
             await DisposeSuccessfulOpenAsync(opening);
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Equal(0, observation.Admitted);
         Assert.Equal(1, observation.Prepared);
         Assert.Equal(1, observation.Aborted);
+
         if (mode != 0)
         {
             await using var reopened = await PantsDatabase.OpenForTestingAsync(options, new RuntimeDependencies(cloudHttpClient: client));
@@ -270,6 +283,7 @@ public sealed class PantsOpenTimeoutTests
                 {
                     if (measurement.Phase == StartupPhase.ServiceStartup) { barrier.Hold(); }
                 })));
+
         try
         {
             await barrier.Entered.WaitAsync(TestTimeouts.Expected);
@@ -280,6 +294,7 @@ public sealed class PantsOpenTimeoutTests
         {
             barrier.Release();
         }
+
         await using var database = await opening.WaitAsync(TestTimeouts.Expected);
         Assert.Null(PantsOpenOptionsResolver.Resolve(options).OpenTimeout);
         await WriteAsync(database, mode);
@@ -307,6 +322,7 @@ public sealed class PantsOpenTimeoutTests
             await WriteAsync(database, mode);
             await AssertValueAsync(database);
         }
+
         if (mode != 0)
         {
             await using var reopened = await PantsDatabase.OpenForTestingAsync(options, new RuntimeDependencies(cloudHttpClient: client));
@@ -336,6 +352,7 @@ public sealed class PantsOpenTimeoutTests
         var opening = PantsDatabase.OpenForTestingAsync(PantsOpenOptions.CloudMulti(directory.Path, topology)
             .WithOpenTimeout(TimeSpan.FromSeconds(1)),
             new RuntimeDependencies(runtimeTimeProvider: time, startupObserver: observation.Observe)).AsTask();
+
         try
         {
             await pending.Started.Task.WaitAsync(TestTimeouts.Expected);
@@ -349,6 +366,7 @@ public sealed class PantsOpenTimeoutTests
             callback.Release();
             await observation.Cleaned.WaitAsync(TestTimeouts.Expected);
         }
+
         Assert.Equal(1, wal.DisposeCount);
         Assert.Equal(1, sst.DisposeCount);
     }
@@ -460,17 +478,20 @@ public sealed class PantsOpenTimeoutTests
                 if (startupTimer)
                 {
                     owner._rearming.TrySetResult();
+
                     if (!owner._release.Wait(TestTimeouts.Expected))
                     {
                         throw new TimeoutException("The startup timer rearm was not released.");
                     }
                 }
+
                 return inner.Change(dueTime, period);
             }
 
             public void Dispose()
             {
                 inner.Dispose();
+
                 if (startupTimer) { owner._disposed.TrySetResult(); }
             }
 
@@ -494,6 +515,7 @@ public sealed class PantsOpenTimeoutTests
         public void Hold()
         {
             _entered.TrySetResult();
+
             if (!_release.Wait(TestTimeouts.Expected))
             {
                 throw new TimeoutException("Startup work was not released.");

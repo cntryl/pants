@@ -44,6 +44,7 @@ public class StrictGroupCommitSystemBenchmarks : Tier4Benchmark
                 reopened.ColumnFamilies.DefaultFamily,
                 PantsTransactionMode.ReadOnly);
             await using var scan = await transaction.ScanAsync(new PantsScanQuery());
+
             await foreach (var _ in scan)
             {
                 count++;

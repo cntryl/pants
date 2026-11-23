@@ -207,6 +207,7 @@ public sealed class PantsColumnFamilyReclamationTests
 
         Assert.Equal(PantsEngineHealth.Healthy, (await verification).Health);
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while ((await database.Diagnostics.GetRuntimeMetricsAsync(timeout.Token)).Health ==
                PantsEngineHealth.Healthy)
         {
@@ -288,7 +289,8 @@ public sealed class PantsColumnFamilyReclamationTests
         IPantsDatabase database,
         string name,
         byte[]? key = null,
-        byte[]? value = null)
+        byte[]? value = null
+    )
     {
         var family = await database.ColumnFamilies.CreateAsync(name);
         await using var transaction = await database.Transactions.BeginAsync(
@@ -318,9 +320,11 @@ public sealed class PantsColumnFamilyReclamationTests
     static async Task WaitForFamilyReclamationAsync(
         string path,
         uint familyId,
-        bool simulatedCloud)
+        bool simulatedCloud
+    )
     {
         using var timeout = new CancellationTokenSource(TestTimeouts.Expected);
+
         while (FamilyFiles(path, familyId, simulatedCloud).Length != 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(5), timeout.Token);

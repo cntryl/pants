@@ -127,6 +127,7 @@ public sealed class CheckpointGateTests
         var handle = ((DatabaseInstance)database).MetadataAccounting;
         CheckpointGate.Verdict measured;
         MetadataAccountingSnapshot after;
+
         try
         {
             var before = handle.Snapshot();
@@ -147,6 +148,7 @@ public sealed class CheckpointGateTests
         {
             await database.DisposeAsync();
         }
+
         var original = handle.Snapshot();
         MetadataAccountingHandle reopenedHandle;
         await using (var reopened = await PantsDatabase.OpenAsync(options))

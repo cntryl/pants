@@ -28,10 +28,12 @@ public sealed class PantsSinglePassPointReadTelemetryTests
         const int fileCount = 8;
         using var directory = new TemporaryDirectory();
         await using var database = await OpenAsync(directory.Path);
+
         for (var index = 0; index < fileCount; index++)
         {
             await FlushKeyAsync(database, $"key-{index:D2}");
         }
+
 
         await using var reader = await database.Transactions.BeginAsync(
             database.ColumnFamilies.DefaultFamily,

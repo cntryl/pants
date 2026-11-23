@@ -29,7 +29,8 @@ static class ScaleLadderChildProcess
         string processPath,
         string? dotnetHostPath,
         string assemblyPath,
-        params string[] args)
+        params string[] args
+    )
     {
         var executable = dotnetHostPath ?? processPath;
         var start = new ProcessStartInfo

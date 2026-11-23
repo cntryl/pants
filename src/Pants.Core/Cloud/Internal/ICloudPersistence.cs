@@ -8,7 +8,8 @@ interface ICloudPersistence : ICloudDdlAuthority, IAsyncDisposable
 
     ValueTask PublishWalBatchAsync(
         IReadOnlyList<SealedWalSegment> segments,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask MirrorMetadataAndSstsAsync(CancellationToken cancellationToken);
 
